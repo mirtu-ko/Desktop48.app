@@ -9,8 +9,9 @@ import { dispatchMediaShortcut } from '../../composables/media/use-media-shortcu
 import { useSleepBlocker } from '../../composables/media/use-sleep-blocker'
 import { useVideoRotation } from '../../composables/media/use-video-rotation'
 import useMediaDownload from '../../composables/tasks/use-media-download'
-
 import EventBus from '../../services/event-bus'
+
+import { debugLog } from '../../utils/debug'
 
 import MediaIcon from '../ui/MediaIcon.vue'
 import MiniControls from './MiniControls.vue'
@@ -135,6 +136,7 @@ const retry = useStreamRetry({
 
 /** 单次恢复尝试：拉详情 → 重建流（节奏由重试状态机安排） */
 async function recoverStream() {
+  debugLog('live', `编排:重试恢复尝试（第 ${retry.retryCount.value + 1} 次）`)
   const data = await session.fetchLiveDetail()
   if (isManuallyUnmounted.value)
     return
@@ -144,12 +146,14 @@ async function recoverStream() {
 
 /** 会话启动（getOne 开始）：复位 loading 与重试计数 */
 function beginSession() {
+  debugLog('live', `编排:会话开始（liveId=${props.liveId}, source=${props.source}），复位 loading 与重试计数`)
   mediaLoading.value = true
   retry.reset()
 }
 
 /** canplay：加载完成，复位恢复态并刷新视频尺寸 */
 function onPlayerCanPlay() {
+  debugLog('live', '编排:播放就绪（canplay），复位恢复态')
   retry.isRecoveringStream.value = false
   if (!isRadio.value)
     updateVideoDimensions()
@@ -157,6 +161,7 @@ function onPlayerCanPlay() {
 
 /** 重建流之前：清重试计时器、销毁播放器、复位媒体元素 */
 function rebuildMedia() {
+  debugLog('live', '编排:重建流前清理（重试计时器/播放器实例/媒体元素）')
   retry.clearTimer()
   player.destroyPlayer()
   player.resetMediaElement()
@@ -166,9 +171,11 @@ function rebuildMedia() {
 function handleStreamError(reason: string, isNetwork: boolean) {
   console.error('[LivePlayer.vue] 直播播放异常:', reason)
   if (isNetwork) {
+    debugLog('live', `编排:网络错误（${reason}），保持 loading 并安排重试`)
     mediaLoading.value = true
   }
   else {
+    debugLog('live', `编排:致命错误（${reason}），先销毁播放器再安排重试`)
     player.destroyPlayer()
     mediaLoading.value = false
   }
@@ -177,6 +184,7 @@ function handleStreamError(reason: string, isNetwork: boolean) {
 
 /** 重试耗尽视为直播结束：停流、广播下架、关闭 tab */
 function handleRetryExhausted() {
+  debugLog('live', `编排:重试耗尽（${retry.retryCount.value} 次），视为直播结束：停流 → 广播下架 → 关闭浮窗`)
   session.stopStreamNow()
   EventBus.emit('live-unavailable', props.liveId)
   emit('close')

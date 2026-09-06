@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { reactive, ref } from 'vue'
 import { subscribe } from '../../services/event-bus'
 import TaskBase from '../../services/task-base'
+import { debugLog } from '../../utils/debug'
 
 export type TaskKind = 'download' | 'record'
 
@@ -20,7 +21,7 @@ interface TaskKindConfig {
 }
 
 // ★ 跨进程：下方 taskConfigs 里的 downloadTask* / recordTask* 通道全部经
-// preload/index.ts 转到 main/ffmpeg/register-ffmpeg-task.ts。
+// preload/index.ts 转到 main/ipc/register-task-ipc.ts（机制在 main/ffmpeg/register-ffmpeg-task.ts）。
 // 与其它 IPC 不同，这组是**双向**的：invoke 发起任务，主进程再用 ipcRenderer.on
 // 持续回推 progress / end / error 事件（见 preload 里返回 unsubscribe 的那几个）。
 //
@@ -95,15 +96,18 @@ async function handleTask(taskData: TaskPayload, kind: TaskKind) {
   const exists = config.list.value.find(item => item.getLiveId() === taskData.liveId)
   if (exists) {
     if (exists.isRunning()) {
+      debugLog('tasks', kind, taskData.liveId, '任务已在运行，忽略本次发起')
       ElMessage({ message: config.runningMessage, type: 'warning' })
       return
     }
     // 任务已结束：按最新参数重启（覆盖原文件）
+    debugLog('tasks', kind, taskData.liveId, '重启已结束任务（覆盖原文件）:', taskData.filename)
     exists.setUrl(taskData.url)
     exists.setFilename(taskData.filename)
     await startTask(exists, config, config.restartMessage)
     return
   }
+  debugLog('tasks', kind, taskData.liveId, '发起新任务:', taskData.filename)
   await startTask(createTask(kind, taskData), config, config.startMessage)
 }
 
@@ -120,6 +124,7 @@ async function removeTask(task: TaskBase, kind: TaskKind) {
 async function restoreTasks(kind: TaskKind) {
   const config = taskConfigs[kind]
   const snapshots = await config.listApi()
+  debugLog('tasks', `从主进程恢复 ${kind} 任务快照: ${snapshots.length} 个`)
   for (const snapshot of snapshots) {
     // 已有同 liveId 任务则跳过，避免重复卡片
     if (config.list.value?.some(item => item.getLiveId() === snapshot.liveId))

@@ -1,24 +1,21 @@
-import type { IpcMainInvokeEvent } from 'electron'
-import { Buffer } from 'node:buffer'
+import type { WebContents } from 'electron'
 import fs from 'node:fs'
 import path, { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
-import { app, BrowserWindow, dialog, ipcMain, net, powerSaveBlocker, shell } from 'electron'
+import { app, BrowserWindow, powerSaveBlocker, shell } from 'electron'
 import icon from '../../resources/icon.png?asset'
 
-import { isAllowedUrl } from './allowed-hosts'
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
-import { registerDatabaseIPC } from './ipc/register-database-ipc'
+import { registerAllIPC } from './ipc'
 import { closeLog, getLogPathForDisplay, log } from './logger'
-import './ffmpeg/register-ffmpeg-task' // 含下载/录制任务通道注册（side effect）
-import './stream' // 流媒体相关主进程注册
-import './http-server' // live中转服务器主进程注册
+import { cleanupStreamSessions } from './stream'
+import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
 
-// 数据库初始化与通道注册（database.ts 模块本身无副作用，单例在此显式拉起）
+// 数据库初始化与全部 IPC 通道注册（database.ts 模块本身无副作用，单例在此显式拉起）
 Database.instance().init()
-registerDatabaseIPC()
+registerAllIPC()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -34,138 +31,8 @@ log('[app.ts] Electron 版本:', process.versions.electron)
 log('[app.ts] Node.js 版本:', process.versions.node)
 log('[app.ts] Chromium 版本:', process.versions.chrome)
 
-// IPC 事件注册
-
-ipcMain.handle('openPath', async (_event: IpcMainInvokeEvent, filePath: string) => {
-  // 校验路径：允许系统标准用户目录 + 用户配置的下载目录/ffmpeg目录
-  const allowedRoots = [
-    app.getPath('desktop'),
-    app.getPath('downloads'),
-    app.getPath('documents'),
-    app.getPath('videos'),
-    app.getPath('pictures'),
-    app.getPath('music'),
-    app.getPath('userData'),
-  ]
-  for (const key of ['downloadDirectory', 'ffmpegDirectory']) {
-    const dir = Database.instance().getConfig(key, '') as string
-    if (dir)
-      allowedRoots.push(dir)
-  }
-  const resolved = path.resolve(filePath)
-  // 必须比较到分隔符边界，否则 Downloads_backup 会被误判为在 Downloads 之内；
-  // Windows 路径大小写不敏感，统一转小写后比较
-  const normalize = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p)
-  const target = normalize(resolved)
-  const inAllowedRoot = allowedRoots.some((root) => {
-    const rootPath = normalize(path.resolve(root))
-    return target === rootPath || target.startsWith(rootPath.endsWith(path.sep) ? rootPath : rootPath + path.sep)
-  })
-  if (!inAllowedRoot) {
-    throw new Error(`路径不在允许范围内: ${filePath}`)
-  }
-  // openPath 以返回值（而非 reject）报告失败，必须 await 并检查，否则错误被静默丢弃
-  const failure = await shell.openPath(resolved)
-  if (failure)
-    throw new Error(failure)
-})
-
-ipcMain.handle('selectDirectory', async () => {
-  const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-  if (result.canceled)
-    return null
-  return result.filePaths[0]
-})
-
-ipcMain.handle('pathJoin', (_event: IpcMainInvokeEvent, ...paths: string[]) => path.join(...paths))
-
-// 网络请求 - 域名白名单校验
-const NET_REQUEST_TIMEOUT = 20 * 1000
-const NET_REQUEST_MAX_BYTES = 32 * 1024 * 1024
-
-ipcMain.handle('netRequest', async (_event: IpcMainInvokeEvent, options: any) => {
-  const url: string = typeof options === 'string' ? options : options?.url
-  if (!url || !isAllowedUrl(url)) {
-    throw new Error(`请求被拒绝：域名不在白名单中 (${url})`)
-  }
-  return new Promise<string>((resolve, reject) => {
-    const request = net.request(options)
-    if (options.headers) {
-      for (const key in options.headers)
-        request.setHeader(key, options.headers[key])
-    }
-
-    let settled = false
-    const timer = setTimeout(() => {
-      if (settled)
-        return
-      settled = true
-      request.abort()
-      reject(new Error(`请求超时（${NET_REQUEST_TIMEOUT}ms）: ${url}`))
-    }, NET_REQUEST_TIMEOUT)
-
-    const fail = (err: Error) => {
-      if (settled)
-        return
-      settled = true
-      clearTimeout(timer)
-      reject(err)
-    }
-    const succeed = (data: string) => {
-      if (settled)
-        return
-      settled = true
-      clearTimeout(timer)
-      resolve(data)
-    }
-
-    request.on('response', (response) => {
-      // 必须先收齐 Buffer 再整体解码：逐块 toString 会把跨块的 UTF-8 多字节字符切成乱码
-      const chunks: Buffer[] = []
-      let received = 0
-      response.on('data', (chunk: Buffer) => {
-        received += chunk.length
-        if (received > NET_REQUEST_MAX_BYTES) {
-          request.abort()
-          fail(new Error(`响应体超过上限（${NET_REQUEST_MAX_BYTES} 字节）: ${url}`))
-          return
-        }
-        chunks.push(chunk)
-      })
-      response.on('end', () => {
-        const status = response.statusCode
-        if (status < 200 || status >= 300) {
-          fail(new Error(`请求失败 HTTP ${status}: ${url}`))
-          return
-        }
-        succeed(Buffer.concat(chunks).toString('utf8'))
-      })
-      response.on('aborted', () => fail(new Error(`响应被中断: ${url}`)))
-      response.on('error', (err: Error) => fail(err))
-    })
-    request.on('abort', () => fail(new Error(`请求被中断: ${url}`)))
-    request.on('error', fail)
-    if (options.body)
-      request.write(options.body)
-    request.end()
-  })
-})
-
-ipcMain.handle('getDesktopPath', () => app.getPath('desktop'))
-
-// ffmpeg 相关
-ipcMain.handle('checkFfmpegBinaries', async (_event: IpcMainInvokeEvent, dir: string) => {
-  function ffmpegFullFilename(name: string): string {
-    return process.platform === 'win32' ? `${name}.exe` : name
-  }
-  const ffmpegPath = path.join(dir, ffmpegFullFilename('ffmpeg'))
-  const ffplayPath = path.join(dir, ffmpegFullFilename('ffplay'))
-  if (!fs.existsSync(ffmpegPath))
-    throw new Error('ffmpeg 不存在')
-  if (!fs.existsSync(ffplayPath))
-    throw new Error('ffplay 不存在')
-  return true
-})
+// 系统服务类 IPC 通道（openPath/selectDirectory/pathJoin/netRequest/getDesktopPath/checkFfmpegBinaries）
+// 已移至 ipc/register-system-ipc.ts，由上方 registerAllIPC() 统一注册
 
 // 保持对主窗口的引用，供自定义标题栏窗口控制使用
 let mainWindow: BrowserWindow | null = null
@@ -221,26 +88,16 @@ function wireWindowEvents(win: BrowserWindow): void {
   win.on('unmaximize', send)
 }
 
-// 取当前可用主窗口；窗口已销毁时返回 null
-function activeWindow(): BrowserWindow | null {
+// 取当前可用主窗口；窗口已销毁时返回 null。
+// 导出供 ipc/register-window-ipc.ts 接线窗口控制通道（窗口引用本身不跨模块共享）
+export function activeWindow(): BrowserWindow | null {
   if (mainWindow && !mainWindow.isDestroyed())
     return mainWindow
   return null
 }
 
-// 自定义标题栏窗口控制
-ipcMain.handle('windowMinimize', () => activeWindow()?.minimize())
-ipcMain.handle('windowToggleMaximize', () => {
-  const win = activeWindow()
-  if (!win)
-    return
-  if (win.isMaximized())
-    win.unmaximize()
-  else
-    win.maximize()
-})
-ipcMain.handle('windowClose', () => activeWindow()?.close())
-ipcMain.handle('windowIsMaximized', () => activeWindow()?.isMaximized() ?? false)
+// 窗口控制通道（windowMinimize/windowToggleMaximize/windowClose/windowIsMaximized）
+// 已移至 ipc/register-window-ipc.ts，由 registerAllIPC() 统一注册
 
 // 当运行第二个实例时，聚焦到已有窗口（单实例锁在 index.ts 中已获取）
 app.on('second-instance', () => {
@@ -283,7 +140,9 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  // 直播流等子进程资源在 stream.ts 的 before-quit 里统一清理
+  // 直播流会话与转流进程清理（原 stream.ts 模块级 before-quit，现改为显式调用，
+  // 使全部退出清理集中在此处可见）
+  cleanupStreamSessions()
   // 对仍在运行的所有 ffmpeg 任务写 'q' 优雅收尾，避免退出后残留孤儿进程
   stopAllFfmpegTasks()
   releaseAllSleepBlockers()
@@ -297,6 +156,7 @@ app.on('will-quit', () => {
 // 阻止休眠：id 由主进程按 webContents 维护。
 // 渲染进程刷新或崩溃时它无法把 id 传回来，只能由主进程在 webContents 销毁时兜底释放，
 // 否则 blocker 会一直生效到应用退出。
+// 状态与释放逻辑归 app.ts 所有；ipc/register-window-ipc.ts 只负责把通道接到下面两个导出函数。
 const sleepBlockers = new Map<number, number>()
 
 function releaseSleepBlocker(webContentsId: number): void {
@@ -315,8 +175,8 @@ function releaseAllSleepBlockers(): void {
     releaseSleepBlocker(webContentsId)
 }
 
-ipcMain.handle('preventSleep', (event) => {
-  const webContentsId = event.sender.id
+export function preventSleepForSender(sender: WebContents): number {
+  const webContentsId = sender.id
   // 幂等：同一 webContents 重复请求（如两次 playing 事件竞态）时复用已有 blocker，避免泄漏
   const existing = sleepBlockers.get(webContentsId)
   if (existing !== undefined && powerSaveBlocker.isStarted(existing))
@@ -324,12 +184,12 @@ ipcMain.handle('preventSleep', (event) => {
 
   const id = powerSaveBlocker.start('prevent-display-sleep')
   sleepBlockers.set(webContentsId, id)
-  event.sender.once('destroyed', () => releaseSleepBlocker(webContentsId))
+  sender.once('destroyed', () => releaseSleepBlocker(webContentsId))
   log('[app.ts] 已阻止系统休眠，ID:', id)
   return id
-})
+}
 
-ipcMain.handle('allowSleep', (event, _id: number) => {
+export function allowSleepForSender(sender: WebContents): void {
   // 以 webContents 为准，忽略渲染进程传来的 id：刷新后它持有的 id 已经失效
-  releaseSleepBlocker(event.sender.id)
-})
+  releaseSleepBlocker(sender.id)
+}

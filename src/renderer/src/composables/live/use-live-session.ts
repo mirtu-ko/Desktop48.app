@@ -3,6 +3,7 @@ import type { LiveDetail } from '../../services/api-types'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 import Apis from '../../services/apis'
+import { debugLog } from '../../utils/debug'
 import {
   buildPlaybackUrl,
   normalizeCarouselTime,
@@ -74,7 +75,7 @@ export function useLiveSession(options: {
     carouselTime.value = normalizeCarouselTime(data.carousels?.carouselTime)
     realName.value = data.user.userName
     // 头像：优先调用方传入（open 公演为封面），否则取详情的主播头像；open 模式无在线人数
-    userAvatar.value = Tools.sourceUrl(options.avatarUrl() || '')
+    userAvatar.value = Tools.sourceUrl(options.avatarUrl() || data.user.userAvatar || '')
     options.onAvatar(userAvatar.value)
     if (typeof data.onlineNum === 'number')
       options.onOnlineNum(data.onlineNum)
@@ -89,8 +90,10 @@ export function useLiveSession(options: {
     if (options.source() === 'open') {
       // 开放公演：getOpenLiveOne 返回 playStreams 数组（多档清晰度），选高清（streamType 2）；
       // 该接口没有主播信息，用副标题/标题兜底成 user.userName 以满足 LiveDetail 契约
+      debugLog('live', '②拉详情: source=open → 走 openLive 接口（公演详情为多档清晰度数组，需选流）')
       const data = await Apis.instance().openLive(options.liveId())
       const stream = pickPreferredStream(data.playStreams)
+      debugLog('live', `②拉详情: 公演选流 → streamType=${stream?.streamType || '无'}（优先高清 2，回落任意有地址的流）`)
       return {
         playStreamPath: stream?.streamPath || '',
         coverPath: data.coverPath || '',
@@ -98,6 +101,7 @@ export function useLiveSession(options: {
         liveId: data.liveId,
       }
     }
+    debugLog('live', '②拉详情: source=user → 走 getLiveOne 接口（单档 rtmp 地址）')
     return await Apis.instance().live(options.liveId())
   }
 
@@ -107,6 +111,7 @@ export function useLiveSession(options: {
     if (!currentLiveId)
       return
     activeSessionLiveId.value = ''
+    debugLog('live', `停止当前直播会话: ${currentLiveId}`)
     try {
       // ★ 跨进程：preload/index.ts → main/stream.ts 的 'stopLiveStream' handler
       await window.mainAPI.stopLiveStream(currentLiveId)
@@ -133,6 +138,7 @@ export function useLiveSession(options: {
 
     // 等待期间组件已卸载 / 又发起了更新的一次重启：本次结果作废，顺手把刚登记的会话撤掉
     if (options.isDisposed.value || requestId !== activeStreamRequestId) {
+      debugLog('live', `会话回包已过期（liveId=${result.liveId || options.liveId()}），撤销刚登记的会话`)
       try {
         // ★ 跨进程：preload/index.ts → main/stream.ts 的 'stopLiveStream' handler
         await window.mainAPI.stopLiveStream(result.liveId || options.liveId())
@@ -146,6 +152,7 @@ export function useLiveSession(options: {
     activeSessionLiveId.value = result.liveId
     // 写入即触发 LivePlayer 里的 watch，由它重建 mpegts 播放器
     localPlaybackUrl.value = buildPlaybackUrl(result.url, streamRestartToken.value)
+    debugLog('live', `本地播放地址已就绪: ${localPlaybackUrl.value}`)
     return true
   }
 
@@ -155,6 +162,7 @@ export function useLiveSession(options: {
    */
   async function restartLiveStream(rtmpUrl: string) {
     const requestId = ++activeStreamRequestId
+    debugLog('live', `重建直播流（第 ${streamRestartToken.value + 1} 次）, rtmp=${rtmpUrl}`)
     options.onBeforeRebuild()
     await stopCurrentLiveStream()
     if (options.isDisposed.value || requestId !== activeStreamRequestId)
@@ -190,6 +198,7 @@ export function useLiveSession(options: {
     if (!currentLiveId)
       return
     activeSessionLiveId.value = ''
+    debugLog('live', `最终停流: ${currentLiveId}（重试耗尽或组件卸载）`)
     // ★ 跨进程：preload/index.ts → main/stream.ts 的 'stopLiveStream' handler。
     // 卸载路径上不 await：调用方（onUnmounted）是同步的，失败只记日志
     window.mainAPI.stopLiveStream(currentLiveId).catch((err) => {

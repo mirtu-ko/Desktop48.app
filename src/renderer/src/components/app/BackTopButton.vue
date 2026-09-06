@@ -34,16 +34,19 @@ function isMainScroller(el: HTMLElement): boolean {
 
 /** 在主内容区里定位当前页面的主滚动容器（取第一个可见的） */
 function resolveContainer(): HTMLElement | null {
-  if (!appContent?.isConnected) return null
+  if (!appContent?.isConnected)
+    return null
   for (const wrap of appContent.querySelectorAll<HTMLElement>('.el-scrollbar__wrap')) {
-    if (isVisible(wrap) && wrap.closest('.scrollbar-wrapper')) return wrap
+    if (isVisible(wrap) && wrap.closest('.scrollbar-wrapper'))
+      return wrap
   }
   return appContent
 }
 
 function syncFromContainer() {
   activeContainer = resolveContainer()
-  if (activeContainer) syncVisible(activeContainer)
+  if (activeContainer)
+    syncVisible(activeContainer)
   else visible.value = false
 }
 
@@ -51,8 +54,10 @@ function syncFromContainer() {
  * 免去切页后重新定位容器，keep-alive / v-show / Suspense 场景天然兼容 */
 function onDocScroll(e: Event) {
   const el = e.target
-  if (!(el instanceof HTMLElement) || !appContent || !appContent.contains(el)) return
-  if (!isMainScroller(el)) return
+  if (!(el instanceof HTMLElement) || !appContent || !appContent.contains(el))
+    return
+  if (!isMainScroller(el))
+    return
   activeContainer = el
   syncVisible(el)
 }
@@ -141,7 +146,9 @@ watch(() => route.path, () => nextTick(syncFromContainer))
 /* 显隐过渡：淡入 + 轻微上浮 */
 .back-top-enter-active,
 .back-top-leave-active {
-  transition: opacity 0.22s ease, transform 0.22s ease;
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
 }
 
 .back-top-enter-from,

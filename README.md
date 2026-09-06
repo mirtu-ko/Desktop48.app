@@ -52,4 +52,4 @@ sudo xattr -rd com.apple.quarantine /Applications/Desktop48.app
 
 ## License
 
- [MIT License](LICENSE)
+[MIT License](LICENSE)

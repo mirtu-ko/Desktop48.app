@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { error, log } from './logger'
+import { debug, error, log } from './logger'
 import { createFlvStreamProcess } from './stream'
 
 let _serverPort = 8080
@@ -83,9 +83,11 @@ const server = http.createServer((req, res) => {
   }
 
   const liveId = liveMatch[1]
+  debug(`[http-server.ts] 收到播放请求: ${requestPath} → liveId=${liveId}`)
 
   try {
     const ffmpeg = createFlvStreamProcess(liveId)
+    debug(`[http-server.ts] 已为 ${liveId} spawn FFmpeg 转流进程, pid=${ffmpeg.pid}`)
     let responseClosed = false
     let hasReceivedData = false
 
@@ -100,6 +102,7 @@ const server = http.createServer((req, res) => {
         return
 
       responseClosed = true
+      debug(`[http-server.ts] 关闭 ${liveId} 的响应与转流管道（收到过数据: ${hasReceivedData}）`)
       try {
         ffmpeg.stdout.unpipe(res)
       }
@@ -122,6 +125,8 @@ const server = http.createServer((req, res) => {
     req.on('aborted', closeResponse)
 
     ffmpeg.stdout.on('data', () => {
+      if (!hasReceivedData)
+        debug(`[http-server.ts] ${liveId} 收到首帧流数据，开始向播放器输出`)
       hasReceivedData = true
     })
 

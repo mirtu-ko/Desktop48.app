@@ -9,6 +9,7 @@ import { useReviewDanmaku } from '../../composables/review/use-review-danmaku'
 import { useReviewMedia } from '../../composables/review/use-review-media'
 import useMediaDownload from '../../composables/tasks/use-media-download'
 import Apis from '../../services/apis'
+import { debugLog } from '../../utils/debug'
 
 import { BARRAGE_SIDEBAR_WIDTH } from '../../utils/float-player-layout'
 import { normalizeCarouselTime, pickPreferredVodStream } from '../../utils/live-stream'
@@ -143,6 +144,7 @@ const {
   onTimeUpdate: onDanmakuTimeUpdate,
   onSeeking: time => seekBarragesTo(time),
   onMetadataLoaded: async () => {
+    debugLog('playback', `④元数据就绪: 刷新画面尺寸${isRadio.value ? '（电台无尺寸）' : ''} → 加载弹幕`)
     // 记录源尺寸供旋转缩放计算，并按（可能旋转后的）画面比例上报浮窗
     if (!isRadio.value)
       updateVideoDimensions()
@@ -180,12 +182,15 @@ async function getOne() {
     if (props.source === 'open') {
       // 开放公演回放：getOpenLiveOne 返回 playStreams 数组（VOD m3u8），优先选超清（streamType 3），
       // 详情里没有用户与在线人数信息，用公演标题与传入的队伍 logo 兜底
+      debugLog('playback', `②拉详情: source=open → getOpenLiveOne`, props)
       const data = await Apis.instance().openLive(props.liveId)
       const stream = pickPreferredVodStream(data.playStreams)
       if (!stream?.streamPath) {
+        debugLog('playback', `②拉详情: 公演回放选流为空（playStreams=${data.playStreams?.length ?? 0} 条），无法播放`)
         ElMessage({ message: '未获取到公演回放地址', type: 'error' })
         return
       }
+      debugLog('playback', `②拉详情: 公演回放选流 → streamType=${stream.streamType}`)
       isRadio.value = false
       number.value = 0
       realName.value = data.subTitle || data.title || '开放公演'
@@ -196,12 +201,14 @@ async function getOne() {
       return
     }
 
+    debugLog('playback', `②拉详情: source=user → getLiveOne`, props)
     const data = await Apis.instance().live(props.liveId)
 
     const nextPlayStreamPath = Tools.streamPathHandle(data.playStreamPath, props.startTime)
     const nextBarrageUrl = data.msgFilePath || ''
 
     if (!data.review) {
+      debugLog('playback', `②拉详情: liveId=${props.liveId} 不是录播（review=false），跳回直播页`)
       ElMessage({
         message: '该视频不是录播',
         type: 'warning',
@@ -225,6 +232,7 @@ async function getOne() {
     const barrageSourceChanged = barrageUrl.value !== nextBarrageUrl
     barrageUrl.value = nextBarrageUrl
     playStreamPath.value = nextPlayStreamPath
+    debugLog('playback', `②拉详情: 播放地址与弹幕源已更新（弹幕源${barrageSourceChanged ? '变化 → 重置弹幕状态' : '未变 → 沿用现有弹幕游标'}）`, barrageUrl.value, playStreamPath.value)
 
     if (barrageSourceChanged)
       resetBarrageSource()
@@ -256,6 +264,7 @@ const { running: downloading, onActionClick: onDownloadClick } = useMediaDownloa
 })
 
 onMounted(async () => {
+  debugLog('playback', `①录播会话开始（liveId=${props.liveId}, source=${props.source}）: 载入弹幕设置 → 启动弹幕动画 → 拉详情`)
   loadSettings()
   startDanmakuAnimation()
   rootRef.value?.focus()
@@ -264,6 +273,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  debugLog('playback', `⑤录播会话结束（liveId=${props.liveId}）: 停弹幕动画 → 销毁播放引擎 → 释放防休眠`)
   stopDanmakuAnimation()
   destroyPlayer()
   releaseSleepBlocker()

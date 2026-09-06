@@ -1,5 +1,6 @@
 import Hls from 'hls.js'
 import { ref } from 'vue'
+import { debugLog } from '../../utils/debug'
 
 interface PlaybackEngineOptions {
   /** 当前应挂载播放源的媒体元素（视频/音频由组件决定），无元素时 attach 直接忽略 */
@@ -59,6 +60,7 @@ export function usePlaybackEngine(options: PlaybackEngineOptions) {
 
   function destroy() {
     if (hlsInstance) {
+      debugLog('playback', '销毁 hls.js 实例')
       hlsInstance.destroy()
       hlsInstance = null
     }
@@ -93,6 +95,7 @@ export function usePlaybackEngine(options: PlaybackEngineOptions) {
     }
 
     mediaElement.onloadedmetadata = async () => {
+      debugLog('playback', '元数据就绪（loadedmetadata），退出加载态并自动播放')
       error.value = ''
       loading.value = false
       await onMetadataLoaded(mediaElement)
@@ -129,6 +132,7 @@ export function usePlaybackEngine(options: PlaybackEngineOptions) {
     loading.value = true
 
     if (sourcePath.endsWith('.m3u8')) {
+      debugLog('playback', `引擎选择: ${sourcePath} 是 HLS → 优先 hls.js 引擎（原生 video 不支持直播切片级控制）`)
       if (Hls.isSupported()) {
         const hls = new Hls()
         hlsInstance = hls
@@ -152,14 +156,17 @@ export function usePlaybackEngine(options: PlaybackEngineOptions) {
         })
       }
       else if (mediaElement.canPlayType('application/vnd.apple.mpegurl')) {
+        debugLog('playback', '引擎选择: hls.js 不受支持，回落到 Safari 原生 HLS（canPlayType 命中）')
         mediaElement.src = sourcePath
       }
       else {
+        debugLog('playback', '引擎选择: hls.js 与原生 HLS 均不可用，无法播放')
         notifyError('当前环境不支持录播 HLS 播放')
         return
       }
     }
     else {
+      debugLog('playback', `引擎选择: ${sourcePath} 非 m3u8 → 原生 video 直接播放（MP4 无需 hls.js）`)
       mediaElement.src = sourcePath
       mediaElement.load()
     }

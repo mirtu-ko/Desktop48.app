@@ -1,5 +1,6 @@
 import type { TaskSnapshot } from './task-payload'
 import Constants from '../utils/constants'
+import { debugLog } from '../utils/debug'
 
 /**
  * 任务通道适配器：收敛下载/录制两组 IPC API 的差异
@@ -87,13 +88,14 @@ export default class TaskBase {
     if (!this._saveDirectory)
       throw new Error('保存目录为空')
 
-    // ★ 跨进程：路径拼接交给主进程，避免渲染层猜测平台分隔符（对端 main/app.ts）
+    // ★ 跨进程：路径拼接交给主进程，避免渲染层猜测平台分隔符（对端 main/ipc/register-system-ipc.ts）
     this._filePath = await window.mainAPI.pathJoin(this._saveDirectory, this._filename)
 
     // 先注册监听器，避免 ffmpeg 启动后立即发送的事件丢失。
     this._unsubscribers.push(this.channels.progress((liveId: string, time: string) => {
       if (liveId === this._liveId) {
-        console.log(`[${this._logTag}] task progress:`, liveId, time)
+        // progress 每个 ffmpeg 心跳都触发，用 debug 门控避免生产环境控制台被刷屏
+        debugLog('tasks', `[${this._logTag}] task progress:`, liveId, time)
       }
     }))
     this.subscribeEndEvents()
@@ -170,7 +172,7 @@ export default class TaskBase {
       console.error('saveDirectory is not initialized')
       return
     }
-    // ★ 跨进程：preload/index.ts → main/app.ts 的 'openPath'（调用系统文件管理器）
+    // ★ 跨进程：preload/index.ts → main/ipc/register-system-ipc.ts 的 'openPath'（调用系统文件管理器）
     window.mainAPI.openPath(this._saveDirectory)
   }
 }

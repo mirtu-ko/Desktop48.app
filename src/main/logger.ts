@@ -1,14 +1,24 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import util from 'node:util'
+import { is } from '@electron-toolkit/utils'
 import { app } from 'electron'
 
 // 日志统一入口：
-// - 显式 log/error/warn 函数，不再全局劫持 console（劫持会改变 Electron 内部行为，
+// - 显式 log/error/warn/debug 函数，不再全局劫持 console（劫持会改变 Electron 内部行为，
 //   且 args.join(' ') 会把对象打成 [object Object]，错误信息实际丢失）
 // - 未捕获异常/unhandledRejection 落盘，崩溃后留有现场
 // - 超过 5MB 自动轮转（main.log -> main.log.1），不会无限增长
 // - 不再在退出时删除日志：崩溃排查完全依赖这份文件
+// - debug 为 verbose 级别：开发模式默认开启，生产环境可用 DESKTOP48_VERBOSE=1 临时开启
+
+// verbose 门控在模块加载时确定，运行期不切换——避免日志级别抖动导致排查时缺片段
+const verboseEnabled = is.dev || process.env.DESKTOP48_VERBOSE === '1'
+
+/** 调用方可据此跳过昂贵的参数格式化（verbose 关闭时 debug 本身是 no-op） */
+export function isVerboseEnabled(): boolean {
+  return verboseEnabled
+}
 
 const MAX_LOG_SIZE = 5 * 1024 * 1024 // 5MB
 
@@ -90,6 +100,17 @@ export function error(...args: unknown[]): void {
   console.error(...args)
   try {
     logStream.write(`${timestamp()} [ERR] ${fmt(args)}\n`)
+  }
+  catch { /* 写盘失败不影响业务 */ }
+}
+
+/** verbose 级别：仅开发模式或显式开启时输出，用于追踪调用流与状态流转 */
+export function debug(...args: unknown[]): void {
+  if (!verboseEnabled)
+    return
+  console.debug(...args)
+  try {
+    logStream.write(`${timestamp()} [DBG] ${fmt(args)}\n`)
   }
   catch { /* 写盘失败不影响业务 */ }
 }

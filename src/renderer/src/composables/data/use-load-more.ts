@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import { nextTick, ref } from 'vue'
+import { debugLog } from '../../utils/debug'
 
 export interface UseLoadMoreOptions {
   /**
@@ -43,10 +44,13 @@ export function useLoadMore({
     // 首屏只有零星几条时内容不足一屏，滚动条都不出现，end-reached 永远不会触发；
     // 这里在渲染完成后自动补齐下一页，直到填满视口或没有更多数据。
     // 加载失败（ok===false）时必须终止：列表为空 → 内容永远不足一屏 → 无限递归
-    if (ok === false || !wrap || isDisabled())
+    if (ok === false || !wrap || isDisabled()) {
+      debugLog('load-more', `本次加载结束（${ok === false ? '加载失败，终止自动补拉' : '无更多数据或已禁用'}）`)
       return
+    }
     await nextTick()
     if (wrap.scrollHeight <= wrap.clientHeight) {
+      debugLog('load-more', '内容不足一屏，自动补拉下一页')
       await onInfiniteScroll()
     }
   }
