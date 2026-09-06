@@ -2,8 +2,9 @@
  * lowdb 初始数据结构与 database.json 成员数据的全量字段定义。
  *
  * 字段依据 UPDATE_INFO_URL 接口的真实返回（test/data.ts，871 条成员 + 其余分节样本）
- * 逐字段建模：每个字段在全部样本中均出现，因此声明为必需；
- * 同时保留索引签名，兼容上游后续新增字段。
+ * 逐字段建模；类型同时被 preload 契约（src/preload/api-types.d.ts）引用，
+ * 因此遵循与渲染端 api-types.ts 相同的宽容原则：仅各分节主键必需，其余字段可选，
+ * 并保留索引签名以兼容上游后续新增字段。
  *
  * 全新安装从空开始，成员数据由渲染进程启动时检测到无成员后自动同步
  * （见 Index.vue / Apis.syncInfo → saveMemberData）。
@@ -13,55 +14,55 @@
 export interface StarInfoItem {
   userId: number
   /** 真实姓名 */
-  realName: string
+  realName?: string
   /** 艺名/昵称 */
-  nickname: string
+  nickname?: string
   /** 姓名拼音缩写（如 zjm） */
-  abbr: string
+  abbr?: string
   /** 姓名拼音（如 Zhao JiaMin） */
-  pinyin: string
-  groupId: number
-  groupName: string
-  teamId: number
-  teamName: string
-  periodId: number
+  pinyin?: string
+  groupId?: number
+  groupName?: string
+  teamId?: number
+  teamName?: string
+  periodId?: number
   /** 期数名称（如 "SNH48 一期生"，对应 periodInfo） */
-  periodName: string
+  periodName?: string
   /** 0=未出道 1=在团 2=暂休 3=已退团 */
-  status: number
+  status?: number
   /** 生日（MM-dd） */
-  birthday: string
+  birthday?: string
   /** 出生地 */
-  birthplace: string
+  birthplace?: string
   /** 血型 */
-  bloodType: string
+  bloodType?: string
   /** 星座 */
-  constellation: string
+  constellation?: string
   /** 身高 */
-  height: string
+  height?: string
   /** 特长 */
-  specialty: string
+  specialty?: string
   /** 爱好 */
-  hobbies: string
+  hobbies?: string
   /** 星座解读文案 */
-  starRegion: string
+  starRegion?: string
   /** 入团时间（yyyy-MM-dd） */
-  joinTime: string
+  joinTime?: string
   /** 头像地址 */
-  avatar: string
+  avatar?: string
   /** 全身照 1-4 */
-  fullPhoto1: string
-  fullPhoto2: string
-  fullPhoto3: string
-  fullPhoto4: string
+  fullPhoto1?: string
+  fullPhoto2?: string
+  fullPhoto3?: string
+  fullPhoto4?: string
   /** 微博昵称 */
-  wbName: string
+  wbName?: string
   /** 微博 uid */
-  wbUid: string
+  wbUid?: string
   /** 创建时间（毫秒时间戳） */
-  ctime: number
+  ctime?: number
   /** 更新时间（毫秒时间戳） */
-  utime: number
+  utime?: number
   [key: string]: unknown
 }
 
@@ -72,80 +73,80 @@ export type OfficialInfoItem = StarInfoItem
 export interface DomainInfoItem {
   domainId: number
   /** 域名（如 snh48.com） */
-  domainUrl: string
-  domainStatus: number
+  domainUrl?: string
+  domainStatus?: number
   /** 创建时间（毫秒时间戳） */
-  createAt: number
+  createAt?: number
   /** 更新时间（毫秒时间戳） */
-  updateAt: number
+  updateAt?: number
   [key: string]: unknown
 }
 
 /** ===== starAdjunctInfo：兼职成员档案（带官方账号关联与证书图） ===== */
 export interface StarAdjunctItem {
   adjunctId: number
-  id: number
+  id?: number
   /** 关联的成员 userId */
-  userId: number
+  userId?: number
   /** 关联的官方账号 userId（officialInfo.userId） */
-  officialId: number
+  officialId?: number
   /** 成员姓名 */
-  starName: string
+  starName?: string
   /** 艺名/昵称 */
-  nickname: string
+  nickname?: string
   /** 姓名拼音缩写 */
-  abbr: string
-  groupId: number
-  teamId: number
-  status: number
-  birthday: string
-  birthplace: string
-  bloodType: string
-  constellation: string
-  height: string
-  specialty: string
-  hobbies: string
-  starRegion: string
+  abbr?: string
+  groupId?: number
+  teamId?: number
+  status?: number
+  birthday?: string
+  birthplace?: string
+  bloodType?: string
+  constellation?: string
+  height?: string
+  specialty?: string
+  hobbies?: string
+  starRegion?: string
   /** 头像地址 */
-  headImg: string
+  headImg?: string
   /** 全身照 1-4 */
-  fullPhoto1: string
-  fullPhoto2: string
-  fullPhoto3: string
-  fullPhoto4: string
+  fullPhoto1?: string
+  fullPhoto2?: string
+  fullPhoto3?: string
+  fullPhoto4?: string
   /** 证书图片地址 */
-  certificateImg: string
+  certificateImg?: string
   /** 更新时间（毫秒时间戳） */
-  utime: number
+  utime?: number
   [key: string]: unknown
 }
 
 /** ===== starRepeatInfo：成员重复档案（样本仅 1 条，字段按原始数据定义） ===== */
 export interface StarRepeatItem {
   repeatId: number
-  id: number
-  userId: number
-  groupId: number
-  teamId: number
-  status: number
+  id?: number
+  userId?: number
+  groupId?: number
+  teamId?: number
+  status?: number
   /** 更新时间（毫秒时间戳） */
-  utime: number
+  utime?: number
   [key: string]: unknown
 }
 
 /** ===== groupInfo：团体记录 ===== */
 export interface GroupInfoItem {
   groupId: number
-  groupName: string
+  groupName?: string
   /** 团体主色（HEX，如 38BAEE） */
-  groupColor: string
+  groupColor?: string
   /** 排序权重（成员树按此排序） */
-  groupSort: number
-  status: number
+  groupSort?: number
+  status?: number
   /** 创建时间（毫秒时间戳） */
-  ctime: number
+  ctime?: number
   /** 更新时间（毫秒时间戳） */
-  utime: number
+  utime?: number
   [key: string]: unknown
 }
 
@@ -153,40 +154,40 @@ export interface GroupInfoItem {
 export interface PeriodInfoItem {
   periodId: number
   /** 期数名称（如 "SNH48 一期生"） */
-  periodName: string
+  periodName?: string
   /** 排序权重 */
-  periodSort: number
-  groupId: number
-  status: number
+  periodSort?: number
+  groupId?: number
+  status?: number
   /** 创建时间（毫秒时间戳） */
-  ctime: number
+  ctime?: number
   /** 更新时间（毫秒时间戳） */
-  utime: number
+  utime?: number
   [key: string]: unknown
 }
 
 /** ===== teamInfo：队伍记录 ===== */
 export interface TeamInfoItem {
   teamId: number
-  teamName: string
-  groupId: number
-  /** 队伍主色（HEX，getMember/teamColorOf 派生 teamColor 的来源） */
-  teamColor: string
+  teamName?: string
+  groupId?: number
+  /** 队伍主色（HEX，getMemberInfo/teamColorOf 派生 teamColor 的来源） */
+  teamColor?: string
   /** 排序权重（成员树按此排序） */
-  teamSort: number
+  teamSort?: number
   /** 队伍 logo 地址 */
-  teamLogo: string
+  teamLogo?: string
   /** 队伍徽章（可能是相对路径，渲染端负责归一化） */
-  seineTeamBadge: string
+  seineTeamBadge?: string
   /** 队伍制式 logo 地址 */
-  seineTeamLogo: string
+  seineTeamLogo?: string
   /** 头像背景（HEX） */
-  avatarBg: string
-  status: number
+  avatarBg?: string
+  status?: number
   /** 创建时间（毫秒时间戳） */
-  ctime: number
+  ctime?: number
   /** 更新时间（毫秒时间戳） */
-  utime: number
+  utime?: number
   [key: string]: unknown
 }
 

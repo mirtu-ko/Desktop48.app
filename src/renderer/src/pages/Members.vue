@@ -21,7 +21,8 @@ interface TeamNode {
 
 interface GroupNode {
   groupName: string
-  groupId: number
+  /** 主进程树节点里可能是字符串 id 或缺省，比较时统一 String() 归一化 */
+  groupId: number | string | undefined
   children: TeamNode[]
 }
 

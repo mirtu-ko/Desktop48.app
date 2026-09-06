@@ -202,7 +202,7 @@ export default class Apis {
     }
     else {
       const message = envelope && envelope.message ? envelope.message : '接口无 success 字段'
-      console.log('[apis.ts]reject', message)
+      console.log('[apis.ts]reject', message, data)
       Apis.toastApiError(message)
       throw new Error(message)
     }

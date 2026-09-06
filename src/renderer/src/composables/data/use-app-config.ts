@@ -21,7 +21,7 @@ export function useAppConfig() {
 
   /** 挂载时读取三项配置（未设置时回退各自默认值） */
   async function loadAppConfig() {
-    downloadDirectory.value = await window.mainAPI.getConfig('downloadDirectory')
+    downloadDirectory.value = await window.mainAPI.getConfig('downloadDirectory', '')
     ffmpegDirectory.value = await window.mainAPI.getConfig('ffmpegDirectory', '')
     userAgent.value = await window.mainAPI.getConfig('userAgent', Constants.DEFAULT_USER_AGENT)
   }

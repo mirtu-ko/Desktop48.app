@@ -1,4 +1,4 @@
-import type { electronAPI as ElectronAPI, mainAPI } from './api-types'
+import type { electronAPI as ElectronAPI, mainAPI, MemberDataContent, NetRequestOptions } from './api-types'
 import { contextBridge, ipcRenderer } from 'electron'
 
 // 替代 @electron-toolkit/preload，仅暴露渲染进程实际需要的最小 API
@@ -26,9 +26,9 @@ const electronAPI = {
  * satisfies mainAPI：实现与契约在编译期强制一致，新增/改名通道漏改任何一侧都会 typecheck 报错。
  */
 const api = {
-  saveMemberData: (data: any) => ipcRenderer.invoke('saveMemberData', data),
+  saveMemberData: (data: Partial<MemberDataContent>) => ipcRenderer.invoke('saveMemberData', data),
   // 成员（对端：main/ipc/register-database-ipc.ts）
-  getMember: (userId: number) => ipcRenderer.invoke('getMember', userId),
+  getMemberInfo: (userId: number) => ipcRenderer.invoke('getMemberInfo', userId),
   getMemberTree: () => ipcRenderer.invoke('getMemberTree'),
   getBlockedMembers: () => ipcRenderer.invoke('getBlockedMembers'),
   setBlockedMembers: (ids: number[]) => ipcRenderer.invoke('setBlockedMembers', ids),
@@ -36,10 +36,10 @@ const api = {
   removeBlockedMember: (userId: number) => ipcRenderer.invoke('removeBlockedMember', userId),
   hasMembers: () => ipcRenderer.invoke('hasMembers'),
   // 配置相关（对端：main/ipc/register-database-ipc.ts）
-  getConfig: (key: string, defaultValue?: any) => ipcRenderer.invoke('getConfig', key, defaultValue),
-  setConfig: (key: string, value: any) => ipcRenderer.invoke('setConfig', key, value),
+  getConfig: <T>(key: string, defaultValue?: T) => ipcRenderer.invoke('getConfig', key, defaultValue),
+  setConfig: (key: string, value: unknown) => ipcRenderer.invoke('setConfig', key, value),
   // 网络（对端：main/app.ts，走 Electron net 模块 + 域名白名单）
-  netRequest: (options: any) => ipcRenderer.invoke('netRequest', options),
+  netRequest: (options: NetRequestOptions) => ipcRenderer.invoke('netRequest', options),
   // 播放（对端：main/stream.ts。createLiveStream 只登记会话，
   // FFmpeg 由 main/http-server.ts 在播放器实际拉流时才 spawn）
   createLiveStream: (rtmpUrl: string, liveId: string) => ipcRenderer.invoke('createLiveStream', rtmpUrl, liveId),
@@ -63,8 +63,8 @@ const api = {
     ipcRenderer.on('downloadTaskEnd', listener)
     return () => ipcRenderer.removeListener('downloadTaskEnd', listener)
   },
-  downloadTaskError: (callback: (_liveId: string, _error: any) => void) => {
-    const listener = (_e: Electron.IpcRendererEvent, liveId: string, error: any) => callback(liveId, error)
+  downloadTaskError: (callback: (_liveId: string, _error: string) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, liveId: string, error: string) => callback(liveId, error)
     ipcRenderer.on('downloadTaskError', listener)
     return () => ipcRenderer.removeListener('downloadTaskError', listener)
   },
@@ -83,8 +83,8 @@ const api = {
     ipcRenderer.on('recordTaskEnd', listener)
     return () => ipcRenderer.removeListener('recordTaskEnd', listener)
   },
-  recordTaskError: (callback: (_liveId: string, _error: any) => void) => {
-    const listener = (_e: Electron.IpcRendererEvent, liveId: string, error: any) => callback(liveId, error)
+  recordTaskError: (callback: (_liveId: string, _error: string) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, liveId: string, error: string) => callback(liveId, error)
     ipcRenderer.on('recordTaskError', listener)
     return () => ipcRenderer.removeListener('recordTaskError', listener)
   },

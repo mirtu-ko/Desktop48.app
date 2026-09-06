@@ -170,7 +170,7 @@ class Database {
     return { ok: true }
   }
 
-  public getMember(userId: number) {
+  public getMemberInfo(userId: number) {
     const member = this.db.starInfo?.find(m => Number(m.userId) === Number(userId))
     if (!member)
       return member

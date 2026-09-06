@@ -12,7 +12,7 @@ export function registerDatabaseIPC(): void {
   const db = () => Database.instance()
 
   ipcMain.handle('saveMemberData', async (_event, content) => db().saveMemberData(content))
-  ipcMain.handle('getMember', async (_event, userId) => db().getMember(userId))
+  ipcMain.handle('getMemberInfo', async (_event, userId) => db().getMemberInfo(userId))
   ipcMain.handle('getBlockedMembers', async () => db().getBlockedMembers())
   ipcMain.handle('setBlockedMembers', async (_event, ids) => db().setBlockedMembers(ids))
   ipcMain.handle('addBlockedMember', async (_event, userId) => db().addBlockedMember(userId))

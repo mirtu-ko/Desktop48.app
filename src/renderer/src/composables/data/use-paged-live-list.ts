@@ -71,7 +71,7 @@ export async function enrichLiveItem(item: any, memberError: 'fallback' | 'throw
   item.date = Tools.dateFormat(Number.parseFloat(item.ctime), 'yyyy-MM-dd hh:mm:ss')
   if (memberError === 'fallback') {
     try {
-      item.member = await window.mainAPI.getMember(item.userInfo.userId)
+      item.member = await window.mainAPI.getMemberInfo(item.userInfo.userId)
     }
     catch (e) {
       item.member = null
@@ -79,7 +79,7 @@ export async function enrichLiveItem(item: any, memberError: 'fallback' | 'throw
     }
     return
   }
-  item.member = await window.mainAPI.getMember(item.userInfo.userId)
+  item.member = await window.mainAPI.getMemberInfo(item.userInfo.userId)
 }
 
 export default usePagedLiveList
