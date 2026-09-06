@@ -3,6 +3,7 @@ import { Download, Headset, Microphone, Setting, User, VideoCamera } from '@elem
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppDock from '../components/app/AppDock.vue'
+import BackTopButton from '../components/app/BackTopButton.vue'
 import FloatAudioBar from '../components/floats/FloatAudioBar.vue'
 import FloatPlayerHost from '../components/floats/FloatPlayerHost.vue'
 import { useMemberSync } from '../composables/data/use-member-sync'
@@ -93,6 +94,9 @@ onUnmounted(() => {
       :active="activeIndex"
       @change="changeMenu"
     />
+
+    <!-- 右下角全局回到顶部按钮：自动定位当前页面的主滚动容器 -->
+    <BackTopButton />
 
     <!-- 全局画中画迷你窗：跨页面持续播放 -->
     <FloatPlayerHost />
