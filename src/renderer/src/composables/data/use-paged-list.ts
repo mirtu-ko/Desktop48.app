@@ -6,6 +6,7 @@ import useLoadMore from './use-load-more'
 export interface PagedPage<T> {
   next: string
   items: T[]
+  [key: string]: any
 }
 
 export interface UsePagedListOptions<T> {
@@ -57,6 +58,7 @@ export function usePagedList<T>({
     loadFailed.value = false
     try {
       const page = await loadPage(listNext.value)
+      // console.info('[use-paged-list] 分页数据', 'requestId', requestId, 'listNext', page.next, page.items)
       if (requestId !== listRequestId)
         return false
       if (!page || !Array.isArray(page.items)) {
@@ -121,18 +123,18 @@ export function usePagedList<T>({
   }
 
   return {
-    list,
-    listNext,
-    loading,
-    noMore,
-    disabled,
+    list, // 列表数据
+    listNext, // 分页游标
+    loading, // 加载状态
+    noMore, // 是否没有更多数据
+    disabled, // 是否禁用加载更多
     /** 最近一次加载是否失败（供 useLoadMore 终止自动补拉；失败时 UI 也可据此显示重试入口） */
-    loadFailed,
-    scrollbarRef,
-    onInfiniteScroll,
-    getList,
-    reset,
-    refresh,
+    loadFailed, // 最近一次加载是否失败
+    scrollbarRef, // 滚动条引用
+    onInfiniteScroll, // 触底加载事件
+    getList, // 分页加载函数
+    reset, // 仅重置列表状态，不发起请求（多列表联动的刷新序列里使用）
+    refresh, // 刷新重置后拉取第一页
   }
 }
 

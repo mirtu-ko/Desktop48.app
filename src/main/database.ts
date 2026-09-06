@@ -1,4 +1,16 @@
-import type { GroupRecord, MemberRecord, MemberTreeGroupNode, TeamRecord } from './domain/member-tree'
+import type {
+  DomainInfoItem,
+  GroupInfoItem,
+  MemberDataContent,
+  OfficialInfoItem,
+  PeriodInfoItem,
+  StarAdjunctItem,
+  StarInfoItem,
+  StarOfficialRelationItem,
+  StarRepeatItem,
+  TeamInfoItem,
+} from './data'
+import type { MemberTreeGroupNode } from './domain/member-tree'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
@@ -24,12 +36,29 @@ export interface AppConfig {
   userAgent?: string
 }
 
-/** database.json 的落库结构：成员原始数据（API 同步）+ 屏蔽名单 + 应用配置 */
+/**
+ * database.json 的落库结构：成员相关原始数据（API 同步，9 个分节）+ 屏蔽名单 + 应用配置。
+ * 分节字段定义见 ./data（依据 UPDATE_INFO_URL 真实返回逐字段建模）。
+ */
 export interface DatabaseShape {
-  /** 成员原始数据（starInfo/teamInfo/groupInfo 来自 update/group_team_star 接口，字段宽容处理） */
-  starInfo?: MemberRecord[]
-  teamInfo?: TeamRecord[]
-  groupInfo?: GroupRecord[]
+  /** 官方账号 */
+  officialInfo?: OfficialInfoItem[]
+  /** 站点域名配置 */
+  domainInfo?: DomainInfoItem[]
+  /** 成员原始数据（建树与屏蔽名单解析的数据源） */
+  starInfo?: StarInfoItem[]
+  /** 兼职成员档案 */
+  starAdjunctInfo?: StarAdjunctItem[]
+  /** 成员重复档案 */
+  starRepeatInfo?: StarRepeatItem[]
+  /** 团体 */
+  groupInfo?: GroupInfoItem[]
+  /** 期数（生） */
+  periodInfo?: PeriodInfoItem[]
+  /** 队伍（提供排序权重、队伍色、徽章） */
+  teamInfo?: TeamInfoItem[]
+  /** 官方账号与成员的关联（接口当前返回空数组，字段待样本补充） */
+  starOfficialRelationInfo?: StarOfficialRelationItem[]
   /**
    * 已屏蔽成员的 userId 列表（旧库可能残留 hiddenMemberIds，init() 时迁移）。
    * 宽容 number|string：旧库存过字符串形式的 id（blocked-members 的纯函数按此设计）
@@ -56,7 +85,7 @@ class Database {
   /** 成员树：starInfo 的内存派生（不落盘），见 domain/member-tree.ts */
   public memberTree: MemberTreeGroupNode[] = []
   public db!: DatabaseShape
-  public membersDB: MemberRecord[] | undefined
+  public membersDB: StarInfoItem[] | undefined
 
   private static database: Database | null = null
 
@@ -102,19 +131,37 @@ class Database {
     log('[database.ts]数据库路径', this.dbPath)
   }
 
-  /** 保存 API 同步来的成员原始数据；清洗/派生只发生在内存里（建树），落盘的只有原始内容 */
-  public saveMemberData(content: Partial<Pick<DatabaseShape, 'starInfo' | 'teamInfo' | 'groupInfo'>>) {
+  /** 保存 API 同步来的成员相关原始数据（9 个分节全量落库）；清洗/派生只发生在内存里（建树），落盘的只有原始内容 */
+  public saveMemberData(content: Partial<MemberDataContent>) {
     log('[database.ts] save-member-data 开始写入:', content.starInfo?.length, content.teamInfo?.length, content.groupInfo?.length)
+    if (content.officialInfo)
+      this.db.officialInfo = content.officialInfo
+    if (content.domainInfo)
+      this.db.domainInfo = content.domainInfo
     if (content.starInfo)
       this.db.starInfo = content.starInfo
-    if (content.teamInfo)
-      this.db.teamInfo = content.teamInfo
+    if (content.starAdjunctInfo)
+      this.db.starAdjunctInfo = content.starAdjunctInfo
+    if (content.starRepeatInfo)
+      this.db.starRepeatInfo = content.starRepeatInfo
     if (content.groupInfo)
       this.db.groupInfo = content.groupInfo
+    if (content.periodInfo)
+      this.db.periodInfo = content.periodInfo
+    if (content.teamInfo)
+      this.db.teamInfo = content.teamInfo
+    if (content.starOfficialRelationInfo)
+      this.db.starOfficialRelationInfo = content.starOfficialRelationInfo
     log('[database.ts] save-member-data 原始数据写入成功:', {
+      officialInfo: this.db.officialInfo?.length,
+      domainInfo: this.db.domainInfo?.length,
       starInfo: this.db.starInfo?.length,
-      teamInfo: this.db.teamInfo?.length,
+      starAdjunctInfo: this.db.starAdjunctInfo?.length,
+      starRepeatInfo: this.db.starRepeatInfo?.length,
       groupInfo: this.db.groupInfo?.length,
+      periodInfo: this.db.periodInfo?.length,
+      teamInfo: this.db.teamInfo?.length,
+      starOfficialRelationInfo: this.db.starOfficialRelationInfo?.length,
     })
     // 同步缓存引用：starInfo 是整组替换，不刷新的话 hasMembers 等会读到旧数据直到重启
     this.membersDB = this.db.starInfo
