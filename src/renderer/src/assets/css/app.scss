@@ -34,7 +34,7 @@
    * 10-29  播放器浮层（相对 video-box 定位）：loading/封面层(10) < 旋转提示(25)
    *        < MiniControls 控制条(20) ≈ player-actions 悬浮按钮(30)
    * 30-89  页内浮动件：弹幕侧栏开关(30)、页内磨砂浮动 Dock/TabBar(6 属容器内微层)
-   * 90-99  全局固定浮层：FloatAudioBar 迷你播放条(99)
+   * 90-99  全局固定浮层：FloatAudioBar 迷你播放条(99)、BackTopButton 回顶按钮(95)
    * 100    AppDock 底部导航（最高固定层）
    * 1000+  FloatPlayer 画中画窗口（动态：1000 + 列表下标，见 FloatPlayer.vue，
    *        需盖过以上所有层；同一时刻只有一个置顶浮窗） */
@@ -88,6 +88,14 @@ body,
  * 侧边栏与内容区共享同一底色，缝隙两侧永远同色，不会出现色差 */
 .el-container {
   background: transparent;
+}
+
+/* 键盘焦点框：桌面端以鼠标交互为主，隐藏方向键/Tab 触发的默认选中态。
+ * !important 用于压过 Element Plus 组件级 :focus-visible（如 .el-button）；
+ * 输入框等组件的聚焦反馈走自绘 box-shadow 边框，不受影响 */
+:focus,
+:focus-visible {
+  outline: none !important;
 }
 
 /* 分区标题：画布是渐变，靠不透明底色遮住横线的老办法会露出色块，
