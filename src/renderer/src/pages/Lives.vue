@@ -10,6 +10,7 @@ import { enrichLiveItem, usePagedLiveList } from '../composables/data/use-paged-
 import useFloatPlayers from '../composables/use-float-players'
 import Apis from '../services/apis'
 import EventBus from '../services/event-bus'
+import { debugLog } from '../utils/debug'
 import Reviews from './Reviews.vue'
 
 const route = useRoute()
@@ -95,6 +96,7 @@ function play(item: LiveListItem) {
 // 浮窗放流失败（流已不存在/直播下架）时，若该直播属于本页列表则自动刷新
 function onLiveUnavailable(liveId: string) {
   const inList = liveList.value.some(item => item.liveId === liveId)
+  debugLog('list', `③收到下架广播: ${liveId}（来自播放器链的 live-unavailable 事件）在本页列表中: ${inList}${inList ? ' → 重置并刷新列表' : ' → 忽略'}`)
   if (inList)
     refreshList()
 }

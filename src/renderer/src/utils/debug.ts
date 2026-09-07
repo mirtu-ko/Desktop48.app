@@ -16,6 +16,8 @@
  * | playback   | 录播 VOD 播放链    | ReviewPlayer → use-playback-engine (hls.js)       |
  * | tasks      | 下载/录制任务链    | use-tasks → task-base → ffmpeg 任务通道           |
  * | load-more  | 列表分页与自动补拉 | use-load-more → use-paged-live-list               |
+ * | list       | 列表数据旅程       | use-paged-list（拉取→过滤→补全→去重）→ Lives.vue |
+ * |            |                    | （③收下架广播，与 live 链的首尾呼应）           |
  * | net        | 所有链路共用的网络 | request.ts → 主进程 netRequest                    |
  * ────────────────────────────────────────────────────────────────
  * 直播链跨进程时序：渲染层先 createLiveStream（只登记会话），

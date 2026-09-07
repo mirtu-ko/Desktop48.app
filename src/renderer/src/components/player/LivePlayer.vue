@@ -169,7 +169,6 @@ function rebuildMedia() {
 
 /** 媒体元素/FLV 错误统一处理：网络错误保持 loading 重试，致命错误先销毁播放器 */
 function handleStreamError(reason: string, isNetwork: boolean) {
-  console.error('[LivePlayer.vue] 直播播放异常:', reason)
   if (isNetwork) {
     debugLog('live', `编排:网络错误（${reason}），保持 loading 并安排重试`)
     mediaLoading.value = true
@@ -209,7 +208,7 @@ const { running: recording, onActionClick: onRecordClick } = useMediaDownload({
     }
     catch (error) {
       // 失败原因已由 Apis.request 统一弹窗提示（直播已下架/网络错误）
-      console.error('[LivePlayer.vue] 获取录制源地址失败:', error)
+      debugLog('live', `编排:获取录制源地址失败 ${error}`)
       return null
     }
   },

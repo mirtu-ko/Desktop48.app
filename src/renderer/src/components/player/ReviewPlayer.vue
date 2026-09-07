@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { useMediaShortcuts } from '../../composables/media/use-media-shortcuts'
 import { useSleepBlocker } from '../../composables/media/use-sleep-blocker'
 import { useVideoRotation } from '../../composables/media/use-video-rotation'
@@ -51,8 +50,6 @@ const sidebarVisible = ref(true)
 
 const videoBoxRef = ref<HTMLElement | null>(null)
 const rootRef = ref<HTMLElement | null>(null)
-
-const router = useRouter()
 
 // 录播页只做两类事情：
 // 1. 按播放地址选择 HLS 或原生 MP4 播放（use-playback-engine）
@@ -184,13 +181,14 @@ async function getOne() {
       // 详情里没有用户与在线人数信息，用公演标题与传入的队伍 logo 兜底
       debugLog('playback', `②拉详情: source=open → getOpenLiveOne`, props)
       const data = await Apis.instance().openLive(props.liveId)
+      debugLog('playback', `②拉详情: 公演回放详情 → data`, data)
       const stream = pickPreferredVodStream(data.playStreams)
       if (!stream?.streamPath) {
         debugLog('playback', `②拉详情: 公演回放选流为空（playStreams=${data.playStreams?.length ?? 0} 条），无法播放`)
         ElMessage({ message: '未获取到公演回放地址', type: 'error' })
         return
       }
-      debugLog('playback', `②拉详情: 公演回放选流 → streamType=${stream.streamType}`)
+      debugLog('playback', `②拉详情: 公演回放选流 → streamType=${stream.streamType}`, stream)
       isRadio.value = false
       number.value = 0
       realName.value = data.subTitle || data.title || '开放公演'
@@ -203,17 +201,17 @@ async function getOne() {
 
     debugLog('playback', `②拉详情: source=user → getLiveOne`, props)
     const data = await Apis.instance().live(props.liveId)
+    debugLog('playback', `②拉详情: 直播详情 → data`, data)
 
     const nextPlayStreamPath = Tools.streamPathHandle(data.playStreamPath, props.startTime)
     const nextBarrageUrl = data.msgFilePath || ''
 
     if (!data.review) {
-      debugLog('playback', `②拉详情: liveId=${props.liveId} 不是录播（review=false），跳回直播页`)
+      debugLog('playback', `②拉详情: liveId=${props.liveId} 不是录播（review=false）`)
       ElMessage({
         message: '该视频不是录播',
         type: 'warning',
       })
-      router.push('/live')
       return
     }
 
@@ -232,10 +230,11 @@ async function getOne() {
     const barrageSourceChanged = barrageUrl.value !== nextBarrageUrl
     barrageUrl.value = nextBarrageUrl
     playStreamPath.value = nextPlayStreamPath
-    debugLog('playback', `②拉详情: 播放地址与弹幕源已更新（弹幕源${barrageSourceChanged ? '变化 → 重置弹幕状态' : '未变 → 沿用现有弹幕游标'}）`, barrageUrl.value, playStreamPath.value)
 
-    if (barrageSourceChanged)
+    if (barrageSourceChanged) {
+      debugLog('playback', `②拉详情: 播放地址与弹幕源已更新（弹幕源${barrageSourceChanged ? '变化 → 重置弹幕状态' : '未变 → 沿用现有弹幕游标'}）`, barrageUrl.value, playStreamPath.value)
       resetBarrageSource()
+    }
   }
   catch (error: any) {
     console.error(error)

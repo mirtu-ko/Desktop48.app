@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import { computed, ref } from 'vue'
+import { debugLog } from '../../utils/debug'
 import useLoadMore from './use-load-more'
 
 /** 分页接口的归一化返回结构：next 为下一页游标（'0' 表示没有更多） */
@@ -59,8 +60,10 @@ export function usePagedList<T>({
     try {
       const page = await loadPage(listNext.value)
       // console.info('[use-paged-list] 分页数据', 'requestId', requestId, 'listNext', page.next, page.items)
-      if (requestId !== listRequestId)
+      if (requestId !== listRequestId) {
+        debugLog('list', `①翻页: 请求 #${requestId} 的回包已过期（更新请求 #${listRequestId} 已发出），整页丢弃`)
         return false
+      }
       if (!page || !Array.isArray(page.items)) {
         console.warn('[use-paged-list] 分页数据不是数组或无内容', page?.items)
         loadFailed.value = true
@@ -83,7 +86,9 @@ export function usePagedList<T>({
         return false
       // 兜底去重，避免接口分页边界返回重复项导致列表出现重复卡片
       const existedIds = new Set(list.value.map(item => itemKey(item)))
-      list.value.push(...items.filter(item => !existedIds.has(itemKey(item))))
+      const fresh = items.filter(item => !existedIds.has(itemKey(item)))
+      list.value.push(...fresh)
+      debugLog('list', `①翻页: 拉取 ${page.items.length} 条 → 过滤后 ${items.length} 条 → 去重后新增 ${fresh.length} 条${items.length - fresh.length > 0 ? `（丢弃重复 ${items.length - fresh.length} 条）` : ''}，next=${page.next}${noMore.value ? '（无更多）' : ''}`)
       return true
     }
     catch (error) {

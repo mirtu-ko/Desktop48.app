@@ -71,6 +71,7 @@ export interface LiveListItem {
   title?: string
   /** 1=视频直播 2=电台 */
   liveType?: number
+  /** 0=直播 1=录屏 */
   liveMode?: number
   [key: string]: unknown
 }

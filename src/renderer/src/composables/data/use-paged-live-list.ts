@@ -1,6 +1,7 @@
 import type { LiveListContent, LiveListItem } from '../../services/api-types'
 import type { UsePagedListOptions } from './use-paged-list'
 import { ref } from 'vue'
+import { debugLog } from '../../utils/debug'
 import Tools from '../../utils/tools'
 import { usePagedList } from './use-paged-list'
 
@@ -76,6 +77,7 @@ export async function enrichLiveItem(item: any, memberError: 'fallback' | 'throw
     catch (e) {
       item.member = null
       console.error('获取成员信息失败:', e)
+      debugLog('list', `②补全降级: liveId=${item.liveId} 成员 ${item.userInfo.userId} 查询失败 → member=null（卡片降级渲染）`)
     }
     return
   }

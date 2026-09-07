@@ -7,7 +7,9 @@ export interface FloatPlayerPayload {
   /** 播放器头部标题 */
   title: string
   startTime: number
+  /** 1=视频直播 2=电台 */
   liveType?: number
+  /** 0=直播 1=录屏 */
   liveMode?: number
   /** 数据源：user=用户直播(getLiveOne)，open=开放公演(getOpenLiveOne) */
   source?: string

@@ -38,7 +38,7 @@ const liveBadge = computed(() => {
 <template>
   <div class="live-card lift-card clickable">
     <div class="cover-container">
-      <el-image class="cover" :src="item.cover[0]" fit="cover" lazy>
+      <el-image class="cover" :src="item.cover?.[0]" fit="cover" lazy>
         <template #placeholder>
           <div class="cover-ph" />
         </template>
@@ -60,7 +60,7 @@ const liveBadge = computed(() => {
       <div class="member-info">
         <span class="nickname ellipsis">{{ item.userInfo.nickname }}</span>
         <span
-          v-if="item.member && item.member.teamName"
+          v-if="item.member?.teamName"
           class="team-badge"
           :style="item.member.teamColor ? { '--tb-color': `#${item.member.teamColor}` } : undefined"
         >
@@ -68,7 +68,7 @@ const liveBadge = computed(() => {
         </span>
       </div>
       <p class="live-date">
-        {{ item.date?.slice(0, 16) }}
+        {{ item.date }}
       </p>
     </div>
   </div>
@@ -94,8 +94,7 @@ const liveBadge = computed(() => {
   .cover-container {
     position: relative;
     width: 100%;
-    height: 0;
-    padding-bottom: 100%;
+    aspect-ratio: 1;
     overflow: hidden;
 
     .cover {
