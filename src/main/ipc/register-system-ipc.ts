@@ -135,15 +135,11 @@ export function registerSystemIPC(): void {
 
   // ffmpeg 相关
   handleTraced('checkFfmpegBinaries', async (_event: IpcMainInvokeEvent, dir: string) => {
-    function ffmpegFullFilename(name: string): string {
-      return process.platform === 'win32' ? `${name}.exe` : name
-    }
-    const ffmpegPath = path.join(dir, ffmpegFullFilename('ffmpeg'))
-    const ffplayPath = path.join(dir, ffmpegFullFilename('ffplay'))
+    // 应用只用 ffmpeg（stream.ts 拉流 / ffmpeg-process.ts 任务），ffplay 从未被调用，
+    // 不再作为就绪条件（ffmpeg-download.ts 在线下载的 ffmpeg-static 构建也不含 ffplay）
+    const ffmpegPath = path.join(dir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
     if (!fs.existsSync(ffmpegPath))
       throw new Error('ffmpeg 不存在')
-    if (!fs.existsSync(ffplayPath))
-      throw new Error('ffplay 不存在')
     return true
   })
 }

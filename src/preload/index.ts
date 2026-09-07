@@ -1,4 +1,4 @@
-import type { electronAPI as ElectronAPI, mainAPI, MemberDataContent, NetRequestOptions } from './api-types'
+import type { electronAPI as ElectronAPI, FfmpegDownloadProgress, mainAPI, MemberDataContent, NetRequestOptions } from './api-types'
 import { contextBridge, ipcRenderer } from 'electron'
 
 // 替代 @electron-toolkit/preload，仅暴露渲染进程实际需要的最小 API
@@ -49,6 +49,13 @@ const api = {
   getDesktopPath: () => ipcRenderer.invoke('getDesktopPath'),
   selectDirectory: () => ipcRenderer.invoke('selectDirectory'),
   checkFfmpegBinaries: (dir: string) => ipcRenderer.invoke('checkFfmpegBinaries', dir),
+  // ffmpeg 在线下载（对端：main/ffmpeg/ffmpeg-download.ts，下载进度经 ffmpegDownloadProgress 回推）
+  downloadFfmpeg: () => ipcRenderer.invoke('downloadFfmpeg'),
+  onFfmpegDownloadProgress: (callback: (_progress: FfmpegDownloadProgress) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, progress: FfmpegDownloadProgress) => callback(progress)
+    ipcRenderer.on('ffmpegDownloadProgress', listener)
+    return () => ipcRenderer.removeListener('ffmpegDownloadProgress', listener)
+  },
   getPlatform: () => process.platform,
   pathJoin: (...paths: string[]) => ipcRenderer.invoke('pathJoin', ...paths),
   // 下载（对端：main/ipc/register-task-ipc.ts，通用任务机制在 main/ffmpeg/register-ffmpeg-task.ts）

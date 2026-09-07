@@ -213,7 +213,7 @@ async function getLiveOne() {
     if (!data.review) {
       debugLog('playback', `②拉详情: liveId=${props.liveId} 暂无回放（review=false）`)
       ElMessage({
-        message: '该视频不是录播',
+        message: '录播回放尚未生成！',
         type: 'warning',
       })
       return

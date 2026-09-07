@@ -45,7 +45,7 @@ export function useAppConfig() {
     void window.mainAPI.openPath(downloadDirectory.value)
   }
 
-  /** 选择 ffmpeg 目录：校验 ffmpeg/ffplay 可执行文件存在后保存，校验失败询问是否重选 */
+  /** 选择 ffmpeg 目录：校验 ffmpeg 可执行文件存在后保存，校验失败询问是否重选 */
   async function setFfmpegDirectory() {
     const dir = await window.mainAPI.selectDirectory()
     if (!dir) {
@@ -63,7 +63,7 @@ export function useAppConfig() {
   }
 
   function confirmFfmpegDir() {
-    ElMessageBox.confirm('选择的目录下没有ffmpeg或ffplay', {
+    ElMessageBox.confirm('选择的目录下没有 ffmpeg', {
       confirmButtonText: '重新选择',
       cancelButtonText: '取消',
     }).then(() => {

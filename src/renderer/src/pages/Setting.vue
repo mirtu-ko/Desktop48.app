@@ -148,14 +148,14 @@ function hideLogo(event: Event) {
             @click="setDownloadDirectory"
           />
           <div class="row-actions">
+            <el-button @click="openDownloadDirectory">
+              打开目录
+            </el-button>
             <el-button
               type="primary"
               @click="setDownloadDirectory"
             >
               选择
-            </el-button>
-            <el-button @click="openDownloadDirectory">
-              打开目录
             </el-button>
           </div>
         </div>
@@ -186,14 +186,14 @@ function hideLogo(event: Event) {
             @click="setFfmpegDirectory"
           />
           <div class="row-actions">
+            <el-button @click="openFfmpegDirectory">
+              打开目录
+            </el-button>
             <el-button
               type="primary"
               @click="setFfmpegDirectory"
             >
               选择
-            </el-button>
-            <el-button @click="openFfmpegDirectory">
-              打开目录
             </el-button>
           </div>
         </div>
@@ -295,7 +295,7 @@ function hideLogo(event: Event) {
               免责声明
             </p>
             <p class="legal-text">
-              本应用数据数据来源于SNH48 官方网站、live.48.cn、口袋48 APP 等互联网公开数据。仅供参考，一切数据以官方信息为准。
+              本应用数据来源于SNH48 官方网站、口袋48 APP 等互联网公开数据。仅供参考，一切数据以官方信息为准。
             </p>
             <p class="legal-text">
               本应用为非官方项目，与 SNH48 Group 及其运营方（上海丝芭文化传媒集团有限公司）无任何关联，所有数据、商标、肖像权等归相关权利人所有。

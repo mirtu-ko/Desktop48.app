@@ -5,6 +5,7 @@
  * 每个模块头部注释都标明其通道与 preload/index.ts mainAPI 契约的对应关系。
  * 新增通道域时在此追加一行调用，不要在业务模块里散落 ipcMain.handle。
  */
+import { registerFfmpegDownloadIPC } from '../ffmpeg/ffmpeg-download'
 import { registerDatabaseIPC } from './register-database-ipc'
 import { registerStreamIPC } from './register-stream-ipc'
 import { registerSystemIPC } from './register-system-ipc'
@@ -17,4 +18,5 @@ export function registerAllIPC(): void {
   registerSystemIPC()
   registerStreamIPC()
   registerTaskIPC()
+  registerFfmpegDownloadIPC()
 }

@@ -14,6 +14,18 @@ import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
 // 类型随契约一起暴露（preload/index.ts 实现侧引用）
 export type { MemberDataContent }
 
+/**
+ * ffmpegDownloadProgress 事件载荷（对端：main/ffmpeg/ffmpeg-download.ts）。
+ * 定义在契约文件而非主进程模块：避免 web 类型程序经此引用拉入主进程文件
+ * （主进程的 process 用法与 env.d.ts 的渲染层轻量 process 声明冲突）
+ */
+export interface FfmpegDownloadProgress {
+  /** 已接收（gzip 压缩）字节数 */
+  received: number
+  /** 总字节数；服务器未返回 Content-Length 时为 0（渲染端退化为按 MB 展示） */
+  total: number
+}
+
 // 网络请求参数类型（对端：main/app.ts 的 'netRequest'；body 为序列化后的字符串）
 export interface NetRequestOptions {
   url: string
@@ -109,6 +121,11 @@ export interface mainAPI {
   getDesktopPath: () => Promise<string>
   selectDirectory: () => Promise<string | null>
   pathJoin: (...paths: string[]) => Promise<string>
+
+  // ffmpeg 在线下载（对端：main/ffmpeg/ffmpeg-download.ts；
+  // downloadFfmpeg 返回 ffmpeg 所在目录，进度回调在下载期间持续触发）
+  downloadFfmpeg: () => Promise<string>
+  onFfmpegDownloadProgress: (callback: (progress: FfmpegDownloadProgress) => void) => () => void
 
   // 播放（对端：main/stream.ts。createLiveStream 只登记会话，
   // FFmpeg 由 main/http-server.ts 在播放器实际拉流时才 spawn）
