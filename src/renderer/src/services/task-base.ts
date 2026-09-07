@@ -30,6 +30,9 @@ export default class TaskBase {
   private readonly channels: TaskChannelAdapter
   private readonly _logTag: string
 
+  /** 任务正常完成回调：由 use-tasks 注入用于展示用户提示（服务层不直接做 UI） */
+  public onEnd?: () => void
+
   constructor(
     channels: TaskChannelAdapter,
     url: string,
@@ -131,6 +134,7 @@ export default class TaskBase {
         this._filePath = filePath
         this._status = Constants.TaskStatus.Finish
         this.cleanupListeners()
+        this.onEnd?.()
         debugLog('tasks', `[${this._logTag}] task end:`, liveId)
       }
     }))

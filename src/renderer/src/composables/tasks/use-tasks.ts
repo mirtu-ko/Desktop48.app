@@ -17,6 +17,8 @@ interface TaskKindConfig {
   runningMessage: string
   startMessage: string
   restartMessage: string
+  /** 任务完成提示文案（正常结束；手动停止与出错不提示，另有状态展示） */
+  endMessage: string
   logTag: string
 }
 
@@ -47,6 +49,7 @@ const taskConfigs: Record<TaskKind, TaskKindConfig> = {
     runningMessage: '该回放正在下载',
     startMessage: '下载开始',
     restartMessage: '下载已重新开始，原任务将被覆盖',
+    endMessage: '下载完成',
     logTag: 'download',
   },
   record: {
@@ -63,13 +66,18 @@ const taskConfigs: Record<TaskKind, TaskKindConfig> = {
     runningMessage: '该直播正在录制',
     startMessage: '录制开始',
     restartMessage: '录制已重新开始，原任务将被覆盖',
+    endMessage: '录制完成',
     logTag: 'record',
   },
 }
 
 /** 由类型差异配置直接构造任务实例（替代原 DownloadTask/RecordTask 薄子类） */
 function createTask(kind: TaskKind, taskData: TaskPayload): TaskBase {
-  return new TaskBase(taskConfigs[kind].channels, taskData.url, taskData.filename, taskData.liveId, taskConfigs[kind].logTag)
+  const config = taskConfigs[kind]
+  const task = new TaskBase(config.channels, taskData.url, taskData.filename, taskData.liveId, config.logTag)
+  // 任务正常完成时提示用户；带文件名，多任务并行时能区分是哪一个完成
+  task.onEnd = () => ElMessage({ message: `${task.getFilename()} ${config.endMessage}`, type: 'success' })
+  return task
 }
 
 async function startTask(task: TaskBase, config: TaskKindConfig, message: string) {
