@@ -510,11 +510,16 @@ body,
   }
 
   /* 任务进行中：常亮实色底 + 呼吸光圈，切回播放器也能一眼看出状态。
-     只换 background-color，白纱层保留 */
+     只换 background-color，白纱层保留；图标随光圈同周期闪烁 */
   &.is-active {
     color: #fff;
     background-color: var(--ab-active-bg);
     animation: action-pulse 1.4s ease-in-out infinite;
+
+    /* 图标呼吸闪烁：与 action-pulse 同为 1.4s ease-in-out，同步启停 */
+    .media-icon {
+      animation: icon-blink 1.4s ease-in-out infinite;
+    }
   }
 }
 
@@ -529,6 +534,17 @@ body,
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.16),
       0 0 0 7px transparent;
+  }
+}
+
+/* 进行中图标的同步闪烁：50% 处最淡，与光圈扩散到最大的时刻一致 */
+@keyframes icon-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
   }
 }
 
@@ -550,7 +566,7 @@ body,
   color: #7dd8a4;
 
   &:hover {
-    color: #4fd187;
+    color: #34c07c;
   }
 }
 
