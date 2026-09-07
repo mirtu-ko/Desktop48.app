@@ -13,7 +13,7 @@ import { TaskRegistry } from './task-registry'
 interface FfmpegTaskConfig {
   /** IPC 通道名前缀，如 'downloadTask' / 'recordTask' */
   channelPrefix: string
-  /** 日志前缀，如 'download.ts' / 'record.ts' */
+  /** 日志前缀，如 'downloadTask' / 'recordTask' */
   logTag: string
   /** ffmpeg 输出参数（位于 '-c copy' 之后、输出文件之前） */
   ffmpegArgs: string[]

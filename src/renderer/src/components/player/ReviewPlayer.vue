@@ -46,7 +46,7 @@ const carousels = ref<string[]>([])
 const carouselTime = ref(5000)
 const realName = ref('')
 const userAvatar = ref('')
-const sidebarVisible = ref(true)
+const sidebarVisible = ref(false)
 
 const videoBoxRef = ref<HTMLElement | null>(null)
 const rootRef = ref<HTMLElement | null>(null)
@@ -179,7 +179,7 @@ async function getOne() {
     if (props.source === 'open') {
       // 开放公演回放：getOpenLiveOne 返回 playStreams 数组（VOD m3u8），优先选超清（streamType 3），
       // 详情里没有用户与在线人数信息，用公演标题与传入的队伍 logo 兜底
-      debugLog('playback', `②拉详情: source=open → getOpenLiveOne`, props)
+      debugLog('playback', `②拉详情: source=open → getOpenLiveOne, props:`, props)
       const data = await Apis.instance().openLive(props.liveId)
       debugLog('playback', `②拉详情: 公演回放详情 → data`, data)
       const stream = pickPreferredVodStream(data.playStreams)
@@ -207,7 +207,7 @@ async function getOne() {
     const nextBarrageUrl = data.msgFilePath || ''
 
     if (!data.review) {
-      debugLog('playback', `②拉详情: liveId=${props.liveId} 不是录播（review=false）`)
+      debugLog('playback', `②拉详情: liveId=${props.liveId} 非录播（review=false）`)
       ElMessage({
         message: '该视频不是录播',
         type: 'warning',
@@ -232,12 +232,12 @@ async function getOne() {
     playStreamPath.value = nextPlayStreamPath
 
     if (barrageSourceChanged) {
-      debugLog('playback', `②拉详情: 播放地址与弹幕源已更新（弹幕源${barrageSourceChanged ? '变化 → 重置弹幕状态' : '未变 → 沿用现有弹幕游标'}）`, barrageUrl.value, playStreamPath.value)
+      debugLog('playback', `②拉详情: 播放地址与弹幕源已更新（弹幕源变化 → 重新加载）`)
       resetBarrageSource()
     }
   }
   catch (error: any) {
-    console.error(error)
+    console.error('ReviewPlayer.vue, 获取录播信息失败:', error.message)
     ElMessage({ message: '获取录播信息失败', type: 'error' })
   }
 }

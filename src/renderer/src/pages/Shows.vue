@@ -158,7 +158,7 @@ function openLiveStream(show: OpenLive) {
 
 /** 历史公演（已结束）：以画中画回放迷你窗打开 VOD 流，停留当前页继续浏览 */
 function openHistoryStream(show: OpenLive) {
-  debugLog('show', `公演选路: ${show.liveId} 已结束 → 进入录播链（ReviewPlayer, source=open）`, show)
+  debugLog('show', `公演选路: ${show.liveId} → 进入录播链（ReviewPlayer, source=open）`, show)
   openReview({
     liveId: show.liveId,
     nickname: '',

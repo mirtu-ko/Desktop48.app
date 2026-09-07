@@ -28,7 +28,6 @@ async function init() {
     // 本地已保存过 ffmpeg 目录，说明环境已就绪，直接放行
     const ffmpegDir = await window.mainAPI.getConfig('ffmpegDirectory', '')
     if (ffmpegDir) {
-      console.log('[Initialize.vue]当前系统平台：', window.mainAPI.getPlatform())
       emit('initialized')
       return
     }

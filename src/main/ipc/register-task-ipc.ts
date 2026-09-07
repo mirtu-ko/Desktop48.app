@@ -14,7 +14,7 @@ export function registerTaskIPC(): void {
   // -movflags +faststart: 正常结束时把 moov atom 移到文件头，播放器可立即打开
   registerFfmpegTask({
     channelPrefix: 'downloadTask',
-    logTag: 'download.ts',
+    logTag: 'downloadTask',
     ffmpegArgs: ['-bsf:a', 'aac_adtstoasc', '-movflags', '+faststart'],
   })
 

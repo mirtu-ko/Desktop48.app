@@ -98,10 +98,9 @@ async function fetchAlbums() {
     const list: MusicAlbum[] = await Apis.instance().musicAlbums()
     list.sort((a, b) => Number(b.start_time) - Number(a.start_time))
     albumList.value = list
-    console.log('[Albums.vue]获取专辑信息成功:', albumList.value.length, '张')
   }
   catch (error) {
-    console.error('[Albums.vue]获取专辑信息失败:', error)
+    console.error('获取专辑信息失败:', error)
     // 失败原因已由 apis.musicAlbums 统一弹窗提示，这里不重复弹
   }
   finally {

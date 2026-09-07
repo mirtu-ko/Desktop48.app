@@ -3,7 +3,7 @@
  *
  * 新人理解这个项目最大的障碍是「渲染层调了一个 API，主进程到底发生了什么」。
  * handleTraced 在 verbose 模式下为每个 invoke 通道记录：通道名、参数摘要、耗时、成功/失败，
- * 使完整调用流在 main.log / DevTools 控制台里可直接观察，无需逐层打断点。
+ * 使完整调用流在终端 / DevTools 控制台里可直接观察，无需逐层打断点。
  *
  * 生产环境（verbose 关闭）直接透传 ipcMain.handle，零额外开销。
  * 仅覆盖 invoke（请求-响应）通道；send/once 类单向通知由各业务模块自行记日志。

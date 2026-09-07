@@ -5,5 +5,5 @@
     "moduleResolution": "bundler",
     "types": ["electron-vite/node"]
   },
-  "include": ["electron.vite.config.*", "src/main/**/*", "src/preload/**/*", "src/renderer/src/services/api-urls.ts"]
+  "include": ["electron.vite.config.*", "src/common/**/*", "src/main/**/*", "src/preload/**/*", "src/renderer/src/services/api-urls.ts"]
 }

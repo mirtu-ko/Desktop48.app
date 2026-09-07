@@ -7,7 +7,6 @@ import Index from './pages/Index.vue'
 const isInitialized = ref(false)
 
 function onInitialized() {
-  console.log('[App.vue] onInitialized')
   isInitialized.value = true
 }
 </script>

@@ -62,7 +62,7 @@ function ensureAudio(): HTMLAudioElement {
   audio.addEventListener('error', () => {
     const track = currentTrack.value
     if (track && audio?.src && track.url && audio.src.includes(track.url)) {
-      console.warn('[use-audio-player]音频加载失败，标记失效:', track.url)
+      console.error('[use-audio-player]音频加载失败，标记失效:', track.url)
       // 替换整个 Set 才能触发 shallowRef 的依赖更新（原地 add 不会）
       brokenUrls.value = new Set(brokenUrls.value).add(track.url)
       // 自动顺延下一首，没有下一首则停止
@@ -92,7 +92,7 @@ function playAt(index: number) {
   currentTime.value = 0
   duration.value = 0
   el.src = track.url
-  void el.play().catch(error => console.warn('[use-audio-player] 播放失败:', error))
+  void el.play().catch(error => console.error('[use-audio-player] 播放失败:', error))
 }
 
 /** 播放/暂停切换 */
@@ -101,7 +101,7 @@ function togglePlay() {
     return
   }
   if (audio.paused) {
-    void audio.play().catch(error => console.warn('[use-audio-player] 播放失败:', error))
+    void audio.play().catch(error => console.error('[use-audio-player] 播放失败:', error))
   }
   else {
     audio.pause()

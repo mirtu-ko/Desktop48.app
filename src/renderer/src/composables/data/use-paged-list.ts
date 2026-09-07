@@ -59,13 +59,13 @@ export function usePagedList<T>({
     loadFailed.value = false
     try {
       const page = await loadPage(listNext.value)
-      // console.info('[use-paged-list] 分页数据', 'requestId', requestId, 'listNext', page.next, page.items)
+      debugLog('list', `①翻页: 请求 #${requestId}，next=${listNext.value}，items=${page.items.length}`, page)
       if (requestId !== listRequestId) {
         debugLog('list', `①翻页: 请求 #${requestId} 的回包已过期（更新请求 #${listRequestId} 已发出），整页丢弃`)
         return false
       }
       if (!page || !Array.isArray(page.items)) {
-        console.warn('[use-paged-list] 分页数据不是数组或无内容', page?.items)
+        debugLog('list', '分页数据不是数组或无内容', page?.items)
         loadFailed.value = true
         noMore.value = true
         return false
@@ -94,7 +94,7 @@ export function usePagedList<T>({
     catch (error) {
       if (requestId !== listRequestId)
         return false
-      console.info(error)
+      console.error('[use-paged-list] 分页加载失败', error)
       loadFailed.value = true
       if (stopOnError)
         noMore.value = true

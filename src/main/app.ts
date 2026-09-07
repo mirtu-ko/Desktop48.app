@@ -9,7 +9,7 @@ import icon from '../../resources/icon.png?asset'
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
 import { registerAllIPC } from './ipc'
-import { closeLog, getLogPathForDisplay, log } from './logger'
+import { log } from './logger'
 import { cleanupStreamSessions } from './stream'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
 
@@ -22,7 +22,6 @@ const __dirname = path.dirname(__filename)
 
 log('[app.ts] Electron app.ts __filename:', __filename)
 log('[app.ts] Electron app.ts __dirname:', __dirname)
-log('[app.ts] 日志目录:', getLogPathForDisplay())
 log('[app.ts] 主进程路径:', process.execPath)
 log('[app.ts] 主进程工作目录:', process.cwd())
 log('[app.ts] 预加载:', join(__dirname, '../preload/index.js'), fs.existsSync(join(__dirname, '../preload/index.js')))
@@ -146,11 +145,6 @@ app.on('before-quit', () => {
   // 对仍在运行的所有 ffmpeg 任务写 'q' 优雅收尾，避免退出后残留孤儿进程
   stopAllFfmpegTasks()
   releaseAllSleepBlockers()
-})
-
-// 日志流最后关闭：必须晚于所有 before-quit 清理，否则清理阶段的日志会 write-after-end 被丢弃
-app.on('will-quit', () => {
-  closeLog()
 })
 
 // 阻止休眠：id 由主进程按 webContents 维护。

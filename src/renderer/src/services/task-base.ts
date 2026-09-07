@@ -101,7 +101,7 @@ export default class TaskBase {
     this.subscribeEndEvents()
 
     try {
-      console.info(`[${this._logTag}] task start:`, this._url, this._filename, this._liveId)
+      debugLog('tasks', `[${this._logTag}] task start:`, this._url, this._filename, this._liveId)
       await this.channels.start(this._url, this._filename, this._liveId)
       this._status = Constants.TaskStatus.Running
       startListener()
@@ -131,7 +131,7 @@ export default class TaskBase {
         this._filePath = filePath
         this._status = Constants.TaskStatus.Finish
         this.cleanupListeners()
-        console.info(`[${this._logTag}] task end:`, liveId)
+        debugLog('tasks', `[${this._logTag}] task end:`, liveId)
       }
     }))
     // 监听任务错误
@@ -164,7 +164,7 @@ export default class TaskBase {
     this.channels.stop(this._liveId)
     this._status = Constants.TaskStatus.Finish
     this.cleanupListeners()
-    console.info(`[${this._logTag}] task stop`)
+    debugLog('tasks', `[${this._logTag}] task stop`)
   }
 
   public openSaveDirectory() {
