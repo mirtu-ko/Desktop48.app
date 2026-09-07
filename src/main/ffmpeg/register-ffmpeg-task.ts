@@ -41,6 +41,11 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
     // 输入地址白名单：url 直接交给 ffmpeg（-i），不经校验会形成 netRequest 之外的安全旁路
     if (!isAllowedStreamUrl(url))
       throw new Error(`任务源地址不在允许范围内: ${url}`)
+    // 文件名校验：filename 由渲染进程直传，必须就是纯文件名本身。
+    // 含路径分隔符（含 Windows 反斜杠在跨平台语义下的变体）或 '..' 时
+    // path.join 的归一化结果会与 basename 不一致，据此拒绝，防止路径穿越下载目录
+    if (path.basename(filename) !== filename || !filename || filename === '.' || filename === '..')
+      throw new Error(`任务文件名不合法: ${filename}`)
     // 保存目录与 ffmpeg 二进制校验
     const saveDir: string = Database.instance().getConfig('downloadDirectory', '') as string
     if (!fs.existsSync(saveDir))

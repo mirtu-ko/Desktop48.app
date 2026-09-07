@@ -10,20 +10,20 @@ import { error } from '../logger'
  * 同时跑 N 个进程拖垮机器。同 liveId 的串行保护在 TaskRegistry（closePromise），
  * 这里做跨任务全局熔断
  */
-export const MAX_CONCURRENT_FFMPEG_TASKS = 3
+export const MAX_CONCURRENT_FFMPEG_TASKS = 5
 
-/** 所有运行中的 ffmpeg 进程（跨任务实例共享），供应用退出时统一优雅收尾 */
-const activeProcesses = new Set<ChildProcess>()
+/** 所有运行中的 ffmpeg 任务进程（跨任务实例共享），供应用退出时统一优雅收尾 */
+const activeProcesses = new Set<FfmpegProcess>()
 
 /**
  * 应用退出时对所有 ffmpeg 写 'q' 优雅收尾；
- * 子进程会独立完成文件尾写入后自行退出，避免残留孤儿进程
+ * 子进程会独立完成文件尾写入后自行退出，避免残留孤儿进程。
+ * gracefulStop 内含超时强杀兜底，网络栈 hang 等场景下不会永久卡住
  */
 export function stopAllFfmpegTasks(): void {
-  for (const ffmpeg of activeProcesses) {
+  for (const proc of activeProcesses) {
     try {
-      if (!ffmpeg.killed && ffmpeg.exitCode === null && ffmpeg.stdin)
-        ffmpeg.stdin.write('q')
+      proc.gracefulStop()
     }
     catch {
       // stdin 已关闭等场景忽略，进程即将随应用生命周期结束
@@ -45,6 +45,13 @@ export function resolveFfmpegBinary(ffmpegDir: string): string {
 }
 
 const TIME_REGEX = /time=(\d+:\d+:\d+\.\d+)/
+
+/**
+ * 写 'q' 后等待进程自行收尾（写文件尾）的期限；超时视为进程卡死，强杀兜底。
+ * 正常情况下 ffmpeg 写完文件尾毫秒级退出；任务要写 MP4 moov 等文件尾，
+ * 比 stream.ts 的纯管道转流耗时略长，给到 5 秒宽裕期限。
+ */
+const GRACEFUL_STOP_TIMEOUT_MS = 5000
 
 /** 从 ffmpeg stderr 输出里解析进度时间（无匹配返回 null）——纯函数，可单测 */
 export function parseProgressTime(message: string): string | null {
@@ -94,8 +101,8 @@ export class FfmpegProcess {
       ...ffmpegArgs,
       filePath,
     ])
-    activeProcesses.add(this.child)
-    this.child.once('close', () => activeProcesses.delete(this.child))
+    activeProcesses.add(this)
+    this.child.once('close', () => activeProcesses.delete(this))
     this.closePromise = new Promise<void>((resolve) => {
       this.child.once('close', () => resolve())
     })
@@ -112,7 +119,7 @@ export class FfmpegProcess {
     })
     this.child.once('error', (err) => {
       error('[ffmpeg-process]spawn ffmpeg error', err)
-      activeProcesses.delete(this.child)
+      activeProcesses.delete(this)
       handlers.onError?.(err)
     })
     this.child.on('close', (code, signal) => {
@@ -128,12 +135,16 @@ export class FfmpegProcess {
   /**
    * 优雅退出：向 stdin 写 'q'，ffmpeg 独立完成文件尾写入（MP4 moov atom /
    * FLV onMetaData）后自行退出。返回是否走了优雅路径；写失败时回退 SIGINT 强杀。
+   * 写 'q' 成功不代表进程会退出：网络栈 hang 等场景下 ffmpeg 可能永不收尾，
+   * 必须挂超时强杀兜底（与 stream.ts 的直播转流进程同一失败模式），
+   * 否则挂死进程会永久占用并发槽、同任务重启挂起、应用退出时残留孤儿进程。
    */
   gracefulStop(): boolean {
     if (!this.running)
       return false
     try {
       this.child.stdin?.write('q')
+      this.scheduleForceKill()
       return true
     }
     catch (e) {
@@ -141,5 +152,22 @@ export class FfmpegProcess {
       void e
       return false
     }
+  }
+
+  /** 超时未自行退出则强杀兜底；正常退出（close）时取消 */
+  private scheduleForceKill(): void {
+    const timer = setTimeout(() => {
+      if (!this.running)
+        return
+      error('[ffmpeg-process]ffmpeg 优雅退出超时，强制结束进程')
+      try {
+        this.child.kill('SIGKILL')
+      }
+      catch (err) {
+        error('[ffmpeg-process]强制结束 ffmpeg 失败:', err)
+      }
+    }, GRACEFUL_STOP_TIMEOUT_MS)
+    timer.unref()
+    this.child.once('close', () => clearTimeout(timer))
   }
 }

@@ -77,15 +77,25 @@ async function startTask(task: TaskBase, config: TaskKindConfig, message: string
   // Proxy 完全透明不会破坏方法；关键是 start()/end 回调里 this 绑定到代理，
   // _status 的每次赋值都走 Proxy set，从而驱动下载页卡片与播放器按钮自动刷新
   const reactiveTask = reactive(task) as TaskBase
+  // 先同步入列再异步 start：handleTask 查重与 isTaskRunning 都依赖列表，
+  // 若等 start()（多次串行 IPC 往返，数百毫秒）完成后再入列，窗口期内的
+  // 重复触发会查不到任务，进而创建同 liveId 的重复任务
+  const existedBefore = config.list.value.includes(reactiveTask)
+  if (!existedBefore)
+    config.list.value.push(reactiveTask)
   try {
     await reactiveTask.start(() => {
       ElMessage({ message, type: 'success' })
     })
-    // 重启路径下任务已在列表中，避免重复 push 导致卡片重复
-    if (!config.list.value.includes(reactiveTask))
-      config.list.value.push(reactiveTask)
   }
   catch (error) {
+    // 新任务启动失败则移除占位，避免留下永不运行的卡片；
+    // 重启路径的任务本就在列表中，维持原状（保留其原状态展示）
+    if (!existedBefore) {
+      const index = config.list.value.indexOf(reactiveTask)
+      if (index !== -1)
+        config.list.value.splice(index, 1)
+    }
     console.error(`[use-tasks] ${config.logTag} task start failed`, error)
     ElMessage({ message: String(error), type: 'error' })
   }

@@ -164,32 +164,33 @@ const server = http.createServer((req, res) => {
 let port = minPort
 
 // 上次退出的残留监听或外部程序可能占用端口，按 minPort-maxPort 区间向后退避尝试。
+// error/listening 只在下面注册一次：EventEmitter 的监听器是追加式的，若放在 tryListen
+// 里每次重试都重新注册，一次 EADDRINUSE 会被所有累积的历史监听器各处理一次，
+// 导致端口连跳、对同一 server 重复 listen，且 _serverPort 可能被旧监听器写成错误端口。
 function tryListen() {
   server.listen(port, serverHost)
-    .on('error', (err: any) => {
-      if (err.code === 'EADDRINUSE') {
-        log(`[http-server.ts] 端口 ${port} 已被占用，尝试下一个端口`)
-        if (port < maxPort) {
-          port++
-          tryListen()
-        }
-        else {
-          _serverPortExhausted = true
-          error('[http-server.ts] 无法找到可用端口，直播播放将不可用')
-        }
-      }
-      else {
-        error('[http-server.ts] 服务器错误:', err)
-      }
-    })
-    .on('listening', () => {
-      log(`[http-server.ts] 本地流媒体服务器监听端口 ${port}`)
-      _serverPort = port
-    })
 }
 
-tryListen()
-
-server.on('error', (err) => {
-  error('[http-server.ts] 本地流媒体服务器错误:', err)
+server.on('error', (err: any) => {
+  if (err.code === 'EADDRINUSE') {
+    log(`[http-server.ts] 端口 ${port} 已被占用，尝试下一个端口`)
+    if (port < maxPort) {
+      port++
+      tryListen()
+    }
+    else {
+      _serverPortExhausted = true
+      error('[http-server.ts] 无法找到可用端口，直播播放将不可用')
+    }
+  }
+  else {
+    error('[http-server.ts] 服务器错误:', err)
+  }
 })
+
+server.on('listening', () => {
+  log(`[http-server.ts] 本地流媒体服务器监听端口 ${port}`)
+  _serverPort = port
+})
+
+tryListen()

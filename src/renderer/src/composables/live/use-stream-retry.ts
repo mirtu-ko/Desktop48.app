@@ -66,18 +66,17 @@ export function useStreamRetry(options: {
     retryTimer = setTimeout(async () => {
       try {
         await options.attempt()
+        // attempt 成功路径下流仍在加载（mediaLoading=true），复位恢复态
+        // 让后续错误可以再次触发重试。
+        // 只能在成功路径复位：catch 里 schedule() 已重新置位重入守卫并安排了
+        // 下一次重试，若放 finally 里无条件复位，会把等待期内的守卫提前撤销，
+        // 重复错误事件会反复重入 schedule()，重试预算被加速耗尽
+        if (options.mediaLoading.value)
+          isRecoveringStream.value = false
       }
       catch (error) {
         console.error('[use-stream-retry] 重试恢复直播流失败:', error)
-        isRecoveringStream.value = false
         schedule()
-        return
-      }
-      finally {
-        // attempt 成功路径下流仍在加载（mediaLoading=true），
-        // 复位恢复态让后续错误可以再次触发重试
-        if (options.mediaLoading.value)
-          isRecoveringStream.value = false
       }
     }, retryDelayMs)
   }
