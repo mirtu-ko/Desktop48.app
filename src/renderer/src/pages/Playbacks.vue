@@ -14,7 +14,7 @@ const props = withDefaults(defineProps<{ memberPreset?: { userId: string } | nul
 })
 
 // 画中画迷你窗：回放播放挂载点与直播共用同一套
-const { openReview } = useFloatPlayers()
+const { openPlayback } = useFloatPlayers()
 
 const memberOption = ref<any[]>([])
 // 级联筛选选中的路径：[groupId] / [groupId, teamId] / [groupId, teamId, userId]
@@ -22,10 +22,10 @@ const selectedFilter = ref<any[]>([])
 
 // 分页状态与触底加载：见 composables/use-paged-live-list.ts（直播/回放共用）
 const {
-  list: reviewList,
+  list: playbackList,
   loading,
   noMore,
-  scrollbarRef: reviewScrollRef,
+  scrollbarRef: playbackScrollRef,
   onInfiniteScroll,
   refresh,
 } = usePagedLiveList({
@@ -49,7 +49,7 @@ const {
       params.teamId = String(teamId)
     else if (groupId != null)
       params.groupId = String(groupId)
-    return Apis.instance().reviews(params)
+    return Apis.instance().playbackList(params)
   },
   // 封面/队伍Logo/日期/成员信息补全：与直播页共用 enrichLiveItem；
   // 成员查询失败直接抛出，由 stopOnError 接管整批停止
@@ -79,7 +79,7 @@ onMounted(async () => {
     memberOption.value = sortMembersByStatus(await window.mainAPI.getMemberTree())
   }
   catch (error) {
-    console.error('[Reviews.vue]获取成员树失败:', error)
+    console.error('[Playbacks.vue]获取成员树失败:', error)
     ElMessage.error('成员筛选加载失败，请刷新页面重试')
   }
   // 先应用预置筛选再拉列表，避免挂载时重复请求
@@ -126,7 +126,7 @@ function applyPreset(): boolean {
   }
   else {
     // 筛选没变也要重新拉取：上次请求可能失败或返回为空
-    reviewScrollRef.value?.setScrollTop?.(0)
+    playbackScrollRef.value?.setScrollTop?.(0)
     refresh()
   }
   return true
@@ -137,15 +137,15 @@ watch(() => props.memberPreset, applyPreset)
 
 /** 供父组件（直播页双击「回放」tab）调用：回到顶部并刷新列表 */
 function refreshFromTop() {
-  reviewScrollRef.value?.setScrollTop?.(0)
+  playbackScrollRef.value?.setScrollTop?.(0)
   refresh()
 }
 
 defineExpose({ refreshFromTop })
 
 // 点击回放：以画中画迷你窗打开，可边看边继续浏览列表
-function onReviewClick(item: any) {
-  openReview({
+function onPlaybackClick(item: any) {
+  openPlayback({
     liveId: item.liveId,
     nickname: item.userInfo.nickname,
     title: item.title,
@@ -155,33 +155,33 @@ function onReviewClick(item: any) {
 
 // 筛选内容变化（选中或清空）时自动触发查询，无需手动点刷新
 watch(selectedFilter, () => {
-  reviewScrollRef.value?.setScrollTop?.(0)
+  playbackScrollRef.value?.setScrollTop?.(0)
   refresh()
 })
 </script>
 
 <template>
-  <div class="reviews-root page-root">
-    <div class="review-container page-root">
+  <div class="playbacks-root page-root">
+    <div class="playback-container page-root">
       <el-scrollbar
-        ref="reviewScrollRef"
+        ref="playbackScrollRef"
         v-loading="loading"
         class="scrollbar-wrapper"
         :distance="10"
         @end-reached="onInfiniteScroll"
       >
-        <div v-if="reviewList.length === 0 && !loading" class="empty-block">
+        <div v-if="playbackList.length === 0 && !loading" class="empty-block">
           暂无回放
         </div>
-        <div v-if="reviewList.length > 0" class="review-list">
+        <div v-if="playbackList.length > 0" class="playback-list">
           <div
-            v-for="item in reviewList" :key="item.liveId" class="review-item"
-            @click="onReviewClick(item)"
+            v-for="item in playbackList" :key="item.liveId" class="playback-item"
+            @click="onPlaybackClick(item)"
           >
             <LiveItem :item="item" class="live-card" />
           </div>
         </div>
-        <div v-if="noMore && reviewList.length > 0" class="list-end">
+        <div v-if="noMore && playbackList.length > 0" class="list-end">
           没有更多回放了
         </div>
       </el-scrollbar>
@@ -239,7 +239,7 @@ watch(selectedFilter, () => {
   }
 }
 
-.review-list {
+.playback-list {
   display: grid;
   gap: 16px;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -247,7 +247,7 @@ watch(selectedFilter, () => {
   padding: var(--tabbar-offset-top) 16px 8px;
 }
 
-.review-item {
+.playback-item {
   cursor: pointer;
   min-width: 0;
 }

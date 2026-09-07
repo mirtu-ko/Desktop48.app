@@ -12,3 +12,4 @@ build/icons
 *.log*
 .trae/rules/git-commit-message.md
 tsconfig.web.tsbuildinfo
+test/data.ts

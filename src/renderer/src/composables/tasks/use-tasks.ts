@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { reactive, ref } from 'vue'
 import { subscribe } from '../../services/event-bus'
 import TaskBase from '../../services/task-base'
+import { debugLog } from '../../utils/debug'
 
 export type TaskKind = 'download' | 'record'
 
@@ -16,11 +17,13 @@ interface TaskKindConfig {
   runningMessage: string
   startMessage: string
   restartMessage: string
+  /** 任务完成提示文案（正常结束；手动停止与出错不提示，另有状态展示） */
+  endMessage: string
   logTag: string
 }
 
 // ★ 跨进程：下方 taskConfigs 里的 downloadTask* / recordTask* 通道全部经
-// preload/index.ts 转到 main/ffmpeg/register-ffmpeg-task.ts。
+// preload/index.ts 转到 main/ipc/register-task-ipc.ts（机制在 main/ffmpeg/register-ffmpeg-task.ts）。
 // 与其它 IPC 不同，这组是**双向**的：invoke 发起任务，主进程再用 ipcRenderer.on
 // 持续回推 progress / end / error 事件（见 preload 里返回 unsubscribe 的那几个）。
 //
@@ -46,6 +49,7 @@ const taskConfigs: Record<TaskKind, TaskKindConfig> = {
     runningMessage: '该回放正在下载',
     startMessage: '下载开始',
     restartMessage: '下载已重新开始，原任务将被覆盖',
+    endMessage: '下载完成',
     logTag: 'download',
   },
   record: {
@@ -62,13 +66,18 @@ const taskConfigs: Record<TaskKind, TaskKindConfig> = {
     runningMessage: '该直播正在录制',
     startMessage: '录制开始',
     restartMessage: '录制已重新开始，原任务将被覆盖',
+    endMessage: '录制完成',
     logTag: 'record',
   },
 }
 
 /** 由类型差异配置直接构造任务实例（替代原 DownloadTask/RecordTask 薄子类） */
 function createTask(kind: TaskKind, taskData: TaskPayload): TaskBase {
-  return new TaskBase(taskConfigs[kind].channels, taskData.url, taskData.filename, taskData.liveId, taskConfigs[kind].logTag)
+  const config = taskConfigs[kind]
+  const task = new TaskBase(config.channels, taskData.url, taskData.filename, taskData.liveId, config.logTag)
+  // 任务正常完成时提示用户；带文件名，多任务并行时能区分是哪一个完成
+  task.onEnd = () => ElMessage({ message: `${task.getFilename()} ${config.endMessage}`, type: 'success' })
+  return task
 }
 
 async function startTask(task: TaskBase, config: TaskKindConfig, message: string) {
@@ -76,15 +85,25 @@ async function startTask(task: TaskBase, config: TaskKindConfig, message: string
   // Proxy 完全透明不会破坏方法；关键是 start()/end 回调里 this 绑定到代理，
   // _status 的每次赋值都走 Proxy set，从而驱动下载页卡片与播放器按钮自动刷新
   const reactiveTask = reactive(task) as TaskBase
+  // 先同步入列再异步 start：handleTask 查重与 isTaskRunning 都依赖列表，
+  // 若等 start()（多次串行 IPC 往返，数百毫秒）完成后再入列，窗口期内的
+  // 重复触发会查不到任务，进而创建同 liveId 的重复任务
+  const existedBefore = config.list.value.includes(reactiveTask)
+  if (!existedBefore)
+    config.list.value.push(reactiveTask)
   try {
     await reactiveTask.start(() => {
-      ElMessage({ message, type: 'info' })
+      ElMessage({ message, type: 'success' })
     })
-    // 重启路径下任务已在列表中，避免重复 push 导致卡片重复
-    if (!config.list.value.includes(reactiveTask))
-      config.list.value.push(reactiveTask)
   }
   catch (error) {
+    // 新任务启动失败则移除占位，避免留下永不运行的卡片；
+    // 重启路径的任务本就在列表中，维持原状（保留其原状态展示）
+    if (!existedBefore) {
+      const index = config.list.value.indexOf(reactiveTask)
+      if (index !== -1)
+        config.list.value.splice(index, 1)
+    }
     console.error(`[use-tasks] ${config.logTag} task start failed`, error)
     ElMessage({ message: String(error), type: 'error' })
   }
@@ -95,15 +114,18 @@ async function handleTask(taskData: TaskPayload, kind: TaskKind) {
   const exists = config.list.value.find(item => item.getLiveId() === taskData.liveId)
   if (exists) {
     if (exists.isRunning()) {
+      debugLog('tasks', kind, taskData.liveId, '任务已在运行，忽略本次发起')
       ElMessage({ message: config.runningMessage, type: 'warning' })
       return
     }
     // 任务已结束：按最新参数重启（覆盖原文件）
+    debugLog('tasks', kind, taskData.liveId, '重启已结束任务（覆盖原文件）:', taskData.filename)
     exists.setUrl(taskData.url)
     exists.setFilename(taskData.filename)
     await startTask(exists, config, config.restartMessage)
     return
   }
+  debugLog('tasks', kind, taskData.liveId, '发起新任务:', taskData.filename)
   await startTask(createTask(kind, taskData), config, config.startMessage)
 }
 
@@ -120,6 +142,7 @@ async function removeTask(task: TaskBase, kind: TaskKind) {
 async function restoreTasks(kind: TaskKind) {
   const config = taskConfigs[kind]
   const snapshots = await config.listApi()
+  debugLog('tasks', `从主进程恢复 ${kind} 任务快照: ${snapshots.length} 个`)
   for (const snapshot of snapshots) {
     // 已有同 liveId 任务则跳过，避免重复卡片
     if (config.list.value?.some(item => item.getLiveId() === snapshot.liveId))

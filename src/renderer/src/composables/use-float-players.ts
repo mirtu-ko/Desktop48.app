@@ -7,7 +7,9 @@ export interface FloatPlayerPayload {
   /** 播放器头部标题 */
   title: string
   startTime: number
+  /** 1=视频直播 2=电台 */
   liveType?: number
+  /** 0=直播 1=录屏 */
   liveMode?: number
   /** 数据源：user=用户直播(getLiveOne)，open=开放公演(getOpenLiveOne) */
   source?: string
@@ -17,8 +19,8 @@ export interface FloatPlayerPayload {
 
 export interface FloatPlayerItem {
   id: string
-  /** live=直播，review=回放 */
-  kind: 'live' | 'review'
+  /** live=直播，playback=回放 */
+  kind: 'live' | 'playback'
   payload: FloatPlayerPayload
   /** 创建序号：用于迷你窗级联定位，避免多窗完全重叠 */
   order: number
@@ -43,11 +45,11 @@ export function useFloatPlayers() {
   }
 
   /** 打开回放迷你窗；同一回放已存在时直接置顶复用 */
-  function openReview(payload: FloatPlayerPayload) {
-    openPlayer('review', payload)
+  function openPlayback(payload: FloatPlayerPayload) {
+    openPlayer('playback', payload)
   }
 
-  function openPlayer(kind: 'live' | 'review', payload: FloatPlayerPayload) {
+  function openPlayer(kind: 'live' | 'playback', payload: FloatPlayerPayload) {
     const existing = players.value.find(
       p => p.kind === kind && p.payload.liveId === payload.liveId,
     )
@@ -73,7 +75,7 @@ export function useFloatPlayers() {
       players.value.splice(idx, 1)
   }
 
-  return { players, openLive, openReview, focusPlayer, closePlayer }
+  return { players, openLive, openPlayback, focusPlayer, closePlayer }
 }
 
 export default useFloatPlayers

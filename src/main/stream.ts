@@ -1,11 +1,10 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, ipcMain } from 'electron'
 import { isAllowedStreamUrl } from './allowed-hosts'
 import { Database } from './database'
 import { assertLocalServerAvailable, serverHost, serverPort } from './http-server'
-import { error, log } from './logger'
+import { debug, error, log } from './logger'
 
 // 直播播放只在这里维护“会话”和“活跃转流进程”的状态。
 // IPC 负责注册直播地址，HTTP 端点真正触发 FFmpeg 拉流并输出 HTTP-FLV。
@@ -171,7 +170,8 @@ export function createFlvStreamProcess(liveId: string) {
 }
 
 // 渲染进程只需要知道“这个直播可从哪个本地地址播放”，不直接管理 FFmpeg 进程。
-ipcMain.handle('createLiveStream', async (_event, rtmpUrl: string, liveId: string) => {
+// IPC 通道注册在 ipc/register-stream-ipc.ts，这里只导出纯业务函数（可测试、无副作用）。
+export async function handleCreateLiveStream(rtmpUrl: string, liveId: string) {
   // 端口耗尽时本地 HTTP 服务不存在，返回 URL 只会让播放器静默连接失败——显式拒绝并说明原因
   assertLocalServerAvailable()
   // rtmpUrl 直接交给 ffmpeg 拉流，必须过白名单，否则渲染层被攻破即可诱导主进程连任意地址
@@ -182,9 +182,11 @@ ipcMain.handle('createLiveStream', async (_event, rtmpUrl: string, liveId: strin
   const publicPath = getStreamRoute(liveId)
 
   if (existingSession && existingSession.inputUrl === rtmpUrl) {
+    const url = `http://${serverHost}:${serverPort()}${publicPath}`
+    debug(`[stream.ts] 复用已有直播会话: ${liveId} → ${url}`)
     return {
       // 用 127.0.0.1 而非 localhost：localhost 可能解析到 ::1，与回环 IPv4 监听不匹配。
-      url: `http://${serverHost}:${serverPort()}${publicPath}`,
+      url,
       liveId,
     }
   }
@@ -195,24 +197,27 @@ ipcMain.handle('createLiveStream', async (_event, rtmpUrl: string, liveId: strin
     inputUrl: rtmpUrl,
   })
 
+  const url = `http://${serverHost}:${serverPort()}${publicPath}`
+  debug(`[stream.ts] 新建直播会话: ${liveId} → ${url}（FFmpeg 待播放器拉流时由 http-server 触发）`)
   return {
-    url: `http://${serverHost}:${serverPort()}${publicPath}`,
+    url,
     liveId,
   }
-})
+}
 
-ipcMain.handle('stopLiveStream', async (_event, liveId: string) => {
+export function handleStopLiveStream(liveId: string) {
   const sessionId = getSafeLiveId(liveId)
   const hadSession = streamSessions.delete(sessionId)
   stopActiveProcesses(sessionId)
   if (hadSession)
     log(`[stream.ts] 已移除直播会话: ${liveId}`)
-})
+}
 
-app.on('before-quit', () => {
+/** 应用退出前清理所有直播会话与转流进程；由 app.ts 的 before-quit 显式调用 */
+export function cleanupStreamSessions(): void {
   for (const sessionId of activeStreamProcesses.keys())
     stopActiveProcesses(sessionId)
 
   streamSessions.clear()
   activeStreamProcesses.clear()
-})
+}

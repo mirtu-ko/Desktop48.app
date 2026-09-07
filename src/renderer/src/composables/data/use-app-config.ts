@@ -21,7 +21,7 @@ export function useAppConfig() {
 
   /** 挂载时读取三项配置（未设置时回退各自默认值） */
   async function loadAppConfig() {
-    downloadDirectory.value = await window.mainAPI.getConfig('downloadDirectory')
+    downloadDirectory.value = await window.mainAPI.getConfig('downloadDirectory', '')
     ffmpegDirectory.value = await window.mainAPI.getConfig('ffmpegDirectory', '')
     userAgent.value = await window.mainAPI.getConfig('userAgent', Constants.DEFAULT_USER_AGENT)
   }
@@ -45,7 +45,7 @@ export function useAppConfig() {
     void window.mainAPI.openPath(downloadDirectory.value)
   }
 
-  /** 选择 ffmpeg 目录：校验 ffmpeg/ffplay 可执行文件存在后保存，校验失败询问是否重选 */
+  /** 选择 ffmpeg 目录：校验 ffmpeg 可执行文件存在后保存，校验失败询问是否重选 */
   async function setFfmpegDirectory() {
     const dir = await window.mainAPI.selectDirectory()
     if (!dir) {
@@ -63,7 +63,7 @@ export function useAppConfig() {
   }
 
   function confirmFfmpegDir() {
-    ElMessageBox.confirm('选择的目录下没有ffmpeg或ffplay', {
+    ElMessageBox.confirm('选择的目录下没有 ffmpeg', {
       confirmButtonText: '重新选择',
       cancelButtonText: '取消',
     }).then(() => {

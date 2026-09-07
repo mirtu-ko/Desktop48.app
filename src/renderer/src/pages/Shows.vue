@@ -9,10 +9,11 @@ import usePagedList from '../composables/data/use-paged-list'
 import useFloatPlayers from '../composables/use-float-players'
 import Apis from '../services/apis'
 import Constants from '../utils/constants'
+import { debugLog } from '../utils/debug'
 import Tools from '../utils/tools'
 
 // 画中画迷你窗：与直播/回放页共用全局播放挂载点
-const { openLive, openReview } = useFloatPlayers()
+const { openLive, openPlayback } = useFloatPlayers()
 
 /** 当前团体 groupId：取值见 Constants.GroupTabs（'0'=全部） */
 const groupId = ref('0')
@@ -138,8 +139,10 @@ const recentShows = computed(() => showList.value.filter(show => !isToday(show.s
 /** 进行中的公演：以画中画迷你窗直接打开直播，停留当前页继续浏览 */
 function openLiveStream(show: OpenLive) {
   if (show.status !== 2) {
+    debugLog('show', `公演选路: ${show.liveId} 状态=${show.status}（非进行中），忽略本次点击`)
     return
   }
+  debugLog('show', `公演选路: ${show.liveId} 进行中 → 进入直播链（LivePlayer, source=open）`, show)
   openLive({
     liveId: show.liveId,
     nickname: show.teamList?.[0]?.teamName || '',
@@ -155,7 +158,8 @@ function openLiveStream(show: OpenLive) {
 
 /** 历史公演（已结束）：以画中画回放迷你窗打开 VOD 流，停留当前页继续浏览 */
 function openHistoryStream(show: OpenLive) {
-  openReview({
+  debugLog('show', `公演选路: ${show.liveId} → 进入录播链（PlaybackPlayer, source=open）`, show)
+  openPlayback({
     liveId: show.liveId,
     nickname: '',
     title: show.subTitle || show.title,

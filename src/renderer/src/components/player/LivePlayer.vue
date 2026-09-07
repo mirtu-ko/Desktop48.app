@@ -9,8 +9,9 @@ import { dispatchMediaShortcut } from '../../composables/media/use-media-shortcu
 import { useSleepBlocker } from '../../composables/media/use-sleep-blocker'
 import { useVideoRotation } from '../../composables/media/use-video-rotation'
 import useMediaDownload from '../../composables/tasks/use-media-download'
-
 import EventBus from '../../services/event-bus'
+
+import { debugLog } from '../../utils/debug'
 
 import MediaIcon from '../ui/MediaIcon.vue'
 import MiniControls from './MiniControls.vue'
@@ -42,17 +43,17 @@ const nativeAudio = ref<HTMLAudioElement | null>(null)
 const videoBoxRef = ref<HTMLElement | null>(null)
 const mediaLoading = ref(true)
 // 鼠标悬浮才响应快捷键：同屏可能有多个浮窗播放器，否则一次按键会把它们全部转一遍。
-// 触发策略与 ReviewPlayer 不同（它走根节点焦点制），但按键分派共用 use-media-shortcuts。
+// 触发策略与 PlaybackPlayer 不同（它走根节点焦点制），但按键分派共用 use-media-shortcuts。
 const hovered = ref(false)
 // 卸载标记：置位后所有在途异步回包直接丢弃
 const isManuallyUnmounted = ref(false)
 
 const isRadio = computed(() => props.liveType !== 1)
 
-// 播放防休眠（use-sleep-blocker，与 ReviewPlayer 共用）
+// 播放防休眠（use-sleep-blocker，与 PlaybackPlayer 共用）
 const { acquire: acquireSleepBlocker, release: releaseSleepBlocker } = useSleepBlocker()
 
-// 旋转 / 容器全屏 / 迷你控制条状态：与 ReviewPlayer 共用同一套实现（useVideoRotation）
+// 旋转 / 容器全屏 / 迷你控制条状态：与 PlaybackPlayer 共用同一套实现（useVideoRotation）
 const {
   rotationAngle,
   isVerticalRotation,
@@ -100,8 +101,10 @@ const session = useLiveSession({
   onOnlineNum: (num) => {
     polling.onlineNum.value = num
   },
-  // 详情都取不到通常意味着直播已下架：广播通知列表页刷新，并关闭当前 tab
+  // 详情都取不到通常意味着直播已下架：广播通知列表页刷新
   onUnavailable: () => {
+    debugLog('live', `①直播:直播已下架（${props.liveId}）`)
+    ElMessage.error('直播不存在')
     EventBus.emit('live-unavailable', props.liveId)
     emit('close')
   },
@@ -135,6 +138,7 @@ const retry = useStreamRetry({
 
 /** 单次恢复尝试：拉详情 → 重建流（节奏由重试状态机安排） */
 async function recoverStream() {
+  debugLog('live', `①直播:重试恢复尝试（第 ${retry.retryCount.value + 1} 次）`)
   const data = await session.fetchLiveDetail()
   if (isManuallyUnmounted.value)
     return
@@ -142,14 +146,16 @@ async function recoverStream() {
   await session.restartLiveStream(data.playStreamPath)
 }
 
-/** 会话启动（getOne 开始）：复位 loading 与重试计数 */
+/** 会话启动（getLiveOne 开始）：复位 loading 与重试计数 */
 function beginSession() {
+  debugLog('live', `①直播会话开始（liveId=${props.liveId}, source=${props.source}），复位 loading 与重试计数`)
   mediaLoading.value = true
   retry.reset()
 }
 
 /** canplay：加载完成，复位恢复态并刷新视频尺寸 */
 function onPlayerCanPlay() {
+  debugLog('live', '①直播:播放就绪（canplay），复位恢复态')
   retry.isRecoveringStream.value = false
   if (!isRadio.value)
     updateVideoDimensions()
@@ -157,6 +163,7 @@ function onPlayerCanPlay() {
 
 /** 重建流之前：清重试计时器、销毁播放器、复位媒体元素 */
 function rebuildMedia() {
+  debugLog('live', '①直播:重建流前清理（重试计时器/播放器实例/媒体元素）')
   retry.clearTimer()
   player.destroyPlayer()
   player.resetMediaElement()
@@ -164,11 +171,12 @@ function rebuildMedia() {
 
 /** 媒体元素/FLV 错误统一处理：网络错误保持 loading 重试，致命错误先销毁播放器 */
 function handleStreamError(reason: string, isNetwork: boolean) {
-  console.error('[LivePlayer.vue] 直播播放异常:', reason)
   if (isNetwork) {
+    debugLog('live', `①直播:网络错误（${reason}），保持 loading 并重试`)
     mediaLoading.value = true
   }
   else {
+    debugLog('live', `①直播:致命错误（${reason}），先销毁播放器再重试`)
     player.destroyPlayer()
     mediaLoading.value = false
   }
@@ -177,6 +185,7 @@ function handleStreamError(reason: string, isNetwork: boolean) {
 
 /** 重试耗尽视为直播结束：停流、广播下架、关闭 tab */
 function handleRetryExhausted() {
+  debugLog('live', `①直播:重试耗尽（${retry.retryCount.value} 次），视为直播结束：停流 → 广播下架 → 关闭浮窗`)
   session.stopStreamNow()
   EventBus.emit('live-unavailable', props.liveId)
   emit('close')
@@ -201,14 +210,14 @@ const { running: recording, onActionClick: onRecordClick } = useMediaDownload({
     }
     catch (error) {
       // 失败原因已由 Apis.request 统一弹窗提示（直播已下架/网络错误）
-      console.error('[LivePlayer.vue] 获取录制源地址失败:', error)
+      debugLog('live', `①直播:获取录制源地址失败 ${error}`)
       return null
     }
   },
 })
 
 // ── 键盘快捷键（悬浮制：仅视频模式、鼠标悬浮时响应） ─────────────────────────
-// 按键分派与 ReviewPlayer 共用 dispatchMediaShortcut（键位单源）；
+// 按键分派与 PlaybackPlayer 共用 dispatchMediaShortcut（键位单源）；
 // 直播场景只接旋转族快捷键（seek/音量对直播流无意义，不传对应 action 即不响应）
 function onKeyDown(event: KeyboardEvent) {
   if (isRadio.value || !hovered.value || event.ctrlKey || event.metaKey || event.altKey)
@@ -243,7 +252,7 @@ async function resumeLive() {
     mountPlayer(localPlaybackUrl.value)
   }
   else {
-    await session.getOne()
+    await session.getLiveOne()
   }
 }
 

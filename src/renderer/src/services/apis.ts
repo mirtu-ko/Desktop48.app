@@ -7,6 +7,7 @@ import type {
   SyncInfoContent,
 } from './api-types'
 import { ElMessage } from 'element-plus'
+import { debugLog } from '../utils/debug'
 import ApiUrls from './api-urls'
 import Request from './request'
 
@@ -26,10 +27,10 @@ export default class Apis {
    * 同步成员信息：拉取并落库（database.json 的 starInfo/teamInfo/groupInfo）
    */
   public async syncInfo(): Promise<SyncInfoContent> {
-    console.log('[apis.ts]开始更新成员信息')
+    debugLog('net', '开始更新成员信息')
     // 更新数据到数据库
     const content = await this.request<SyncInfoContent>(ApiUrls.UPDATE_INFO_URL, {}, {})
-    console.log('[apis.ts]更新成员信息', content)
+    debugLog('net', '更新成员信息', content)
     // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts（写 database.json 并重建成员树）
     await window.mainAPI.saveMemberData(content)
     return content
@@ -55,7 +56,7 @@ export default class Apis {
   /**
    * 回放列表
    */
-  public reviews({
+  public playbackList({
     next = '0',
     userId = '0',
     teamId = '0',
@@ -134,7 +135,7 @@ export default class Apis {
         data = JSON.parse(data)
       }
       catch (e) {
-        console.warn('[apis.ts]musicAlbums 响应不是 JSON', e)
+        console.error('[apis.ts]musicAlbums 响应不是 JSON', e)
         Apis.toastApiError('专辑接口返回数据异常，请稍后重试')
         throw new Error('[apis.ts]音乐专辑接口返回非JSON')
       }
@@ -191,7 +192,7 @@ export default class Apis {
         responseBody = JSON.parse(responseBody)
       }
       catch (e) {
-        console.warn('[apis.ts]responseBody 不是 JSON', responseBody, e)
+        console.error('[apis.ts]responseBody 不是 JSON', responseBody, e)
         Apis.toastApiError('接口返回数据异常，请稍后重试')
         throw new Error(`[apis.ts]接口返回非JSON：${responseBody}`)
       }
@@ -202,7 +203,7 @@ export default class Apis {
     }
     else {
       const message = envelope && envelope.message ? envelope.message : '接口无 success 字段'
-      console.log('[apis.ts]reject', message)
+      console.error('[apis.ts]reject', message, data)
       Apis.toastApiError(message)
       throw new Error(message)
     }

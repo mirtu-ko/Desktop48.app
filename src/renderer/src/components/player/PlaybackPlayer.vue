@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { useMediaShortcuts } from '../../composables/media/use-media-shortcuts'
 import { useSleepBlocker } from '../../composables/media/use-sleep-blocker'
 import { useVideoRotation } from '../../composables/media/use-video-rotation'
-import { useReviewDanmaku } from '../../composables/review/use-review-danmaku'
-import { useReviewMedia } from '../../composables/review/use-review-media'
+import { usePlaybackDanmaku } from '../../composables/playback/use-playback-danmaku'
+import { usePlaybackMedia } from '../../composables/playback/use-playback-media'
 import useMediaDownload from '../../composables/tasks/use-media-download'
 import Apis from '../../services/apis'
+import { debugLog } from '../../utils/debug'
 
 import { BARRAGE_SIDEBAR_WIDTH } from '../../utils/float-player-layout'
 import { normalizeCarouselTime, pickPreferredVodStream } from '../../utils/live-stream'
@@ -46,12 +46,10 @@ const carousels = ref<string[]>([])
 const carouselTime = ref(5000)
 const realName = ref('')
 const userAvatar = ref('')
-const sidebarVisible = ref(true)
+const sidebarVisible = ref(false)
 
 const videoBoxRef = ref<HTMLElement | null>(null)
 const rootRef = ref<HTMLElement | null>(null)
-
-const router = useRouter()
 
 // 录播页只做两类事情：
 // 1. 按播放地址选择 HLS 或原生 MP4 播放（use-playback-engine）
@@ -94,7 +92,7 @@ const {
 
 // 侧栏实际占位（有弹幕数据且未收起）上报给浮窗：
 // 无弹幕或收起弹幕列表时，放大窗不预留侧栏宽，画面不留空白
-const danmaku = useReviewDanmaku({
+const danmaku = usePlaybackDanmaku({
   videoBoxRef,
   getMedia: getActiveMediaElement,
 })
@@ -128,7 +126,7 @@ watch(
 // 播放防休眠（use-sleep-blocker，与 LivePlayer 共用）
 const { acquire: acquireSleepBlocker, release: releaseSleepBlocker } = useSleepBlocker()
 
-// =========== 播放引擎接线（HLS/原生选择与三态在 use-review-media） ===========
+// =========== 播放引擎接线（HLS/原生选择与三态在 use-playback-media） ===========
 const {
   mediaLoading,
   mediaBuffering,
@@ -136,13 +134,14 @@ const {
   mediaDuration,
   retryPlayback,
   destroy: destroyPlayer,
-} = useReviewMedia({
+} = usePlaybackMedia({
   playStreamPath,
   getMediaElement: getActiveMediaElement,
   getManagedElements: () => [nativeVideo.value, nativeAudio.value],
   onTimeUpdate: onDanmakuTimeUpdate,
   onSeeking: time => seekBarragesTo(time),
   onMetadataLoaded: async () => {
+    debugLog('playback', `④元数据就绪: 刷新画面尺寸${isRadio.value ? '（电台无尺寸）' : ''} → 加载弹幕`)
     // 记录源尺寸供旋转缩放计算，并按（可能旋转后的）画面比例上报浮窗
     if (!isRadio.value)
       updateVideoDimensions()
@@ -175,17 +174,25 @@ function onMiniSeek(value: number) {
   currentTime.value = value
 }
 
-async function getOne() {
+/**
+ * 获取回放详情
+ * 返回回放详情数据，data.review 为 true 时有回放
+ */
+async function getLiveOne() {
   try {
     if (props.source === 'open') {
       // 开放公演回放：getOpenLiveOne 返回 playStreams 数组（VOD m3u8），优先选超清（streamType 3），
       // 详情里没有用户与在线人数信息，用公演标题与传入的队伍 logo 兜底
+      debugLog('playback', `②拉详情: source=open → getOpenLiveOne, props:`, props)
       const data = await Apis.instance().openLive(props.liveId)
+      debugLog('playback', `②拉详情: 公演回放详情 → data`, data)
       const stream = pickPreferredVodStream(data.playStreams)
       if (!stream?.streamPath) {
+        debugLog('playback', `②拉详情: 公演回放选流为空（playStreams=${data.playStreams?.length ?? 0} 条），无法播放`)
         ElMessage({ message: '未获取到公演回放地址', type: 'error' })
         return
       }
+      debugLog('playback', `②拉详情: 公演回放选流 → streamType=${stream.streamType}`, stream)
       isRadio.value = false
       number.value = 0
       realName.value = data.subTitle || data.title || '开放公演'
@@ -196,17 +203,19 @@ async function getOne() {
       return
     }
 
+    debugLog('playback', `②拉详情: source=user → getLiveOne, props:`, props)
     const data = await Apis.instance().live(props.liveId)
+    debugLog('playback', `②拉详情: 录播详情 → data`, data)
 
     const nextPlayStreamPath = Tools.streamPathHandle(data.playStreamPath, props.startTime)
     const nextBarrageUrl = data.msgFilePath || ''
 
     if (!data.review) {
+      debugLog('playback', `②拉详情: liveId=${props.liveId} 暂无回放（review=false）`)
       ElMessage({
-        message: '该视频不是录播',
+        message: '录播回放尚未生成！',
         type: 'warning',
       })
-      router.push('/live')
       return
     }
 
@@ -226,11 +235,13 @@ async function getOne() {
     barrageUrl.value = nextBarrageUrl
     playStreamPath.value = nextPlayStreamPath
 
-    if (barrageSourceChanged)
+    if (barrageSourceChanged) {
+      debugLog('playback', `②拉详情: 播放地址与弹幕源已更新（弹幕源变化 → 重新加载）`)
       resetBarrageSource()
+    }
   }
   catch (error: any) {
-    console.error(error)
+    console.error('PlaybackPlayer.vue, 获取录播信息失败:', error.message)
     ElMessage({ message: '获取录播信息失败', type: 'error' })
   }
 }
@@ -256,14 +267,16 @@ const { running: downloading, onActionClick: onDownloadClick } = useMediaDownloa
 })
 
 onMounted(async () => {
+  debugLog('playback', `①录播会话开始（liveId=${props.liveId}, source=${props.source}）: 载入弹幕设置 → 启动弹幕动画 → 拉详情`)
   loadSettings()
   startDanmakuAnimation()
   rootRef.value?.focus()
 
-  await getOne()
+  await getLiveOne()
 })
 
 onUnmounted(() => {
+  debugLog('playback', `⑤录播会话结束（liveId=${props.liveId}）: 停弹幕动画 → 销毁播放引擎 → 释放防休眠`)
   stopDanmakuAnimation()
   destroyPlayer()
   releaseSleepBlocker()
@@ -273,13 +286,13 @@ onUnmounted(() => {
 <template>
   <div
     ref="rootRef"
-    class="review-player"
+    class="playback-player"
     :style="{ '--barrage-sidebar-width': `${BARRAGE_SIDEBAR_WIDTH}px` }"
     tabindex="-1"
     @keydown="onKeydown"
     @pointerdown="onPointerDown"
   >
-    <div class="review-content">
+    <div class="playback-content">
       <div class="video-box">
         <div
           ref="videoBoxRef"
@@ -418,7 +431,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped lang="scss">
-.review-player {
+.playback-player {
   height: 100%;
   overflow: hidden;
   display: flex;
@@ -429,7 +442,7 @@ onUnmounted(() => {
 /* 悬浮按钮（下载）与右上角容器样式为全局 .player-actions / .action-btn，见 app.scss */
 
 /* 视频占主区域，弹幕列表定宽侧栏；min-height/min-width 为 0 让高度链正确收缩 */
-.review-content {
+.playback-content {
   flex: 1;
   min-height: 0;
   display: flex;

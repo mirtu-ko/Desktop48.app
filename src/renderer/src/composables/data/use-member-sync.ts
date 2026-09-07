@@ -31,9 +31,7 @@ export function useMemberSync() {
     if (await window.mainAPI.hasMembers?.()) {
       return
     }
-    console.log('[useMemberSync]数据库没有成员信息, 同步成员信息')
     await syncInfo()
-    console.log('[useMemberSync]数据库没有成员信息, 同步完成')
   }
 
   /**

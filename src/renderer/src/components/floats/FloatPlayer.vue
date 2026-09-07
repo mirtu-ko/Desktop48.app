@@ -20,7 +20,7 @@ import {
   VIEWPORT_PADDING_X,
 } from '../../utils/float-player-layout'
 import LivePlayer from '../player/LivePlayer.vue'
-import ReviewPlayer from '../player/ReviewPlayer.vue'
+import PlaybackPlayer from '../player/PlaybackPlayer.vue'
 import MediaIcon from '../ui/MediaIcon.vue'
 
 const props = defineProps<{
@@ -48,7 +48,7 @@ const barTitle = computed(() => {
 })
 const collapsed = ref(false)
 const expanded = ref(false)
-// 弹幕侧栏是否实际占位（由 ReviewPlayer 上报：有弹幕且未收起）
+// 弹幕侧栏是否实际占位（由 PlaybackPlayer 上报：有弹幕且未收起）
 const sidebarActive = ref(false)
 function onSidebar(active: boolean) {
   sidebarActive.value = active
@@ -77,7 +77,7 @@ const size = computed<WindowSize>(() => {
   if (collapsed.value)
     return PILL_SIZE
   const ratio = expanded.value ? EXPAND_BOX_RATIO : MINI_BOX_RATIO
-  const sidebar = expanded.value && kind.value === 'review' && sidebarActive.value ? BARRAGE_SIDEBAR_WIDTH : 0
+  const sidebar = expanded.value && kind.value === 'playback' && sidebarActive.value ? BARRAGE_SIDEBAR_WIDTH : 0
   const boxW = viewport.value.w * ratio.w
   const boxH = (viewport.value.h - FP_BAR_HEIGHT) * ratio.h
   const video = fitAspectInBox(
@@ -286,7 +286,7 @@ onUnmounted(() => {
       @dblclick="onBarDblClick"
     >
       <!-- 胶囊态隐藏「直播/回放」徽章，给标题让出空间 -->
-      <span v-if="!collapsed" class="fp-kind" :class="{ 'is-review': kind === 'review' }">
+      <span v-if="!collapsed" class="fp-kind" :class="{ 'is-playback': kind === 'playback' }">
         {{ kind === 'live' ? '直播' : '回放' }}
       </span>
       <img v-if="avatarUrl" :src="avatarUrl" alt="avatar" class="fp-avatar">
@@ -334,7 +334,7 @@ onUnmounted(() => {
         @aspect="onAspect"
         @close="onClose"
       />
-      <ReviewPlayer
+      <PlaybackPlayer
         v-else
         :live-title="item.payload.title"
         :live-id="item.payload.liveId"
@@ -395,7 +395,7 @@ onUnmounted(() => {
   color: #fff;
   background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
 
-  &.is-review {
+  &.is-playback {
     background: linear-gradient(135deg, var(--brand-secondary), #ffb0c8);
   }
 }

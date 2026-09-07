@@ -1,4 +1,4 @@
-import type { electronAPI as ElectronAPI, mainAPI } from './api-types'
+import type { electronAPI as ElectronAPI, FfmpegDownloadProgress, mainAPI, MemberDataContent, NetRequestOptions } from './api-types'
 import { contextBridge, ipcRenderer } from 'electron'
 
 // 替代 @electron-toolkit/preload，仅暴露渲染进程实际需要的最小 API
@@ -26,9 +26,9 @@ const electronAPI = {
  * satisfies mainAPI：实现与契约在编译期强制一致，新增/改名通道漏改任何一侧都会 typecheck 报错。
  */
 const api = {
-  saveMemberData: (data: any) => ipcRenderer.invoke('saveMemberData', data),
+  saveMemberData: (data: Partial<MemberDataContent>) => ipcRenderer.invoke('saveMemberData', data),
   // 成员（对端：main/ipc/register-database-ipc.ts）
-  getMember: (userId: number) => ipcRenderer.invoke('getMember', userId),
+  getMemberInfo: (userId: number) => ipcRenderer.invoke('getMemberInfo', userId),
   getMemberTree: () => ipcRenderer.invoke('getMemberTree'),
   getBlockedMembers: () => ipcRenderer.invoke('getBlockedMembers'),
   setBlockedMembers: (ids: number[]) => ipcRenderer.invoke('setBlockedMembers', ids),
@@ -36,22 +36,29 @@ const api = {
   removeBlockedMember: (userId: number) => ipcRenderer.invoke('removeBlockedMember', userId),
   hasMembers: () => ipcRenderer.invoke('hasMembers'),
   // 配置相关（对端：main/ipc/register-database-ipc.ts）
-  getConfig: (key: string, defaultValue?: any) => ipcRenderer.invoke('getConfig', key, defaultValue),
-  setConfig: (key: string, value: any) => ipcRenderer.invoke('setConfig', key, value),
-  // 网络（对端：main/app.ts，走 Electron net 模块 + 域名白名单）
-  netRequest: (options: any) => ipcRenderer.invoke('netRequest', options),
-  // 播放（对端：main/stream.ts。createLiveStream 只登记会话，
-  // FFmpeg 由 main/http-server.ts 在播放器实际拉流时才 spawn）
+  getConfig: <T>(key: string, defaultValue?: T) => ipcRenderer.invoke('getConfig', key, defaultValue),
+  setConfig: (key: string, value: unknown) => ipcRenderer.invoke('setConfig', key, value),
+  // 网络（对端：main/ipc/register-system-ipc.ts，走 Electron net 模块 + 域名白名单）
+  netRequest: (options: NetRequestOptions) => ipcRenderer.invoke('netRequest', options),
+  // 播放（对端：main/ipc/register-stream-ipc.ts，业务实现在 main/stream.ts。
+  // createLiveStream 只登记会话，FFmpeg 由 main/http-server.ts 在播放器实际拉流时才 spawn）
   createLiveStream: (rtmpUrl: string, liveId: string) => ipcRenderer.invoke('createLiveStream', rtmpUrl, liveId),
   stopLiveStream: (liveId: string) => ipcRenderer.invoke('stopLiveStream', liveId),
-  // 文件夹目录
+  // 文件夹目录（对端：main/ipc/register-system-ipc.ts）
   openPath: (filePath: string) => ipcRenderer.invoke('openPath', filePath),
   getDesktopPath: () => ipcRenderer.invoke('getDesktopPath'),
   selectDirectory: () => ipcRenderer.invoke('selectDirectory'),
   checkFfmpegBinaries: (dir: string) => ipcRenderer.invoke('checkFfmpegBinaries', dir),
+  // ffmpeg 在线下载（对端：main/ffmpeg/ffmpeg-download.ts，下载进度经 ffmpegDownloadProgress 回推）
+  downloadFfmpeg: () => ipcRenderer.invoke('downloadFfmpeg'),
+  onFfmpegDownloadProgress: (callback: (_progress: FfmpegDownloadProgress) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, progress: FfmpegDownloadProgress) => callback(progress)
+    ipcRenderer.on('ffmpegDownloadProgress', listener)
+    return () => ipcRenderer.removeListener('ffmpegDownloadProgress', listener)
+  },
   getPlatform: () => process.platform,
   pathJoin: (...paths: string[]) => ipcRenderer.invoke('pathJoin', ...paths),
-  // 下载（对端：main/ffmpeg/register-ffmpeg-task.ts）
+  // 下载（对端：main/ipc/register-task-ipc.ts，通用任务机制在 main/ffmpeg/register-ffmpeg-task.ts）
   downloadTaskStart: (url: string, filename: string, liveId: string) => ipcRenderer.invoke('downloadTaskStart', url, filename, liveId),
   downloadTaskProgress: (callback: (_liveId: string, _time: string) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, liveId: string, time: string) => callback(liveId, time)
@@ -63,15 +70,15 @@ const api = {
     ipcRenderer.on('downloadTaskEnd', listener)
     return () => ipcRenderer.removeListener('downloadTaskEnd', listener)
   },
-  downloadTaskError: (callback: (_liveId: string, _error: any) => void) => {
-    const listener = (_e: Electron.IpcRendererEvent, liveId: string, error: any) => callback(liveId, error)
+  downloadTaskError: (callback: (_liveId: string, _error: string) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, liveId: string, error: string) => callback(liveId, error)
     ipcRenderer.on('downloadTaskError', listener)
     return () => ipcRenderer.removeListener('downloadTaskError', listener)
   },
   downloadTaskStop: (liveId: string) => ipcRenderer.send(`downloadTaskStop:${liveId}`),
   downloadTaskList: () => ipcRenderer.invoke('downloadTaskList'),
   downloadTaskRemove: (liveId: string) => ipcRenderer.invoke('downloadTaskRemove', liveId),
-  // 录制（对端：main/ffmpeg/register-ffmpeg-task.ts）
+  // 录制（对端：main/ipc/register-task-ipc.ts，通用任务机制在 main/ffmpeg/register-ffmpeg-task.ts）
   recordTaskStart: (url: string, filename: string, liveId: string) => ipcRenderer.invoke('recordTaskStart', url, filename, liveId),
   recordTaskProgress: (callback: (_liveId: string, _time: string) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, liveId: string, time: string) => callback(liveId, time)
@@ -83,15 +90,15 @@ const api = {
     ipcRenderer.on('recordTaskEnd', listener)
     return () => ipcRenderer.removeListener('recordTaskEnd', listener)
   },
-  recordTaskError: (callback: (_liveId: string, _error: any) => void) => {
-    const listener = (_e: Electron.IpcRendererEvent, liveId: string, error: any) => callback(liveId, error)
+  recordTaskError: (callback: (_liveId: string, _error: string) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, liveId: string, error: string) => callback(liveId, error)
     ipcRenderer.on('recordTaskError', listener)
     return () => ipcRenderer.removeListener('recordTaskError', listener)
   },
   recordTaskStop: (liveId: string) => ipcRenderer.send(`recordTaskStop:${liveId}`),
   recordTaskList: () => ipcRenderer.invoke('recordTaskList'),
   recordTaskRemove: (liveId: string) => ipcRenderer.invoke('recordTaskRemove', liveId),
-  // 窗口控制（对端：main/app.ts）
+  // 窗口控制（对端：main/ipc/register-window-ipc.ts，窗口引用与休眠状态归 main/app.ts 管理）
   windowMinimize: () => ipcRenderer.invoke('windowMinimize'),
   windowToggleMaximize: () => ipcRenderer.invoke('windowToggleMaximize'),
   windowClose: () => ipcRenderer.invoke('windowClose'),
@@ -101,9 +108,9 @@ const api = {
     ipcRenderer.on('windowOnMaximizeChange', listener)
     return () => ipcRenderer.removeListener('windowOnMaximizeChange', listener)
   },
-  // 阻止系统休眠
+  // 阻止系统休眠（对端：main/ipc/register-window-ipc.ts，blocker 状态归 main/app.ts 管理）
   preventSleep: () => ipcRenderer.invoke('preventSleep'),
-  // 允许系统休眠
+  // 允许系统休眠（对端：main/ipc/register-window-ipc.ts）
   allowSleep: (id: number) => ipcRenderer.invoke('allowSleep', id),
 } satisfies mainAPI
 

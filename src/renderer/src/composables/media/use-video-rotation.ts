@@ -15,7 +15,7 @@ interface UseVideoRotationOptions {
 }
 
 /**
- * 画面旋转 + 容器全屏 + 迷你控制条状态，供 LivePlayer / ReviewPlayer 共用。
+ * 画面旋转 + 容器全屏 + 迷你控制条状态，供 LivePlayer / PlaybackPlayer 共用。
  * 旋转作用于 video wrapper，不参与旋转的浮层（弹幕等）由组件自己保证同级不旋转。
  */
 export function useVideoRotation(options: UseVideoRotationOptions) {

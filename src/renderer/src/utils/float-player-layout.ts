@@ -30,7 +30,7 @@ export const EXPAND_BOX_RATIO = { w: 0.8, h: 0.88 }
 
 /**
  * 回放放大态的弹幕侧栏预留宽度。
- * 唯一来源：ReviewPlayer 经根节点 :style 注入 CSS 变量 --barrage-sidebar-width，
+ * 唯一来源：PlaybackPlayer 经根节点 :style 注入 CSS 变量 --barrage-sidebar-width，
  * 其 .barrage-box 样式引用该变量（B-3 收口，不再手工同步两处数值）；
  * 仅当侧栏实际占位（有弹幕数据且未收起，经 sidebar 事件上报）时预留，
  * 无弹幕 / 收起列表时放大窗按纯视频比例收窄。

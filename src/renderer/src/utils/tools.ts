@@ -35,6 +35,10 @@ class Tools {
    * @returns {string[]} 完整的图片URL数组
    */
   public static pictureUrls(picturesStr: string) {
+    // teamLogo 等字段为可选，数据缺失（undefined/null）时返回空数组，
+    // 避免 .split 抛错导致整页列表加载失败
+    if (!picturesStr)
+      return []
     return picturesStr.split(',').map(picture => Tools.toSourceUrl(picture))
   }
 

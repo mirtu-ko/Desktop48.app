@@ -4,6 +4,7 @@ import path from 'node:path'
 import { ipcMain } from 'electron'
 import { isAllowedStreamUrl } from '../allowed-hosts'
 import { Database } from '../database'
+import { handleTraced } from '../ipc/trace'
 import { log, warn } from '../logger'
 import { FfmpegProcess, hasFfmpegSlot, MAX_CONCURRENT_FFMPEG_TASKS, resolveFfmpegBinary } from './ffmpeg-process'
 import { nextAvailablePath } from './output-path'
@@ -12,7 +13,7 @@ import { TaskRegistry } from './task-registry'
 interface FfmpegTaskConfig {
   /** IPC 通道名前缀，如 'downloadTask' / 'recordTask' */
   channelPrefix: string
-  /** 日志前缀，如 'download.ts' / 'record.ts' */
+  /** 日志前缀，如 'downloadTask' / 'recordTask' */
   logTag: string
   /** ffmpeg 输出参数（位于 '-c copy' 之后、输出文件之前） */
   ffmpegArgs: string[]
@@ -25,21 +26,26 @@ interface FfmpegTaskConfig {
  * 编排职责划分：目录/二进制校验、并发熔断、文件冲突检测、进程生命周期在这里串起来；
  * 进程细节在 ffmpeg-process.ts，状态在 task-registry.ts，冲突序号在 output-path.ts。
  */
-function registerFfmpegTask(config: FfmpegTaskConfig): void {
+export function registerFfmpegTask(config: FfmpegTaskConfig): void {
   const { channelPrefix, logTag, ffmpegArgs } = config
   const registry = new TaskRegistry()
 
   // 查询当前所有任务快照，供渲染端刷新后恢复列表
-  ipcMain.handle(`${channelPrefix}List`, () => registry.list())
+  handleTraced(`${channelPrefix}List`, () => registry.list())
   // 从快照表删除任务（对应渲染端移除卡片）
-  ipcMain.handle(`${channelPrefix}Remove`, (_event: IpcMainInvokeEvent, liveId: string) => {
+  handleTraced(`${channelPrefix}Remove`, (_event: IpcMainInvokeEvent, liveId: string) => {
     registry.remove(liveId)
   })
 
-  ipcMain.handle(`${channelPrefix}Start`, async (event: IpcMainInvokeEvent, url: string, filename: string, liveId: string) => {
+  handleTraced(`${channelPrefix}Start`, async (event: IpcMainInvokeEvent, url: string, filename: string, liveId: string) => {
     // 输入地址白名单：url 直接交给 ffmpeg（-i），不经校验会形成 netRequest 之外的安全旁路
     if (!isAllowedStreamUrl(url))
       throw new Error(`任务源地址不在允许范围内: ${url}`)
+    // 文件名校验：filename 由渲染进程直传，必须就是纯文件名本身。
+    // 含路径分隔符（含 Windows 反斜杠在跨平台语义下的变体）或 '..' 时
+    // path.join 的归一化结果会与 basename 不一致，据此拒绝，防止路径穿越下载目录
+    if (path.basename(filename) !== filename || !filename || filename === '.' || filename === '..')
+      throw new Error(`任务文件名不合法: ${filename}`)
     // 保存目录与 ffmpeg 二进制校验
     const saveDir: string = Database.instance().getConfig('downloadDirectory', '') as string
     if (!fs.existsSync(saveDir))
@@ -140,22 +146,5 @@ function registerFfmpegTask(config: FfmpegTaskConfig): void {
   })
 }
 
-// ===== 任务注册 =====
-
-// 下载任务：HLS TS → MP4
-// -bsf:a aac_adtstoasc: HLS TS 里的 AAC 是 ADTS 格式，MP4 容器需要 ASC 格式，必须转封装
-// -movflags +faststart: 正常结束时把 moov atom 移到文件头，播放器可立即打开
-registerFfmpegTask({
-  channelPrefix: 'downloadTask',
-  logTag: 'download.ts',
-  ffmpegArgs: ['-bsf:a', 'aac_adtstoasc', '-movflags', '+faststart'],
-})
-
-// 录制任务：RTMP/HTTP 流 → FLV 文件
-// -f flv: 将 RTMP/HTTP 流封装为 FLV 容器
-// 如需断线重连，可追加 -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2
-registerFfmpegTask({
-  channelPrefix: 'recordTask',
-  logTag: 'record.ts',
-  ffmpegArgs: ['-f', 'flv'],
-})
+// 具体任务通道组（downloadTask / recordTask）的配置与注册在 ipc/register-task-ipc.ts，
+// 本模块只提供通用工厂，不再自带副作用调用。

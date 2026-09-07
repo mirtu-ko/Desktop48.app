@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import mpegts from 'mpegts.js'
+import { debugLog } from '../../utils/debug'
 
 /**
  * mpegts 播放器实例管理：
@@ -97,8 +98,10 @@ export function useLivePlayer(options: {
     created.attachMediaElement(mediaElement)
     created.load()
     play()
+    debugLog('live', `mpegts 播放器已挂载: ${path}`)
 
     mediaElement.oncanplay = () => {
+      debugLog('live', '媒体可播放（canplay）')
       options.mediaLoading.value = false
       options.onCanPlay()
     }

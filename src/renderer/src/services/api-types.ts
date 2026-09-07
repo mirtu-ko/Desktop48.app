@@ -71,6 +71,7 @@ export interface LiveListItem {
   title?: string
   /** 1=视频直播 2=电台 */
   liveType?: number
+  /** 0=直播 1=录屏 */
   liveMode?: number
   [key: string]: unknown
 }
@@ -98,7 +99,7 @@ export interface LiveDetail {
   user: LiveDetailUser
   liveId?: string
   onlineNum?: number
-  /** 是否可回放（ReviewPlayer 用） */
+  /** 是否可回放（PlaybackPlayer 用） */
   review?: number | boolean
   /** 1=视频直播 2=电台 */
   liveType?: number

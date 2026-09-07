@@ -12,7 +12,7 @@ import { useDanmakuSettings } from '../media/use-danmaku-settings'
  * 任何一条路径都不可能漏同步（拆分前两者分散在组件两处，靠约定维持一致）。
  * 同时持有：弹幕数据源 url、右侧列表引擎、叠加层引擎、显示设置。
  */
-export function useReviewDanmaku(options: {
+export function usePlaybackDanmaku(options: {
   /** 视频容器：弹幕叠加层的轨道区域按它的宽高计算 */
   videoBoxRef: Ref<HTMLElement | null>
   /** 当前媒体元素（video/audio），叠加层逐帧取进度、ensureBarragesLoaded 读进度 */

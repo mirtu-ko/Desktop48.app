@@ -7,7 +7,7 @@ import { usePlaybackEngine } from '../media/use-playback-engine'
  * usePlaybackEngine 的业务接线 + retryPlayback + 播放地址变化的挂载 watch。
  * 引擎维护「加载中 / 缓冲中 / 出错」三态，媒体事件经回调交还调用方做业务处理。
  */
-export function useReviewMedia(options: {
+export function usePlaybackMedia(options: {
   playStreamPath: Ref<string>
   /** 当前应挂载播放源的媒体元素（电台模式切换后是 audio，否则 video） */
   getMediaElement: () => HTMLMediaElement | null
