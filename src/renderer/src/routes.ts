@@ -9,7 +9,7 @@ const routes: any[] = [
   {
     path: '/lives',
     component: Lives,
-    // ?tab=review&member=<userId>：成员详情抽屉「看 TA 的回放」的跳转参数，
+    // ?tab=playback&member=<userId>：成员详情抽屉「看 TA 的回放」的跳转参数，
     // Lives 页 onMounted 读取（keep-alive 下仅首次挂载生效，后续跳转走 watch）
   },
   {

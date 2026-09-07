@@ -56,7 +56,7 @@ export default class Apis {
   /**
    * 回放列表
    */
-  public reviews({
+  public playbackList({
     next = '0',
     userId = '0',
     teamId = '0',

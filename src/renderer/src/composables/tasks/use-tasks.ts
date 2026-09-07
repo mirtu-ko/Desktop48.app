@@ -79,7 +79,7 @@ async function startTask(task: TaskBase, config: TaskKindConfig, message: string
   const reactiveTask = reactive(task) as TaskBase
   try {
     await reactiveTask.start(() => {
-      ElMessage({ message, type: 'info' })
+      ElMessage({ message, type: 'success' })
     })
     // 重启路径下任务已在列表中，避免重复 push 导致卡片重复
     if (!config.list.value.includes(reactiveTask))

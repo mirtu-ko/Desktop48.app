@@ -44,7 +44,7 @@ export function useLiveSession(options: {
   onUnavailable: () => void
   /** 每次重建流之前调用：组件在此销毁播放器/复位媒体元素/清重试计时器 */
   onBeforeRebuild: () => void
-  /** 会话启动（getOne 开始）时调用：组件在此复位重试计数与 loading 态 */
+  /** 会话启动（getLiveOne 开始）时调用：组件在此复位重试计数与 loading 态 */
   onSessionStart: () => void
 }) {
   /** 本地 HTTP-FLV 播放地址（http://127.0.0.1:<port>/live/xxx.flv?t=&r=），播放器的唯一数据源 */
@@ -101,7 +101,7 @@ export function useLiveSession(options: {
         liveId: data.liveId,
       }
     }
-    debugLog('live', '②拉详情: source=user → 走 getLiveOne 接口（单档 rtmp 地址）')
+    debugLog('live', '②拉详情: source=user → 走 getLiveOne 接口（单档 rtmp 地址）', `liveId=${options.liveId()}`)
     return await Apis.instance().live(options.liveId())
   }
 
@@ -111,7 +111,7 @@ export function useLiveSession(options: {
     if (!currentLiveId)
       return
     activeSessionLiveId.value = ''
-    debugLog('live', `停止当前直播会话: ${currentLiveId}`)
+    debugLog('live', `session 停止当前直播会话: ${currentLiveId}`)
     try {
       // ★ 跨进程：preload/index.ts → main/stream.ts 的 'stopLiveStream' handler
       await window.mainAPI.stopLiveStream(currentLiveId)
@@ -138,7 +138,7 @@ export function useLiveSession(options: {
 
     // 等待期间组件已卸载 / 又发起了更新的一次重启：本次结果作废，顺手把刚登记的会话撤掉
     if (options.isDisposed.value || requestId !== activeStreamRequestId) {
-      debugLog('live', `会话回包已过期（liveId=${result.liveId || options.liveId()}），撤销刚登记的会话`)
+      debugLog('live', `session 会话回包已过期（liveId=${result.liveId || options.liveId()}），撤销刚登记的会话`)
       try {
         // ★ 跨进程：preload/index.ts → main/stream.ts 的 'stopLiveStream' handler
         await window.mainAPI.stopLiveStream(result.liveId || options.liveId())
@@ -152,7 +152,7 @@ export function useLiveSession(options: {
     activeSessionLiveId.value = result.liveId
     // 写入即触发 LivePlayer 里的 watch，由它重建 mpegts 播放器
     localPlaybackUrl.value = buildPlaybackUrl(result.url, streamRestartToken.value)
-    debugLog('live', `本地播放地址已就绪: ${localPlaybackUrl.value}`)
+    debugLog('live', `session 本地播放地址已就绪: ${localPlaybackUrl.value}`)
     return true
   }
 
@@ -162,7 +162,7 @@ export function useLiveSession(options: {
    */
   async function restartLiveStream(rtmpUrl: string) {
     const requestId = ++activeStreamRequestId
-    debugLog('live', `重建直播流（第 ${streamRestartToken.value + 1} 次）, rtmp=${rtmpUrl}`)
+    debugLog('live', `session 重建直播流（第 ${streamRestartToken.value + 1} 次）, rtmp=${rtmpUrl}`)
     options.onBeforeRebuild()
     await stopCurrentLiveStream()
     if (options.isDisposed.value || requestId !== activeStreamRequestId)
@@ -175,17 +175,18 @@ export function useLiveSession(options: {
    * 会话入口：拉详情 → 同步界面 → 开本地转流会话。
    * 详情都取不到通常意味着直播已下架，走 onUnavailable 关窗。
    */
-  async function getOne() {
+  async function getLiveOne() {
     options.onSessionStart()
     try {
       const data = await fetchLiveDetail()
+      debugLog('live', `②拉详情: 直播详情 -> data`, data)
       if (options.isDisposed.value)
         return
       applyLiveDetail(data)
       await restartLiveStream(data.playStreamPath)
     }
     catch (error: any) {
-      console.error('getOne()', error)
+      console.error('getLiveOne()', error)
       // 详情失败的原因已由 Apis.request 统一弹窗提示（不在这里重复弹）；
       // 详情都取不到通常意味着直播已下架，走下架处理
       options.onUnavailable()
@@ -198,7 +199,7 @@ export function useLiveSession(options: {
     if (!currentLiveId)
       return
     activeSessionLiveId.value = ''
-    debugLog('live', `最终停流: ${currentLiveId}（重试耗尽或组件卸载）`)
+    debugLog('live', `session 最终停流: ${currentLiveId}（重试耗尽或组件卸载）`)
     // ★ 跨进程：preload/index.ts → main/stream.ts 的 'stopLiveStream' handler。
     // 卸载路径上不 await：调用方（onUnmounted）是同步的，失败只记日志
     window.mainAPI.stopLiveStream(currentLiveId).catch((err) => {
@@ -224,7 +225,7 @@ export function useLiveSession(options: {
     carouselTime,
     fetchLiveDetail,
     applyLiveDetail,
-    getOne,
+    getLiveOne,
     restartLiveStream,
     stopCurrentLiveStream,
     stopStreamNow,

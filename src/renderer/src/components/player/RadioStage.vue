@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 电台舞台：轮播封面铺满 + 隐藏 audio 媒体源，LivePlayer / ReviewPlayer 共用。
+ * 电台舞台：轮播封面铺满 + 隐藏 audio 媒体源，LivePlayer / PlaybackPlayer 共用。
  * audio 元素本体经 `audio` 事件回传（挂载时元素、卸载时 null），
  * 由父级挂 mpegts / hls 播放会话；播控交互统一走 MiniControls。
  */

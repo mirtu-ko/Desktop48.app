@@ -11,49 +11,49 @@ import useFloatPlayers from '../composables/use-float-players'
 import Apis from '../services/apis'
 import EventBus from '../services/event-bus'
 import { debugLog } from '../utils/debug'
-import Reviews from './Reviews.vue'
+import Playbacks from './Playbacks.vue'
 
 const route = useRoute()
 
 // 画中画迷你窗：直播/回放/公演共用全局播放挂载点
 const { openLive } = useFloatPlayers()
 
-// 顶部浮层 tab 当前选中的视图：live（直播）/ review（回放）
-const activeTab = ref<'live' | 'review'>('live')
+// 顶部浮层 tab 当前选中的视图：live（直播）/ playback（回放）
+const activeTab = ref<'live' | 'playback'>('live')
 // 是否加载过回放面板，首次切换到回放时才渲染，避免进入页面即请求回放列表
-const reviewMounted = ref(false)
-// 成员详情「看 TA 的回放」预置筛选：每次跳转都新建对象，同一成员连续跳转也能触发 Reviews 的 watch
+const playbackMounted = ref(false)
+// 成员详情「看 TA 的回放」预置筛选：每次跳转都新建对象，同一成员连续跳转也能触发 Playbacks 的 watch
 const memberPreset = ref<{ userId: string } | null>(null)
 
 const viewTabs = [
   { label: '直播', key: 'live', icon: VideoCamera },
-  { label: '回放', key: 'review', icon: Film },
+  { label: '回放', key: 'playback', icon: Film },
 ]
 
 function switchTab(tab: string) {
-  if (tab === 'review')
-    reviewMounted.value = true
-  activeTab.value = tab as 'live' | 'review'
+  if (tab === 'playback')
+    playbackMounted.value = true
+  activeTab.value = tab as 'live' | 'playback'
 }
 
-// 成员详情抽屉跳转（/lives?tab=review&member=<userId>）：
+// 成员详情抽屉跳转（/lives?tab=playback&member=<userId>）：
 // 切到回放面板并按该成员预置级联筛选。跳转语义由路由 query 承载（原 EventBus 事件已移除）
-function applyMemberReviewsRoute(query: { tab?: string, member?: string }) {
+function applyMemberPlaybacksRoute(query: { tab?: string, member?: string }) {
   if (query.member) {
     memberPreset.value = { userId: String(query.member) }
-    switchTab('review')
+    switchTab('playback')
   }
-  else if (query.tab === 'review') {
-    switchTab('review')
+  else if (query.tab === 'playback') {
+    switchTab('playback')
   }
 }
 
 // 双击当前 tab：直播 tab 刷新直播列表，回放 tab 转发给回放组件刷新
-const reviewsRef = ref<InstanceType<typeof Reviews> | null>(null)
+const playbackRef = ref<InstanceType<typeof Playbacks> | null>(null)
 
 function onTabsRefresh() {
-  if (activeTab.value === 'review')
-    reviewsRef.value?.refreshFromTop()
+  if (activeTab.value === 'playback')
+    playbackRef.value?.refreshFromTop()
   else
     refreshList()
 }
@@ -110,7 +110,7 @@ function refreshList() {
 onMounted(() => {
   getLiveList()
   // 首次挂载即读取跳转参数（从成员页抽屉跳转过来的场景）
-  applyMemberReviewsRoute(route.query as { tab?: string, member?: string })
+  applyMemberPlaybacksRoute(route.query as { tab?: string, member?: string })
   EventBus.on('live-unavailable', onLiveUnavailable)
 })
 
@@ -118,7 +118,7 @@ onMounted(() => {
 watch(() => route.query, (query) => {
   // 仅在当前路由就是 /lives 时响应，避免其他页面 query 变化误触发
   if (route.path === '/lives')
-    applyMemberReviewsRoute(query as { tab?: string, member?: string })
+    applyMemberPlaybacksRoute(query as { tab?: string, member?: string })
 })
 
 onUnmounted(() => {
@@ -165,8 +165,8 @@ onUnmounted(() => {
     </div>
 
     <!-- 回放面板：复用回放组件，首次切换时才渲染并保持状态 -->
-    <div v-show="activeTab === 'review'" class="review-main">
-      <Reviews v-if="reviewMounted" ref="reviewsRef" :member-preset="memberPreset" />
+    <div v-show="activeTab === 'playback'" class="playback-main">
+      <Playbacks v-if="playbackMounted" ref="playbackRef" :member-preset="memberPreset" />
     </div>
   </div>
 </template>
@@ -175,7 +175,7 @@ onUnmounted(() => {
 /* 页面骨架（相对定位 + 裁剪）由模板上的全局 .page-root 提供 */
 
 /* 回放面板与直播共用整页高度 */
-.review-main {
+.playback-main {
   height: 100%;
 }
 

@@ -3,7 +3,7 @@ import { useRouter } from 'vue-router'
 
 /**
  * 下载/录制前的公共校验：下载目录已配置才放行。
- * 目录缺失时提示并跳转设置页。LivePlayer（录制）与 ReviewPlayer（回放下载）共用，
+ * 目录缺失时提示并跳转设置页。LivePlayer（录制）与 PlaybackPlayer（回放下载）共用，
  * 须在组件 setup 内调用（内部依赖 useRouter）。
  */
 export function useDownloadGuard() {

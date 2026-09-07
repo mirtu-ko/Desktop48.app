@@ -10,7 +10,7 @@ export interface DanmakuSettings {
 }
 
 // 弹幕显示设置持久化在 localStorage（主进程 config 只接受固定几个 key）
-const DANMAKU_SETTINGS_KEY = 'review-danmaku-settings'
+const DANMAKU_SETTINGS_KEY = 'playback-danmaku-settings'
 
 /**
  * 每实例一份的弹幕设置：回放可同时存在多个实例（浮窗），

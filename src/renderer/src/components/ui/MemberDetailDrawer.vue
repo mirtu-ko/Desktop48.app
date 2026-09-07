@@ -83,13 +83,13 @@ function onVisibilityChange(value: boolean) {
 }
 
 /** 点击卡片「看 TA 的回放」：跳转直播页回放 tab 并按该成员预置筛选。
- *  跳转语义由路由 query 承载（原 EventBus 'open-member-reviews' 事件已移除）：
- *  /lives?tab=review&member=<userId>，Lives 页解析后切 tab + 应用筛选 */
-function openReviews() {
+ *  跳转语义由路由 query 承载（原 EventBus 'open-member-playbacks' 事件已移除）：
+ *  /lives?tab=playback&member=<userId>，Lives 页解析后切 tab + 应用筛选 */
+function openPlaybacks() {
   if (!props.member)
     return
   emit('close')
-  router.push({ path: '/lives', query: { tab: 'review', member: String(props.member.userId) } })
+  router.push({ path: '/lives', query: { tab: 'playback', member: String(props.member.userId) } })
 }
 </script>
 
@@ -207,7 +207,7 @@ function openReviews() {
 
       <!-- 回放直达 + 屏蔽操作 -->
       <div class="actions">
-        <el-button type="primary" class="review-btn" :icon="Film" @click="openReviews">
+        <el-button type="primary" class="playback-btn" :icon="Film" @click="openPlaybacks">
           看 TA 的回放
         </el-button>
         <el-button
@@ -388,7 +388,7 @@ function openReviews() {
     margin-left: 0;
   }
 
-  .review-btn {
+  .playback-btn {
     flex: 1;
   }
 }

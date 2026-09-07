@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 播放器统一加载态：双环 spinner + 主文案 + 可选提示与封面图淡显背景。
- * 直播（LivePlayer）与回放（ReviewPlayer）共用，覆盖在视频容器上。
+ * 直播（LivePlayer）与回放（PlaybackPlayer）共用，覆盖在视频容器上。
  */
 withDefaults(defineProps<{
   /** 主文案，如「正在加载直播」 */

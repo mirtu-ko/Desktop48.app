@@ -3,7 +3,7 @@ import { ref } from 'vue'
 /**
  * 播放防休眠：持有 Electron 主进程的 powerSaveBlocker id，
  * 播放开始时 acquire、暂停/结束/卸载时 release。
- * LivePlayer（直播）与 ReviewPlayer（录播）共用。
+ * LivePlayer（直播）与 PlaybackPlayer（录播）共用。
  *
  * id 是主进程分配的句柄，release 时必须原样传回，否则解除的是别人的锁。
  */

@@ -4,8 +4,8 @@ import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMediaShortcuts } from '../../composables/media/use-media-shortcuts'
 import { useSleepBlocker } from '../../composables/media/use-sleep-blocker'
 import { useVideoRotation } from '../../composables/media/use-video-rotation'
-import { useReviewDanmaku } from '../../composables/review/use-review-danmaku'
-import { useReviewMedia } from '../../composables/review/use-review-media'
+import { usePlaybackDanmaku } from '../../composables/playback/use-playback-danmaku'
+import { usePlaybackMedia } from '../../composables/playback/use-playback-media'
 import useMediaDownload from '../../composables/tasks/use-media-download'
 import Apis from '../../services/apis'
 import { debugLog } from '../../utils/debug'
@@ -92,7 +92,7 @@ const {
 
 // 侧栏实际占位（有弹幕数据且未收起）上报给浮窗：
 // 无弹幕或收起弹幕列表时，放大窗不预留侧栏宽，画面不留空白
-const danmaku = useReviewDanmaku({
+const danmaku = usePlaybackDanmaku({
   videoBoxRef,
   getMedia: getActiveMediaElement,
 })
@@ -126,7 +126,7 @@ watch(
 // 播放防休眠（use-sleep-blocker，与 LivePlayer 共用）
 const { acquire: acquireSleepBlocker, release: releaseSleepBlocker } = useSleepBlocker()
 
-// =========== 播放引擎接线（HLS/原生选择与三态在 use-review-media） ===========
+// =========== 播放引擎接线（HLS/原生选择与三态在 use-playback-media） ===========
 const {
   mediaLoading,
   mediaBuffering,
@@ -134,7 +134,7 @@ const {
   mediaDuration,
   retryPlayback,
   destroy: destroyPlayer,
-} = useReviewMedia({
+} = usePlaybackMedia({
   playStreamPath,
   getMediaElement: getActiveMediaElement,
   getManagedElements: () => [nativeVideo.value, nativeAudio.value],
@@ -174,7 +174,11 @@ function onMiniSeek(value: number) {
   currentTime.value = value
 }
 
-async function getOne() {
+/**
+ * 获取回放详情
+ * 返回回放详情数据，data.review 为 true 时有回放
+ */
+async function getLiveOne() {
   try {
     if (props.source === 'open') {
       // 开放公演回放：getOpenLiveOne 返回 playStreams 数组（VOD m3u8），优先选超清（streamType 3），
@@ -199,15 +203,15 @@ async function getOne() {
       return
     }
 
-    debugLog('playback', `②拉详情: source=user → getLiveOne`, props)
+    debugLog('playback', `②拉详情: source=user → getLiveOne, props:`, props)
     const data = await Apis.instance().live(props.liveId)
-    debugLog('playback', `②拉详情: 直播详情 → data`, data)
+    debugLog('playback', `②拉详情: 录播详情 → data`, data)
 
     const nextPlayStreamPath = Tools.streamPathHandle(data.playStreamPath, props.startTime)
     const nextBarrageUrl = data.msgFilePath || ''
 
     if (!data.review) {
-      debugLog('playback', `②拉详情: liveId=${props.liveId} 非录播（review=false）`)
+      debugLog('playback', `②拉详情: liveId=${props.liveId} 暂无回放（review=false）`)
       ElMessage({
         message: '该视频不是录播',
         type: 'warning',
@@ -237,7 +241,7 @@ async function getOne() {
     }
   }
   catch (error: any) {
-    console.error('ReviewPlayer.vue, 获取录播信息失败:', error.message)
+    console.error('PlaybackPlayer.vue, 获取录播信息失败:', error.message)
     ElMessage({ message: '获取录播信息失败', type: 'error' })
   }
 }
@@ -268,7 +272,7 @@ onMounted(async () => {
   startDanmakuAnimation()
   rootRef.value?.focus()
 
-  await getOne()
+  await getLiveOne()
 })
 
 onUnmounted(() => {
@@ -282,13 +286,13 @@ onUnmounted(() => {
 <template>
   <div
     ref="rootRef"
-    class="review-player"
+    class="playback-player"
     :style="{ '--barrage-sidebar-width': `${BARRAGE_SIDEBAR_WIDTH}px` }"
     tabindex="-1"
     @keydown="onKeydown"
     @pointerdown="onPointerDown"
   >
-    <div class="review-content">
+    <div class="playback-content">
       <div class="video-box">
         <div
           ref="videoBoxRef"
@@ -427,7 +431,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped lang="scss">
-.review-player {
+.playback-player {
   height: 100%;
   overflow: hidden;
   display: flex;
@@ -438,7 +442,7 @@ onUnmounted(() => {
 /* 悬浮按钮（下载）与右上角容器样式为全局 .player-actions / .action-btn，见 app.scss */
 
 /* 视频占主区域，弹幕列表定宽侧栏；min-height/min-width 为 0 让高度链正确收缩 */
-.review-content {
+.playback-content {
   flex: 1;
   min-height: 0;
   display: flex;

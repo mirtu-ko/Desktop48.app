@@ -17,7 +17,7 @@ export interface UsePagedLiveListOptions<T> {
   processItem?: (_item: T, _index: number) => Promise<void> | void
   /** 是否在每次翻页前拉取并过滤被屏蔽成员，默认 true */
   filterBlocked?: boolean
-  /** 请求失败时是否标记为"没有更多"，从而停止触底重试；Lives 默认 false，Reviews 为 true */
+  /** 请求失败时是否标记为"没有更多"，从而停止触底重试；Lives 默认 false，Playbacks 为 true */
   stopOnError?: boolean
 }
 
@@ -62,7 +62,7 @@ export function usePagedLiveList<T extends PagedLive = PagedLive>({
 
 /**
  * 直播 / 回放列表条目的展示信息补全：封面 / 队伍 Logo 归一化、日期格式化、关联成员。
- * Lives 与 Reviews 的 processItem 共用；memberError 决定成员查询失败时的行为：
+ * Lives 与 Playbacks 的 processItem 共用；memberError 决定成员查询失败时的行为：
  * - 'fallback'：成员置 null 并打错误日志（直播页逐条容错）
  * - 'throw'：向上抛出，交由 usePagedList 的 stopOnError 接管（回放页整批停止）
  */

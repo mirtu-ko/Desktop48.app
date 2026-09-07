@@ -28,7 +28,7 @@ const props = defineProps<{ item: Item }>()
 const liveBadge = computed(() => {
   if (props.item.liveType === 1) {
     return props.item.liveMode === 1
-      ? { text: '录屏', type: 'review' }
+      ? { text: '录屏', type: 'playback' }
       : { text: '直播', type: 'live' }
   }
   return { text: '电台', type: 'radio' }

@@ -19,12 +19,12 @@ export interface UsePagedListOptions<T> {
   filterItems?: (_items: T[]) => Promise<T[]> | T[]
   /** 列表条目唯一键：用于翻页去重，默认取 (item as any).liveId */
   itemKey?: (_item: T) => string
-  /** 请求失败时是否标记为"没有更多"，从而停止触底重试；Lives 默认 false，Reviews 为 true */
+  /** 请求失败时是否标记为"没有更多"，从而停止触底重试；Lives 默认 false，Playbacks 为 true */
   stopOnError?: boolean
 }
 
 /**
- * 分页列表通用逻辑（Lives / Reviews / Shows 三页共用）：
+ * 分页列表通用逻辑（Lives / Playbacks / Shows 三页共用）：
  * - 列表 / 游标 / loading / noMore 四件套
  * - 请求序号丢弃过期响应，避免刷新与滚动并发导致数据错乱
  * - 去重追加 + 触底加载（useLoadMore）

@@ -7,7 +7,7 @@ import { useDownloadGuard } from './use-download-guard'
 import useTasks from './use-tasks'
 
 /**
- * 播放器媒体任务发起流程（B-1 抽取）：LivePlayer（录制）与 ReviewPlayer（回放下载）
+ * 播放器媒体任务发起流程：LivePlayer（录制）与 PlaybackPlayer（回放下载）
  * 原本各自维护一套「目录校验 → 取源地址 → 组 TaskPayload → handleTask 下发」的同构代码，
  * 这里收敛为单一骨架；差异项通过参数表达：
  * - kind: 'download'（回放 HLS→MP4）/ 'record'（直播 RTMP→FLV）
@@ -66,7 +66,7 @@ export function useMediaDownload(options: {
       return
     }
     stopTask(options.kind, options.liveId())
-    ElMessage({ message: options.kind === 'record' ? '已结束录制' : '已停止下载', type: 'info' })
+    ElMessage({ message: options.kind === 'record' ? '已结束录制' : '已停止下载', type: 'success' })
   }
 
   return { running, onActionClick, stopTask }
