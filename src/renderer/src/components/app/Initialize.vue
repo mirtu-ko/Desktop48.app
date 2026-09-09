@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FfmpegDownloadProgress } from '../../../../preload/api-types'
+import type { FfmpegDownloadProgress } from '../../../../preload/ipc-contract'
 import { Loading } from '@element-plus/icons-vue'
 import { onMounted, onUnmounted, ref } from 'vue'
 

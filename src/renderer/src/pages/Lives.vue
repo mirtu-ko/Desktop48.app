@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { LiveListItem } from '../services/api-types'
 import { Film, VideoCamera } from '@element-plus/icons-vue'
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '../components/ui/FloatingTabBar.vue'
 import LiveItem from '../components/ui/LiveItem.vue'
+import CardSkeletonGrid from '../components/ui/skeleton/CardSkeletonGrid.vue'
 import { enrichLiveItem, usePagedLiveList } from '../composables/data/use-paged-live-list'
 import useFloatPlayers from '../composables/use-float-players'
 import Apis from '../services/apis'
@@ -81,6 +82,11 @@ type EnrichedLiveItem = LiveListItem & {
   member: { teamName: string, teamColor: string } | null
 }
 
+// 首屏/刷新后列表为空时展示骨架屏；已有列表时刷新只反馈到刷新按钮，避免整页蒙层闪烁
+const showSkeleton = computed(() => loading.value && liveList.value.length === 0)
+/** 手动刷新递增，让同一封面的失败图也强制重新请求 */
+const imageVersion = ref(0)
+
 // 点击卡片：以画中画迷你窗打开直播，可边看边继续浏览列表
 function play(item: LiveListItem) {
   openLive({
@@ -103,6 +109,7 @@ function onLiveUnavailable(liveId: string) {
 
 // 手动/自动刷新：重置分页后拉取最新列表，并回到列表顶部
 function refreshList() {
+  imageVersion.value += 1
   liveScrollRef.value?.setScrollTop?.(0)
   refresh()
 }
@@ -131,13 +138,28 @@ onUnmounted(() => {
     <!-- 左上角浮层 tab：在直播与回放之间切换，悬浮于列表之上；双击当前 tab 刷新 -->
     <FloatingTabBar :tabs="viewTabs" :active="activeTab" @change="switchTab" @refresh="onTabsRefresh" />
 
-    <div v-show="activeTab === 'live'" v-loading="loading" class="live-main">
-      <div v-if="!loading && liveList.length === 0" class="live-empty">
+    <div v-show="activeTab === 'live'" class="live-main">
+      <!-- 首屏骨架：比全屏 loading 蒙层更稳定，能预先表达卡片布局和即将出现的内容 -->
+      <el-scrollbar
+        v-if="showSkeleton"
+        class="scrollbar-wrapper"
+      >
+        <CardSkeletonGrid
+          class="live-skeleton"
+          :count="12"
+          min-item-width="220px"
+          gap="16px"
+          aspect-ratio="1"
+          :line-widths="[82, 56, 38]"
+        />
+      </el-scrollbar>
+
+      <div v-else-if="liveList.length === 0 && !loading" class="live-empty">
         <el-empty description="当前没有直播" />
       </div>
 
       <el-scrollbar
-        v-if="liveList.length > 0"
+        v-else
         ref="liveScrollRef"
         class="scrollbar-wrapper"
         :distance="10"
@@ -146,7 +168,7 @@ onUnmounted(() => {
         <div class="live-list">
           <div v-for="item in liveList" :key="item.liveId" class="live-item" @click="play(item)">
             <!-- enrichLiveItem 在 processItem 阶段已就地补全 cover/date/member，渲染时必然就绪 -->
-            <LiveItem :item="item as EnrichedLiveItem" />
+            <LiveItem :item="item as EnrichedLiveItem" :image-version="imageVersion" />
           </div>
         </div>
         <div v-if="noMore" class="list-end">
@@ -195,6 +217,10 @@ onUnmounted(() => {
 /* 底部留出 Dock 空间（--dock-reserve） */
 :deep(.el-scrollbar__view) {
   padding-bottom: var(--dock-reserve);
+}
+
+.live-skeleton {
+  padding: var(--tabbar-offset-top) 16px 8px;
 }
 
 .live-empty {

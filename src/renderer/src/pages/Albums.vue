@@ -1,43 +1,21 @@
 <script setup lang="ts">
 import type { AudioTrack } from '../composables/use-audio-player'
+import type { AlbumSong, MusicAlbum } from '../services/api-types'
 import { Headset, Link, Plus, ShoppingCart, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import CoverImage from '../components/ui/CoverImage.vue'
 import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '../components/ui/FloatingTabBar.vue'
+import BaseSkeleton from '../components/ui/skeleton/BaseSkeleton.vue'
 import useAudioPlayer from '../composables/use-audio-player'
 import Apis from '../services/apis'
 import Tools from '../utils/tools'
 
-/** CDN JSON 中的歌曲条目 */
-interface AlbumSong {
-  songs_id: string
-  songs_name: string
-  /** 时长 m:ss，伴奏曲目可能为 null */
-  songs_time: string | null
-  url: string | null
-}
-
-/** CDN JSON 中的音乐条目（tag：ep=EP / zj=专辑 / sg=单曲） */
-interface MusicAlbum {
-  sid: string
-  title: string
-  singer: string
-  tag: string
-  image: string
-  year: string
-  /** 发行时间（秒级时间戳） */
-  start_time: string
-  /** 专辑概念页（event 页），可能为空串 */
-  link: string
-  /** 购买链接（shop 商品页），可能为空串 */
-  href: string
-  song: AlbumSong[]
-}
-
 const albumList = ref<MusicAlbum[]>([])
 const loading = ref(false)
+/** 封面刷新版本：手动刷新时递增，保证同一封面 URL 也会重新请求 */
+const imageVersion = ref(0)
 
 /** 年份筛选：全部 + 数据中出现的年份（新→旧） */
 const yearFilter = ref('0')
@@ -108,7 +86,18 @@ async function fetchAlbums() {
   }
 }
 
-const refresh = fetchAlbums
+/** 已有数据时的轻量刷新反馈：卡片降透明度，完成后恢复 */
+const isRefreshing = computed(() => loading.value && albumList.value.length > 0)
+
+async function refreshAlbums() {
+  imageVersion.value += 1
+  await fetchAlbums()
+}
+
+const refresh = refreshAlbums
+
+// 首次加载或刷新后无专辑时展示骨架；已有数据刷新不整页遮罩
+const showSkeleton = computed(() => loading.value && albumList.value.length === 0)
 
 /** 专辑详情抽屉 */
 const detailVisible = ref(false)
@@ -221,10 +210,7 @@ onMounted(fetchAlbums)
 </script>
 
 <template>
-  <div
-    v-loading="loading"
-    class="container page-root"
-  >
+  <div class="container page-root">
     <!-- 左上角浮动年份切换：磨砂玻璃，双击当前年份刷新 -->
     <FloatingTabBar
       :tabs="yearTabs"
@@ -233,9 +219,34 @@ onMounted(fetchAlbums)
       @refresh="refresh"
     />
 
-    <el-scrollbar class="scrollbar-wrapper">
+    <div v-if="showSkeleton" class="albums-skeleton" aria-busy="true">
+      <div class="albums-grid">
+        <div
+          v-for="albumSkeleton in 8"
+          :key="albumSkeleton"
+          class="album-skeleton"
+        >
+          <BaseSkeleton
+            class="album-cover"
+            width="96px"
+            height="96px"
+            radius="var(--radius-lg)"
+          />
+          <div class="album-skeleton-info">
+            <BaseSkeleton class="album-title-line" width="72%" height="18px" />
+            <BaseSkeleton class="album-meta-line" width="48%" />
+            <BaseSkeleton class="album-count-line" width="32%" />
+          </div>
+        </div>
+      </div>
+    </div>
+    <el-scrollbar v-else class="scrollbar-wrapper">
       <div class="albums-container">
-        <div class="albums-grid">
+        <div
+          class="albums-grid"
+          :class="{ 'is-refreshing': isRefreshing }"
+          :aria-busy="isRefreshing"
+        >
           <!-- 专辑卡片：唱片套 + 探出的黑胶唱片，悬浮时唱片滑出旋转 -->
           <div
             v-for="album in filteredAlbums"
@@ -246,12 +257,12 @@ onMounted(fetchAlbums)
             <div class="album-cover">
               <div class="vinyl">
                 <span class="vinyl-label">
-                  <CoverImage class="vinyl-label-img" :src="album.image" loading="lazy" />
+                  <CoverImage class="vinyl-label-img" :src="album.image" :version="imageVersion" loading="lazy" />
                 </span>
               </div>
               <!-- 原生懒加载：视口外不请求，滚动接近时浏览器提前预取，比 el-image 的滚动节流更早就位 -->
               <div class="cover-img">
-                <CoverImage class="cover-src" :src="album.image" loading="lazy">
+                <CoverImage class="cover-src" :src="album.image" :version="imageVersion" loading="lazy">
                   <div class="cover-fallback">
                     <el-icon><Headset /></el-icon>
                   </div>
@@ -437,10 +448,43 @@ onMounted(fetchAlbums)
   padding: var(--tabbar-offset-top) 16px 8px;
 }
 
+.albums-skeleton {
+  padding: var(--tabbar-offset-top) 16px 8px;
+}
+
+.album-skeleton {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-lg);
+  background: var(--el-bg-color);
+  box-shadow: var(--shadow-sm);
+}
+
+.album-skeleton-info {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
 .albums-grid {
   display: grid;
   gap: 16px;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  transition:
+    opacity 0.25s ease,
+    filter 0.25s ease;
+
+  &.is-refreshing {
+    opacity: 0.58;
+    filter: saturate(0.75);
+    pointer-events: none;
+  }
 }
 
 /* 空态：样式见全局 .page-empty */

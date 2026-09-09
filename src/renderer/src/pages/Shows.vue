@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import type { OpenLive } from '../services/apis'
+import type { OpenLive } from '../services/api-types'
 import { computed, onMounted, ref, watch } from 'vue'
 import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '../components/ui/FloatingTabBar.vue'
 import ShowCard from '../components/ui/ShowCard.vue'
+import CardSkeletonGrid from '../components/ui/skeleton/CardSkeletonGrid.vue'
 import useLoadMore from '../composables/data/use-load-more'
 import usePagedList from '../composables/data/use-paged-list'
 import useFloatPlayers from '../composables/use-float-players'
@@ -136,6 +137,10 @@ function isToday(stime: string): boolean {
 const todayShows = computed(() => showList.value.filter(show => isToday(show.stime)))
 const recentShows = computed(() => showList.value.filter(show => !isToday(show.stime)))
 
+// 首屏/切换团体时展示接近真实分区的骨架；已有数据刷新不整页遮罩
+const showSkeleton = computed(() =>
+  initialLoading.value && showList.value.length === 0 && historyList.value.length === 0)
+
 /** 进行中的公演：以画中画迷你窗直接打开直播，停留当前页继续浏览 */
 function openLiveStream(show: OpenLive) {
   if (show.status !== 2) {
@@ -174,10 +179,7 @@ function openHistoryStream(show: OpenLive) {
 </script>
 
 <template>
-  <div
-    v-loading="initialLoading"
-    class="page-root"
-  >
+  <div class="page-root">
     <!-- 左上角浮动团体切换：不占行，内容滚过时呈现磨砂玻璃；双击当前分团刷新列表 -->
     <FloatingTabBar :tabs="groupTabs" :active="groupId" @change="groupId = $event" @refresh="refresh" />
     <div class="page-root">
@@ -187,7 +189,27 @@ function openHistoryStream(show: OpenLive) {
         :distance="10"
         @end-reached="onInfiniteScroll"
       >
-        <div class="shows-container">
+        <div v-if="showSkeleton" class="shows-container">
+          <CardSkeletonGrid
+            :count="3"
+            min-item-width="320px"
+            gap="20px"
+            aspect-ratio="16 / 9"
+            :line-widths="[72, 42]"
+            heading
+          />
+          <CardSkeletonGrid
+            class="skeleton-section"
+            :count="3"
+            min-item-width="320px"
+            gap="20px"
+            aspect-ratio="16 / 9"
+            :line-widths="[72, 42]"
+            heading
+          />
+        </div>
+
+        <div v-else class="shows-container">
           <template v-if="todayShows.length">
             <h2 class="section-title section-title--live">
               即将开始
@@ -264,6 +286,10 @@ function openHistoryStream(show: OpenLive) {
 .shows-container {
   /* 顶部留出左上角浮动切换器的空间（--tabbar-offset-top），避免遮挡内容 */
   padding: var(--tabbar-offset-top) 16px 8px;
+}
+
+.skeleton-section {
+  margin-top: 20px;
 }
 
 .shows-list {

@@ -22,7 +22,19 @@ interface Item {
   member: Member | null
 }
 
-const props = defineProps<{ item: Item }>()
+const props = defineProps<{
+  item: Item
+  /** 刷新版本号：变化时给封面 URL 追加 cache-busting 参数，强制失败图重试 */
+  imageVersion?: number | string
+}>()
+
+const coverSrc = computed(() => {
+  const source = props.item.cover?.[0]
+  if (!source || !props.imageVersion)
+    return source
+  const separator = source.includes('?') ? '&' : '?'
+  return `${source}${separator}_r=${encodeURIComponent(String(props.imageVersion))}`
+})
 
 // 直播类型角标：直播 / 录屏 / 电台
 const liveBadge = computed(() => {
@@ -38,7 +50,13 @@ const liveBadge = computed(() => {
 <template>
   <div class="live-card lift-card clickable">
     <div class="cover-container">
-      <el-image class="cover" :src="item.cover?.[0]" fit="cover" lazy>
+      <el-image
+        :key="coverSrc"
+        class="cover"
+        :src="coverSrc"
+        fit="cover"
+        lazy
+      >
         <template #placeholder>
           <div class="cover-ph" />
         </template>

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
 import LiveItem from '../components/ui/LiveItem.vue'
+import CardSkeletonGrid from '../components/ui/skeleton/CardSkeletonGrid.vue'
 import { enrichLiveItem, usePagedLiveList } from '../composables/data/use-paged-live-list'
 import useFloatPlayers from '../composables/use-float-players'
 import Apis from '../services/apis'
@@ -56,6 +57,9 @@ const {
   processItem: (item: any) => enrichLiveItem(item),
   stopOnError: true,
 })
+
+// 首屏/筛选刷新后列表为空时显示骨架屏；已有列表时刷新只反馈到右上角 dock
+const showSkeleton = computed(() => loading.value && playbackList.value.length === 0)
 
 const whitespaceRegex = /\s+/g
 
@@ -165,15 +169,23 @@ watch(selectedFilter, () => {
     <div class="playback-container page-root">
       <el-scrollbar
         ref="playbackScrollRef"
-        v-loading="loading"
         class="scrollbar-wrapper"
         :distance="10"
         @end-reached="onInfiniteScroll"
       >
-        <div v-if="playbackList.length === 0 && !loading" class="empty-block">
+        <CardSkeletonGrid
+          v-if="showSkeleton"
+          class="playback-skeleton"
+          :count="12"
+          min-item-width="220px"
+          gap="16px"
+          aspect-ratio="1"
+          :line-widths="[82, 56, 38]"
+        />
+        <div v-else-if="playbackList.length === 0 && !loading" class="empty-block">
           暂无回放
         </div>
-        <div v-if="playbackList.length > 0" class="playback-list">
+        <div v-else class="playback-list">
           <div
             v-for="item in playbackList" :key="item.liveId" class="playback-item"
             @click="onPlaybackClick(item)"
@@ -187,7 +199,7 @@ watch(selectedFilter, () => {
       </el-scrollbar>
 
       <!-- 右上角浮动筛选/刷新工具条：不占行，内容滚过时呈现磨砂玻璃 -->
-      <FloatingRefreshDock @refresh="refresh">
+      <FloatingRefreshDock :loading="loading" title="刷新" @refresh="refresh">
         <el-cascader
           v-model="selectedFilter"
           style="width: 240px" transfer
@@ -237,6 +249,10 @@ watch(selectedFilter, () => {
   &.is-focus {
     box-shadow: 0 0 0 1.5px var(--el-color-primary) inset;
   }
+}
+
+.playback-skeleton {
+  padding: var(--tabbar-offset-top) 16px 8px;
 }
 
 .playback-list {

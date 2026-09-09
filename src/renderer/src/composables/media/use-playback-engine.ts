@@ -1,8 +1,11 @@
+import type { Ref } from 'vue'
 import Hls from 'hls.js'
-import { ref } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import { debugLog } from '../../utils/debug'
 
 interface PlaybackEngineOptions {
+  /** 当前播放源地址；变化时自动重新挂载 */
+  sourcePath: Ref<string>
   /** 当前应挂载播放源的媒体元素（视频/音频由组件决定），无元素时 attach 直接忽略 */
   getMediaElement: () => HTMLMediaElement | null
   /** 组件管理的全部媒体元素：destroy 时统一复位（电台模式切换会同时存在过 video/audio 引用） */
@@ -26,6 +29,7 @@ interface PlaybackEngineOptions {
  */
 export function usePlaybackEngine(options: PlaybackEngineOptions) {
   const {
+    sourcePath,
     getMediaElement,
     getManagedElements,
     onTimeUpdate,
@@ -38,6 +42,8 @@ export function usePlaybackEngine(options: PlaybackEngineOptions) {
   const loading = ref(true)
   const buffering = ref(false)
   const error = ref('')
+  /** 源时长：MiniControls 进度条的分母 */
+  const mediaDuration = ref(0)
 
   let hlsInstance: Hls | null = null
 
@@ -98,6 +104,7 @@ export function usePlaybackEngine(options: PlaybackEngineOptions) {
       debugLog('playback', '元数据就绪（loadedmetadata），退出加载态并自动播放')
       error.value = ''
       loading.value = false
+      mediaDuration.value = mediaElement.duration || 0
       await onMetadataLoaded(mediaElement)
       attemptAutoplay(mediaElement)
     }
@@ -175,5 +182,26 @@ export function usePlaybackEngine(options: PlaybackEngineOptions) {
     attemptAutoplay(mediaElement)
   }
 
-  return { loading, buffering, error, attach, destroy }
+  // 播放地址变化即挂载播放源；组件卸载时该 watch 随作用域自动停止。
+  // 电台录播会在 isRadio 切换后把 <video> 替换成 <audio>，先等一轮 DOM 更新，
+  // 确保拿到正确的媒体节点再挂载播放源。
+  watch(
+    () => sourcePath.value,
+    async (newPath) => {
+      if (!newPath)
+        return
+      await nextTick()
+      attach(newPath)
+    },
+    { flush: 'post' },
+  )
+
+  /** 出错遮罩上的「重试」：按当前地址重新挂载 */
+  function retryPlayback() {
+    if (!sourcePath.value)
+      return
+    attach(sourcePath.value)
+  }
+
+  return { loading, buffering, error, mediaDuration, attach, destroy, retryPlayback }
 }

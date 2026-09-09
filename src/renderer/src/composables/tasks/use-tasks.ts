@@ -3,7 +3,6 @@ import type { TaskChannelAdapter } from '../../services/task-base'
 import type { TaskPayload, TaskSnapshot } from '../../services/task-payload'
 import { ElMessage } from 'element-plus'
 import { reactive, ref } from 'vue'
-import { subscribe } from '../../services/event-bus'
 import TaskBase from '../../services/task-base'
 import { debugLog } from '../../utils/debug'
 
@@ -173,7 +172,6 @@ function stopTask(kind: TaskKind, liveId: string) {
 
 let restored = false
 let installed = false
-let unsubscribe: Array<() => void> = []
 
 /** 首次调用时从主进程恢复一次任务快照（幂等） */
 async function ensureRestored() {
@@ -192,25 +190,10 @@ export function installTasks() {
   if (installed)
     return
   installed = true
-  // subscribe 返回卸载函数，供 HMR dispose / 测试重置统一卸载
-  unsubscribe = [
-    subscribe('download-task', payload => handleTask(payload, 'download')),
-    subscribe('record-task', payload => handleTask(payload, 'record')),
-  ]
-  // 订阅须早于任何组件 setup：发起方可能在 Downloads 未挂载的页面上，
-  // 若等到页面 mount 再订阅，事件可能在订阅前发出而静默丢失。
   // 应用启动即恢复一次：播放器可能在下载页从未挂载过的情况下进入，
   // 此时也要能正确显示「录制中」并能停止
   void ensureRestored().catch((error: any) => {
     console.error('[use-tasks] 恢复任务列表失败:', error)
-  })
-}
-
-// HMR：卸载旧实例的监听，避免热更新后残留过期订阅
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => {
-    unsubscribe.forEach(off => off())
-    unsubscribe = []
   })
 }
 

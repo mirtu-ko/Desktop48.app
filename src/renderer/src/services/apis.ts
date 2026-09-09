@@ -11,10 +11,6 @@ import { debugLog } from '../utils/debug'
 import ApiUrls from './api-urls'
 import Request from './request'
 
-// 开放公演模型历史上从 apis.ts 导出（Shows.vue / ShowCard.vue 引用），
-// 定义已迁移至 api-types.ts，这里保留 re-export 兼容既有导入路径
-export type { OpenLive, OpenLiveTeam } from './api-types'
-
 export default class Apis {
   /** 单例入口 */
   public static instance() {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { OpenLive } from '../../services/apis'
+import type { OpenLive } from '../../services/api-types'
 import Tools from '../../utils/tools'
 import CoverImage from './CoverImage.vue'
 
