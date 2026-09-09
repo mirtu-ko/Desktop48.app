@@ -6,6 +6,7 @@ import { computed, onMounted, ref } from 'vue'
 import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '../components/ui/FloatingTabBar.vue'
 import MemberDetailDrawer from '../components/ui/MemberDetailDrawer.vue'
+import CardSkeletonGrid from '../components/ui/skeleton/CardSkeletonGrid.vue'
 import { useBlockedMembers } from '../composables/data/use-blocked-members'
 import { useMemberSync } from '../composables/data/use-member-sync'
 import Constants from '../utils/constants'
@@ -139,6 +140,9 @@ const memberCount = computed(() =>
 const activeCount = computed(() => sections.value.filter(section => !section.muted).reduce((sum, section) => sum + section.members.length, 0))
 const inactiveCount = computed(() => sections.value.filter(section => section.muted).reduce((sum, section) => sum + section.members.length, 0))
 
+// 首次/切换后无成员数据时展示骨架；已有数据刷新不整页遮罩
+const showSkeleton = computed(() => loading.value && groups.value.length === 0)
+
 onMounted(() => {
   fetchGroups()
   refreshBlockedMembers()
@@ -173,15 +177,21 @@ async function updateMembers() {
 </script>
 
 <template>
-  <div
-    v-loading="loading"
-    class="page-root"
-  >
+  <div class="page-root">
     <!-- 左上角浮动分团切换：与公演页同一套交互；双击当前分团刷新成员数据 -->
     <FloatingTabBar :tabs="groupTabs" :active="groupId" @change="groupId = $event" @refresh="fetchGroups" />
     <div class="page-root">
       <el-scrollbar class="scrollbar-wrapper">
-        <div class="members-container">
+        <CardSkeletonGrid
+          v-if="showSkeleton"
+          class="members-skeleton"
+          :count="12"
+          min-item-width="120px"
+          gap="14px"
+          aspect-ratio="3 / 4"
+          :line-widths="[68]"
+        />
+        <div v-else class="members-container">
           <section v-for="section in sections" :key="section.title" class="group-section">
             <h2 class="team-title">
               <img
@@ -278,7 +288,7 @@ async function updateMembers() {
 
     <!-- 右上角浮动操作条：更新成员数据库 -->
     <FloatingRefreshDock
-      :loading="isSyncing"
+      :loading="isSyncing || loading"
       title="更新成员数据库"
       @refresh="updateMembers"
     >
@@ -328,6 +338,10 @@ async function updateMembers() {
   .section-title {
     width: 100%;
   }
+}
+
+.members-skeleton {
+  padding: var(--tabbar-offset-top) 16px 8px;
 }
 
 .member-count {
