@@ -5,14 +5,9 @@ import { debugLog } from '../../utils/debug'
 import Tools from '../../utils/tools'
 import { usePagedList } from './use-paged-list'
 
-// 条目与分页响应的结构定义已收敛至 services/api-types.ts，
-// 这里保留历史命名的类型别名，既有导入不受影响
-export type PagedLive = LiveListItem
-export type PagedLiveResponse<T = LiveListItem> = LiveListContent<T>
-
 export interface UsePagedLiveListOptions<T> {
   /** 请求一页数据：返回 { next, liveList }；通过闭包可注入筛选参数 */
-  loadPage: (_next: string) => Promise<PagedLiveResponse<T>> | PagedLiveResponse<T>
+  loadPage: (_next: string) => Promise<LiveListContent<T>> | LiveListContent<T>
   /** 并行补全单个条目的展示信息（封面 / 成员 / 日期等）；在过滤屏蔽成员之后执行 */
   processItem?: (_item: T, _index: number) => Promise<void> | void
   /** 是否在每次翻页前拉取并过滤被屏蔽成员，默认 true */
@@ -25,7 +20,7 @@ export interface UsePagedLiveListOptions<T> {
  * 直播 / 回放列表共用的分页加载逻辑：在通用 usePagedList（use-paged-list.ts）
  * 之上叠加「拉取被屏蔽成员并过滤」的领域行为，并适配 { next, liveList } 响应结构。
  */
-export function usePagedLiveList<T extends PagedLive = PagedLive>({
+export function usePagedLiveList<T extends LiveListItem = LiveListItem>({
   loadPage,
   processItem,
   filterBlocked = true,

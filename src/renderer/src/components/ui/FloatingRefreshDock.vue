@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { Refresh } from '@element-plus/icons-vue'
-import FloatingDock from './FloatingDock.vue'
 
 /**
- * 右上角浮动操作条 + 圆形刷新按钮的复合组件。
- * 直播/公演/专辑/成员/回放页同构的「FloatingDock + Refresh」组合收敛于此；
+ * 右上角浮动操作条 + 圆形刷新按钮。
+ * 直播/公演/专辑/成员/回放页同构的浮动工具条收敛于此；
  * 需要补充计数、筛选等控件时放进默认插槽（渲染在刷新按钮之前）。
  */
 withDefaults(defineProps<{
@@ -21,7 +20,7 @@ const emit = defineEmits<{ refresh: [] }>()
 </script>
 
 <template>
-  <FloatingDock>
+  <div class="floating-dock frosted-surface no-scrollbar">
     <slot />
     <el-button
       circle
@@ -31,5 +30,21 @@ const emit = defineEmits<{ refresh: [] }>()
       :title="title"
       @click="emit('refresh')"
     />
-  </FloatingDock>
+  </div>
 </template>
+
+<style scoped lang="scss">
+.floating-dock {
+  position: absolute;
+  right: 8px;
+  top: 12px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - 40px);
+  padding: 4px;
+  border-radius: 999px;
+  overflow-x: auto;
+}
+</style>

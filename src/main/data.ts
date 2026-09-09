@@ -2,7 +2,7 @@
  * lowdb 初始数据结构与 database.json 成员数据的全量字段定义。
  *
  * 字段依据 UPDATE_INFO_URL 接口的真实返回（test/data.ts，871 条成员 + 其余分节样本）
- * 逐字段建模；类型同时被 preload 契约（src/preload/api-types.d.ts）引用，
+ * 逐字段建模；类型同时被 preload 契约（src/preload/ipc-contract.d.ts）引用，
  * 因此遵循与渲染端 api-types.ts 相同的宽容原则：仅各分节主键必需，其余字段可选，
  * 并保留索引签名以兼容上游后续新增字段。
  *

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { OpenLive } from '../services/apis'
+import type { OpenLive } from '../services/api-types'
 import { computed, onMounted, ref, watch } from 'vue'
 import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '../components/ui/FloatingTabBar.vue'

@@ -2,10 +2,10 @@
 import { ElMessage } from 'element-plus'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMediaShortcuts } from '../../composables/media/use-media-shortcuts'
+import { usePlaybackEngine } from '../../composables/media/use-playback-engine'
 import { useSleepBlocker } from '../../composables/media/use-sleep-blocker'
 import { useVideoRotation } from '../../composables/media/use-video-rotation'
 import { usePlaybackDanmaku } from '../../composables/playback/use-playback-danmaku'
-import { usePlaybackMedia } from '../../composables/playback/use-playback-media'
 import useMediaDownload from '../../composables/tasks/use-media-download'
 import Apis from '../../services/apis'
 import { debugLog } from '../../utils/debug'
@@ -126,16 +126,16 @@ watch(
 // 播放防休眠（use-sleep-blocker，与 LivePlayer 共用）
 const { acquire: acquireSleepBlocker, release: releaseSleepBlocker } = useSleepBlocker()
 
-// =========== 播放引擎接线（HLS/原生选择与三态在 use-playback-media） ===========
+// =========== 播放引擎接线（HLS/原生选择、三态与播放源 watch 在 use-playback-engine） ===========
 const {
-  mediaLoading,
-  mediaBuffering,
-  lastPlaybackError,
+  loading: mediaLoading,
+  buffering: mediaBuffering,
+  error: lastPlaybackError,
   mediaDuration,
   retryPlayback,
   destroy: destroyPlayer,
-} = usePlaybackMedia({
-  playStreamPath,
+} = usePlaybackEngine({
+  sourcePath: playStreamPath,
   getMediaElement: getActiveMediaElement,
   getManagedElements: () => [nativeVideo.value, nativeAudio.value],
   onTimeUpdate: onDanmakuTimeUpdate,

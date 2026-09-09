@@ -1,6 +1,6 @@
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
 import type { Buffer } from 'node:buffer'
-import type { FfmpegDownloadProgress } from '../../preload/api-types'
+import type { FfmpegDownloadProgress } from '../../preload/ipc-contract'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createGunzip } from 'node:zlib'

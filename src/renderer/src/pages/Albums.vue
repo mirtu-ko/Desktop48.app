@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AudioTrack } from '../composables/use-audio-player'
+import type { AlbumSong, MusicAlbum } from '../services/api-types'
 import { Headset, Link, Plus, ShoppingCart, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
@@ -10,32 +11,6 @@ import BaseSkeleton from '../components/ui/skeleton/BaseSkeleton.vue'
 import useAudioPlayer from '../composables/use-audio-player'
 import Apis from '../services/apis'
 import Tools from '../utils/tools'
-
-/** CDN JSON 中的歌曲条目 */
-interface AlbumSong {
-  songs_id: string
-  songs_name: string
-  /** 时长 m:ss，伴奏曲目可能为 null */
-  songs_time: string | null
-  url: string | null
-}
-
-/** CDN JSON 中的音乐条目（tag：ep=EP / zj=专辑 / sg=单曲） */
-interface MusicAlbum {
-  sid: string
-  title: string
-  singer: string
-  tag: string
-  image: string
-  year: string
-  /** 发行时间（秒级时间戳） */
-  start_time: string
-  /** 专辑概念页（event 页），可能为空串 */
-  link: string
-  /** 购买链接（shop 商品页），可能为空串 */
-  href: string
-  song: AlbumSong[]
-}
 
 const albumList = ref<MusicAlbum[]>([])
 const loading = ref(false)
