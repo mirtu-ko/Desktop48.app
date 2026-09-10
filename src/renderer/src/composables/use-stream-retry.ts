@@ -42,6 +42,17 @@ export function useStreamRetry(options: {
   }
 
   /**
+   * 播放成功（canplay）后调用：只清计数与恢复态，不动计时器。
+   * 计数语义是「连续失败次数」，播放成功即中断连续性；不复位的话，一场直播里累计断流
+   * 3 次（如反复连麦）就会被误判为直播结束并关窗。计时器不能在这里清：错误后等待重试的
+   * 2 秒内仍可能有旧媒体元素的 canplay 迟到，清掉会把已安排的重试一并撤销。
+   */
+  function markRecovered() {
+    retryCount.value = 0
+    isRecoveringStream.value = false
+  }
+
+  /**
    * 安排一次恢复。网络抖动、链接过期等都走这里的统一节奏：
    * 未达上限 → 延迟 retryDelayMs 后执行 attempt；
    * 已达上限 → 走 onExhausted。
@@ -81,5 +92,5 @@ export function useStreamRetry(options: {
     }, retryDelayMs)
   }
 
-  return { retryCount, isRecoveringStream, schedule, reset, clearTimer }
+  return { retryCount, isRecoveringStream, schedule, reset, markRecovered, clearTimer }
 }

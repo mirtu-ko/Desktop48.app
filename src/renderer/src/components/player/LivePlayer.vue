@@ -153,10 +153,10 @@ function beginSession() {
   retry.reset()
 }
 
-/** canplay：加载完成，复位恢复态并刷新视频尺寸 */
+/** canplay：加载完成，复位恢复态与重试预算并刷新视频尺寸 */
 function onPlayerCanPlay() {
-  debugLog('live', '①直播:播放就绪（canplay），复位恢复态')
-  retry.isRecoveringStream.value = false
+  debugLog('live', '①直播:播放就绪（canplay），复位恢复态与重试预算')
+  retry.markRecovered()
   if (!isRadio.value)
     updateVideoDimensions()
 }

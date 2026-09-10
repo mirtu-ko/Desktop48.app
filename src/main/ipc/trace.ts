@@ -14,7 +14,7 @@ import { debug, isVerboseEnabled } from '../logger'
 
 type InvokeHandler = (event: IpcMainInvokeEvent, ...args: any[]) => any
 
-const MAX_ARG_PREVIEW = 200
+const MAX_ARG_PREVIEW = 300
 
 /** 参数摘要：截断长字符串与大对象，避免 verbose 日志被 payload 淹没 */
 function summarizeArgs(args: unknown[]): string {
