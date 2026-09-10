@@ -16,5 +16,5 @@ export const CONFIG_DEFAULTS: AppConfig = {
   /** 空串表示「未配置」：首次启动由 Initialize 引导下载/选择 ffmpeg */
   ffmpegDirectory: '',
   /** 站点请求 UA（原 renderer constants 的 DEFAULT_USER_AGENT，收拢到此） */
-  userAgent: 'Mozilla/5.0 (Linux; U; Android 8.1.0;) AppleWebKit/537.36 (KHTML, like Gecko)',
+  userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36',
 }

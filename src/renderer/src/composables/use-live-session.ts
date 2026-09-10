@@ -25,7 +25,7 @@ export type { LiveDetail }
  * - 入参 / LiveDetail.playStreamPath = rtmp://...      远程源，喂给主进程的 FFmpeg
  * - 出参 localPlaybackUrl            = http://127.0.0.1 本地地址，喂给 mpegts 播放器
  *
- * 完整链路见 docs/播放链路.md
+ * 完整链路见 docs/live-playback-pipeline.md
  */
 export function useLiveSession(options: {
   liveId: () => string
