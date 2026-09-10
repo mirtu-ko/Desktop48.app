@@ -4,7 +4,6 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import { installTasks } from './composables/tasks/use-tasks'
 import routes from './routes'
-import Constants from './utils/constants'
 
 import 'element-plus/dist/index.css'
 import './assets/css/app.scss'
@@ -16,7 +15,6 @@ const router = createRouter({
   routes,
 })
 
-app.config.globalProperties.Constants = Constants
 app.use(router).use(ElementPlus)
 
 // 显式安装任务系统（早于任何组件 setup 订阅事件并恢复一次任务快照）：

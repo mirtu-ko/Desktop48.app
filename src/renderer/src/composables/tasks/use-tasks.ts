@@ -1,10 +1,10 @@
+import type { TaskChannelAdapter } from '@renderer/services/task-base'
+import type { TaskPayload, TaskSnapshot } from '@renderer/services/task-payload'
 import type { Ref } from 'vue'
-import type { TaskChannelAdapter } from '../../services/task-base'
-import type { TaskPayload, TaskSnapshot } from '../../services/task-payload'
+import TaskBase from '@renderer/services/task-base'
+import { debugLog } from '@renderer/utils/debug'
 import { ElMessage } from 'element-plus'
 import { reactive, ref } from 'vue'
-import TaskBase from '../../services/task-base'
-import { debugLog } from '../../utils/debug'
 
 export type TaskKind = 'download' | 'record'
 

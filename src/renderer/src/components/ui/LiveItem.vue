@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { VideoCameraFilled } from '@element-plus/icons-vue'
+import Tools from '@renderer/utils/tools'
 import { computed } from 'vue'
-import Tools from '../../utils/tools'
 
 interface Member {
   teamName: string

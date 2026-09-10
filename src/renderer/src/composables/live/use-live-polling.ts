@@ -1,6 +1,6 @@
+import Apis from '@renderer/services/apis'
+import { formatMediaTime } from '@renderer/utils/time-format'
 import { computed, ref } from 'vue'
-import Apis from '../../services/apis'
-import { formatMediaTime } from '../../utils/time-format'
 
 /**
  * 直播轮询：

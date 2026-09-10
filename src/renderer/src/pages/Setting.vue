@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { Connection, Cpu, Document, Folder, Hide } from '@element-plus/icons-vue'
+import { useAppConfig } from '@renderer/composables/data/use-app-config'
+import { useBlockedMembers } from '@renderer/composables/data/use-blocked-members'
+import Constants from '@renderer/utils/constants'
 import { ElMessageBox } from 'element-plus'
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAppConfig } from '../composables/data/use-app-config'
-import { useBlockedMembers } from '../composables/data/use-blocked-members'
-import Constants from '../utils/constants'
 
 const router = useRouter()
 

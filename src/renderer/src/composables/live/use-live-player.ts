@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
+import { debugLog } from '@renderer/utils/debug'
 import mpegts from 'mpegts.js'
-import { debugLog } from '../../utils/debug'
 
 /**
  * mpegts 播放器实例管理：

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useFloatPlayers } from '../../composables/use-float-players'
+import { useFloatPlayers } from '@renderer/composables/use-float-players'
 import FloatPlayer from './FloatPlayer.vue'
 
 const { players, focusPlayer, closePlayer } = useFloatPlayers()

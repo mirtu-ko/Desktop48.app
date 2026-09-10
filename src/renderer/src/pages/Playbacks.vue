@@ -1,13 +1,13 @@
 <script setup lang="ts">
+import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
+import LiveItem from '@renderer/components/ui/LiveItem.vue'
+import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
+import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/data/use-paged-live-list'
+import useFloatPlayers from '@renderer/composables/use-float-players'
+import Apis from '@renderer/services/apis'
+import Constants from '@renderer/utils/constants'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
-import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
-import LiveItem from '../components/ui/LiveItem.vue'
-import CardSkeletonGrid from '../components/ui/skeleton/CardSkeletonGrid.vue'
-import { enrichLiveItem, usePagedLiveList } from '../composables/data/use-paged-live-list'
-import useFloatPlayers from '../composables/use-float-players'
-import Apis from '../services/apis'
-import Constants from '../utils/constants'
 
 // 组件 props：成员详情「看 TA 的回放」跳转时预置的成员筛选；每次跳转都是新对象，保证 watch 必触发
 const props = withDefaults(defineProps<{ memberPreset?: { userId: string } | null }>(), {

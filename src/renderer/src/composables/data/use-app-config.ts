@@ -1,6 +1,6 @@
+import Constants from '@renderer/utils/constants'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ref } from 'vue'
-import Constants from '../../utils/constants'
 
 /** 应用配置项的键（限制 getConfig / setConfig 的 key 取值范围） */
 export type AppConfigKey = 'downloadDirectory' | 'ffmpegDirectory' | 'userAgent'

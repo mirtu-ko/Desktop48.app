@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { Download, Headset, Microphone, Setting, User, VideoCamera } from '@element-plus/icons-vue'
+import AppDock from '@renderer/components/app/AppDock.vue'
+import BackTopButton from '@renderer/components/app/BackTopButton.vue'
+import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
+import FloatPlayerHost from '@renderer/components/floats/FloatPlayerHost.vue'
+import { useMemberSync } from '@renderer/composables/data/use-member-sync'
+import useTasks from '@renderer/composables/tasks/use-tasks'
+import EventBus from '@renderer/services/event-bus'
+import Constants from '@renderer/utils/constants'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import AppDock from '../components/app/AppDock.vue'
-import BackTopButton from '../components/app/BackTopButton.vue'
-import FloatAudioBar from '../components/floats/FloatAudioBar.vue'
-import FloatPlayerHost from '../components/floats/FloatPlayerHost.vue'
-import { useMemberSync } from '../composables/data/use-member-sync'
-import useTasks from '../composables/tasks/use-tasks'
-import EventBus from '../services/event-bus'
-import Constants from '../utils/constants'
 
 const router = useRouter()
 const route = useRoute()
@@ -17,9 +17,9 @@ const route = useRoute()
 // 路由 path 与菜单 index 的映射
 const pathToMenu = {
   '/lives': Constants.Menu.LIVES,
-  '/shows': Constants.Menu.Shows,
-  '/albums': Constants.Menu.Albums,
-  '/members': Constants.Menu.Members,
+  '/shows': Constants.Menu.SHOWS,
+  '/albums': Constants.Menu.ALBUMS,
+  '/members': Constants.Menu.MEMBERS,
   '/downloads': Constants.Menu.DOWNLOADS,
   '/setting': Constants.Menu.SETTING,
 }
@@ -35,9 +35,9 @@ const runningTaskCount = computed(() => downloadTasks.value.filter(task => task.
 // 底部 Dock 菜单项（语义色统一取自 Constants.Theme；每项专属色用于激活/悬浮的图标渐变）
 const dockItems = computed(() => [
   { index: Constants.Menu.LIVES, label: '直播', icon: VideoCamera, color: Constants.Theme.LIVES },
-  { index: Constants.Menu.Shows, label: '公演', icon: Microphone, color: Constants.Theme.SHOWS },
-  { index: Constants.Menu.Albums, label: '专辑', icon: Headset, color: Constants.Theme.ALBUMS },
-  { index: Constants.Menu.Members, label: '成员', icon: User, color: Constants.Theme.MEMBERS },
+  { index: Constants.Menu.SHOWS, label: '公演', icon: Microphone, color: Constants.Theme.SHOWS },
+  { index: Constants.Menu.ALBUMS, label: '专辑', icon: Headset, color: Constants.Theme.ALBUMS },
+  { index: Constants.Menu.MEMBERS, label: '成员', icon: User, color: Constants.Theme.MEMBERS },
   { index: Constants.Menu.DOWNLOADS, label: '下载', icon: Download, color: Constants.Theme.DOWNLOADS, badge: runningTaskCount.value },
   { index: Constants.Menu.SETTING, label: '设置', icon: Setting, color: Constants.Theme.SETTING },
 ])

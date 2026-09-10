@@ -1,8 +1,8 @@
-import type { TaskKind } from '../../composables/tasks/use-tasks'
-import type { TaskPayload } from '../../services/task-payload'
+import type { TaskKind } from '@renderer/composables/tasks/use-tasks'
+import type { TaskPayload } from '@renderer/services/task-payload'
+import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { computed } from 'vue'
-import Tools from '../../utils/tools'
 import { useDownloadGuard } from './use-download-guard'
 import useTasks from './use-tasks'
 

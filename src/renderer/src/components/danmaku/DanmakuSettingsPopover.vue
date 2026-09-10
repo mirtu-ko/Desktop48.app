@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { DanmakuSettings } from '../../composables/media/use-danmaku-settings'
-import MediaIcon from '../ui/MediaIcon.vue'
+import type { DanmakuSettings } from '@renderer/composables/media/use-danmaku-settings'
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 
 defineProps<{
   settings: DanmakuSettings

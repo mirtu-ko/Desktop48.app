@@ -1,8 +1,8 @@
-import type { LiveListContent, LiveListItem } from '../../services/api-types'
+import type { LiveListContent, LiveListItem } from '@renderer/services/api-types'
 import type { UsePagedListOptions } from './use-paged-list'
+import { debugLog } from '@renderer/utils/debug'
+import Tools from '@renderer/utils/tools'
 import { ref } from 'vue'
-import { debugLog } from '../../utils/debug'
-import Tools from '../../utils/tools'
 import { usePagedList } from './use-paged-list'
 
 export interface UsePagedLiveListOptions<T> {

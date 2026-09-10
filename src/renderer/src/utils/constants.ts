@@ -5,15 +5,15 @@ export default class Constants {
   public static readonly DEFAULT_USER_AGENT: string = 'Mozilla/5.0 (Linux; U; Android 8.1.0;) AppleWebKit/537.36 (KHTML, like Gecko)'
 
   /**
-   * 菜单
+   * 菜单（键命名与 Theme 保持一致：全大写下划线；值为路由 path）
    */
-  public static readonly Menu: any = {
+  public static readonly Menu: Record<string, string> = {
     LIVES: 'lives',
-    SETTING: 'setting',
+    SHOWS: 'shows',
+    ALBUMS: 'albums',
+    MEMBERS: 'members',
     DOWNLOADS: 'downloads',
-    Shows: 'shows',
-    Albums: 'albums',
-    Members: 'members',
+    SETTING: 'setting',
   }
 
   /**

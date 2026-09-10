@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import type { AudioTrack } from '../composables/use-audio-player'
-import type { AlbumSong, MusicAlbum } from '../services/api-types'
+import type { AudioTrack } from '@renderer/composables/use-audio-player'
+import type { AlbumSong, MusicAlbum } from '@renderer/services/api-types'
 import { Headset, Link, Plus, ShoppingCart, VideoPlay } from '@element-plus/icons-vue'
+import CoverImage from '@renderer/components/ui/CoverImage.vue'
+import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
+import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
+import BaseSkeleton from '@renderer/components/ui/skeleton/BaseSkeleton.vue'
+import useAudioPlayer from '@renderer/composables/use-audio-player'
+import Apis from '@renderer/services/apis'
+import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
-import CoverImage from '../components/ui/CoverImage.vue'
-import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
-import FloatingTabBar from '../components/ui/FloatingTabBar.vue'
-import BaseSkeleton from '../components/ui/skeleton/BaseSkeleton.vue'
-import useAudioPlayer from '../composables/use-audio-player'
-import Apis from '../services/apis'
-import Tools from '../utils/tools'
 
 const albumList = ref<MusicAlbum[]>([])
 const loading = ref(false)

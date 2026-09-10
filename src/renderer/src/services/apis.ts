@@ -6,8 +6,8 @@ import type {
   OpenLiveDetail,
   SyncInfoContent,
 } from './api-types'
+import { debugLog } from '@renderer/utils/debug'
 import { ElMessage } from 'element-plus'
-import { debugLog } from '../utils/debug'
 import ApiUrls from './api-urls'
 import Request from './request'
 

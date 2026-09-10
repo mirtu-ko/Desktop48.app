@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { BarrageListItem } from './Barrage.vue'
+import Barrage from '@renderer/components/danmaku/Barrage.vue'
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
+import Tools from '@renderer/utils/tools'
 import { computed, ref } from 'vue'
-import Tools from '../../utils/tools'
-import Barrage from '../danmaku/Barrage.vue'
-import MediaIcon from '../ui/MediaIcon.vue'
 
 const props = defineProps<{
   number: number

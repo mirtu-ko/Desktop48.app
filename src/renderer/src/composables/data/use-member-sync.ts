@@ -1,6 +1,6 @@
+import Apis from '@renderer/services/apis'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
-import Apis from '../../services/apis'
 
 /**
  * 成员数据库同步的单一入口（Index 与 Members 页共用，避免各写一遍 syncInfo）：

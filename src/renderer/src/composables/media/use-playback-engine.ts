@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
+import { debugLog } from '@renderer/utils/debug'
 import Hls from 'hls.js'
 import { nextTick, ref, watch } from 'vue'
-import { debugLog } from '../../utils/debug'
 
 interface PlaybackEngineOptions {
   /** 当前播放源地址；变化时自动重新挂载 */

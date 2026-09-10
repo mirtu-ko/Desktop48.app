@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
+import { debugLog } from '@renderer/utils/debug'
 import { computed, ref } from 'vue'
-import { debugLog } from '../../utils/debug'
 import useLoadMore from './use-load-more'
 
 /** 分页接口的归一化返回结构：next 为下一页游标（'0' 表示没有更多） */

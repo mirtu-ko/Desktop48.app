@@ -1,16 +1,16 @@
+import type { LiveDetail } from '@renderer/services/api-types'
 import type { Ref } from 'vue'
-import type { LiveDetail } from '../../services/api-types'
-import { ElMessage } from 'element-plus'
-import { ref } from 'vue'
-import Apis from '../../services/apis'
-import { debugLog } from '../../utils/debug'
+import Apis from '@renderer/services/apis'
+import { debugLog } from '@renderer/utils/debug'
 import {
   buildPlaybackUrl,
   normalizeCarouselTime,
   pickPreferredStream,
   resolveCarouselImages,
-} from '../../utils/live-stream'
-import Tools from '../../utils/tools'
+} from '@renderer/utils/live-stream'
+import Tools from '@renderer/utils/tools'
+import { ElMessage } from 'element-plus'
+import { ref } from 'vue'
 
 /** 直播详情形状统一在 services/api-types.ts 建模 */
 export type { LiveDetail }

@@ -1,5 +1,5 @@
-import Constants from '../utils/constants'
-import { debugLog } from '../utils/debug'
+import Constants from '@renderer/utils/constants'
+import { debugLog } from '@renderer/utils/debug'
 
 /** 网络请求参数：直接从 preload 契约签名反推，避免渲染层反向依赖 preload 目录 */
 type NetRequestPayload = Parameters<typeof window.mainAPI.netRequest>[0]

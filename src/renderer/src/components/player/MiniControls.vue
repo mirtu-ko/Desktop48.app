@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { formatMediaTime } from '../../utils/time-format'
-import MediaIcon from '../ui/MediaIcon.vue'
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
+import { formatMediaTime } from '@renderer/utils/time-format'
 
 const props = defineProps({
   playing: { type: Boolean, default: false },

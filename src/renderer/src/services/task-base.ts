@@ -1,6 +1,6 @@
 import type { TaskSnapshot } from './task-payload'
-import Constants from '../utils/constants'
-import { debugLog } from '../utils/debug'
+import Constants from '@renderer/utils/constants'
+import { debugLog } from '@renderer/utils/debug'
 
 /**
  * 任务通道适配器：收敛下载/录制两组 IPC API 的差异

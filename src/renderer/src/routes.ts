@@ -1,3 +1,4 @@
+import type { RouteRecordRaw } from 'vue-router'
 import Albums from './pages/Albums.vue'
 import Downloads from './pages/Downloads.vue'
 import Lives from './pages/Lives.vue'
@@ -5,7 +6,7 @@ import Members from './pages/Members.vue'
 import Setting from './pages/Setting.vue'
 import Shows from './pages/Shows.vue'
 
-const routes: any[] = [
+const routes: RouteRecordRaw[] = [
   {
     path: '/lives',
     component: Lives,
