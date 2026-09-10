@@ -11,11 +11,11 @@ async function tracedNetRequest(payload: NetRequestPayload): Promise<string> {
   const startedAt = performance.now()
   try {
     const response = await window.mainAPI.netRequest(payload)
-    debugLog('net', payload.method, payload.url, `${(performance.now() - startedAt).toFixed(0)}ms`)
+    debugLog('net', payload.method, payload.url, payload.body, `${(performance.now() - startedAt).toFixed(0)}ms`)
     return response
   }
   catch (e: any) {
-    debugLog('net', payload.method, payload.url, `失败(${(performance.now() - startedAt).toFixed(0)}ms):`, e?.message || e)
+    debugLog('net', payload.method, payload.url, payload.body, `失败(${(performance.now() - startedAt).toFixed(0)}ms):`, e?.message || e)
     throw e
   }
 }

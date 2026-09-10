@@ -55,6 +55,7 @@ export function useLivePlayer(options: {
     mediaElement.load()
     mediaElement.onerror = null
     mediaElement.oncanplay = null
+    mediaElement.onended = null
   }
 
   /**
@@ -111,6 +112,21 @@ export function useLivePlayer(options: {
 
     mediaElement.onerror = () => {
       options.onError('native media error', false)
+    }
+
+    // 上游推流中断（如主播开始/停止连麦导致 RTMP 签名地址失效）→ 主进程 FFmpeg 退出 →
+    // 本地 FLV 响应结束。响应没有 Content-Length，mpegts 判为「下载完成」而非 Early-EOF，
+    // **不发 ERROR**；它随后 endOfStream 并把时长校正到最后一段，浏览器播完缓冲即触发 ended
+    // （状态转为暂停，此时再调 play() 也无法继续）。
+    // 直播流正常播放时永远不会 ended，故此处一律按网络错误上抛，交由重试重建。
+    // ⚠️ 不要改用 mpegts 的 LOADING_COMPLETE：enableWorker 下 worker 回传的包只有
+    // { msg, event }、不带 extraData，主线程按 `'extraData' in packet` 判断后直接丢弃。
+    mediaElement.onended = () => {
+      if (player !== created)
+        return
+
+      debugLog('live', '媒体流已结束（上游推流中断），按网络错误处理并重建')
+      options.onError('media ended', true)
     }
 
     created.on(mpegts.Events.ERROR, (errorType, errorDetail, errorInfo) => {

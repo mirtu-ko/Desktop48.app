@@ -16,11 +16,11 @@ FFmpeg 为外部可执行程序，只能由主进程 spawn。这一约束决定�
 
 涉及的三个运行环境：
 
-| 角色     | 目录                             | 职责                                                |
-| -------- | -------------------------------- | --------------------------------------------------- |
-| 渲染进程 | `src/renderer`                   | Vue 页面与播放器 UI                                 |
-| 预加载桥 | `src/preload/index.ts`           | 将主进程能力暴露为 `window.mainAPI.*`               |
-| 主进程   | `src/main`                       | 本地 HTTP 服务、FFmpeg 进程管理、白名单/端口安全闸   |
+| 角色     | 目录                   | 职责                                               |
+| -------- | ---------------------- | -------------------------------------------------- |
+| 渲染进程 | `src/renderer`         | Vue 页面与播放器 UI                                |
+| 预加载桥 | `src/preload/index.ts` | 将主进程能力暴露为 `window.mainAPI.*`              |
+| 主进程   | `src/main`             | 本地 HTTP 服务、FFmpeg 进程管理、白名单/端口安全闸 |
 
 主进程侧的关键分工（改动前请先看清）：
 
@@ -237,15 +237,15 @@ handleCreateLiveStream → assertLocalServerAvailable + isAllowedStreamUrl
 
 职责划分如下：
 
-| composable            | 负责范围                                          | 不负责范围                       |
-| --------------------- | ------------------------------------------------- | -------------------------------- |
-| `use-live-session`    | 拉详情、开/停本地转流会话、界面状态同步           | 播放器实例、重试节奏、轮询       |
-| `use-live-player`     | mpegts 实例创建/销毁、媒体元素复位                | 地址来源、错误处理策略           |
-| `use-stream-retry`    | 重试节奏（默认 2 秒 × 3 次，决策走纯函数）        | 具体恢复逻辑（由 attempt 注入）  |
-| `use-live-polling`    | 已播时长、在线人数定时刷新                        | 播放行为本身                     |
-| `use-video-rotation`  | 旋转 / 容器全屏 / 原生 PiP / 播放暂停 / 音量      | 地址、重试                       |
-| `use-sleep-blocker`   | 播放期间阻止系统休眠                              | 播放行为                         |
-| `use-media-download`  | 录制发起（走原始 RTMP 直存文件，不经本地转封装）  | 页面播放链路                     |
+| composable           | 负责范围                                         | 不负责范围                      |
+| -------------------- | ------------------------------------------------ | ------------------------------- |
+| `use-live-session`   | 拉详情、开/停本地转流会话、界面状态同步          | 播放器实例、重试节奏、轮询      |
+| `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位               | 地址来源、错误处理策略          |
+| `use-stream-retry`   | 重试节奏（默认 2 秒 × 3 次，决策走纯函数）       | 具体恢复逻辑（由 attempt 注入） |
+| `use-live-polling`   | 已播时长、在线人数定时刷新                       | 播放行为本身                    |
+| `use-video-rotation` | 旋转 / 容器全屏 / 原生 PiP / 播放暂停 / 音量     | 地址、重试                      |
+| `use-sleep-blocker`  | 播放期间阻止系统休眠                             | 播放行为                        |
+| `use-media-download` | 录制发起（走原始 RTMP 直存文件，不经本地转封装） | 页面播放链路                    |
 
 ## 7. 四处需要注意的实现约定
 
@@ -284,6 +284,23 @@ useLiveSession({ liveId: props.liveId }) // 错误：传入的是快照
 `EventBus.emit('live-unavailable', liveId)` 让列表页刷新，然后 `emit('close')`
 关掉浮窗。重试耗尽走的是同一条下架路径（见 `handleRetryExhausted`）。
 
+### 7.5 上游推流中断（连麦等）只能从媒体元素侧感知
+
+主播开始/停止连麦时，官方会换发新签名：仅 query 里的 `wsSecret` / `wsTime` 变化，
+Stream Key 不变。旧地址随即失效 → 主进程 FFmpeg 退出 → 本地 FLV 响应结束。
+
+这条路径上**没有任何 mpegts ERROR 事件**，重试状态机不会被触发，因此恢复入口必须自己建立：
+
+- 本地响应没有 `Content-Length`，mpegts 判定为「下载完成」（LOADING_COMPLETE）而非 Early-EOF，
+  不抛 ERROR；随后 `endOfStream()` 把时长校正到最后一段，浏览器播完缓冲即触发 `ended`
+  （伴随 `pause`，所以画面看起来是「停住 + 变暂停」，再点播放也无法继续）。
+- 触发点取媒体元素的 `onended`（见 `use-live-player.ts`）：直播正常播放时永远不会 ended，
+  故一律按网络错误上抛 → `retry.schedule()` → `recoverStream` 重新拉详情拿到**新签名地址**重建。
+- ⚠️ 不要改用 mpegts 的 `LOADING_COMPLETE` 兜底：`enableWorker: true` 时 worker 回传的包只有
+  `{ msg, event }`、不带 `extraData`，主线程按 `'extraData' in packet` 判断后直接丢弃该事件。
+- 重试计数语义是「连续失败次数」，必须在 canplay 时清零（`retry.markRecovered()`）：
+  否则一场直播里累计断流 3 次（连麦很容易做到）就会被误判为「直播已结束」并关窗。
+
 ## 8. 对照：历史公演（回放）链路
 
 同一 Shows 页面中，点击历史公演走 `openHistoryStream` → `openPlayback(payload)`
@@ -305,11 +322,11 @@ PlaybackPlayer
 
 三条播放链已埋讲解型 debug 日志，scope 对照表登记在 `utils/debug.ts` 头部：
 
-| scope       | 覆盖场景                                       |
-| ----------- | ---------------------------------------------- |
-| `live`      | LivePlayer 直播链（阶段编号 ①②…）             |
-| `show`      | Shows.vue 按 `status` 分流到直播/回放          |
-| `playback`  | PlaybackPlayer 录播链（hls.js / 原生 MP4）     |
+| scope      | 覆盖场景                                   |
+| ---------- | ------------------------------------------ |
+| `live`     | LivePlayer 直播链（阶段编号 ①②…）          |
+| `show`     | Shows.vue 按 `status` 分流到直播/回放      |
+| `playback` | PlaybackPlayer 录播链（hls.js / 原生 MP4） |
 
 打开方式：
 
@@ -322,13 +339,13 @@ PlaybackPlayer
 
 ### 9.2 关键断点位置
 
-| 位置                                                          | 观察内容                          |
-| ------------------------------------------------------------- | --------------------------------- |
-| `pages/Shows.vue` → `openLiveStream`                          | 原始 `show` 数据与 status 分流    |
-| `stores/float-players.ts` → `openPlayer`                      | `players` 数组变化与去重置顶      |
-| `composables/use-live-session.ts` → `fetchLiveDetail`         | 归一化后的详情与 rtmp 地址        |
-| `composables/use-live-session.ts` → `startLiveStream`         | 主进程返回的本地地址              |
-| `main/stream.ts` → `handleCreateLiveStream`                   | 白名单校验与会话登记              |
+| 位置                                                             | 观察内容                         |
+| ---------------------------------------------------------------- | -------------------------------- |
+| `pages/Shows.vue` → `openLiveStream`                             | 原始 `show` 数据与 status 分流   |
+| `stores/float-players.ts` → `openPlayer`                         | `players` 数组变化与去重置顶     |
+| `composables/use-live-session.ts` → `fetchLiveDetail`            | 归一化后的详情与 rtmp 地址       |
+| `composables/use-live-session.ts` → `startLiveStream`            | 主进程返回的本地地址             |
+| `main/stream.ts` → `handleCreateLiveStream`                      | 白名单校验与会话登记             |
 | `main/http-server.ts` → 请求 handler（`createFlvStreamProcess`） | FFmpeg 实际 spawn 时机与首帧到达 |
 
 执行 `npm run dev` 后打开 DevTools，在 `getLiveOne()` 处设断点并逐步步进，
