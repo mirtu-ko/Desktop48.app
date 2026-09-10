@@ -29,17 +29,16 @@ function onInitialized() {
   isInitialized.value = true
 }
 
-// 路由 path 与菜单 index 的映射
-const pathToMenu = {
-  '/lives': Constants.Menu.LIVES,
-  '/shows': Constants.Menu.SHOWS,
-  '/albums': Constants.Menu.ALBUMS,
-  '/members': Constants.Menu.MEMBERS,
-  '/downloads': Constants.Menu.DOWNLOADS,
-  '/setting': Constants.Menu.SETTING,
+// 菜单值即路由 path，两者共用同一份定义（见 utils/constants.ts 的 Menu），
+// 此前这里手工维护的 pathToMenu 是与 Constants.Menu / routes.ts 重复的第三份副本
+const MENU_PATHS: string[] = Object.values(Constants.Menu)
+
+/** 未知 path（如重定向发生前的 '/'）一律回退到直播页，保证 Dock 始终有高亮项 */
+function resolveActiveMenu(path: string): string {
+  return MENU_PATHS.includes(path) ? path : Constants.Menu.LIVES
 }
 
-const activeIndex = ref(pathToMenu[route.path as keyof typeof pathToMenu] || Constants.Menu.LIVES)
+const activeIndex = ref(resolveActiveMenu(route.path))
 
 // 任务状态由 useTasksStore 模块级单例持有，跨页面实时更新 Dock 角标
 const { recordTasks, downloadTasks } = useTasksStore()
@@ -47,7 +46,8 @@ const { recordTasks, downloadTasks } = useTasksStore()
 // Dock「下载」角标：正在下载中的任务数量
 const runningTaskCount = computed(() => downloadTasks.value.filter(task => task.status === 'running').length + recordTasks.value.filter(task => task.status === 'running').length)
 
-// 底部 Dock 菜单项（语义色统一取自 Constants.Theme；每项专属色用于激活/悬浮的图标渐变）
+// 底部 Dock 菜单项（语义色统一取自 Constants.Theme；每项专属色用于激活/悬浮的图标渐变）。
+// index 就是路由 path（Constants.Menu 的值），同时充当激活态匹配标识
 const dockItems = computed(() => [
   { index: Constants.Menu.LIVES, label: '直播', icon: VideoCamera, color: Constants.Theme.LIVES },
   { index: Constants.Menu.SHOWS, label: '公演', icon: Microphone, color: Constants.Theme.SHOWS },
@@ -57,16 +57,17 @@ const dockItems = computed(() => [
   { index: Constants.Menu.SETTING, label: '设置', icon: Setting, color: Constants.Theme.SETTING },
 ])
 
-function changeMenu(menu: string) {
-  activeIndex.value = menu
-  router.push(menu)
+/** path 带前导斜杠，是绝对路径——此前传的是 'lives' 这种相对路径，会被 vue-router 按"相对当前路径"解析 */
+function changeMenu(path: string) {
+  activeIndex.value = path
+  router.push(path)
 }
 
 // 路由变化时自动同步菜单高亮
 watch(
   () => route.path,
   (newPath) => {
-    activeIndex.value = pathToMenu[newPath as keyof typeof pathToMenu] || Constants.Menu.LIVES
+    activeIndex.value = resolveActiveMenu(newPath)
   },
 )
 

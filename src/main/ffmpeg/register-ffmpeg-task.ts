@@ -47,10 +47,10 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
     if (path.basename(filename) !== filename || !filename || filename === '.' || filename === '..')
       throw new Error(`任务文件名不合法: ${filename}`)
     // 保存目录与 ffmpeg 二进制校验
-    const saveDir: string = Database.instance().getConfig('downloadDirectory', '') as string
+    const saveDir = Database.instance().getConfig('downloadDirectory')
     if (!fs.existsSync(saveDir))
       throw new Error('保存目录不存在')
-    const ffmpegDir: string = Database.instance().getConfig('ffmpegDirectory', '') as string
+    const ffmpegDir = Database.instance().getConfig('ffmpegDirectory')
     if (!fs.existsSync(ffmpegDir))
       throw new Error('ffmpeg 目录不存在')
     const ffmpegPath = resolveFfmpegBinary(ffmpegDir)

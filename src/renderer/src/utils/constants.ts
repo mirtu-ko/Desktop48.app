@@ -22,18 +22,24 @@ const MemberStatusMeta: Record<number, { label: string, tag: 'success' | 'warnin
  * 样板与 `this` 陷阱。跨组件共享的「状态」请放 `stores/`，这里只放常量。
  */
 const Constants = {
-  /** 默认User-Agent */
-  DEFAULT_USER_AGENT: 'Mozilla/5.0 (Linux; U; Android 8.1.0;) AppleWebKit/537.36 (KHTML, like Gecko)',
-
-  /** 菜单（键命名与 Theme 保持一致：全大写下划线；值为路由 path） */
+  /**
+   * 菜单（键命名与 Theme 保持一致：全大写下划线）。
+   *
+   * 值**就是路由 path**（带前导斜杠），Dock 高亮与 router.push 共用同一份值，
+   * 因此不需要再单独维护一张"path ↔ 菜单键"的映射表。
+   *
+   * 刻意不用 `as Record<string, string>`：那会让所有字符串键都合法，
+   * `Menu.LIVE`（少个 S）也能通过编译并返回 undefined 静默失效；
+   * 用 `as const` 保留字面量类型，拼错的键名直接编译报错。
+   */
   Menu: {
-    LIVES: 'lives',
-    SHOWS: 'shows',
-    ALBUMS: 'albums',
-    MEMBERS: 'members',
-    DOWNLOADS: 'downloads',
-    SETTING: 'setting',
-  } as Record<string, string>,
+    LIVES: '/lives',
+    SHOWS: '/shows',
+    ALBUMS: '/albums',
+    MEMBERS: '/members',
+    DOWNLOADS: '/downloads',
+    SETTING: '/setting',
+  } as const,
 
   MemberStatus,
   MemberStatusMeta,

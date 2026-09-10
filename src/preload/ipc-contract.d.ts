@@ -8,6 +8,7 @@
  * 成员数据见 main/data.ts，任务快照见 main/ffmpeg/task-registry.ts，
  * 成员树见 main/domain/member-tree.ts（buildMemberTree）。
  */
+import type { AppConfig, ConfigKey } from '../common/app-config'
 import type { MemberDataContent, StarInfoItem } from '../main/data'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
 
@@ -123,9 +124,10 @@ export interface mainAPI {
   removeBlockedMember: (userId: number) => Promise<void>
 
   // ===== 应用配置 =====
-  // key 取值见 main/database.ts 的 CONFIG_KEYS；值类型由默认值推断
-  getConfig: <T = unknown>(key: string, defaultValue?: T) => Promise<T>
-  setConfig: (key: string, value: unknown) => Promise<void>
+  // 键与值类型见 common/app-config.ts（ConfigKey / AppConfig）；init() 已补齐默认值，
+  // getConfig 恒返回生效值，无需传 defaultValue
+  getConfig: <K extends ConfigKey>(key: K) => Promise<AppConfig[K]>
+  setConfig: <K extends ConfigKey>(key: K, value: AppConfig[K]) => Promise<void>
 
   // ===== 文件系统与目录 =====
   openPath: (filePath: string) => Promise<void>

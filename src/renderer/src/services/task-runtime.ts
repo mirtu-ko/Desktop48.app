@@ -107,7 +107,7 @@ export async function startTask(
   onEnd?: TaskEndListener,
 ): Promise<void> {
   // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts 的 'getConfig'
-  task.saveDirectory = await window.mainAPI.getConfig('downloadDirectory', '')
+  task.saveDirectory = await window.mainAPI.getConfig('downloadDirectory')
   if (!task.saveDirectory)
     throw new Error('保存目录为空')
 

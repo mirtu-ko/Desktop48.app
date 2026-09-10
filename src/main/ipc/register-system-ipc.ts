@@ -31,8 +31,8 @@ export function registerSystemIPC(): void {
       app.getPath('music'),
       app.getPath('userData'),
     ]
-    for (const key of ['downloadDirectory', 'ffmpegDirectory']) {
-      const dir = Database.instance().getConfig(key, '') as string
+    for (const key of ['downloadDirectory', 'ffmpegDirectory'] as const) {
+      const dir = Database.instance().getConfig(key)
       if (dir)
         allowedRoots.push(dir)
     }

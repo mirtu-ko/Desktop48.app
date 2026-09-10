@@ -1,4 +1,3 @@
-import Constants from '@renderer/utils/constants'
 import { debugLog } from '@renderer/utils/debug'
 
 /** 网络请求参数：直接从 preload 契约签名反推，避免渲染层反向依赖 preload 目录 */
@@ -31,7 +30,7 @@ async function tracedNetRequest(payload: NetRequestPayload): Promise<string> {
  * 故返回 Promise<string> 而非对象。
  */
 async function post(url: string, body: object, headers: Record<string, string> = {}): Promise<string> {
-  headers['User-Agent'] = await window.mainAPI.getConfig('userAgent', Constants.DEFAULT_USER_AGENT)
+  headers['User-Agent'] = await window.mainAPI.getConfig('userAgent')
   headers['Content-Type'] = 'application/json'
   return tracedNetRequest({
     url,
@@ -43,7 +42,7 @@ async function post(url: string, body: object, headers: Record<string, string> =
 
 /** 发送 GET 请求。同样绕道主进程，说明见上方 post */
 async function get(url: string, headers: Record<string, string> = {}): Promise<string> {
-  headers['User-Agent'] = await window.mainAPI.getConfig('userAgent', Constants.DEFAULT_USER_AGENT)
+  headers['User-Agent'] = await window.mainAPI.getConfig('userAgent')
   return tracedNetRequest({
     url,
     method: 'GET',
