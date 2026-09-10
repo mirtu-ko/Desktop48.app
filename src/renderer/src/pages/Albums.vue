@@ -73,7 +73,7 @@ function totalTime(album: MusicAlbum): string {
 async function fetchAlbums() {
   loading.value = true
   try {
-    const list: MusicAlbum[] = await Apis.instance().musicAlbums()
+    const list: MusicAlbum[] = await Apis.musicAlbums()
     list.sort((a, b) => Number(b.start_time) - Number(a.start_time))
     albumList.value = list
   }

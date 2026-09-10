@@ -37,7 +37,7 @@ export function useLivePolling(options: {
   function updateOnlineNum() {
     if (options.skipOnlineNum())
       return
-    Apis.instance().live(options.liveId()).then((data) => {
+    Apis.live(options.liveId()).then((data) => {
       onlineNum.value = data.onlineNum ?? 0
     }).catch((error: any) => {
       console.error(error)

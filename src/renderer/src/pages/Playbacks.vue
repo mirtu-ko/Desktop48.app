@@ -50,7 +50,7 @@ const {
       params.teamId = String(teamId)
     else if (groupId != null)
       params.groupId = String(groupId)
-    return Apis.instance().playbackList(params)
+    return Apis.playbackList(params)
   },
   // 封面/队伍Logo/日期/成员信息补全：与直播页共用 enrichLiveItem；
   // 成员查询失败直接抛出，由 stopOnError 接管整批停止

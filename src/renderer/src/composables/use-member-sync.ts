@@ -14,7 +14,7 @@ export function useMemberSync() {
   /** 拉取并落库最新成员名单（Apis.syncInfo 的薄封装，成功返回 true） */
   async function syncInfo(): Promise<boolean> {
     try {
-      await Apis.instance().syncInfo()
+      await Apis.syncInfo()
       return true
     }
     catch (error) {

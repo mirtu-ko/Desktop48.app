@@ -30,7 +30,7 @@ export function useBarrageList() {
       return false
 
     try {
-      const response = await Apis.instance().barrage(url)
+      const response = await Apis.barrage(url)
       loadedUrl.value = url
       // 预计算秒数并排序，之后游标推进与二分查找都不必再解析时间字符串
       entries.value = Tools.lyricsParse(response)

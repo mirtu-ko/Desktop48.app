@@ -69,7 +69,7 @@ const {
   getList: getLiveList,
   refresh,
 } = usePagedLiveList({
-  loadPage: next => Apis.instance().lives(next),
+  loadPage: next => Apis.lives(next),
   // 封面/队伍Logo/日期/成员信息补全：与回放页共用 enrichLiveItem，成员查询失败逐条容错
   processItem: item => enrichLiveItem(item, 'fallback'),
   stopOnError: false,

@@ -184,7 +184,7 @@ async function getLiveOne() {
       // 开放公演回放：getOpenLiveOne 返回 playStreams 数组（VOD m3u8），优先选超清（streamType 3），
       // 详情里没有用户与在线人数信息，用公演标题与传入的队伍 logo 兜底
       debugLog('playback', `②拉详情: source=open → getOpenLiveOne, props:`, props)
-      const data = await Apis.instance().openLive(props.liveId)
+      const data = await Apis.openLive(props.liveId)
       debugLog('playback', `②拉详情: 公演回放详情 → data`, data)
       const stream = pickPreferredVodStream(data.playStreams)
       if (!stream?.streamPath) {
@@ -204,7 +204,7 @@ async function getLiveOne() {
     }
 
     debugLog('playback', `②拉详情: source=user → getLiveOne, props:`, props)
-    const data = await Apis.instance().live(props.liveId)
+    const data = await Apis.live(props.liveId)
     debugLog('playback', `②拉详情: 录播详情 → data`, data)
 
     const nextPlayStreamPath = Tools.streamPathHandle(data.playStreamPath, props.startTime)

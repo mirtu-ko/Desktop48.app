@@ -31,7 +31,7 @@ const {
   getList: fetchShows,
 } = usePagedList<OpenLive>({
   loadPage: async (next) => {
-    const content = await Apis.instance().openLives(Number.parseInt(groupId.value), next, false)
+    const content = await Apis.openLives(Number.parseInt(groupId.value), next, false)
     // getOpenLiveList 的 next 是"最后一场开演时间"游标：有数据时永远是时间戳，
     // 只有拉回空列表（或返回 '0'）才算没有更多
     return {
@@ -55,7 +55,7 @@ const {
   getList: fetchHistoryShows,
 } = usePagedList<OpenLive>({
   loadPage: async (next) => {
-    const content = await Apis.instance().openLives(Number.parseInt(groupId.value), next, true)
+    const content = await Apis.openLives(Number.parseInt(groupId.value), next, true)
     return {
       next: content.next || '0',
       items: [...(content.liveList || [])].sort((a, b) => Number.parseInt(b.stime) - Number.parseInt(a.stime)),

@@ -209,7 +209,7 @@ const { running: recording, onActionClick: onRecordClick } = useMediaDownload({
       return detail.playStreamPath
     }
     catch (error) {
-      // 失败原因已由 Apis.request 统一弹窗提示（直播已下架/网络错误）
+      // 失败原因已由 apis.ts 的 request() 统一弹窗提示（直播已下架/网络错误）
       debugLog('live', `①直播:获取录制源地址失败 ${error}`)
       return null
     }
