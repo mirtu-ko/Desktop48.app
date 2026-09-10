@@ -38,7 +38,7 @@ async function init() {
       return
     }
     // 本地已保存过 ffmpeg 目录，说明环境已就绪，直接放行
-    const ffmpegDir = await window.mainAPI.getConfig('ffmpegDirectory', '')
+    const ffmpegDir = await window.mainAPI.getConfig('ffmpegDirectory')
     if (ffmpegDir) {
       emit('initialized')
       return

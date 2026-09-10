@@ -1,9 +1,9 @@
 <script setup lang="ts">
+import CoverImage from '@renderer/components/ui/CoverImage.vue'
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
+import useAudioPlayerStore from '@renderer/stores/audio-player'
+import Tools from '@renderer/utils/tools'
 import { computed, ref } from 'vue'
-import useAudioPlayer from '../../composables/use-audio-player'
-import Tools from '../../utils/tools'
-import CoverImage from '../ui/CoverImage.vue'
-import MediaIcon from '../ui/MediaIcon.vue'
 
 const {
   playlist,
@@ -21,7 +21,7 @@ const {
   clearAll,
   isCurrent,
   isBroken,
-} = useAudioPlayer()
+} = useAudioPlayerStore()
 
 /** 队列面板展开态 */
 const panelVisible = ref(false)

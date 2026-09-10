@@ -1,3 +1,4 @@
+import type { AppConfig, ConfigKey } from '../common/app-config'
 import type {
   DomainInfoItem,
   GroupInfoItem,
@@ -15,25 +16,17 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { LowSync } from 'lowdb'
+import { CONFIG_DEFAULTS } from '../common/app-config'
 import data from './data'
 import { addBlockedMemberId, isBlockedId, removeBlockedId, resolveBlockedMembers } from './domain/blocked-members'
 import { buildMemberTree, teamColorOf } from './domain/member-tree'
 import { log } from './logger'
 import { SafeJSONFileSync } from './safe-json-file-sync'
 
-/** config 里允许存取的键；'all' 表示整包读取 */
-const CONFIG_KEYS = new Set(['downloadDirectory', 'ffmpegDirectory', 'userAgent', 'all'])
-
-function assertConfigKey(key: string) {
-  if (!CONFIG_KEYS.has(key))
-    throw new Error('Invalid config key')
-}
-
-/** 应用配置：键即 CONFIG_KEYS 中的合法键（'all' 除外） */
-export interface AppConfig {
-  downloadDirectory?: string
-  ffmpegDirectory?: string
-  userAgent?: string
+/** 校验配置键。必须用 hasOwn：`in` 会沿原型链放行 `'toString'` 这类键 */
+function assertConfigKey(key: ConfigKey) {
+  if (!Object.hasOwn(CONFIG_DEFAULTS, key))
+    throw new Error(`Invalid config key: ${key}`)
 }
 
 /**
@@ -124,6 +117,16 @@ class Database {
 
     // 清理旧库遗留的派生字段：memberTree 现在是纯内存派生，不再持久化
     delete this.db.memberTree
+
+    // 补齐未设置的配置并写盘：「未设置」= 缺失 / 空串 / 非字符串
+    const stored = this.db.config as Partial<Record<ConfigKey, unknown>> | undefined
+    const config: AppConfig = { ...CONFIG_DEFAULTS }
+    for (const key of Object.keys(CONFIG_DEFAULTS) as ConfigKey[]) {
+      const value = stored?.[key]
+      if (typeof value === 'string' && value !== '')
+        config[key] = value
+    }
+    this.db.config = config
 
     // 建树（纯内存派生，不写回原始数据）
     this.rebuildMemberTree()
@@ -218,24 +221,20 @@ class Database {
     return Array.isArray(this.membersDB) && this.membersDB.length > 0
   }
 
-  public getConfig(key: string, defaultValue: any = null) {
+  /**
+   * 读取配置：纯读操作，不写盘。init() 已补齐未设置的键，故恒返回生效值，
+   * 调用方无需再传 defaultValue。末尾回退只作防御（空串同样算未设置）。
+   */
+  public getConfig<K extends ConfigKey>(key: K): AppConfig[K] {
     assertConfigKey(key)
-    if (!this.db.config)
-      this.db.config = {}
-    if (key in this.db.config)
-      return this.db.config[key]
-    if (key === 'all')
-      return this.db.config
-    this.db.config[key] = defaultValue
-    this.lowdb.write()
-    return defaultValue
+    return this.db.config?.[key] || CONFIG_DEFAULTS[key]
   }
 
-  public setConfig(key: string, value: any) {
+  public setConfig<K extends ConfigKey>(key: K, value: AppConfig[K]) {
     assertConfigKey(key)
-    if (!this.db.config)
-      this.db.config = {}
-    this.db.config[key] = value
+    const config = this.db.config ?? { ...CONFIG_DEFAULTS }
+    config[key] = value
+    this.db.config = config
     this.lowdb.write()
   }
 

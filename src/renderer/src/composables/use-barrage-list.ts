@@ -1,8 +1,8 @@
-import type { BarrageListItem } from '../../components/danmaku/Barrage.vue'
+import type { BarrageListItem } from '@renderer/components/danmaku/Barrage.vue'
+import Apis from '@renderer/services/apis'
+import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { ref, shallowRef } from 'vue'
-import Apis from '../../services/apis'
-import Tools from '../../utils/tools'
 import { findBarrageIndex } from './use-danmaku-overlay'
 
 // 右侧列表与叠加层的进度基准不同（列表滞后 1s），各自维护一个游标；
@@ -30,7 +30,7 @@ export function useBarrageList() {
       return false
 
     try {
-      const response = await Apis.instance().barrage(url)
+      const response = await Apis.barrage(url)
       loadedUrl.value = url
       // 预计算秒数并排序，之后游标推进与二分查找都不必再解析时间字符串
       entries.value = Tools.lyricsParse(response)

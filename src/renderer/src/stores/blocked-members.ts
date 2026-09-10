@@ -1,3 +1,9 @@
+/**
+ * ⚠️ 全局单例 store（原 composables/data/use-blocked-members.ts）
+ *
+ * 屏蔽名单定义在模块作用域，**不随任何组件卸载而销毁**：
+ * 成员页与设置页调用 useBlockedMembersStore() 读写的是同一份名单，跨页自动同步。
+ */
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
@@ -25,7 +31,7 @@ const blockedMembers = ref<BlockedMember[]>([])
  * ★ 跨进程：本文件所有 window.mainAPI.*BlockedMember* 调用经 preload/index.ts
  * 转到 main/ipc/register-database-ipc.ts，名单落盘在 database.json。
  */
-export function useBlockedMembers() {
+export function useBlockedMembersStore() {
   /** 从主进程拉取最新名单（页面挂载时调用） */
   async function refreshBlockedMembers() {
     blockedMembers.value = (await window.mainAPI.getBlockedMembers()) || []

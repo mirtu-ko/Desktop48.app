@@ -1,16 +1,16 @@
+import type { LiveDetail } from '@renderer/services/api-types'
 import type { Ref } from 'vue'
-import type { LiveDetail } from '../../services/api-types'
-import { ElMessage } from 'element-plus'
-import { ref } from 'vue'
-import Apis from '../../services/apis'
-import { debugLog } from '../../utils/debug'
+import Apis from '@renderer/services/apis'
+import { debugLog } from '@renderer/utils/debug'
 import {
   buildPlaybackUrl,
   normalizeCarouselTime,
   pickPreferredStream,
   resolveCarouselImages,
-} from '../../utils/live-stream'
-import Tools from '../../utils/tools'
+} from '@renderer/utils/live-stream'
+import Tools from '@renderer/utils/tools'
+import { ElMessage } from 'element-plus'
+import { ref } from 'vue'
 
 /** 直播详情形状统一在 services/api-types.ts 建模 */
 export type { LiveDetail }
@@ -25,7 +25,7 @@ export type { LiveDetail }
  * - 入参 / LiveDetail.playStreamPath = rtmp://...      远程源，喂给主进程的 FFmpeg
  * - 出参 localPlaybackUrl            = http://127.0.0.1 本地地址，喂给 mpegts 播放器
  *
- * 完整链路见 docs/播放链路.md
+ * 完整链路见 docs/live-playback-pipeline.md
  */
 export function useLiveSession(options: {
   liveId: () => string
@@ -91,7 +91,7 @@ export function useLiveSession(options: {
       // 开放公演：getOpenLiveOne 返回 playStreams 数组（多档清晰度），选高清（streamType 2）；
       // 该接口没有主播信息，用副标题/标题兜底成 user.userName 以满足 LiveDetail 契约
       debugLog('live', '②拉详情: source=open → 走 openLive 接口（公演详情为多档清晰度数组，需选流）')
-      const data = await Apis.instance().openLive(options.liveId())
+      const data = await Apis.openLive(options.liveId())
       const stream = pickPreferredStream(data.playStreams)
       debugLog('live', `②拉详情: 公演选流 → streamType=${stream?.streamType || '无'}（优先高清 2，回落任意有地址的流）`)
       return {
@@ -102,7 +102,7 @@ export function useLiveSession(options: {
       }
     }
     debugLog('live', '②拉详情: source=user → 走 getLiveOne 接口（单档 rtmp 地址）', `liveId=${options.liveId()}`)
-    return await Apis.instance().live(options.liveId())
+    return await Apis.live(options.liveId())
   }
 
   /** 停掉当前会话并等待主进程确认（重建流之前调用，确保旧 FFmpeg 已退出） */
@@ -123,7 +123,7 @@ export function useLiveSession(options: {
 
   async function startLiveStream(rtmpUrl: string, requestId: number) {
     // 主进程失败（如本地流媒体服务端口全部被占用）在这里显式提示：
-    // 这条链路不经过 Apis.request，没有统一兜底弹窗
+    // 这条链路不经过 apis.ts 的 request()，没有统一兜底弹窗
     let result
     try {
       // ★ 跨进程：preload/index.ts → main/stream.ts 的 'createLiveStream' handler。
@@ -187,7 +187,7 @@ export function useLiveSession(options: {
     }
     catch (error: any) {
       console.error('getLiveOne()', error)
-      // 详情失败的原因已由 Apis.request 统一弹窗提示（不在这里重复弹）；
+      // 详情失败的原因已由 apis.ts 的 request() 统一弹窗提示（不在这里重复弹）；
       // 详情都取不到通常意味着直播已下架，走下架处理
       options.onUnavailable()
     }

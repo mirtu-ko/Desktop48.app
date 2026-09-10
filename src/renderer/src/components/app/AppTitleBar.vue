@@ -1,6 +1,6 @@
 <script setup lang="ts">
+import appIcon from '@renderer/assets/icon.png'
 import { onMounted, onUnmounted, ref } from 'vue'
-import appIcon from '../../assets/icon.png'
 
 const isMaximized = ref(false)
 let disposeChange: (() => void) | undefined

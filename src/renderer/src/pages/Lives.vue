@@ -1,23 +1,23 @@
 <script setup lang="ts">
-import type { LiveListItem } from '../services/api-types'
+import type { LiveListItem } from '@renderer/services/api-types'
 import { Film, VideoCamera } from '@element-plus/icons-vue'
+import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
+import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
+import LiveItem from '@renderer/components/ui/LiveItem.vue'
+import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
+import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
+import Apis from '@renderer/services/apis'
+import EventBus from '@renderer/services/event-bus'
+import useFloatPlayersStore from '@renderer/stores/float-players'
+import { debugLog } from '@renderer/utils/debug'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
-import FloatingTabBar from '../components/ui/FloatingTabBar.vue'
-import LiveItem from '../components/ui/LiveItem.vue'
-import CardSkeletonGrid from '../components/ui/skeleton/CardSkeletonGrid.vue'
-import { enrichLiveItem, usePagedLiveList } from '../composables/data/use-paged-live-list'
-import useFloatPlayers from '../composables/use-float-players'
-import Apis from '../services/apis'
-import EventBus from '../services/event-bus'
-import { debugLog } from '../utils/debug'
 import Playbacks from './Playbacks.vue'
 
 const route = useRoute()
 
 // 画中画迷你窗：直播/回放/公演共用全局播放挂载点
-const { openLive } = useFloatPlayers()
+const { openLive } = useFloatPlayersStore()
 
 // 顶部浮层 tab 当前选中的视图：live（直播）/ playback（回放）
 const activeTab = ref<'live' | 'playback'>('live')
@@ -69,7 +69,7 @@ const {
   getList: getLiveList,
   refresh,
 } = usePagedLiveList({
-  loadPage: next => Apis.instance().lives(next),
+  loadPage: next => Apis.lives(next),
   // 封面/队伍Logo/日期/成员信息补全：与回放页共用 enrichLiveItem，成员查询失败逐条容错
   processItem: item => enrichLiveItem(item, 'fallback'),
   stopOnError: false,

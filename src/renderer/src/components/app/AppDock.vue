@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 统一底部 Dock 导航：磨砂表层复用全局 .frosted-surface
 export interface DockItem {
-  /** 菜单 key（Constants.Menu 值，如 'lives'），同时作为激活态匹配标识 */
+  /** 路由 path（Constants.Menu 值，如 '/lives'），同时作为激活态匹配标识；点击后原样 push */
   index: string
   label: string
   /** Element Plus 图标组件 */

@@ -1,9 +1,6 @@
+import type { ConfigKey } from '../../../common/app-config'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ref } from 'vue'
-import Constants from '../../utils/constants'
-
-/** 应用配置项的键（限制 getConfig / setConfig 的 key 取值范围） */
-export type AppConfigKey = 'downloadDirectory' | 'ffmpegDirectory' | 'userAgent'
 
 /**
  * 应用配置的读写收口：三项配置（下载目录 / ffmpeg 目录 / User-Agent）的状态、
@@ -19,15 +16,15 @@ export function useAppConfig() {
   const ffmpegDirectory = ref('')
   const userAgent = ref('')
 
-  /** 挂载时读取三项配置（未设置时回退各自默认值） */
+  /** 挂载时读取三项配置（init() 已补齐默认值，恒为生效值） */
   async function loadAppConfig() {
-    downloadDirectory.value = await window.mainAPI.getConfig('downloadDirectory', '')
-    ffmpegDirectory.value = await window.mainAPI.getConfig('ffmpegDirectory', '')
-    userAgent.value = await window.mainAPI.getConfig('userAgent', Constants.DEFAULT_USER_AGENT)
+    downloadDirectory.value = await window.mainAPI.getConfig('downloadDirectory')
+    ffmpegDirectory.value = await window.mainAPI.getConfig('ffmpegDirectory')
+    userAgent.value = await window.mainAPI.getConfig('userAgent')
   }
 
   /** 通用保存：写盘 + 成功提示 */
-  async function saveConfig(key: AppConfigKey, value: string) {
+  async function saveConfig(key: ConfigKey, value: string) {
     await window.mainAPI.setConfig(key, value)
     ElMessage({ message: '设置成功', type: 'success' })
   }

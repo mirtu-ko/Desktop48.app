@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
+import { debugLog } from '@renderer/utils/debug'
 import { nextTick, ref } from 'vue'
-import { debugLog } from '../../utils/debug'
 
 export interface UseLoadMoreOptions {
   /**

@@ -1,22 +1,22 @@
 <script setup lang="ts">
+import BarrageBox from '@renderer/components/danmaku/BarrageBox.vue'
+import BarrageSidebarToggle from '@renderer/components/danmaku/BarrageSidebarToggle.vue'
+import DanmakuSettingsPopover from '@renderer/components/danmaku/DanmakuSettingsPopover.vue'
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
+import useMediaDownload from '@renderer/composables/use-media-download'
+import { useMediaShortcuts } from '@renderer/composables/use-media-shortcuts'
+import { usePlaybackDanmaku } from '@renderer/composables/use-playback-danmaku'
+import { usePlaybackEngine } from '@renderer/composables/use-playback-engine'
+import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
+import { useVideoRotation } from '@renderer/composables/use-video-rotation'
+
+import Apis from '@renderer/services/apis'
+import { debugLog } from '@renderer/utils/debug'
+import { BARRAGE_SIDEBAR_WIDTH } from '@renderer/utils/float-player-layout'
+import { normalizeCarouselTime, pickPreferredVodStream } from '@renderer/utils/live-stream'
+import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { useMediaShortcuts } from '../../composables/media/use-media-shortcuts'
-import { usePlaybackEngine } from '../../composables/media/use-playback-engine'
-import { useSleepBlocker } from '../../composables/media/use-sleep-blocker'
-import { useVideoRotation } from '../../composables/media/use-video-rotation'
-import { usePlaybackDanmaku } from '../../composables/playback/use-playback-danmaku'
-import useMediaDownload from '../../composables/tasks/use-media-download'
-import Apis from '../../services/apis'
-import { debugLog } from '../../utils/debug'
-
-import { BARRAGE_SIDEBAR_WIDTH } from '../../utils/float-player-layout'
-import { normalizeCarouselTime, pickPreferredVodStream } from '../../utils/live-stream'
-import Tools from '../../utils/tools'
-import BarrageBox from '../danmaku/BarrageBox.vue'
-import BarrageSidebarToggle from '../danmaku/BarrageSidebarToggle.vue'
-import DanmakuSettingsPopover from '../danmaku/DanmakuSettingsPopover.vue'
-import MediaIcon from '../ui/MediaIcon.vue'
 import MiniControls from './MiniControls.vue'
 import PlayerLoading from './PlayerLoading.vue'
 import RadioStage from './RadioStage.vue'
@@ -184,7 +184,7 @@ async function getLiveOne() {
       // 开放公演回放：getOpenLiveOne 返回 playStreams 数组（VOD m3u8），优先选超清（streamType 3），
       // 详情里没有用户与在线人数信息，用公演标题与传入的队伍 logo 兜底
       debugLog('playback', `②拉详情: source=open → getOpenLiveOne, props:`, props)
-      const data = await Apis.instance().openLive(props.liveId)
+      const data = await Apis.openLive(props.liveId)
       debugLog('playback', `②拉详情: 公演回放详情 → data`, data)
       const stream = pickPreferredVodStream(data.playStreams)
       if (!stream?.streamPath) {
@@ -204,7 +204,7 @@ async function getLiveOne() {
     }
 
     debugLog('playback', `②拉详情: source=user → getLiveOne, props:`, props)
-    const data = await Apis.instance().live(props.liveId)
+    const data = await Apis.live(props.liveId)
     debugLog('playback', `②拉详情: 录播详情 → data`, data)
 
     const nextPlayStreamPath = Tools.streamPathHandle(data.playStreamPath, props.startTime)

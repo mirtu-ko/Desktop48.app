@@ -13,7 +13,7 @@
  * |            |                    | （主进程侧：stream.ts → http-server → ffmpeg）    |
  * | show       | 公演选路入口       | Shows.vue → 按状态分流到直播链或录播链            |
  * | playback   | 录播 VOD 播放链    | PlaybackPlayer → use-playback-engine (hls.js)       |
- * | tasks      | 下载/录制任务链    | use-tasks → task-base → ffmpeg 任务通道           |
+ * | tasks      | 下载/录制任务链    | stores/tasks → task-runtime → ffmpeg 任务通道      |
  * | load-more  | 列表分页与自动补拉 | use-load-more → use-paged-live-list               |
  * | list       | 列表数据旅程       | use-paged-list（拉取→过滤→补全→去重）→ Lives.vue |
  * |            |                    | （③收下架广播，与 live 链的首尾呼应）           |

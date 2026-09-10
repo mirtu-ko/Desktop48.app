@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import type { MemberDetail } from '../components/ui/MemberDetailDrawer.vue'
+import type { MemberDetail } from '@renderer/components/ui/MemberDetailDrawer.vue'
 import { Hide, User, View } from '@element-plus/icons-vue'
+import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
+import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
+import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
+import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
+import { useMemberSync } from '@renderer/composables/use-member-sync'
+import { useBlockedMembersStore } from '@renderer/stores/blocked-members'
+import Constants from '@renderer/utils/constants'
+import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
-import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
-import FloatingTabBar from '../components/ui/FloatingTabBar.vue'
-import MemberDetailDrawer from '../components/ui/MemberDetailDrawer.vue'
-import CardSkeletonGrid from '../components/ui/skeleton/CardSkeletonGrid.vue'
-import { useBlockedMembers } from '../composables/data/use-blocked-members'
-import { useMemberSync } from '../composables/data/use-member-sync'
-import Constants from '../utils/constants'
-import Tools from '../utils/tools'
 
 /** 成员树：分团 → 队伍 → 成员（getMemberTree 返回结构） */
 interface TeamNode {
@@ -62,7 +62,7 @@ function hideBadge(event: Event) {
 const selectedMember = ref<MemberDetail | null>(null)
 
 /** 屏蔽名单：模块级共享状态，机制见 use-blocked-members.ts */
-const { refreshBlockedMembers, isBlocked, toggleBlock } = useBlockedMembers()
+const { refreshBlockedMembers, isBlocked, toggleBlock } = useBlockedMembersStore()
 
 /** API 把“明星殿堂”建模成独立分团（groupId 19），展示上并入 SNH48 的同名队伍 */
 const HALL_GROUP_NAME = '明星殿堂'

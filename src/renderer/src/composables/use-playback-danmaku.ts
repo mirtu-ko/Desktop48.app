@@ -1,9 +1,9 @@
+import type { DanmakuSettings } from '@renderer/composables/use-danmaku-settings'
 import type { Ref } from 'vue'
-import type { DanmakuSettings } from '../media/use-danmaku-settings'
+import { useBarrageList } from '@renderer/composables/use-barrage-list'
+import { useDanmakuOverlay } from '@renderer/composables/use-danmaku-overlay'
+import { useDanmakuSettings } from '@renderer/composables/use-danmaku-settings'
 import { computed, ref } from 'vue'
-import { useBarrageList } from '../media/use-barrage-list'
-import { useDanmakuOverlay } from '../media/use-danmaku-overlay'
-import { useDanmakuSettings } from '../media/use-danmaku-settings'
 
 /**
  * 录播弹幕编排：

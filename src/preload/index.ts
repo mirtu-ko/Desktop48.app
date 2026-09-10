@@ -1,3 +1,4 @@
+import type { AppConfig, ConfigKey } from '../common/app-config'
 import type { electronAPI as ElectronAPI, FfmpegDownloadProgress, mainAPI, MemberDataContent, NetRequestOptions } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
@@ -45,8 +46,8 @@ const api = {
 
   // ===== 应用配置 =====
   // 对端：main/ipc/register-database-ipc.ts
-  getConfig: <T>(key: string, defaultValue?: T) => ipcRenderer.invoke('getConfig', key, defaultValue),
-  setConfig: (key: string, value: unknown) => ipcRenderer.invoke('setConfig', key, value),
+  getConfig: <K extends ConfigKey>(key: K) => ipcRenderer.invoke('getConfig', key),
+  setConfig: <K extends ConfigKey>(key: K, value: AppConfig[K]) => ipcRenderer.invoke('setConfig', key, value),
 
   // ===== 文件系统与目录 =====
   // 对端：main/ipc/register-system-ipc.ts

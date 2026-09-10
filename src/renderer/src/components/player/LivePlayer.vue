@@ -1,19 +1,19 @@
 <script setup lang="ts">
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
+import { useLivePlayer } from '@renderer/composables/use-live-player'
+import { useLivePolling } from '@renderer/composables/use-live-polling'
+import { useLiveSession } from '@renderer/composables/use-live-session'
+import useMediaDownload from '@renderer/composables/use-media-download'
+import { dispatchMediaShortcut } from '@renderer/composables/use-media-shortcuts'
+import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
+import { useStreamRetry } from '@renderer/composables/use-stream-retry'
+import { useVideoRotation } from '@renderer/composables/use-video-rotation'
+import EventBus from '@renderer/services/event-bus'
+import { debugLog } from '@renderer/utils/debug'
+
 import { ElMessage } from 'element-plus'
+
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useLivePlayer } from '../../composables/live/use-live-player'
-import { useLivePolling } from '../../composables/live/use-live-polling'
-import { useLiveSession } from '../../composables/live/use-live-session'
-import { useStreamRetry } from '../../composables/live/use-stream-retry'
-import { dispatchMediaShortcut } from '../../composables/media/use-media-shortcuts'
-import { useSleepBlocker } from '../../composables/media/use-sleep-blocker'
-import { useVideoRotation } from '../../composables/media/use-video-rotation'
-import useMediaDownload from '../../composables/tasks/use-media-download'
-import EventBus from '../../services/event-bus'
-
-import { debugLog } from '../../utils/debug'
-
-import MediaIcon from '../ui/MediaIcon.vue'
 import MiniControls from './MiniControls.vue'
 import PlayerLoading from './PlayerLoading.vue'
 import RadioStage from './RadioStage.vue'
@@ -209,7 +209,7 @@ const { running: recording, onActionClick: onRecordClick } = useMediaDownload({
       return detail.playStreamPath
     }
     catch (error) {
-      // 失败原因已由 Apis.request 统一弹窗提示（直播已下架/网络错误）
+      // 失败原因已由 apis.ts 的 request() 统一弹窗提示（直播已下架/网络错误）
       debugLog('live', `①直播:获取录制源地址失败 ${error}`)
       return null
     }

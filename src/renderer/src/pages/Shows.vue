@@ -1,20 +1,20 @@
 <script setup lang="ts">
-import type { OpenLive } from '../services/api-types'
+import type { OpenLive } from '@renderer/services/api-types'
+import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
+import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
+import ShowCard from '@renderer/components/ui/ShowCard.vue'
+import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
+import useLoadMore from '@renderer/composables/use-load-more'
+import usePagedList from '@renderer/composables/use-paged-list'
+import Apis from '@renderer/services/apis'
+import useFloatPlayersStore from '@renderer/stores/float-players'
+import Constants from '@renderer/utils/constants'
+import { debugLog } from '@renderer/utils/debug'
+import Tools from '@renderer/utils/tools'
 import { computed, onMounted, ref, watch } from 'vue'
-import FloatingRefreshDock from '../components/ui/FloatingRefreshDock.vue'
-import FloatingTabBar from '../components/ui/FloatingTabBar.vue'
-import ShowCard from '../components/ui/ShowCard.vue'
-import CardSkeletonGrid from '../components/ui/skeleton/CardSkeletonGrid.vue'
-import useLoadMore from '../composables/data/use-load-more'
-import usePagedList from '../composables/data/use-paged-list'
-import useFloatPlayers from '../composables/use-float-players'
-import Apis from '../services/apis'
-import Constants from '../utils/constants'
-import { debugLog } from '../utils/debug'
-import Tools from '../utils/tools'
 
 // 画中画迷你窗：与直播/回放页共用全局播放挂载点
-const { openLive, openPlayback } = useFloatPlayers()
+const { openLive, openPlayback } = useFloatPlayersStore()
 
 /** 当前团体 groupId：取值见 Constants.GroupTabs（'0'=全部） */
 const groupId = ref('0')
@@ -31,7 +31,7 @@ const {
   getList: fetchShows,
 } = usePagedList<OpenLive>({
   loadPage: async (next) => {
-    const content = await Apis.instance().openLives(Number.parseInt(groupId.value), next, false)
+    const content = await Apis.openLives(Number.parseInt(groupId.value), next, false)
     // getOpenLiveList 的 next 是"最后一场开演时间"游标：有数据时永远是时间戳，
     // 只有拉回空列表（或返回 '0'）才算没有更多
     return {
@@ -55,7 +55,7 @@ const {
   getList: fetchHistoryShows,
 } = usePagedList<OpenLive>({
   loadPage: async (next) => {
-    const content = await Apis.instance().openLives(Number.parseInt(groupId.value), next, true)
+    const content = await Apis.openLives(Number.parseInt(groupId.value), next, true)
     return {
       next: content.next || '0',
       items: [...(content.liveList || [])].sort((a, b) => Number.parseInt(b.stime) - Number.parseInt(a.stime)),
