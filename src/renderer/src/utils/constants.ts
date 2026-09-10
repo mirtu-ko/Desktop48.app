@@ -17,15 +17,6 @@ export default class Constants {
   }
 
   /**
-   * 任务状态（下载/录制共用）
-   */
-  public static readonly TaskStatus = {
-    Prepared: 0,
-    Running: 1,
-    Finish: 2,
-  }
-
-  /**
    * 成员状态（starInfo.status 字段取值，接口约定）：成员页分区、详情抽屉标签、回放页排序共用。
    * 附展示元信息（标签文案 + 语义色），三处此前各自硬编码 1/2/3，收口于此
    */

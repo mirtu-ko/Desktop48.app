@@ -14,7 +14,7 @@ import { useDownloadGuard } from './use-download-guard'
  * - ext / separator: 任务文件名的扩展名与成员名分隔符（保持既有命名约定）
  * - getUrl: 源地址获取方式——回放用现成 playStreamPath，录制需先拉最新 RTMP 详情
  *
- * 状态查询与停止仍走 useTasksStore 的共享任务 store（handleTask/isTaskRunning/stopTask 一并返回）。
+ * 状态查询与停止仍走 useTasksStore 的共享任务 store（handleTask/isTaskRunning/stopTaskByLiveId 一并返回）。
  * 须在组件 setup 内调用（useDownloadGuard 内部依赖 useRouter）。
  */
 export function useMediaDownload(options: {
@@ -30,7 +30,7 @@ export function useMediaDownload(options: {
   getUrl: () => Promise<string | null>
 }) {
   const { checkDownloadDirectory } = useDownloadGuard()
-  const { handleTask, isTaskRunning, stopTask } = useTasksStore()
+  const { handleTask, isTaskRunning, stopTaskByLiveId } = useTasksStore()
 
   const running = computed(() => isTaskRunning(options.kind, options.liveId()))
 
@@ -65,11 +65,11 @@ export function useMediaDownload(options: {
       void start()
       return
     }
-    stopTask(options.kind, options.liveId())
+    stopTaskByLiveId(options.kind, options.liveId())
     ElMessage({ message: options.kind === 'record' ? '已结束录制' : '已停止下载', type: 'success' })
   }
 
-  return { running, onActionClick, stopTask }
+  return { running, onActionClick, stopTask: stopTaskByLiveId }
 }
 
 export default useMediaDownload

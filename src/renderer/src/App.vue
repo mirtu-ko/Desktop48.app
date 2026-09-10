@@ -7,10 +7,9 @@ import Initialize from '@renderer/components/app/Initialize.vue'
 import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
 import FloatPlayerHost from '@renderer/components/floats/FloatPlayerHost.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
-import EventBus from '@renderer/services/event-bus'
 import useTasksStore from '@renderer/stores/tasks'
 import Constants from '@renderer/utils/constants'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 /**
@@ -46,7 +45,7 @@ const activeIndex = ref(pathToMenu[route.path as keyof typeof pathToMenu] || Con
 const { recordTasks, downloadTasks } = useTasksStore()
 
 // Dock「下载」角标：正在下载中的任务数量
-const runningTaskCount = computed(() => downloadTasks.value.filter(task => task.isRunning()).length + recordTasks.value.filter(task => task.isRunning()).length)
+const runningTaskCount = computed(() => downloadTasks.value.filter(task => task.status === 'running').length + recordTasks.value.filter(task => task.status === 'running').length)
 
 // 底部 Dock 菜单项（语义色统一取自 Constants.Theme；每项专属色用于激活/悬浮的图标渐变）
 const dockItems = computed(() => [
@@ -71,9 +70,6 @@ watch(
   },
 )
 
-/** EventBus 'change-selected-menu' 的处理器（menu 字符串，见 event-bus.ts Events 登记） */
-const changeMenuHandler: (menu: string) => void = changeMenu
-
 // 启动兜底：数据库没有成员信息时自动同步一次（逻辑见 use-member-sync.ts）
 const { ensureMembers } = useMemberSync()
 
@@ -83,14 +79,6 @@ watch(isInitialized, async (ready) => {
   if (ready) {
     await ensureMembers()
   }
-})
-
-onMounted(() => {
-  EventBus.on('change-selected-menu', changeMenuHandler)
-})
-
-onUnmounted(() => {
-  EventBus.off('change-selected-menu', changeMenuHandler)
 })
 </script>
 

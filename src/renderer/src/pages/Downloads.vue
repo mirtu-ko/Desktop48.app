@@ -7,7 +7,7 @@ import { computed, onMounted } from 'vue'
 
 // 任务状态由 useTasksStore 这个模块级单例持有：本页卸载后任务照常运行，
 // 从悬浮迷你窗等任意入口发起的任务也不会因为本页未挂载而丢失
-const { downloadTasks, recordTasks, removeTask, restoreTasks } = useTasksStore()
+const { downloadTasks, recordTasks, removeTask, restoreTasks, stopTaskByLiveId, openSaveDirectory } = useTasksStore()
 
 onMounted(() => {
   restoreTasks('download')
@@ -59,12 +59,12 @@ const taskGroups = computed(() => [
         >
           <article
             v-for="task in group.tasks"
-            :key="task.getLiveId()"
+            :key="task.liveId"
             class="task-card glass-card"
           >
             <span
               class="task-icon"
-              :class="{ 'is-running': task.isRunning() }"
+              :class="{ 'is-running': task.status === 'running' }"
             >
               <el-icon><component :is="group.icon" /></el-icon>
             </span>
@@ -72,21 +72,21 @@ const taskGroups = computed(() => [
             <div class="task-meta">
               <div
                 class="task-name ellipsis"
-                :title="task.getFilename()"
+                :title="task.filename"
               >
-                {{ task.getFilename() }}
+                {{ task.filename }}
               </div>
               <div
-                v-if="task.getFilePath()"
+                v-if="task.filePath"
                 class="task-path ellipsis"
-                :title="task.getFilePath()"
+                :title="task.filePath"
               >
-                {{ task.getFilePath() }}
+                {{ task.filePath }}
               </div>
             </div>
 
             <el-tag
-              v-if="task.isRunning()"
+              v-if="task.status === 'running'"
               type="primary"
               size="small"
               round
@@ -110,11 +110,11 @@ const taskGroups = computed(() => [
 
             <div class="task-actions">
               <el-button
-                v-if="task.isRunning()"
+                v-if="task.status === 'running'"
                 type="danger"
                 size="small"
                 round
-                @click="task.stop()"
+                @click="stopTaskByLiveId(group.kind, task.liveId)"
               >
                 结束
               </el-button>
@@ -123,7 +123,7 @@ const taskGroups = computed(() => [
                   type="primary"
                   size="small"
                   round
-                  @click="task.openSaveDirectory()"
+                  @click="openSaveDirectory(task)"
                 >
                   打开文件夹
                 </el-button>
