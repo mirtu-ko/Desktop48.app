@@ -3,8 +3,8 @@ import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
 /**
- * 成员数据库同步的单一入口（Index 与 Members 页共用，避免各写一遍 syncInfo）：
- * - Index.vue 挂载时调 ensureMembers()：库里没有成员时静默补一次初始同步
+ * 成员数据库同步的单一入口（App 根组件与 Members 页共用，避免各写一遍 syncInfo）：
+ * - App.vue 初始化通过后调 ensureMembers()：库里没有成员时静默补一次初始同步
  * - Members.vue 的「更新成员数据库」走 syncMembers()：带 loading 态与成功提示
  */
 export function useMemberSync() {

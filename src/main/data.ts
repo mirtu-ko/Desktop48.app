@@ -7,7 +7,7 @@
  * 并保留索引签名以兼容上游后续新增字段。
  *
  * 全新安装从空开始，成员数据由渲染进程启动时检测到无成员后自动同步
- * （见 Index.vue / Apis.syncInfo → saveMemberData）。
+ * （见 App.vue → use-member-sync.ts / Apis.syncInfo → saveMemberData）。
  */
 
 /** ===== starInfo：成员（艺人）记录 ===== */
