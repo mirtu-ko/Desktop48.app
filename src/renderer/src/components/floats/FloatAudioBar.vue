@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import CoverImage from '@renderer/components/ui/CoverImage.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
-import useAudioPlayer from '@renderer/composables/use-audio-player'
+import useAudioPlayerStore from '@renderer/stores/audio-player'
 import Tools from '@renderer/utils/tools'
 import { computed, ref } from 'vue'
 
@@ -21,7 +21,7 @@ const {
   clearAll,
   isCurrent,
   isBroken,
-} = useAudioPlayer()
+} = useAudioPlayerStore()
 
 /** 队列面板展开态 */
 const panelVisible = ref(false)

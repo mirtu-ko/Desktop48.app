@@ -6,9 +6,9 @@ import BackTopButton from '@renderer/components/app/BackTopButton.vue'
 import Initialize from '@renderer/components/app/Initialize.vue'
 import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
 import FloatPlayerHost from '@renderer/components/floats/FloatPlayerHost.vue'
-import { useMemberSync } from '@renderer/composables/data/use-member-sync'
-import useTasks from '@renderer/composables/tasks/use-tasks'
+import { useMemberSync } from '@renderer/composables/use-member-sync'
 import EventBus from '@renderer/services/event-bus'
+import useTasksStore from '@renderer/stores/tasks'
 import Constants from '@renderer/utils/constants'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -42,8 +42,8 @@ const pathToMenu = {
 
 const activeIndex = ref(pathToMenu[route.path as keyof typeof pathToMenu] || Constants.Menu.LIVES)
 
-// 任务状态由 useTasks 模块级单例持有，跨页面实时更新 Dock 角标
-const { recordTasks, downloadTasks } = useTasks()
+// 任务状态由 useTasksStore 模块级单例持有，跨页面实时更新 Dock 角标
+const { recordTasks, downloadTasks } = useTasksStore()
 
 // Dock「下载」角标：正在下载中的任务数量
 const runningTaskCount = computed(() => downloadTasks.value.filter(task => task.isRunning()).length + recordTasks.value.filter(task => task.isRunning()).length)

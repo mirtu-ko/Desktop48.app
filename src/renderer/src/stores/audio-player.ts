@@ -1,3 +1,10 @@
+/**
+ * ⚠️ 全局单例 store（原 composables/use-audio-player.ts）
+ *
+ * 播放列表、播放进度与那个全局唯一的 HTML5 Audio 元素都定义在模块作用域，
+ * **不随任何组件卸载而销毁**：专辑页负责入队/点播，FloatAudioBar 负责展示与移除，
+ * 两边调用 useAudioPlayerStore() 拿到的是同一份状态。
+ */
 import { computed, ref, shallowRef } from 'vue'
 
 /** 播放列表条目 */
@@ -62,7 +69,7 @@ function ensureAudio(): HTMLAudioElement {
   audio.addEventListener('error', () => {
     const track = currentTrack.value
     if (track && audio?.src && track.url && audio.src.includes(track.url)) {
-      console.error('[use-audio-player]音频加载失败，标记失效:', track.url)
+      console.error('[stores/audio-player]音频加载失败，标记失效:', track.url)
       // 替换整个 Set 才能触发 shallowRef 的依赖更新（原地 add 不会）
       brokenUrls.value = new Set(brokenUrls.value).add(track.url)
       // 自动顺延下一首，没有下一首则停止
@@ -92,7 +99,7 @@ function playAt(index: number) {
   currentTime.value = 0
   duration.value = 0
   el.src = track.url
-  void el.play().catch(error => console.error('[use-audio-player] 播放失败:', error))
+  void el.play().catch(error => console.error('[stores/audio-player] 播放失败:', error))
 }
 
 /** 播放/暂停切换 */
@@ -101,7 +108,7 @@ function togglePlay() {
     return
   }
   if (audio.paused) {
-    void audio.play().catch(error => console.error('[use-audio-player] 播放失败:', error))
+    void audio.play().catch(error => console.error('[stores/audio-player] 播放失败:', error))
   }
   else {
     audio.pause()
@@ -235,7 +242,7 @@ function isBroken(url: string): boolean {
  * 挂在布局根部的浮动条（FloatAudioBar）跨页面持续播放，
  * 专辑页负责入队/点播，移除/清空在浮动条队列面板完成。
  */
-export function useAudioPlayer() {
+export function useAudioPlayerStore() {
   return {
     playlist,
     currentIndex,
@@ -260,4 +267,4 @@ export function useAudioPlayer() {
   }
 }
 
-export default useAudioPlayer
+export default useAudioPlayerStore

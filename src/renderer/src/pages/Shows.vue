@@ -4,17 +4,17 @@ import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import ShowCard from '@renderer/components/ui/ShowCard.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
-import useLoadMore from '@renderer/composables/data/use-load-more'
-import usePagedList from '@renderer/composables/data/use-paged-list'
-import useFloatPlayers from '@renderer/composables/use-float-players'
+import useLoadMore from '@renderer/composables/use-load-more'
+import usePagedList from '@renderer/composables/use-paged-list'
 import Apis from '@renderer/services/apis'
+import useFloatPlayersStore from '@renderer/stores/float-players'
 import Constants from '@renderer/utils/constants'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
 import { computed, onMounted, ref, watch } from 'vue'
 
 // 画中画迷你窗：与直播/回放页共用全局播放挂载点
-const { openLive, openPlayback } = useFloatPlayers()
+const { openLive, openPlayback } = useFloatPlayersStore()
 
 /** 当前团体 groupId：取值见 Constants.GroupTabs（'0'=全部） */
 const groupId = ref('0')

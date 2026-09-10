@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FloatPlayerItem } from '@renderer/composables/use-float-players'
+import type { FloatPlayerItem } from '@renderer/stores/float-players'
 import type { WindowSize } from '@renderer/utils/float-player-layout'
 import LivePlayer from '@renderer/components/player/LivePlayer.vue'
 import PlaybackPlayer from '@renderer/components/player/PlaybackPlayer.vue'

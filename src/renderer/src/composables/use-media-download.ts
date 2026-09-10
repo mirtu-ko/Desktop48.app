@@ -1,10 +1,10 @@
-import type { TaskKind } from '@renderer/composables/tasks/use-tasks'
 import type { TaskPayload } from '@renderer/services/task-payload'
+import type { TaskKind } from '@renderer/stores/tasks'
+import useTasksStore from '@renderer/stores/tasks'
 import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { computed } from 'vue'
 import { useDownloadGuard } from './use-download-guard'
-import useTasks from './use-tasks'
 
 /**
  * 播放器媒体任务发起流程：LivePlayer（录制）与 PlaybackPlayer（回放下载）
@@ -14,7 +14,7 @@ import useTasks from './use-tasks'
  * - ext / separator: 任务文件名的扩展名与成员名分隔符（保持既有命名约定）
  * - getUrl: 源地址获取方式——回放用现成 playStreamPath，录制需先拉最新 RTMP 详情
  *
- * 状态查询与停止仍走 useTasks 的共享任务 store（handleTask/isTaskRunning/stopTask 一并返回）。
+ * 状态查询与停止仍走 useTasksStore 的共享任务 store（handleTask/isTaskRunning/stopTask 一并返回）。
  * 须在组件 setup 内调用（useDownloadGuard 内部依赖 useRouter）。
  */
 export function useMediaDownload(options: {
@@ -30,7 +30,7 @@ export function useMediaDownload(options: {
   getUrl: () => Promise<string | null>
 }) {
   const { checkDownloadDirectory } = useDownloadGuard()
-  const { handleTask, isTaskRunning, stopTask } = useTasks()
+  const { handleTask, isTaskRunning, stopTask } = useTasksStore()
 
   const running = computed(() => isTaskRunning(options.kind, options.liveId()))
 
@@ -54,7 +54,7 @@ export function useMediaDownload(options: {
       filename,
       liveId: options.liveId(),
     }
-    // 任务由 useTasks 模块级单例直接接住并启动，状态在按钮上就地可见，
+    // 任务由 useTasksStore 模块级单例直接接住并启动，状态在按钮上就地可见，
     // 不再跳转下载页——播放器本身也是浮窗，跳走反而打断浏览
     await handleTask(task, options.kind)
   }

@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import type { TaskKind } from '@renderer/composables/tasks/use-tasks'
+import type { TaskKind } from '@renderer/stores/tasks'
 import { Check, Download, Loading, VideoCamera } from '@element-plus/icons-vue'
-import useTasks from '@renderer/composables/tasks/use-tasks'
+import useTasksStore from '@renderer/stores/tasks'
 import Constants from '@renderer/utils/constants'
 import { computed, onMounted } from 'vue'
 
-// 任务状态由 useTasks 这个模块级单例持有：本页卸载后任务照常运行，
+// 任务状态由 useTasksStore 这个模块级单例持有：本页卸载后任务照常运行，
 // 从悬浮迷你窗等任意入口发起的任务也不会因为本页未挂载而丢失
-const { downloadTasks, recordTasks, removeTask, restoreTasks } = useTasks()
+const { downloadTasks, recordTasks, removeTask, restoreTasks } = useTasksStore()
 
 onMounted(() => {
   restoreTasks('download')

@@ -2,9 +2,9 @@
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
-import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/data/use-paged-live-list'
-import useFloatPlayers from '@renderer/composables/use-float-players'
+import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
 import Apis from '@renderer/services/apis'
+import useFloatPlayersStore from '@renderer/stores/float-players'
 import Constants from '@renderer/utils/constants'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -15,7 +15,7 @@ const props = withDefaults(defineProps<{ memberPreset?: { userId: string } | nul
 })
 
 // 画中画迷你窗：回放播放挂载点与直播共用同一套
-const { openPlayback } = useFloatPlayers()
+const { openPlayback } = useFloatPlayersStore()
 
 const memberOption = ref<any[]>([])
 // 级联筛选选中的路径：[groupId] / [groupId, teamId] / [groupId, teamId, userId]

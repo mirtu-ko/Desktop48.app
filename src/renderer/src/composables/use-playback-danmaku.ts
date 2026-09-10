@@ -1,8 +1,8 @@
-import type { DanmakuSettings } from '@renderer/composables/media/use-danmaku-settings'
+import type { DanmakuSettings } from '@renderer/composables/use-danmaku-settings'
 import type { Ref } from 'vue'
-import { useBarrageList } from '@renderer/composables/media/use-barrage-list'
-import { useDanmakuOverlay } from '@renderer/composables/media/use-danmaku-overlay'
-import { useDanmakuSettings } from '@renderer/composables/media/use-danmaku-settings'
+import { useBarrageList } from '@renderer/composables/use-barrage-list'
+import { useDanmakuOverlay } from '@renderer/composables/use-danmaku-overlay'
+import { useDanmakuSettings } from '@renderer/composables/use-danmaku-settings'
 import { computed, ref } from 'vue'
 
 /**

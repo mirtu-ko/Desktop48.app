@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import type { AudioTrack } from '@renderer/composables/use-audio-player'
 import type { AlbumSong, MusicAlbum } from '@renderer/services/api-types'
+import type { AudioTrack } from '@renderer/stores/audio-player'
 import { Headset, Link, Plus, ShoppingCart, VideoPlay } from '@element-plus/icons-vue'
 import CoverImage from '@renderer/components/ui/CoverImage.vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import BaseSkeleton from '@renderer/components/ui/skeleton/BaseSkeleton.vue'
-import useAudioPlayer from '@renderer/composables/use-audio-player'
 import Apis from '@renderer/services/apis'
+import useAudioPlayerStore from '@renderer/stores/audio-player'
 import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
@@ -109,7 +109,7 @@ function openDetail(album: MusicAlbum) {
 }
 
 // ===== 歌曲播放：全局迷你播放条（use-audio-player） =====
-const { playlist, currentIndex, playing, playAt, playAlbum, addAlbum, addTrack, isCurrent, isBroken } = useAudioPlayer()
+const { playlist, currentIndex, playing, playAt, playAlbum, addAlbum, addTrack, isCurrent, isBroken } = useAudioPlayerStore()
 
 /** 曲目唯一键：专辑 sid + 歌曲 id */
 function trackKey(album: MusicAlbum, song: AlbumSong): string {

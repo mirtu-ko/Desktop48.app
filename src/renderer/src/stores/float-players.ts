@@ -1,3 +1,9 @@
+/**
+ * ⚠️ 全局单例 store（原 composables/use-float-players.ts）
+ *
+ * 画中画窗口列表定义在模块作用域，**不随任何组件卸载而销毁**：
+ * 直播 / 回放 / 公演三个列表页调用 useFloatPlayersStore() 打开的是同一组迷你窗。
+ */
 import { ref } from 'vue'
 
 export interface FloatPlayerPayload {
@@ -38,7 +44,7 @@ function createId() {
  * 画中画迷你窗全局管理：点击卡片不再走顶部 tab，而是打开一个可拖拽的
  * 悬浮迷你播放窗，边看边继续浏览列表。同一直播/回放重复点击时置顶复用。
  */
-export function useFloatPlayers() {
+export function useFloatPlayersStore() {
   /** 打开直播迷你窗；同一直播已存在时直接置顶复用 */
   function openLive(payload: FloatPlayerPayload) {
     openPlayer('live', payload)
@@ -78,4 +84,4 @@ export function useFloatPlayers() {
   return { players, openLive, openPlayback, focusPlayer, closePlayer }
 }
 
-export default useFloatPlayers
+export default useFloatPlayersStore

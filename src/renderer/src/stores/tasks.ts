@@ -1,3 +1,10 @@
+/**
+ * ⚠️ 全局单例 store（原 composables/tasks/use-tasks.ts）
+ *
+ * 下载 / 录制任务的状态定义在模块作用域，**不随任何组件卸载而销毁**：
+ * 任何页面调用 useTasksStore() 拿到的都是同一份任务列表。
+ * 因此这里不叫 use-tasks 那种"组合式函数"名字——它不是组件私有状态。
+ */
 import type { TaskChannelAdapter } from '@renderer/services/task-base'
 import type { TaskPayload, TaskSnapshot } from '@renderer/services/task-payload'
 import type { Ref } from 'vue'
@@ -193,11 +200,12 @@ export function installTasks() {
   // 应用启动即恢复一次：播放器可能在下载页从未挂载过的情况下进入，
   // 此时也要能正确显示「录制中」并能停止
   void ensureRestored().catch((error: any) => {
-    console.error('[use-tasks] 恢复任务列表失败:', error)
+    console.error('[stores/tasks] 恢复任务列表失败:', error)
   })
 }
 
-export function useTasks() {
+/** 任务 store：下载 / 录制任务的全局状态与操作（模块级单例，见文件头说明） */
+export function useTasksStore() {
   return {
     downloadTasks,
     recordTasks,
@@ -209,4 +217,4 @@ export function useTasks() {
   }
 }
 
-export default useTasks
+export default useTasksStore
