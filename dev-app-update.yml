@@ -1,4 +1,4 @@
 provider: github
 owner: mirtu-ko
-repo: Desktop48_app
+repo: Desktop48.app
 updaterCacheDirName: desktop48.app-updater

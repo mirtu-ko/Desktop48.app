@@ -172,7 +172,7 @@ function queueWholeAlbum(album: MusicAlbum) {
   ElMessage.success(`已把《${album.title}》加入播放列表`)
 }
 
-/** 点击曲目：已在队列中直接播放，否则整张专辑入队后定位到该曲 */
+/** 点击曲目：已在队列中直接播放，否则加入播放列表 */
 function playFromAlbum(album: MusicAlbum, song: AlbumSong) {
   if (!song.url) {
     return
@@ -182,11 +182,8 @@ function playFromAlbum(album: MusicAlbum, song: AlbumSong) {
     playAt(existing)
     return
   }
-  addAlbum(toTracks(album))
-  const idx = playlist.value.findIndex(track => track.key === trackKey(album, song))
-  if (idx >= 0) {
-    playAt(idx)
-  }
+  const idx = addTrack(toTrack(album, song))
+  playAt(idx)
 }
 
 /** 单曲加入播放列表；队列原本为空时自动播放该曲 */
