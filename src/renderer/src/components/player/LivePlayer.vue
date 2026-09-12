@@ -10,6 +10,7 @@ import { useStreamRetry } from '@renderer/composables/use-stream-retry'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import EventBus from '@renderer/services/event-bus'
 import { debugLog } from '@renderer/utils/debug'
+import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
 
 import { ElMessage } from 'element-plus'
 
@@ -49,6 +50,14 @@ const hovered = ref(false)
 const isManuallyUnmounted = ref(false)
 
 const isRadio = computed(() => props.liveType !== 1)
+
+/** 详情/轮询明确反馈直播已终结：广播下架 + 关闭浮窗 */
+function closeUnavailableLive() {
+  debugLog('live', `①直播:直播反馈不可用，关闭浮窗（liveId=${props.liveId}）`)
+  ElMessage.error('直播不存在')
+  EventBus.emit('live-unavailable', props.liveId)
+  emit('close')
+}
 
 // 播放防休眠（use-sleep-blocker，与 PlaybackPlayer 共用）
 const { acquire: acquireSleepBlocker, release: releaseSleepBlocker } = useSleepBlocker()
@@ -90,6 +99,7 @@ const polling = useLivePolling({
   startTime: () => props.startTime,
   liveId: () => props.liveId,
   skipOnlineNum: () => props.source === 'open',
+  onUnavailable: closeUnavailableLive,
 })
 const { liveElapsedText, onlineNum } = polling
 
@@ -105,12 +115,7 @@ const session = useLiveSession({
     polling.onlineNum.value = num
   },
   // 详情都取不到通常意味着直播已下架：广播通知列表页刷新
-  onUnavailable: () => {
-    debugLog('live', `①直播:直播已下架（${props.liveId}）`)
-    ElMessage.error('直播不存在')
-    EventBus.emit('live-unavailable', props.liveId)
-    emit('close')
-  },
+  onUnavailable: closeUnavailableLive,
   // 回调依赖 retry/player，创建顺序成环，统一走提升的函数声明（见文件末尾）
   onBeforeRebuild: rebuildMedia,
   onSessionStart: beginSession,
@@ -142,11 +147,23 @@ const retry = useStreamRetry({
 /** 单次恢复尝试：拉详情 → 重建流（节奏由重试状态机安排） */
 async function recoverStream() {
   debugLog('live', `①直播:重试恢复尝试（第 ${retry.retryCount.value + 1} 次）`)
-  const data = await session.fetchLiveDetail()
-  if (isManuallyUnmounted.value)
-    return
-  session.applyLiveDetail(data)
-  await session.restartLiveStream(data.playStreamPath)
+  try {
+    const data = await session.fetchLiveDetail()
+    if (isManuallyUnmounted.value)
+      return
+    session.applyLiveDetail(data)
+    await session.restartLiveStream(data.playStreamPath)
+  }
+  catch (error) {
+    // 详情明确返回直播已终结（已删除/回放生成中）：跳过剩余重试，直接关闭
+    if (error instanceof Error && isUnavailableLiveMessage(error.message)) {
+      debugLog('live', `①直播:重试时详情反馈「${error.message}」，立即关闭直播窗口`)
+      session.stopStreamNow()
+      closeUnavailableLive()
+      return
+    }
+    throw error
+  }
 }
 
 /** 会话启动（getLiveOne 开始）：复位 loading 与重试计数 */

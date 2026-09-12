@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPlaybackUrl,
+  isUnavailableLiveMessage,
   nextRetryAttempt,
   normalizeCarouselTime,
   pickPreferredStream,
@@ -111,5 +112,17 @@ describe('nextRetryAttempt（重试决策）', () => {
   it('已达上限返回 null（走直播结束分支）', () => {
     expect(nextRetryAttempt(3, 3)).toBeNull()
     expect(nextRetryAttempt(4, 3)).toBeNull()
+  })
+})
+describe('isUnavailableLiveMessage（直播终结业务文案判定）', () => {
+  it('命中已列出的直播终结文案', () => {
+    expect(isUnavailableLiveMessage('回放生成中')).toBe(true)
+    expect(isUnavailableLiveMessage('该成员直播已被删除')).toBe(true)
+  })
+
+  it('网络/参数/普通业务错误不视为终结', () => {
+    expect(isUnavailableLiveMessage('参数错误')).toBe(false)
+    expect(isUnavailableLiveMessage('网络请求失败')).toBe(false)
+    expect(isUnavailableLiveMessage('')).toBe(false)
   })
 })

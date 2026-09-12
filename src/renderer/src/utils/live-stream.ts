@@ -40,6 +40,20 @@ export function buildPlaybackUrl(url: string, restartToken: number, now = Date.n
   return `${url}?t=${now}&r=${restartToken}`
 }
 
+/**
+ * 直播详情接口明确返回的「直播已终结」业务文案：
+ * 命中即说明不该再走断流重试，应直接关闭直播窗口。
+ */
+const UNAVAILABLE_LIVE_MESSAGES = new Set([
+  '回放生成中',
+  '该成员直播已被删除',
+])
+
+/** 判断 apis.ts 抛出的业务错误是否属于「直播已终结/不可用」 */
+export function isUnavailableLiveMessage(message: string): boolean {
+  return UNAVAILABLE_LIVE_MESSAGES.has(message)
+}
+
 /** 电台轮播切换间隔（毫秒）：接口缺省或非法时回退 5 秒 */
 export function normalizeCarouselTime(raw: number | string | undefined | null): number {
   if (raw === undefined || raw === null || raw === '')
