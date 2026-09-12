@@ -141,8 +141,28 @@ function onAspect(value: number) {
   clampPos()
 }
 
-// 拖拽：Pointer Events + setPointerCapture，指针移出标题栏也不会丢事件；
-// 坐标写入经 rAF 节流，每帧最多触发一次重渲染
+// 拖拽：Pointer Events + setPointerCapture，指针移出窗口也不会丢事件；
+// 坐标写入经 rAF 节流，每帧最多触发一次重渲染。
+// 标题栏与播放器画面共用同一套逻辑：先按阈值判定「是否真正开拖」再捕获指针，
+// 保证画面上的单击/双击（播放、全屏等）不被误当成拖拽，也不会因无位移点击触发吸附。
+const DRAG_THRESHOLD = 3
+const DRAG_IGNORE_SELECTOR = [
+  'button',
+  'a',
+  'input',
+  'select',
+  'textarea',
+  '.el-button',
+  '.el-overlay',
+  '.fp-actions',
+  '.player-actions',
+  '.mini-controls',
+  '.rotate-hint',
+  '.mask-actions',
+  '.barrage-box',
+  '.barrage-sidebar-toggle',
+].join(',')
+
 interface DragState {
   pointerId: number
   startX: number
@@ -151,6 +171,8 @@ interface DragState {
   baseY: number
   dx: number
   dy: number
+  /** 是否已越过阈值真正进入拖拽（拖拽开始后才捕获指针） */
+  active: boolean
 }
 let drag: DragState | null = null
 let dragFrame: number | null = null
@@ -170,12 +192,36 @@ function scheduleDrag() {
   })
 }
 
-function onBarPointerDown(e: PointerEvent) {
-  if (e.button !== 0)
+/** 命中交互元素（操作按钮、控制条、弹幕侧栏等）时不由拖拽接管 */
+function isDraggableTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && !target.closest(DRAG_IGNORE_SELECTOR)
+}
+
+function stopDragTracking() {
+  window.removeEventListener('pointerup', onWindowPointerUp)
+  window.removeEventListener('pointercancel', onWindowPointerCancel)
+  if (dragFrame !== null) {
+    cancelAnimationFrame(dragFrame)
+    dragFrame = null
+  }
+  drag = null
+}
+
+function finishDrag(e: PointerEvent, snap: boolean) {
+  if (!drag || drag.pointerId !== e.pointerId)
     return
-  // 按下操作按钮不触发拖拽
-  if ((e.target as HTMLElement).closest('.fp-actions'))
+  const { active } = drag
+  if (active && snap) {
+    applyDrag()
+    snapToEdge()
+  }
+  stopDragTracking()
+}
+
+function onDragPointerDown(e: PointerEvent) {
+  if (e.button !== 0 || !isDraggableTarget(e.target))
     return
+  stopDragTracking()
   drag = {
     pointerId: e.pointerId,
     startX: e.clientX,
@@ -184,28 +230,42 @@ function onBarPointerDown(e: PointerEvent) {
     baseY: pos.value.y,
     dx: 0,
     dy: 0,
+    active: false,
   }
-  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  // 兜底：在画面/标题栏内按下、又在阈值前把指针移出窗口外松开时，窗口层也能收尾
+  window.addEventListener('pointerup', onWindowPointerUp)
+  window.addEventListener('pointercancel', onWindowPointerCancel)
 }
 
-function onBarPointerMove(e: PointerEvent) {
+function onDragPointerMove(e: PointerEvent) {
   if (!drag || e.pointerId !== drag.pointerId)
     return
   drag.dx = e.clientX - drag.startX
   drag.dy = e.clientY - drag.startY
+  // 未越过阈值前不捕获指针：阈值内松开视为点击，不打断子组件的单击/双击
+  if (!drag.active) {
+    if (Math.max(Math.abs(drag.dx), Math.abs(drag.dy)) < DRAG_THRESHOLD)
+      return
+    drag.active = true
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
   scheduleDrag()
 }
 
-function onBarPointerUp(e: PointerEvent) {
-  if (!drag || e.pointerId !== drag.pointerId)
-    return
-  if (dragFrame !== null) {
-    cancelAnimationFrame(dragFrame)
-    dragFrame = null
-  }
-  applyDrag()
-  drag = null
-  snapToEdge()
+function onWindowPointerUp(e: PointerEvent) {
+  finishDrag(e, true)
+}
+
+function onWindowPointerCancel(e: PointerEvent) {
+  finishDrag(e, false)
+}
+
+function onDragPointerUp(e: PointerEvent) {
+  onWindowPointerUp(e)
+}
+
+function onDragPointerCancel(e: PointerEvent) {
+  onWindowPointerCancel(e)
 }
 
 // 松开后若贴近屏幕边缘则自动吸附
@@ -275,10 +335,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', onWindowResize)
-  if (dragFrame !== null) {
-    cancelAnimationFrame(dragFrame)
-    dragFrame = null
-  }
+  stopDragTracking()
 })
 </script>
 
@@ -292,17 +349,17 @@ onUnmounted(() => {
     <div
       class="fp-bar"
       title="拖动移动 · 双击切换形态"
-      @pointerdown="onBarPointerDown"
-      @pointermove="onBarPointerMove"
-      @pointerup="onBarPointerUp"
-      @pointercancel="onBarPointerUp"
+      @pointerdown="onDragPointerDown"
+      @pointermove="onDragPointerMove"
+      @pointerup="onDragPointerUp"
+      @pointercancel="onDragPointerCancel"
       @dblclick="onBarDblClick"
     >
       <!-- 胶囊态隐藏「直播/回放」徽章，给标题让出空间 -->
       <span v-if="!collapsed" class="fp-kind" :class="{ 'is-playback': kind === 'playback' }">
         {{ kind === 'live' ? '直播' : '回放' }}
       </span>
-      <img v-if="avatarUrl" :src="avatarUrl" alt="avatar" class="fp-avatar">
+      <img v-if="avatarUrl" :src="avatarUrl" alt="avatar" class="fp-avatar" draggable="false">
       <span class="fp-title ellipsis" :title="barTitle">
         {{ barTitle }}
       </span>
@@ -332,7 +389,14 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-show="!collapsed" class="fp-body">
+    <div
+      v-show="!collapsed"
+      class="fp-body"
+      @pointerdown="onDragPointerDown"
+      @pointermove="onDragPointerMove"
+      @pointerup="onDragPointerUp"
+      @pointercancel="onDragPointerCancel"
+    >
       <LivePlayer
         v-if="kind === 'live'"
         :live-title="item.payload.title"
