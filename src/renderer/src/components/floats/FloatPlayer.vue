@@ -54,6 +54,19 @@ function onSidebar(active: boolean) {
   sidebarActive.value = active
   clampPos()
 }
+
+// 系统画中画（PiP）联动：进入 PiP 时自动折叠成胶囊条，退出时若仍处于胶囊态则还原为迷你窗
+function onPip(active: boolean) {
+  if (active) {
+    collapsed.value = true
+    expanded.value = false
+  }
+  else if (collapsed.value) {
+    collapsed.value = false
+    expanded.value = false
+  }
+  clampPos()
+}
 // 头部头像：由子播放器加载完成（或 open 模式传入）后上报，显示在 fp-bar
 const avatarUrl = ref('')
 function onAvatar(url: string) {
@@ -332,6 +345,7 @@ onUnmounted(() => {
         :compact="!expanded"
         @avatar="onAvatar"
         @aspect="onAspect"
+        @pip="onPip"
         @close="onClose"
       />
       <PlaybackPlayer
@@ -345,6 +359,7 @@ onUnmounted(() => {
         @avatar="onAvatar"
         @aspect="onAspect"
         @sidebar="onSidebar"
+        @pip="onPip"
       />
     </div>
   </div>

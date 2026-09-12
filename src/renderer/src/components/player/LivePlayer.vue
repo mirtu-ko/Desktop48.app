@@ -35,7 +35,7 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['close', 'avatar', 'aspect'])
+const emit = defineEmits(['close', 'avatar', 'aspect', 'pip'])
 
 const nativeVideo = ref<HTMLVideoElement | null>(null)
 // 电台模式的 audio 元素由 RadioStage 挂载/卸载时经 @audio 事件回传
@@ -81,6 +81,9 @@ const {
   isRadio,
   onAspect: aspect => emit('aspect', aspect),
 })
+
+// PiP 状态变化上报父级：进入/退出系统画中画时浮窗自动收窄/还原
+watch(isPip, active => emit('pip', active))
 
 // ── 直播轮询：已播时长 + 在线人数 ────────────────────────────────
 const polling = useLivePolling({

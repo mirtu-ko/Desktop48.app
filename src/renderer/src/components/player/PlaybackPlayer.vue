@@ -34,7 +34,7 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['avatar', 'aspect', 'sidebar'])
+const emit = defineEmits(['avatar', 'aspect', 'sidebar', 'pip'])
 
 const playStreamPath = ref('')
 const isRadio = ref(false)
@@ -89,6 +89,9 @@ const {
   onAspect: aspect => emit('aspect', aspect),
 })
 // =========== 画面旋转结束 ===========
+
+// PiP 状态变化上报父级：进入/退出系统画中画时浮窗自动收窄/还原
+watch(isPip, active => emit('pip', active))
 
 // 侧栏实际占位（有弹幕数据且未收起）上报给浮窗：
 // 无弹幕或收起弹幕列表时，放大窗不预留侧栏宽，画面不留空白
