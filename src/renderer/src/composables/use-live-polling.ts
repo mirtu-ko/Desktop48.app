@@ -40,11 +40,12 @@ export function useLivePolling(options: {
   function updateOnlineNum() {
     if (options.skipOnlineNum())
       return
-    Apis.live(options.liveId()).then((data) => {
+    // silent：在线人数是纯展示信息，拉不到就不更新；红条提示留给「直播已终结」这类确定结论
+    Apis.live(options.liveId(), { silent: true }).then((data) => {
       onlineNum.value = data.onlineNum ?? 0
     }).catch((error: any) => {
       // 详情明确说直播已删除/回放生成中时，不必等下一次轮询或断流重试，
-      // 直接让上层关闭窗口；其余错误（网络抖动/参数问题）保持静默记录
+      // 直接让上层关闭窗口；其余错误（网络抖动/瞬时失败）保持静默记录
       if (error instanceof Error && isUnavailableLiveMessage(error.message)) {
         options.onUnavailable?.(error.message)
         return

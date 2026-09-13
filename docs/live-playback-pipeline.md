@@ -279,10 +279,17 @@ useLiveSession({ liveId: props.liveId }) // 错误：传入的是快照
 ### 7.4 详情失败统一走 `onUnavailable`
 
 `getLiveOne` 的 `try/catch` 里，详情接口失败通常意味着直播已下架。
-错误提示由 `services/request.ts` 的 `Apis.request` 统一弹窗（网络/非 JSON/业务
-失败三类，3 秒同文案去重），此处**不重复弹**，只广播
+错误提示由 `services/apis.ts` 的 `request()` 统一弹窗（网络/非 JSON/业务失败三类，
+3 秒同文案去重），此处**不重复弹**，只广播
 `EventBus.emit('live-unavailable', liveId)` 让列表页刷新，然后 `emit('close')`
 关掉浮窗。重试耗尽走的是同一条下架路径（见 `handleRetryExhausted`）。
+
+⚠️ 只有**确定性失败**才该走这条路。pocketapi 的 `getLiveOne` 会随机返回
+`{status:1017, message:'参数错误'}`——同一份 body 连续请求约 1/3 命中，与请求参数、
+频率、并发都无关（2026-09-13 实测）。若原样当成下架处理，直播会被无故关掉，
+因此 `request()` 对 1017 与网络层异常默认重试 3 次（退避 400/800/1200ms）；
+`10049 该成员直播已被删除` 这类业务结论不重试，立即上抛。
+在线人数轮询用 `Apis.live(liveId, { silent: true })`：纯展示信息，失败不弹红条。
 
 ### 7.5 上游推流中断（连麦等）只能从媒体元素侧感知
 

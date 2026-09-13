@@ -182,96 +182,94 @@ function openHistoryStream(show: OpenLive) {
   <div class="page-root">
     <!-- 左上角浮动团体切换：不占行，内容滚过时呈现磨砂玻璃；双击当前分团刷新列表 -->
     <FloatingTabBar :tabs="groupTabs" :active="groupId" @change="groupId = $event" @refresh="refresh" />
-    <div class="page-root">
-      <el-scrollbar
-        ref="showsScrollRef"
-        class="scrollbar-wrapper"
-        :distance="10"
-        @end-reached="onInfiniteScroll"
-      >
-        <div v-if="showSkeleton" class="shows-container">
-          <CardSkeletonGrid
-            :count="3"
-            min-item-width="320px"
-            gap="20px"
-            aspect-ratio="16 / 9"
-            :line-widths="[72, 42]"
-            heading
-          />
-          <CardSkeletonGrid
-            class="skeleton-section"
-            :count="3"
-            min-item-width="320px"
-            gap="20px"
-            aspect-ratio="16 / 9"
-            :line-widths="[72, 42]"
-            heading
-          />
-        </div>
+    <el-scrollbar
+      ref="showsScrollRef"
+      class="scrollbar-wrapper"
+      :distance="10"
+      @end-reached="onInfiniteScroll"
+    >
+      <div v-if="showSkeleton" class="shows-container">
+        <CardSkeletonGrid
+          :count="3"
+          min-item-width="320px"
+          gap="20px"
+          aspect-ratio="16 / 9"
+          :line-widths="[72, 42]"
+          heading
+        />
+        <CardSkeletonGrid
+          class="skeleton-section"
+          :count="3"
+          min-item-width="320px"
+          gap="20px"
+          aspect-ratio="16 / 9"
+          :line-widths="[72, 42]"
+          heading
+        />
+      </div>
 
-        <div v-else class="shows-container">
-          <template v-if="todayShows.length">
-            <h2 class="section-title section-title--live">
-              即将开始
-            </h2>
-            <div class="shows-list">
-              <div
-                v-for="show in todayShows"
-                :key="show.liveId"
-                class="show-item lift-card"
-                :class="{ clickable: show.status === 2 }"
-                @click="openLiveStream(show)"
-              >
-                <ShowCard :show="show" />
-              </div>
+      <div v-else class="shows-container">
+        <template v-if="todayShows.length">
+          <h2 class="section-title section-title--live">
+            即将开始
+          </h2>
+          <div class="shows-list">
+            <div
+              v-for="show in todayShows"
+              :key="show.liveId"
+              class="show-item lift-card"
+              :class="{ clickable: show.status === 2 }"
+              @click="openLiveStream(show)"
+            >
+              <ShowCard :show="show" />
             </div>
-          </template>
+          </div>
+        </template>
 
-          <template v-if="recentShows.length">
-            <h2 class="section-title">
-              最近公演
-            </h2>
-            <div class="shows-list">
-              <div
-                v-for="show in recentShows"
-                :key="show.liveId"
-                class="show-item lift-card"
-                :class="{ clickable: show.status === 2 }"
-                @click="openLiveStream(show)"
-              >
-                <ShowCard :show="show" />
-              </div>
+        <template v-if="recentShows.length">
+          <h2 class="section-title">
+            最近公演
+          </h2>
+          <div class="shows-list">
+            <div
+              v-for="show in recentShows"
+              :key="show.liveId"
+              class="show-item lift-card"
+              :class="{ clickable: show.status === 2 }"
+              @click="openLiveStream(show)"
+            >
+              <ShowCard :show="show" />
             </div>
-          </template>
+          </div>
+        </template>
 
-          <template v-if="historyList.length">
-            <h2 class="section-title section-title--muted">
-              历史公演
-            </h2>
-            <div class="shows-list">
-              <div
-                v-for="show in historyList"
-                :key="show.liveId"
-                class="show-item lift-card clickable"
-                @click="openHistoryStream(show)"
-              >
-                <ShowCard :show="show" />
-              </div>
+        <template v-if="historyList.length">
+          <h2 class="section-title section-title--muted">
+            历史公演
+          </h2>
+          <div class="shows-list">
+            <div
+              v-for="show in historyList"
+              :key="show.liveId"
+              class="show-item lift-card clickable"
+              @click="openHistoryStream(show)"
+            >
+              <ShowCard :show="show" />
             </div>
-          </template>
+          </div>
+        </template>
 
-          <el-empty
-            v-if="!showList.length && !historyList.length && !initialLoading && !loading && !historyLoading"
-            class="page-empty"
-            :image-size="120"
-            description="暂无演出信息，换个团体看看吧"
-          />
-        </div>
-        <div v-if="noMore && historyNoMore" class="list-end">
-          没有更多公演了
-        </div>
-      </el-scrollbar>
-    </div>
+        <el-empty
+          v-if="!showList.length && !historyList.length && !initialLoading && !loading && !historyLoading"
+          class="page-empty"
+          :image-size="120"
+          description="暂无演出信息，换个团体看看吧"
+        />
+      </div>
+      <div v-if="noMore && historyNoMore" class="list-end">
+        没有更多公演了
+      </div>
+    </el-scrollbar>
     <!-- 右上角浮动操作条：磨砂玻璃 dock 衬托刷新按钮，空数据时也可用 -->
     <FloatingRefreshDock
       :loading="loading || historyLoading"

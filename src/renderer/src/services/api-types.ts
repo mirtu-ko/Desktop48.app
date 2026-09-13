@@ -10,6 +10,8 @@
 /** ===== 接口信封（request 解析层使用，不直接暴露给消费方） ===== */
 export interface ApiEnvelope<T> {
   success?: boolean
+  /** 业务状态码：1017=参数错误（瞬时，见 apis.ts 的重试规则）、10049=直播已删除 等 */
+  status?: number
   message?: string
   content?: T
 }

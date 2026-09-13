@@ -165,59 +165,57 @@ watch(selectedFilter, () => {
 </script>
 
 <template>
-  <div class="playbacks-root page-root">
-    <div class="playback-container page-root">
-      <el-scrollbar
-        ref="playbackScrollRef"
-        class="scrollbar-wrapper"
-        :distance="10"
-        @end-reached="onInfiniteScroll"
-      >
-        <CardSkeletonGrid
-          v-if="showSkeleton"
-          class="playback-skeleton"
-          :count="12"
-          min-item-width="220px"
-          gap="16px"
-          aspect-ratio="1"
-          :line-widths="[82, 56, 38]"
-        />
-        <div v-else-if="playbackList.length === 0 && !loading" class="empty-block">
-          暂无回放
+  <div class="page-root">
+    <el-scrollbar
+      ref="playbackScrollRef"
+      class="scrollbar-wrapper"
+      :distance="10"
+      @end-reached="onInfiniteScroll"
+    >
+      <CardSkeletonGrid
+        v-if="showSkeleton"
+        class="playback-skeleton"
+        :count="12"
+        min-item-width="220px"
+        gap="16px"
+        aspect-ratio="1"
+        :line-widths="[82, 56, 38]"
+      />
+      <div v-else-if="playbackList.length === 0 && !loading" class="empty-block">
+        暂无回放
+      </div>
+      <div v-else class="playback-list">
+        <div
+          v-for="item in playbackList" :key="item.liveId" class="playback-item"
+          @click="onPlaybackClick(item)"
+        >
+          <LiveItem :item="item" class="live-card" />
         </div>
-        <div v-else class="playback-list">
-          <div
-            v-for="item in playbackList" :key="item.liveId" class="playback-item"
-            @click="onPlaybackClick(item)"
-          >
-            <LiveItem :item="item" class="live-card" />
-          </div>
-        </div>
-        <div v-if="noMore && playbackList.length > 0" class="list-end">
-          没有更多回放了
-        </div>
-      </el-scrollbar>
+      </div>
+      <div v-if="noMore && playbackList.length > 0" class="list-end">
+        没有更多回放了
+      </div>
+    </el-scrollbar>
 
-      <!-- 右上角浮动筛选/刷新工具条：不占行，内容滚过时呈现磨砂玻璃 -->
-      <FloatingRefreshDock :loading="loading" title="刷新" @refresh="refresh">
-        <el-cascader
-          v-model="selectedFilter"
-          style="width: 240px" transfer
-          clearable placeholder="请选择团体/队伍/成员"
-          filterable :filter-method="filterMethod" :options="memberOption" :props="{
-            label: 'label',
-            value: 'value',
-            children: 'children',
-            checkStrictly: true,
-            checkOnClickNode: true,
-            emitPath: true,
-            multiple: false,
-            expandTrigger: 'hover',
-            lazy: false,
-          }"
-        />
-      </FloatingRefreshDock>
-    </div>
+    <!-- 右上角浮动筛选/刷新工具条：不占行，内容滚过时呈现磨砂玻璃 -->
+    <FloatingRefreshDock :loading="loading" title="刷新" @refresh="refresh">
+      <el-cascader
+        v-model="selectedFilter"
+        style="width: 240px" transfer
+        clearable placeholder="请选择团体/队伍/成员"
+        filterable :filter-method="filterMethod" :options="memberOption" :props="{
+          label: 'label',
+          value: 'value',
+          children: 'children',
+          checkStrictly: true,
+          checkOnClickNode: true,
+          emitPath: true,
+          multiple: false,
+          expandTrigger: 'hover',
+          lazy: false,
+        }"
+      />
+    </FloatingRefreshDock>
   </div>
 </template>
 

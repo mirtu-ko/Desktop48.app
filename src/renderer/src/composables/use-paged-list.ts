@@ -50,6 +50,23 @@ export function usePagedList<T>({
   let listRequestId = 0
 
   /**
+   * 整页过滤（如屏蔽成员）+ 并行补全展示信息：
+   * 返回 null 表示期间已有更新请求发出，本次结果应整体丢弃
+   */
+  async function transformItems(items: T[], requestId: number): Promise<T[] | null> {
+    let result = items
+    if (filterItems)
+      result = await filterItems(result)
+    if (requestId !== listRequestId)
+      return null
+    if (processItem)
+      await Promise.all(result.map((item, index) => processItem(item, index)))
+    if (requestId !== listRequestId)
+      return null
+    return result
+  }
+
+  /**
    * 分页加载入口，返回是否成功（供 useLoadMore 终止自动补拉递归）：
    * 失败时不抛错，以 false 返回（调用方据此终止自动补拉，而不是靠 try/catch）
    */
@@ -75,14 +92,8 @@ export function usePagedList<T>({
       listNext.value = page.next
 
       // 先整页过滤（如屏蔽成员），再并行补全展示信息，避免逐条串行 await 拖慢列表加载
-      let items = page.items
-      if (filterItems)
-        items = await filterItems(items)
-      if (requestId !== listRequestId)
-        return false
-      if (processItem)
-        await Promise.all(items.map((item, index) => processItem(item, index)))
-      if (requestId !== listRequestId)
+      const items = await transformItems(page.items, requestId)
+      if (!items)
         return false
       // 兜底去重，避免接口分页边界返回重复项导致列表出现重复卡片
       const existedIds = new Set(list.value.map(item => itemKey(item)))
@@ -121,10 +132,10 @@ export function usePagedList<T>({
     loadFailed.value = false
   }
 
-  /** 重置后拉取第一页 */
-  function refresh() {
+  /** 重置后拉取第一页；返回 getList 的 Promise，调用方需要时可 await 其成功与否 */
+  function refresh(): Promise<boolean> {
     reset()
-    getList()
+    return getList()
   }
 
   return {

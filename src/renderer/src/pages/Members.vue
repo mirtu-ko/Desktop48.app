@@ -180,111 +180,109 @@ async function updateMembers() {
   <div class="page-root">
     <!-- 左上角浮动分团切换：与公演页同一套交互；双击当前分团刷新成员数据 -->
     <FloatingTabBar :tabs="groupTabs" :active="groupId" @change="groupId = $event" @refresh="fetchGroups" />
-    <div class="page-root">
-      <el-scrollbar class="scrollbar-wrapper">
-        <CardSkeletonGrid
-          v-if="showSkeleton"
-          class="members-skeleton"
-          :count="12"
-          min-item-width="120px"
-          gap="14px"
-          aspect-ratio="3 / 4"
-          :line-widths="[68]"
-        />
-        <div v-else class="members-container">
-          <section v-for="section in sections" :key="section.title" class="group-section">
-            <h2 class="team-title">
-              <img
-                v-if="section.teamBadge"
-                class="team-badge-img"
-                :src="Tools.sourceUrl(section.teamBadge)"
-                alt=""
-                @error="hideBadge"
-              >
+    <el-scrollbar class="scrollbar-wrapper">
+      <CardSkeletonGrid
+        v-if="showSkeleton"
+        class="members-skeleton"
+        :count="12"
+        min-item-width="120px"
+        gap="14px"
+        aspect-ratio="3 / 4"
+        :line-widths="[68]"
+      />
+      <div v-else class="members-container">
+        <section v-for="section in sections" :key="section.title" class="group-section">
+          <h2 class="team-title">
+            <img
+              v-if="section.teamBadge"
+              class="team-badge-img"
+              :src="Tools.sourceUrl(section.teamBadge)"
+              alt=""
+              @error="hideBadge"
+            >
+            <span
+              class="section-title"
+              :class="{ 'section-title--muted': section.muted }"
+              :style="section.accent ? { '--st-accent': section.accent } : undefined"
+            >
+              {{ `${section.title} (${section.members.length})` }}
+            </span>
+          </h2>
+          <div class="member-list">
+            <div
+              v-for="member in section.members"
+              :key="member.userId"
+              class="member-card lift-card clickable"
+              :class="{ 'is-blocked': isBlocked(member.userId) }"
+              @click="selectedMember = member"
+            >
+              <el-image class="avatar" :src="member.avatar" fit="cover" lazy>
+                <template #placeholder>
+                  <div class="avatar-ph" />
+                </template>
+                <template #error>
+                  <div class="avatar-ph">
+                    <el-icon :size="28">
+                      <User />
+                    </el-icon>
+                  </div>
+                </template>
+              </el-image>
+              <div class="member-meta">
+                <p class="member-name ellipsis" :title="member.realName">
+                  {{ member.realName }}
+                </p>
+              </div>
               <span
-                class="section-title"
-                :class="{ 'section-title--muted': section.muted }"
-                :style="section.accent ? { '--st-accent': section.accent } : undefined"
+                v-if="member.teamName"
+                class="team-badge team-badge--overlay"
+                :style="member.teamColor ? { '--tb-color': `#${member.teamColor}` } : undefined"
               >
-                {{ `${section.title} (${section.members.length})` }}
+                {{ Tools.shortTeamName(member.teamName) }}
               </span>
-            </h2>
-            <div class="member-list">
-              <div
-                v-for="member in section.members"
-                :key="member.userId"
-                class="member-card lift-card clickable"
-                :class="{ 'is-blocked': isBlocked(member.userId) }"
-                @click="selectedMember = member"
-              >
-                <el-image class="avatar" :src="member.avatar" fit="cover" lazy>
-                  <template #placeholder>
-                    <div class="avatar-ph" />
-                  </template>
-                  <template #error>
-                    <div class="avatar-ph">
-                      <el-icon :size="28">
-                        <User />
-                      </el-icon>
-                    </div>
-                  </template>
-                </el-image>
-                <div class="member-meta">
-                  <p class="member-name ellipsis" :title="member.realName">
-                    {{ member.realName }}
-                  </p>
-                </div>
-                <span
-                  v-if="member.teamName"
-                  class="team-badge team-badge--overlay"
-                  :style="member.teamColor ? { '--tb-color': `#${member.teamColor}` } : undefined"
-                >
-                  {{ Tools.shortTeamName(member.teamName) }}
-                </span>
 
-                <!-- 未屏蔽：悬浮卡片时右上角快捷屏蔽 -->
-                <button
-                  v-if="!isBlocked(member.userId)"
-                  class="quick-block"
-                  title="屏蔽 TA 的直播与回放"
-                  @click.stop="toggleBlock(member)"
-                >
-                  <el-icon :size="13">
+              <!-- 未屏蔽：悬浮卡片时右上角快捷屏蔽 -->
+              <button
+                v-if="!isBlocked(member.userId)"
+                class="quick-block"
+                title="屏蔽 TA 的直播与回放"
+                @click.stop="toggleBlock(member)"
+              >
+                <el-icon :size="13">
+                  <Hide />
+                </el-icon>
+              </button>
+
+              <!-- 已屏蔽：状态标记 + 悬浮解除按钮 -->
+              <template v-else>
+                <span class="blocked-flag">
+                  <el-icon :size="12">
                     <Hide />
                   </el-icon>
+                  已屏蔽
+                </span>
+                <button class="unblock-btn" @click.stop="toggleBlock(member)">
+                  <el-icon :size="13">
+                    <View />
+                  </el-icon>
+                  解除屏蔽
                 </button>
-
-                <!-- 已屏蔽：状态标记 + 悬浮解除按钮 -->
-                <template v-else>
-                  <span class="blocked-flag">
-                    <el-icon :size="12">
-                      <Hide />
-                    </el-icon>
-                    已屏蔽
-                  </span>
-                  <button class="unblock-btn" @click.stop="toggleBlock(member)">
-                    <el-icon :size="13">
-                      <View />
-                    </el-icon>
-                    解除屏蔽
-                  </button>
-                </template>
-              </div>
+              </template>
             </div>
-          </section>
+          </div>
+        </section>
 
-          <el-empty
-            v-if="!loading && memberCount === 0"
-            class="page-empty"
-            :image-size="120"
-            description="暂无成员信息，可在设置里同步成员数据"
-          />
-        </div>
-        <div class="list-end">
-          在团共 {{ activeCount }} 人，离团 {{ inactiveCount }} 人
-        </div>
-      </el-scrollbar>
-    </div>
+        <el-empty
+          v-if="!loading && memberCount === 0"
+          class="page-empty"
+          :image-size="120"
+          description="暂无成员信息，可在设置里同步成员数据"
+        />
+      </div>
+      <div class="list-end">
+        在团共 {{ activeCount }} 人，离团 {{ inactiveCount }} 人
+      </div>
+    </el-scrollbar>
 
     <!-- 右上角浮动操作条：更新成员数据库 -->
     <FloatingRefreshDock

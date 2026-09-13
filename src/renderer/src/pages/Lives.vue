@@ -134,7 +134,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="lives-root page-root">
+  <div class="page-root">
     <!-- 左上角浮层 tab：在直播与回放之间切换，悬浮于列表之上；双击当前 tab 刷新 -->
     <FloatingTabBar :tabs="viewTabs" :active="activeTab" @change="switchTab" @refresh="onTabsRefresh" />
 
