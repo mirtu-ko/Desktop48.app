@@ -1,4 +1,5 @@
 import Apis from '@renderer/services/apis'
+import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
 import { formatMediaTime } from '@renderer/utils/time-format'
 import { computed, ref } from 'vue'
 
@@ -12,6 +13,8 @@ export function useLivePolling(options: {
   liveId: () => string
   /** source === 'open' 时为 true */
   skipOnlineNum: () => boolean
+  /** 详情接口明确返回直播已终结（已删除/回放生成中）时，通知上层关闭 */
+  onUnavailable?: (message: string) => void
 }) {
   const elapsedTime = ref(0)
   const onlineNum = ref(0)
@@ -40,6 +43,12 @@ export function useLivePolling(options: {
     Apis.live(options.liveId()).then((data) => {
       onlineNum.value = data.onlineNum ?? 0
     }).catch((error: any) => {
+      // 详情明确说直播已删除/回放生成中时，不必等下一次轮询或断流重试，
+      // 直接让上层关闭窗口；其余错误（网络抖动/参数问题）保持静默记录
+      if (error instanceof Error && isUnavailableLiveMessage(error.message)) {
+        options.onUnavailable?.(error.message)
+        return
+      }
       console.error(error)
     })
   }

@@ -40,7 +40,7 @@ function setAudioRef(el: unknown) {
         height="100%"
       >
         <el-carousel-item v-for="carousel in carousels" :key="carousel">
-          <img :src="carousel" class="radio-cover" alt="cover">
+          <img :src="carousel" class="radio-cover" alt="cover" draggable="false">
         </el-carousel-item>
       </el-carousel>
     </div>
