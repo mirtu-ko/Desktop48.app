@@ -1,11 +1,8 @@
 import type { WebContents } from 'electron'
-import fs from 'node:fs'
-import path, { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, powerSaveBlocker, shell } from 'electron'
 import icon from '../../resources/icon.png?asset'
-
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
 import { registerAllIPC } from './ipc'
@@ -17,11 +14,8 @@ import './http-server' // live中转服务器主进程注册（side effect：启
 Database.instance().init()
 registerAllIPC()
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-
 log('[app.ts] 主进程路径:', process.execPath)
-log('[app.ts] 预加载:', join(__dirname, '../preload/index.js'), fs.existsSync(join(__dirname, '../preload/index.js')))
+log('[app.ts] 预加载:', fileURLToPath(new URL('../preload/index.mjs', import.meta.url)))
 log('[app.ts] 系统平台:', process.platform)
 log('[app.ts] Electron 版本:', process.versions.electron)
 log('[app.ts] Node.js 版本:', process.versions.node)
@@ -43,8 +37,8 @@ function createWindow(): void {
     autoHideMenuBar: true,
     icon,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: true,
+      preload: fileURLToPath(new URL('../preload/index.mjs', import.meta.url)),
+      sandbox: false,
     },
   })
   mainWindow = win
@@ -70,7 +64,7 @@ function createWindow(): void {
     win.loadURL(process.env.ELECTRON_RENDERER_URL)
   }
   else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(fileURLToPath(new URL('../renderer/index.html', import.meta.url)))
   }
 }
 
