@@ -87,6 +87,10 @@ export function useStreamRetry(options: {
       }
       catch (error) {
         console.error('[use-stream-retry] 重试恢复直播流失败:', error)
+        // 先让出守卫再重排：否则下面这次 schedule() 会被上面设的重入守卫（isRecoveringStream
+        // 仍为 true）原样挡掉，重试链就断在第 1 次——计数不再递增、onExhausted 永不触发、
+        // loading 一直转。守卫由 schedule() 自己立刻重新置位，等待期内的重复错误事件照旧被拦
+        isRecoveringStream.value = false
         schedule()
       }
     }, retryDelayMs)

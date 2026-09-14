@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ComponentInternalInstance, ComponentPublicInstance } from 'vue'
 import { Download, Headset, Microphone, Setting, User, VideoCamera } from '@element-plus/icons-vue'
 import AppDock from '@renderer/components/app/AppDock.vue'
 import AppTitleBar from '@renderer/components/app/AppTitleBar.vue'
@@ -9,7 +10,7 @@ import FloatPlayerHost from '@renderer/components/floats/FloatPlayerHost.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import useTasksStore from '@renderer/stores/tasks'
 import Constants from '@renderer/utils/constants'
-import { computed, ref, watch } from 'vue'
+import { computed, KeepAlive, onErrorCaptured, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 /**
@@ -81,6 +82,48 @@ watch(isInitialized, async (ready) => {
     await ensureMembers()
   }
 })
+
+/**
+ * 页面层渲染兜底：页面被 keep-alive 缓存后，一次渲染错误会让它永久卡在半更新的 DOM 上，
+ * 而桌面端没有重载入口（用户只能重启应用）。这里捕获页面层的渲染错误，自动重挂整层
+ * （key 变化 → keep-alive 重建、缓存清空），页面重新挂载即重新拉数据；
+ * 浮动播放器在 keep-alive 之外，不受影响。
+ */
+const pageLayerKey = ref(0)
+/** 已自动重挂过的路由 path：同一 path 只重挂一次，确定性错误（如脏数据）不至于反复重挂 */
+let remountedPath: string | null = null
+
+// 切页后允许新页面再享受一次自动恢复
+watch(() => route.path, () => {
+  remountedPath = null
+})
+
+/** 错误是否来自 keep-alive 包裹的页面层：标题栏 / Dock / 浮动播放器等全局浮层不算（公开实例要经 `$` 取内部实例） */
+function isFromPageLayer(instance: ComponentPublicInstance | null): boolean {
+  let cur: ComponentInternalInstance | null | undefined = instance?.$
+  while (cur) {
+    if (cur.vnode.type === KeepAlive)
+      return true
+    cur = cur.parent
+  }
+  return false
+}
+
+/** 只有渲染/更新期出错才重挂：事件回调里的普通报错不该把页面状态一起清掉 */
+const RENDER_ERROR_INFO = ['render function', 'component update']
+
+onErrorCaptured((error, instance, info) => {
+  if (!isFromPageLayer(instance) || !RENDER_ERROR_INFO.includes(info))
+    return
+  if (remountedPath === route.path) {
+    console.error(`[app] 页面渲染再次失败，停止自动恢复（${info}）:`, error)
+    return false
+  }
+  remountedPath = route.path
+  console.error(`[app] 页面渲染失败，自动重挂页面层（${info}）:`, error)
+  pageLayerKey.value += 1
+  return false
+})
 </script>
 
 <template>
@@ -92,9 +135,10 @@ watch(isInitialized, async (ready) => {
       <div v-else class="app-layout">
         <div class="app-content">
           <router-view v-slot="{ Component }">
-            <keep-alive>
+            <!-- key 只在页面渲染失败时递增，用来重建 keep-alive（清掉坏掉的缓存实例），平时恒为 0 -->
+            <KeepAlive :key="pageLayerKey">
               <component :is="Component" />
-            </keep-alive>
+            </KeepAlive>
           </router-view>
         </div>
 

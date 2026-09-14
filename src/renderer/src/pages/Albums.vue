@@ -207,7 +207,7 @@ onMounted(fetchAlbums)
 </script>
 
 <template>
-  <div class="container page-root">
+  <div class="page-root">
     <!-- 左上角浮动年份切换：磨砂玻璃，双击当前年份刷新 -->
     <FloatingTabBar
       :tabs="yearTabs"
