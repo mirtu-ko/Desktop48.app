@@ -21,7 +21,8 @@ import {
   VIEWPORT_PADDING_BOTTOM,
   VIEWPORT_PADDING_X,
 } from '@renderer/utils/float-player-layout'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useEventListener } from '@vueuse/core'
+import { computed, onUnmounted, ref } from 'vue'
 
 const props = defineProps<{
   item: FloatPlayerItem
@@ -329,12 +330,9 @@ function onBarDblClick(e: MouseEvent) {
   cycleSize()
 }
 
-onMounted(() => {
-  window.addEventListener('resize', onWindowResize)
-})
+useEventListener(window, 'resize', onWindowResize)
 
 onUnmounted(() => {
-  window.removeEventListener('resize', onWindowResize)
   stopDragTracking()
 })
 </script>

@@ -71,6 +71,32 @@ describe('buildMemberTree（database.ts 抽出的纯函数）', () => {
     expect(snh.children.find(t => t.teamName === 'TEAM SII')!.children[0].realName).toBe('成员一')
   })
 
+  it('团体别名：「明星殿堂」(groupId 19) 归入 SNH48，与同 teamId 队友并成一队', () => {
+    const aliased: MemberRecord[] = [
+      // 别名成员排在前面：分组名不能取自它自带的 groupName，否则会另起一个「明星殿堂」团体
+      { userId: 2, groupId: 19, groupName: '明星殿堂', teamId: 1008, teamName: '明星殿堂', realName: '袁一琦' },
+      { userId: 1, groupId: 10, groupName: 'SNH48', teamId: 1008, teamName: '明星殿堂', realName: '孙芮' },
+    ]
+    const tree = buildMemberTree(aliased, [], [{ groupId: 10, groupName: 'SNH48', groupSort: 1 }])
+
+    expect(tree).toHaveLength(1)
+    expect(tree[0].groupName).toBe('SNH48')
+    expect(tree[0].groupId).toBe(10)
+    // 两个成员同 teamId 1008：并进同一个队伍节点，不各占一队
+    expect(tree[0].children).toHaveLength(1)
+    expect(tree[0].children[0].value).toBe('1008')
+    expect(tree[0].children[0].children.map(m => m.label)).toEqual(['袁一琦', '孙芮'])
+    // 叶子上的 groupId/groupName 跟着分组走，不与所在团体矛盾
+    expect(tree[0].children[0].children[0].groupId).toBe(10)
+    expect(tree[0].children[0].children[0].groupName).toBe('SNH48')
+    // 原始数据零改动
+    expect(aliased[0].groupId).toBe(19)
+
+    // 兜底：groupInfo 查不到归属团体名时用成员自带的 groupName，成员不会丢
+    const noGroupInfo = buildMemberTree([aliased[0]], [], [])
+    expect(noGroupInfo.map(g => g.groupName)).toEqual(['明星殿堂'])
+  })
+
   it('空输入返回空树', () => {
     expect(buildMemberTree(undefined, undefined, undefined)).toEqual([])
     expect(buildMemberTree([], [], [])).toEqual([])

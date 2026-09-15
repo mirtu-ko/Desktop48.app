@@ -12,8 +12,9 @@ import EventBus from '@renderer/services/event-bus'
 import { debugLog } from '@renderer/utils/debug'
 import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
 
-import { ElMessage } from 'element-plus'
+import { useEventListener } from '@vueuse/core'
 
+import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import MiniControls from './MiniControls.vue'
 import PlayerLoading from './PlayerLoading.vue'
@@ -251,6 +252,8 @@ function onKeyDown(event: KeyboardEvent) {
     event.preventDefault()
 }
 
+useEventListener(window, 'keydown', onKeyDown)
+
 /** 挂载播放器；环境不支持 HTTP-FLV 时统一在此提示 */
 function mountPlayer(path: string) {
   if (!player.setupPlayer(path))
@@ -310,7 +313,6 @@ onUnmounted(() => {
   player.destroyPlayer()
   player.resetMediaElement()
   releaseSleepBlocker()
-  window.removeEventListener('keydown', onKeyDown)
 })
 </script>
 

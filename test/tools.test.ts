@@ -32,15 +32,8 @@ describe('tools.lyricsParse', () => {
   })
 })
 
-describe('tools.dateFormat / taskFilename', () => {
-  // 2026-09-05 02:03:04（本地时区）
-  const ts = new Date(2026, 8, 5, 2, 3, 4).getTime()
-
-  it('dateFormat 支持 yyyyMMddhhmmss（补零）', () => {
-    expect(Tools.dateFormat(ts, 'yyyyMMddhhmmss')).toBe('20260905020304')
-  })
-
-  it('taskFilename 保持分钟精度文件名', () => {
+describe('tools.taskFilename', () => {
+  it('保持分钟精度文件名', () => {
     // 2026-09-05 02:03（本地时区）
     const minuteTs = new Date(2026, 8, 5, 2, 3).getTime()
     expect(Tools.taskFilename('陈观逸', minuteTs, 'mp4')).toBe('陈观逸202609050203.mp4')

@@ -31,9 +31,20 @@ export interface TeamRecord {
 /** groupInfo 的一条团体记录 */
 export interface GroupRecord {
   groupId: number | string
+  groupName?: string
   groupSort?: number
   [key: string]: unknown
 }
+
+/**
+ * 团体别名表：原始 groupId → 归属团体 groupId。
+ *
+ * 「明星殿堂」(19) 实际是 SNH48 的升堂荣誉队伍 —— 4 位成员的 teamId 都是 1008，
+ * 其中孙芮/李艺彤/鞠婧祎仍标 SNH48(10)，只有袁一琦被数据源单独标成 19。
+ * 不归一她就会从 SNH48 tab 与回放筛选里掉出去（tab 按 groupId 筛），
+ * 成员库还会多出一个「明星殿堂」的单人分区。
+ */
+const GROUP_ALIASES: Record<string, number | string> = { 19: 10 }
 
 /** 树节点里队伍的摘要信息（供成员页分组标题/筛选使用） */
 export interface MemberTreeTeamSummary {
@@ -73,13 +84,19 @@ export function teamColorOf(teamInfo: TeamRecord[] | undefined, teamId: number |
   return t?.teamColor || ''
 }
 
+/** 按团体 id 从 groupInfo 查显示名（别名团体归一后名字要跟着归属团体走，否则会按 groupName 另起一个分组） */
+function groupNameOf(groupInfo: GroupRecord[] | undefined, groupId: number | string | undefined): string {
+  const name = groupInfo?.find(i => sameId(i.groupId, groupId))?.groupName
+  return typeof name === 'string' ? name : ''
+}
+
 /**
  * 构建成员树。用 groupName/teamName 字符串分组，保持树状层级；
  * 同时记录 groupId / teamId 供回放按维度筛选；value 一律用 id 字符串。
  *
  * @param starInfo  成员原始数据
  * @param teamInfo  队伍原始数据（提供排序权重、徽章、队伍色）
- * @param groupInfo 团体原始数据（提供排序权重）
+ * @param groupInfo 团体原始数据（提供排序权重；团体别名归一后也由它取归属团体的显示名）
  */
 export function buildMemberTree(
   starInfo: MemberRecord[] | undefined,
@@ -93,13 +110,16 @@ export function buildMemberTree(
   }>()
 
   for (const member of starInfo || []) {
-    const groupName = member.groupName || '未分组'
+    // 别名团体（见 GROUP_ALIASES）的 id 与显示名一起归到归属团体，与同 teamId 的队友并成一队
+    const alias = GROUP_ALIASES[String(member.groupId)]
+    const groupId = alias ?? member.groupId
+    const groupName = (alias === undefined ? '' : groupNameOf(groupInfo, groupId)) || member.groupName || '未分组'
     const teamName = member.teamName || '未分队'
     if (!groupMap.has(groupName)) {
-      groupMap.set(groupName, { groupId: member.groupId, groupName, teams: new Map() })
+      groupMap.set(groupName, { groupId, groupName, teams: new Map() })
     }
     const group = groupMap.get(groupName)!
-    group.groupId ??= member.groupId
+    group.groupId ??= groupId
     if (!group.teams.has(teamName)) {
       group.teams.set(teamName, { teamId: member.teamId, teamName, members: [] })
     }
@@ -138,6 +158,10 @@ export function buildMemberTree(
             label: member.realName || '',
             value: String(member.userId),
             ...member,
+            // 别名团体归一后叶子也要跟着分组走（否则成员自带的 groupId/groupName 与所在分组矛盾，
+            // 任何按叶子 groupId 判断的地方都会漏掉这个成员）
+            groupId: group.groupId,
+            groupName: group.groupName,
             // teamColor 纯派生：优先取 teamInfo 里的队伍色（原始数据不做任何改写），
             // 查不到队伍时退回成员自带颜色，再退空串
             teamColor: teamColorOf(teamInfo, team.teamId) || member.teamColor || '',

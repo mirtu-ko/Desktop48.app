@@ -15,6 +15,13 @@ const MemberStatusMeta: Record<number, { label: string, tag: 'success' | 'warnin
 }
 
 /**
+ * 分团官方 logo 的兜底图（SNH48 那张 about-logo-snh.png）。
+ * 成员页分区标题在没有队伍徽章、又查不到所属团体 logo（IDFT / 燃烧吧团魂 / 新星闪耀计划 等）
+ * 时统一用它，避免标题左侧出现空盒。
+ */
+const GROUP_LOGO_FALLBACK = 'https://www.snh48.com/images/index/about-logo-snh.png'
+
+/**
  * 全局常量表（全部无状态）。
  *
  * 说明：这里刻意不用 `class + static` —— ES 模块本身就是单例，一个模块无论被
@@ -57,15 +64,23 @@ const Constants = {
     SETTING: '#6d5ae0', // 设置：品牌紫
   },
 
-  /** 分团切换 tab（公演页 / 成员页左上角浮动切换器共用）：key 即 groupId */
+  /**
+   * 分团切换 tab（公演页 / 成员页左上角浮动切换器共用）：key 即 groupId。
+   * logoPng 是分团官方标识（snh48.com/images/index/about-logo-*.png，129×180 含透明通道），
+   * 成员页在队伍徽章缺失时拿它当分区标题图标；tab 自身只用 label / key / color。
+   * 表里没有的团体（IDFT / 燃烧吧团魂 / 新星闪耀计划 等）由 GroupLogoFallback 兜底。
+   */
   GroupTabs: [
-    { label: '全部', key: '0', color: '' },
-    { label: 'SNH48', key: '10', color: '#8FD3F6' },
-    { label: 'BEJ48', key: '11', color: '#FE2472' },
-    { label: 'GNZ48', key: '12', color: '#ABCA14' },
-    { label: 'CKG48', key: '14', color: '#FFBA07' },
-    { label: 'CGT48', key: '21', color: '#D21217' },
-  ] as Array<{ label: string, key: string, color: string }>,
+    { label: '全部', key: '0', color: '', logoPng: '' },
+    { label: 'SNH48', key: '10', color: '#8FD3F6', logoPng: GROUP_LOGO_FALLBACK },
+    { label: 'BEJ48', key: '11', color: '#FE2472', logoPng: 'https://www.snh48.com/images/index/about-logo-bej.png' },
+    { label: 'GNZ48', key: '12', color: '#ABCA14', logoPng: 'https://www.snh48.com/images/index/about-logo-gnz.png' },
+    { label: 'CKG48', key: '14', color: '#FFBA07', logoPng: 'https://www.snh48.com/images/index/about-logo-ckg.png' },
+    { label: 'CGT48', key: '21', color: '#D21217', logoPng: 'https://www.snh48.com/images/index/about-logo-cgt.png' },
+  ] as Array<{ label: string, key: string, color: string, logoPng: string }>,
+
+  /** 分团 logo 的兜底地址（即 SNH48 那张）：成员页保证分区标题左侧永远有图标可用 */
+  GroupLogoFallback: GROUP_LOGO_FALLBACK,
 }
 
 export default Constants

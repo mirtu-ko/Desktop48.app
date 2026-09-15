@@ -1,4 +1,6 @@
 import type {
+  AllMemberEnvelope,
+  AllMemberItem,
   ApiEnvelope,
   LiveDetail,
   LiveListContent,
@@ -13,15 +15,67 @@ import ApiUrls from './api-urls'
 import Request from './request'
 
 /**
- * 同步成员信息：拉取并落库（database.json 的 starInfo/teamInfo/groupInfo）
+ * 解析 h5.48.cn 的 jsonp 响应。真实接口返回形如 `callback({...})` 的包裹文本，
+ * 需剥掉 `函数名(` 前缀与末尾 `;`、`)`；若首个非空白字符即 `{`/`[`（形如测试里的
+ * 纯 JSON `{total, rows}`），则直接当 JSON 解析。调用方再按字段取 total/rows。
+ */
+function parseJsonpBody<T>(raw: string): T {
+  const body = raw.trim()
+  const head = body[0]
+  // 纯 JSON（对象 `{` 或数组 `[`）→ 原样解析
+  if (head === '{' || head === '[')
+    return JSON.parse(body) as T
+  // jsonp 包裹：跳过 `函数名(`，取其后到末尾的 JSON，再剥掉收尾 `;` / `)`
+  const start = body.indexOf('(') + 1
+  const json = body.slice(start).trim().replace(/\);?\s*$/, '')
+  return JSON.parse(json) as T
+}
+
+/** 拉取 h5.48.cn 的 jsonp 成员名单，返回其 rows 数组（解析失败/网络失败都会抛，由调用方决定降级策略） */
+async function fetchAllMembers<T>(url: string): Promise<T[]> {
+  const raw = await Request.get(url)
+  const payload = parseJsonpBody<AllMemberEnvelope<T>>(raw)
+  return payload.rows ?? []
+}
+
+/**
+ * 补充源专用：失败或拿到空名单都返回 undefined，调用方据此不带该 key 上送。
+ * 空名单也算失败——接口正常时恒有 700+ 条，`[]` 只可能来自异常响应，
+ * 而 saveMemberData 的 `if (content.allmembers)` 对 `[]` 判真，上送会清空已落库的名单。
+ * 这条 jsonp 链路不走 pocketapi 的瞬时失败重试，被风控返回 HTML 时 JSON.parse 会抛，异常只能在这里收敛。
+ */
+async function fetchAllMembersOrSkip(): Promise<AllMemberItem[] | undefined> {
+  try {
+    const rows = await fetchAllMembers<AllMemberItem>(ApiUrls.ALL_MEMBER_URL)
+    if (rows.length === 0) {
+      console.error('[apis.ts]allmembers 返回空名单，按失败处理（保留库中旧数据）')
+      return undefined
+    }
+    debugLog('net', 'allmembers 拉取完成', rows.length)
+    return rows
+  }
+  catch (e: any) {
+    console.error('[apis.ts]allmembers 拉取失败，跳过本次补充源:', e?.message || e)
+    return undefined
+  }
+}
+
+/**
+ * 同步成员信息：拉取并落库（database.json 的 starInfo/teamInfo/groupInfo），
+ * 同时从 h5.48.cn 的 allmembers.php 拉取补充成员名单一并存库。
+ *
+ * allmembers 是**次要数据源**：它返回 undefined 时只跳过本次补充，9 个主分节照常落库
+ * （缺 key → saveMemberData 保留旧值），它的抖动不该把主流程拖挂。
  */
 async function syncInfo(): Promise<SyncInfoContent> {
   debugLog('net', '开始更新成员信息')
-  // 更新数据到数据库
+  // 更新数据到数据库（UPDATE_INFO_URL，9 个分节）
   const content = await request<SyncInfoContent>(ApiUrls.UPDATE_INFO_URL, {}, {})
   debugLog('net', '更新成员信息', content)
+  // 补充数据源：h5.48.cn 全量成员名单（独立信封，不参与 UPDATE 分节）
+  const allmembers = await fetchAllMembersOrSkip()
   // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts（写 database.json 并重建成员树）
-  await window.mainAPI.saveMemberData(content)
+  await window.mainAPI.saveMemberData(allmembers ? { ...content, allmembers } : content)
   return content
 }
 

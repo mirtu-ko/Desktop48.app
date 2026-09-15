@@ -38,6 +38,9 @@ const ApiUrls = {
   CHECK_IN_URL: 'https://pocketapi.48.cn/user/api/v1/checkin',
 
   TRIP_LIST_URL: 'https://pocketapi.48.cn/trip/api/trip/v1/list',
+
+  ALL_MEMBER_URL: 'https://h5.48.cn/resource/jsonp/allmembers.php?gid=00',
+  ALL_MEMBER_SIMPLE_URL: 'https://h5.48.cn/resource/jsonp/allmembers_simple.php?gid=00',
 }
 
 export default ApiUrls

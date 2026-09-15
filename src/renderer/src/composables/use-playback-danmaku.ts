@@ -24,12 +24,8 @@ export function usePlaybackDanmaku(options: {
   // 是否有弹幕数据源：无弹幕时隐藏弹幕叠加层、右缘切换竖条与弹幕侧栏
   const hasBarrage = computed(() => !!barrageUrl.value)
 
-  // 弹幕显示设置（localStorage 持久化见 use-danmaku-settings）
-  const {
-    settings,
-    load: loadSettings,
-    save: saveSettings,
-  } = useDanmakuSettings()
+  // 弹幕显示设置（localStorage 持久化见 use-danmaku-settings，改动即落盘）
+  const { settings } = useDanmakuSettings()
 
   // 弹幕数据源与右侧列表游标
   const {
@@ -92,13 +88,11 @@ export function usePlaybackDanmaku(options: {
     settings.enabled = !settings.enabled
     if (!settings.enabled)
       clearOverlay()
-    saveSettings()
   }
 
-  /** 设置弹层里改动的参数统一在这里落库 */
+  /** 设置弹层里改动的参数统一写回（落盘由 use-danmaku-settings 的深度监听承担） */
   function updateSettings(patch: Partial<DanmakuSettings>) {
     Object.assign(settings, patch)
-    saveSettings()
   }
 
   return {
@@ -115,7 +109,6 @@ export function usePlaybackDanmaku(options: {
     onTimeUpdate,
     ensureBarragesLoaded,
     resetBarrageSource,
-    loadSettings,
     toggleDanmaku,
     updateSettings,
     startAnimation,

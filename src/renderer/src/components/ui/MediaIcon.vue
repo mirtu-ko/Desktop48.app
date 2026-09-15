@@ -51,6 +51,8 @@ const ICONS = {
   pauseFilled: 'M6 19h4V5H6v14zm8-14v14h4V5h-4z',
   nextFilled: 'M6 18l8.5-6L6 6v12zM16 6h2v12h-2z',
   playlistFilled: 'M3 6h13v2H3zm0 5h13v2H3zm0 5h9v2H3zm15-3.5 5 3.5-5 3.5z',
+  // 总选排名皇冠（实心壳）：金色由调用方 currentColor 决定，数字另叠加
+  crownFilled: 'M12 2l2.4 4.9L19 5l-2.1 5.6 2.6 2.3L12 21l-7.5-8.1 2.6-2.3L5 5l4.6 1.9L12 2z',
 } as const
 
 const filled = computed(() => props.name.endsWith('Filled'))

@@ -11,8 +11,10 @@ const props = withDefaults(defineProps<{
   /** 单卡最小宽度，传给 CSS grid 的 minmax */
   minItemWidth?: string
   gap?: string
-  /** 媒体区宽高比；直播/回放 1，公演 16 / 9，成员 3 / 4 */
+  /** 媒体区宽高比；直播/回放 1，公演 16 / 9，成员 1 */
   aspectRatio?: string
+  /** 媒体区圆角；成员页的圆形头像传 50%，其余页面保持直角 */
+  mediaRadius?: string
   /** 文案行宽度（百分比），空数组可只显示媒体区 */
   lineWidths?: number[]
   /** 网格上方渲染分区标题占位（公演页使用） */
@@ -22,6 +24,7 @@ const props = withDefaults(defineProps<{
   minItemWidth: '220px',
   gap: '16px',
   aspectRatio: '1',
+  mediaRadius: '0',
   lineWidths: () => [82, 56, 38],
   heading: false,
 })
@@ -55,7 +58,7 @@ const gridStyle = computed(() => ({
         <BaseSkeleton
           class="skeleton-media"
           :aspect-ratio="aspectRatio"
-          radius="0"
+          :radius="mediaRadius"
         />
         <div class="skeleton-body">
           <BaseSkeleton

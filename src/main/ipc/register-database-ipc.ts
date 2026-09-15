@@ -13,6 +13,7 @@ export function registerDatabaseIPC(): void {
   const db = () => Database.instance()
 
   handleTraced('saveMemberData', async (_event, content) => db().saveMemberData(content))
+  handleTraced('getAllMembers', async () => db().getAllMembers())
   handleTraced('getMemberInfo', async (_event, userId) => db().getMemberInfo(userId))
   handleTraced('getBlockedMembers', async () => db().getBlockedMembers())
   handleTraced('setBlockedMembers', async (_event, ids) => db().setBlockedMembers(ids))

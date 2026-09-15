@@ -51,17 +51,25 @@ describe('constants.MemberStatus / MemberStatusMeta', () => {
 })
 
 describe('constants.GroupTabs', () => {
-  it('key 唯一，首项为「全部」且不带主题色', () => {
+  it('key 唯一，首项为「全部」且不带主题色 / 分团 logo', () => {
     const keys = Constants.GroupTabs.map(tab => tab.key)
     expect(new Set(keys).size).toBe(keys.length)
-    expect(Constants.GroupTabs[0]).toEqual({ label: '全部', key: '0', color: '' })
+    expect(Constants.GroupTabs[0]).toEqual({ label: '全部', key: '0', color: '', logoPng: '' })
   })
 
-  it('每个分团的 label / key / color 都不为空（除「全部」外）', () => {
+  it('每个分团的 label / key / color / logoPng 都不为空（除「全部」外）', () => {
     for (const tab of Constants.GroupTabs.slice(1)) {
       expect(tab.label).toBeTruthy()
       expect(tab.key).not.toBe('0')
       expect(tab.color).toMatch(/^#[0-9a-f]{6}$/i)
+      // 分团官方 logo 一律是 snh48.com 的 about-logo-*.png（成员页队伍徽章缺失时拿它做标题图标）
+      expect(tab.logoPng).toMatch(/^https:\/\/www\.snh48\.com\/images\/index\/about-logo-[a-z]+\.png$/)
     }
+  })
+
+  it('提供分团 logo 兜底地址：无官方 logo 的团体（IDFT / 燃烧吧团魂 等）与暂休退团分区共用它', () => {
+    expect(Constants.GroupLogoFallback).toMatch(/^https:\/\/www\.snh48\.com\/images\/index\/about-logo-[a-z]+\.png$/)
+    // 兜底图就是 SNH48 那张，避免两处各写一份地址
+    expect(Constants.GroupLogoFallback).toBe(Constants.GroupTabs[1].logoPng)
   })
 })

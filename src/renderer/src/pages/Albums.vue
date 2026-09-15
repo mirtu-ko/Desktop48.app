@@ -9,6 +9,7 @@ import BaseSkeleton from '@renderer/components/ui/skeleton/BaseSkeleton.vue'
 import Apis from '@renderer/services/apis'
 import useAudioPlayerStore from '@renderer/stores/audio-player'
 import Tools from '@renderer/utils/tools'
+import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 
@@ -51,7 +52,7 @@ function tagClass(tag: string): string {
 /** 发行日期：优先 start_time，缺失时回退 year */
 function releaseDate(album: MusicAlbum): string {
   const ts = Number(album.start_time)
-  return ts > 0 ? Tools.dateFormat(ts * 1000, 'yyyy-MM-dd') : album.year || '未知'
+  return ts > 0 ? dayjs(ts * 1000).format('YYYY-MM-DD') : album.year || '未知'
 }
 
 /** 专辑总时长（m:ss，忽略无时长的伴奏曲目） */

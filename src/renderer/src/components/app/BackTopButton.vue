@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Top } from '@element-plus/icons-vue'
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useEventListener } from '@vueuse/core'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 /** 滚动超过该距离才显示按钮 */
@@ -67,14 +68,13 @@ function backToTop() {
   el?.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
+// scroll 事件不冒泡，但捕获阶段监听 document 能收到所有元素滚动；
+// 免去切页后重新定位容器，keep-alive / v-show / Suspense 场景天然兼容
+useEventListener(document, 'scroll', onDocScroll, { capture: true })
+
 onMounted(() => {
   appContent = document.querySelector('.app-content')
-  document.addEventListener('scroll', onDocScroll, true)
   nextTick(syncFromContainer)
-})
-
-onUnmounted(() => {
-  document.removeEventListener('scroll', onDocScroll, true)
 })
 
 // 切页时 keep-alive 保留滚动位置但不触发 scroll 事件，等 DOM 重新挂载后重新定位同步

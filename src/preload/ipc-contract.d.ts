@@ -9,7 +9,7 @@
  * 成员树见 main/domain/member-tree.ts（buildMemberTree）。
  */
 import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { MemberDataContent, StarInfoItem } from '../main/data'
+import type { AllMemberItem, MemberDataContent, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
 
 // ===== 基础环境 =====
@@ -36,8 +36,8 @@ export interface NetRequestOptions {
 
 // ===== 成员与屏蔽名单 =====
 
-// 类型随契约一起暴露（preload/index.ts 实现侧引用）
-export type { MemberDataContent }
+// 类型随契约一起暴露（preload/index.ts 实现侧与渲染端合并函数引用）
+export type { AllMemberItem, MemberDataContent, StarAdjunctItem }
 
 // 与 renderer composables/use-blocked-members.ts 的 BlockedMember 同构（跨进程镜像）
 export interface BlockedMember {
@@ -81,6 +81,13 @@ export interface MemberTreeGroupPayload {
   children: MemberTreeTeamPayload[]
 }
 
+/** getAllMembers 返回：h5.48.cn 落库的 allmembers 成员名单 + 兼职成员档案（见 main/data.ts 对应类型） */
+export interface AllMembersPayload {
+  allmembers: AllMemberItem[]
+  /** starAdjunctInfo 兼职成员档案（status===1 为有效兼任，渲染端据此归入兼任队伍） */
+  adjuncts?: StarAdjunctItem[]
+}
+
 // ===== FFmpeg 下载 =====
 
 /**
@@ -115,6 +122,7 @@ export interface mainAPI {
 
   // ===== 成员与屏蔽名单 =====
   saveMemberData: (content: Partial<MemberDataContent>) => Promise<{ ok: true }>
+  getAllMembers: () => Promise<AllMembersPayload>
   hasMembers: () => Promise<boolean>
   getMemberInfo: (userId: number) => Promise<MemberInfo | undefined>
   getMemberTree: () => Promise<MemberTreeGroupPayload[]>

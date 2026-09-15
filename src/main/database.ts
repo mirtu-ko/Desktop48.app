@@ -1,5 +1,6 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
 import type {
+  AllMemberItem,
   DomainInfoItem,
   GroupInfoItem,
   MemberDataContent,
@@ -30,7 +31,7 @@ function assertConfigKey(key: ConfigKey) {
 }
 
 /**
- * database.json 的落库结构：成员相关原始数据（API 同步，9 个分节）+ 屏蔽名单 + 应用配置。
+ * database.json 的落库结构：成员相关原始数据（UPDATE_INFO_URL 的 9 个分节 + h5.48.cn 的 allmembers）+ 屏蔽名单 + 应用配置。
  * 分节字段定义见 ./data（依据 UPDATE_INFO_URL 真实返回逐字段建模）。
  */
 export interface DatabaseShape {
@@ -52,15 +53,18 @@ export interface DatabaseShape {
   teamInfo?: TeamInfoItem[]
   /** 官方账号与成员的关联（接口当前返回空数组，字段待样本补充） */
   starOfficialRelationInfo?: StarOfficialRelationItem[]
+  /** h5.48.cn 全量成员名单（allmembers.php） */
+  allmembers?: AllMemberItem[]
   /**
    * 已屏蔽成员的 userId 列表（旧库可能残留 hiddenMemberIds，init() 时迁移）。
    * 宽容 number|string：旧库存过字符串形式的 id（blocked-members 的纯函数按此设计）
    */
   blockedMemberIds?: Array<number | string>
   config?: AppConfig
-  /** 兼容旧库残留字段（init() 清理）：迁移来源 / 已废弃的持久化树 */
+  /** 兼容旧库残留字段（init() 清理）：迁移来源 / 已废弃的持久化树 / 已停止拉取的精简名单 */
   hiddenMemberIds?: number[]
   memberTree?: unknown
+  allmembersSimple?: unknown
 }
 
 /**
@@ -118,6 +122,9 @@ class Database {
     // 清理旧库遗留的派生字段：memberTree 现在是纯内存派生，不再持久化
     delete this.db.memberTree
 
+    // 清理已废弃的存储字段：allmembersSimple 是 allmembers 的字段子集，已停止拉取与落库
+    delete this.db.allmembersSimple
+
     // 补齐未设置的配置并写盘：「未设置」= 缺失 / 空串 / 非字符串
     const stored = this.db.config as Partial<Record<ConfigKey, unknown>> | undefined
     const config: AppConfig = { ...CONFIG_DEFAULTS }
@@ -134,7 +141,7 @@ class Database {
     log('[database.ts]数据库路径', this.dbPath)
   }
 
-  /** 保存 API 同步来的成员相关原始数据（9 个分节全量落库）；清洗/派生只发生在内存里（建树），落盘的只有原始内容 */
+  /** 保存 API 同步来的成员相关原始数据（10 个分节全量落库）；清洗/派生只发生在内存里（建树），落盘的只有原始内容 */
   public saveMemberData(content: Partial<MemberDataContent>) {
     log('[database.ts] save-member-data 开始写入:', content.starInfo?.length, content.teamInfo?.length, content.groupInfo?.length)
     if (content.officialInfo)
@@ -155,6 +162,8 @@ class Database {
       this.db.teamInfo = content.teamInfo
     if (content.starOfficialRelationInfo)
       this.db.starOfficialRelationInfo = content.starOfficialRelationInfo
+    if (content.allmembers)
+      this.db.allmembers = content.allmembers
     log('[database.ts] save-member-data 原始数据写入成功:', {
       officialInfo: this.db.officialInfo?.length,
       domainInfo: this.db.domainInfo?.length,
@@ -165,6 +174,7 @@ class Database {
       periodInfo: this.db.periodInfo?.length,
       teamInfo: this.db.teamInfo?.length,
       starOfficialRelationInfo: this.db.starOfficialRelationInfo?.length,
+      allmembers: this.db.allmembers?.length,
     })
     // 同步缓存引用：starInfo 是整组替换，不刷新的话 hasMembers 等会读到旧数据直到重启
     this.membersDB = this.db.starInfo
@@ -192,6 +202,14 @@ class Database {
       this.lowdb.write()
     }
     return resolveBlockedMembers(this.db.blockedMemberIds, this.db.starInfo ?? [])
+  }
+
+  /** 读取 h5.48.cn 的 allmembers 成员名单（同步成员数据库时落库，见 apis.syncInfo）+ 兼职成员档案 */
+  public getAllMembers() {
+    return {
+      allmembers: this.db.allmembers ?? [],
+      adjuncts: this.db.starAdjunctInfo ?? [],
+    }
   }
 
   public setBlockedMembers(ids: number[]) {

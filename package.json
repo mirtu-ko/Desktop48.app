@@ -28,6 +28,8 @@
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
     "@element-plus/icons-vue": "^2.3.2",
+    "@vueuse/core": "^14.4.0",
+    "dayjs": "^1.11.23",
     "element-plus": "^2.14.5",
     "hls.js": "^1.7.3",
     "lowdb": "^7.0.1",
