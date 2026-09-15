@@ -3,13 +3,13 @@ import type { MemberDetail } from '@renderer/utils/member-merge'
 import { Hide, User, View } from '@element-plus/icons-vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import { useBlockedMembersStore } from '@renderer/stores/blocked-members'
 import Constants from '@renderer/utils/constants'
-import { mergeMembers } from '@renderer/utils/member-merge'
-import Tools from '@renderer/utils/tools'
+import { buildAdjuncts, mergeMembers } from '@renderer/utils/member-merge'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 
@@ -50,6 +50,9 @@ interface MemberSection {
   teamBadge: string
   /** 分区标题主题色：跟随队伍 teamColor；暂休/退团走弱化灰变体 */
   accent?: string
+  /** 分团官方 logo（snh48.com 的 about-logo-*.png）：队伍徽章缺失时充当标题左侧图标；
+   * 查不到所属团体 logo 的团体（IDFT / 燃烧吧团魂 等）走 `Constants.GroupLogoFallback`，故必有值 */
+  groupLogo: string
   muted?: boolean
   members: MemberDetail[]
 }
@@ -57,6 +60,11 @@ interface MemberSection {
 /** 按队伍分区：入参已按树的顺序（团体 → teamSort）排好，用 Map 保住首现顺序 */
 function groupByTeam(list: MemberDetail[], withGroup: boolean): MemberSection[] {
   const sections = new Map<string, MemberSection>()
+  // 分团官方 logo → 队伍徽章缺失时做标题左侧图标；表里没有的团体（IDFT / 燃烧吧团魂 等）
+  // 与暂休 / 退团分区一样退回 GroupLogoFallback，标题左侧不留空盒
+  const groupLogoOf = (member: MemberDetail) =>
+    Constants.GroupTabs.find(item => item.key === String(member.groupId))?.logoPng
+    || Constants.GroupLogoFallback
   for (const member of list) {
     const key = `${member.groupName}/${member.teamName}`
     const existing = sections.get(key)
@@ -69,6 +77,7 @@ function groupByTeam(list: MemberDetail[], withGroup: boolean): MemberSection[] 
       title: withGroup ? `${member.groupName} · ${member.teamName}` : member.teamName,
       teamBadge: member.teamBadge,
       accent: member.teamColor ? `#${member.teamColor}` : '',
+      groupLogo: groupLogoOf(member),
       members: [member],
     })
   }
@@ -90,7 +99,9 @@ const sections = computed<MemberSection[]>(() => {
 
   const inactiveSections = (status: number, title: string): MemberSection[] => {
     const list = scope.filter(member => member.status === status)
-    return list.length ? [{ key: title, title, teamBadge: '', muted: true, members: list }] : []
+    return list.length
+      ? [{ key: title, title, teamBadge: '', groupLogo: Constants.GroupLogoFallback, muted: true, members: list }]
+      : []
   }
   return [...active, ...inactiveSections(STATUS_HIATUS, '暂休'), ...inactiveSections(STATUS_LEFT, '退团')]
 })
@@ -112,7 +123,8 @@ onMounted(() => {
   refreshBlockedMembers()
 })
 
-/** 拉取两个数据源并合并（挂载初始化 / 双击 tab / 更新数据库后共用） */
+/** 拉取两个数据源并合并（挂载初始化 / 双击 tab / 更新数据库后共用）。
+ * 兼任成员（starAdjunctInfo，status===1）由 buildAdjuncts 以本人档案为底就地并入其兼任队伍 */
 async function fetchMembers() {
   loading.value = true
   try {
@@ -121,7 +133,8 @@ async function fetchMembers() {
       window.mainAPI.getMemberTree(),
       window.mainAPI.getAllMembers(),
     ])
-    members.value = mergeMembers(tree, payload?.allmembers)
+    const merged = mergeMembers(tree, payload?.allmembers)
+    members.value = [...merged, ...buildAdjuncts(merged, tree, payload?.adjuncts)]
   }
   catch (error) {
     console.error('获取成员信息失败:', error)
@@ -148,17 +161,30 @@ async function updateMembers() {
     await fetchMembers()
 }
 
+/** 头像圆环强调色：兼任成员取主队色 ringColor，其余成员取所属队伍色 teamColor；都没有时不注入变量，走 CSS 默认渐变 */
+function avatarAccentStyle(member: MemberDetail) {
+  const color = member.ringColor || member.teamColor
+  return color ? { '--avatar-accent': `#${color}` } : undefined
+}
+
+/** 卡片 key：兼任记录用兼职档案主键（加前缀，避免数值上与别的 userId 相撞），其余成员用 userId / sid 兜底 */
+function cardKey(member: MemberDetail) {
+  if (member.adjunctId !== undefined)
+    return `adjunct-${member.adjunctId}`
+  return member.userId ?? member.sid
+}
+
+/** 分区标题左侧图标：优先队伍徽章，退分团官方 logoPng（groupLogo 有 GroupLogoFallback 兜底，恒非空） */
+function badgeSrc(section: MemberSection) {
+  return section.teamBadge || section.groupLogo
+}
+
 /** 屏蔽 / 解除屏蔽：官网独有的补充成员没有 userId，直接忽略（卡片上也不给入口） */
 function toggleBlockMember(member: MemberDetail) {
   const { userId } = member
   if (typeof userId !== 'number')
     return
   void toggleBlock({ ...member, userId })
-}
-
-/** 徽章加载失败时隐藏，避免显示碎图 */
-function hideBadge(event: Event) {
-  (event.target as HTMLImageElement).style.visibility = 'hidden'
 }
 </script>
 
@@ -171,21 +197,24 @@ function hideBadge(event: Event) {
         v-if="showSkeleton"
         class="members-skeleton"
         :count="12"
-        min-item-width="120px"
-        gap="14px"
-        aspect-ratio="3 / 4"
+        min-item-width="118px"
+        gap="6px"
+        aspect-ratio="1"
+        media-radius="50%"
         :line-widths="[68]"
       />
       <div v-else class="members-container">
         <section v-for="section in sections" :key="section.key" class="group-section">
           <h2 class="team-title">
-            <img
-              v-if="section.teamBadge"
-              class="team-badge-img"
-              :src="section.teamBadge"
-              alt=""
-              @error="hideBadge"
-            >
+            <!-- 统一尺寸的徽章盒子：队伍徽章优先，缺则分团 logoPng（查不到团体时退 SNH48 兜底图），各分区标题列起点一致 -->
+            <span class="team-badge-box">
+              <img
+                v-if="badgeSrc(section)"
+                class="team-badge-img"
+                :src="badgeSrc(section)"
+                alt=""
+              >
+            </span>
             <span
               class="section-title"
               :class="{ 'section-title--muted': section.muted }"
@@ -195,53 +224,43 @@ function hideBadge(event: Event) {
             </span>
           </h2>
           <div class="member-list">
-            <!-- 官网独有的补充成员没有 userId，用 sid 兜底做 key -->
+            <!-- key 见 cardKey：兼任记录走档案主键，官网独有的补充成员走 sid 兜底 -->
             <div
               v-for="member in section.members"
-              :key="member.userId ?? member.sid"
-              class="member-card lift-card clickable"
+              :key="cardKey(member)"
+              class="member-card"
               :class="{ 'is-blocked': !!member.userId && isBlocked(member.userId) }"
               @click="selectedMember = member"
             >
-              <el-image class="avatar" :src="member.avatar" fit="cover" lazy>
-                <template #placeholder>
-                  <div class="avatar-ph" />
-                </template>
-                <template #error>
-                  <div class="avatar-ph">
-                    <el-icon :size="28">
-                      <User />
-                    </el-icon>
-                  </div>
-                </template>
-              </el-image>
+              <div
+                class="avatar-wrap"
+                :style="avatarAccentStyle(member)"
+              >
+                <el-image class="avatar" :src="member.avatar" fit="cover" lazy>
+                  <template #placeholder>
+                    <div class="avatar-ph" />
+                  </template>
+                  <template #error>
+                    <div class="avatar-ph">
+                      <el-icon :size="30">
+                        <User />
+                      </el-icon>
+                    </div>
+                  </template>
+                </el-image>
 
-              <!-- 排名徽章：总选排名非 0 的成员右上角显示皇冠，数字内嵌皇冠中 -->
-              <span v-if="member.ranking" class="rank-crown">
-                <svg
-                  class="rank-crown__svg"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  aria-hidden="true"
-                >
-                  <path d="M12 2l2.4 4.9L19 5l-2.1 5.6 2.6 2.3L12 21l-7.5-8.1 2.6-2.3L5 5l4.6 1.9L12 2z" />
-                </svg>
-                <span class="rank-crown__num">{{ member.ranking }}</span>
-              </span>
+                <!-- 排名徽章：总选排名非 0 的成员在头像左上角显示皇冠，数字内嵌皇冠中 -->
+                <span v-if="member.ranking" class="rank-crown">
+                  <MediaIcon name="crownFilled" :size="30" />
+                  <span class="rank-crown__num">{{ member.ranking }}</span>
+                </span>
+              </div>
 
               <div class="member-meta">
                 <p class="member-name ellipsis" :title="member.realName">
                   {{ member.realName }}
                 </p>
               </div>
-              <span
-                v-if="member.teamName"
-                class="team-badge team-badge--overlay"
-                :style="member.teamColor ? { '--tb-color': `#${member.teamColor}` } : undefined"
-              >
-                {{ Tools.shortTeamName(member.teamName) }}
-              </span>
-
               <!-- 屏蔽控件：未屏蔽悬浮出现快捷屏蔽；已屏蔽常驻标记 + 悬浮解除 -->
               <template v-if="member.userId">
                 <button
@@ -317,30 +336,61 @@ function hideBadge(event: Event) {
   padding-bottom: var(--dock-reserve);
 }
 
-/* 分区标题 */
+/* 分区标题：队伍徽章图标居左、标题居右的水平布局；
+ * 徽章盒子固定尺寸、始终占位（无徽章分区标题列起点保持一致） */
 .team-title {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  gap: 14px;
   align-items: center;
-  margin: 14px 4px 12px;
+  margin: 18px 4px 6px;
 
-  /* 徽章保持原始宽高比 */
-  .team-badge-img {
+  /* 统一尺寸的徽章盒子：图标等比缩放入内（图标恒有值，见 badgeSrc / GroupLogoFallback） */
+  .team-badge-box {
     flex: none;
-    height: 144px;
-    width: auto;
-    object-fit: contain;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 54px;
+    height: 54px;
+
+    .team-badge-img {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+    }
   }
 
-  /* 复用全局分区标题：撑满行宽以展示右侧渐隐细线 */
+  /* 复用全局分区标题：撑满剩余宽度以展示右侧渐隐细线 */
   .section-title {
-    width: 100%;
+    flex: 1;
+    min-width: 0;
+    margin: 0;
   }
 }
 
 .members-skeleton {
   padding: var(--tabbar-offset-top) 16px 8px;
+
+  /* 与改版后的卡片对齐：无实底皮肤（透明底），媒体区是 92px 圆形头像（圆角走模板 props）、
+   * 文案行居中 —— 否则加载完成时整块布局会跳一次 */
+  :deep(.skeleton-card) {
+    overflow: visible;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  :deep(.skeleton-media) {
+    width: 92px;
+    margin: 0 auto;
+  }
+
+  :deep(.skeleton-body) {
+    margin-top: 14px;
+    padding: 0 4px;
+  }
 }
 
 .member-count {
@@ -352,50 +402,108 @@ function hideBadge(event: Event) {
 
 .member-list {
   display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-}
-
-.member-card.clickable {
-  cursor: pointer;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
 }
 
 .member-card {
+  /* 无实底卡片皮肤：透明底，仅保留功能性布局与 hover 动效；可点击 */
   position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 7px 8px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  cursor: pointer;
 
-  .avatar {
-    display: block;
-    width: 100%;
-    aspect-ratio: 3 / 4;
+  /* 头像圆形容器：渐变光环 + 顶部高光；hover 轻微放大 */
+  .avatar-wrap {
+    position: relative;
+    width: 92px;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    padding: 3px;
+    background: radial-gradient(circle at 30% 20%, #fff, rgba(255, 255, 255, 0));
+    transition: transform 0.25s ease;
+    transform-origin: center;
+
+    /* hover：头像略微放大 */
+    &:hover {
+      transform: scale(1.16);
+    }
+
+    &::before {
+      /* 主题色渐变光环（跟随队伍强调色；无强调色时回退为蓝紫渐变） */
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      padding: 2px;
+      background: linear-gradient(
+        135deg,
+        var(--avatar-accent, #4f6ef7),
+        var(--avatar-accent, #a94ff7) 60%,
+        var(--avatar-accent, #50c8ff)
+      );
+      -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+      mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      opacity: 0.85;
+    }
+
+    &::after {
+      /* 顶部高光：营造玻璃质感 */
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: linear-gradient(160deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 45%);
+      pointer-events: none;
+    }
+
+    /* 圆形头像本身 */
+    .avatar {
+      display: block;
+      width: 100%;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      overflow: hidden;
+      background: var(--el-fill-color-light);
+    }
+
+    /* 头像加载占位 / 失败兜底 */
+    .avatar-ph {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      color: var(--el-text-color-placeholder);
+      background: var(--el-fill-color-light);
+    }
   }
 
-  .avatar-ph {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-    color: var(--el-text-color-placeholder);
-    background: var(--el-fill-color-light);
-  }
-
-  /* 排名皇冠徽章：头像右上角，数字内嵌皇冠中。
-   * 与快捷屏蔽按钮同占一个角：悬浮时让位给按钮，卡片屏蔽后不再显示排名装饰 */
+  /* 排名皇冠徽章：头像左上角，队色皇冠（MediaIcon 实心壳）+ 内嵌数字；屏蔽后隐藏 */
   .rank-crown {
     position: absolute;
     top: 0px;
-    right: 0px;
-    z-index: 2;
+    left: 0px;
+    z-index: 3;
     display: inline-flex;
     pointer-events: none;
     transition: opacity 0.15s ease;
 
-    &__svg {
-      width: 46px;
-      height: 34px;
-      color: #ffc53d;
-      fill: #ffc53d;
-      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+    /* 队色皇冠：沿用 avatar-wrap 注入的 --avatar-accent；无队色回退金色 */
+    .media-icon {
+      color: var(--avatar-accent, #ffc53d);
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
     }
 
     /* 排名数字：叠加在皇冠图形内部偏下的位置 */
@@ -411,12 +519,17 @@ function hideBadge(event: Event) {
       line-height: 1.3;
       text-align: center;
       color: #fff;
-      text-shadow: 0 0 2px rgba(255, 231, 158, 0.8);
+      text-shadow: 0 0 2px color-mix(in srgb, var(--avatar-accent, #ffc53d) 70%, transparent);
     }
   }
 
   .member-meta {
-    padding: 8px 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+    margin-top: 14px;
+    padding: 0 4px;
     text-align: center;
 
     p {
@@ -425,16 +538,17 @@ function hideBadge(event: Event) {
   }
 
   .member-name {
+    width: 100%;
     font-size: 14px;
     font-weight: 600;
     color: var(--el-text-color-primary);
   }
 
-  /* 快捷屏蔽：悬浮卡片时右上角出现 */
+  /* 快捷屏蔽：悬浮卡片时头像右上角出现 */
   .quick-block {
     position: absolute;
-    top: 6px;
-    right: 6px;
+    top: 12px;
+    right: 14px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -466,11 +580,7 @@ function hideBadge(event: Event) {
     transform: scale(1);
   }
 
-  &:hover .rank-crown {
-    opacity: 0;
-  }
-
-  /* 已屏蔽：头像去色弱化，排名装饰让位给状态标记 */
+  /* 已屏蔽：头像去色弱化，排名装饰隐藏 */
   &.is-blocked {
     .avatar {
       filter: grayscale(1);
@@ -484,8 +594,8 @@ function hideBadge(event: Event) {
 
   .blocked-flag {
     position: absolute;
-    top: 6px;
-    right: 6px;
+    top: 12px;
+    right: 14px;
     display: inline-flex;
     gap: 3px;
     align-items: center;
@@ -528,6 +638,7 @@ function hideBadge(event: Event) {
   }
 
   &:hover .unblock-btn {
+    line-height: 1;
     opacity: 1;
     pointer-events: auto;
     transform: translateX(-50%) translateY(0);

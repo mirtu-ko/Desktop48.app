@@ -204,9 +204,12 @@ class Database {
     return resolveBlockedMembers(this.db.blockedMemberIds, this.db.starInfo ?? [])
   }
 
-  /** 读取 h5.48.cn 的 allmembers 成员名单（同步成员数据库时落库，见 apis.syncInfo） */
+  /** 读取 h5.48.cn 的 allmembers 成员名单（同步成员数据库时落库，见 apis.syncInfo）+ 兼职成员档案 */
   public getAllMembers() {
-    return { allmembers: this.db.allmembers ?? [] }
+    return {
+      allmembers: this.db.allmembers ?? [],
+      adjuncts: this.db.starAdjunctInfo ?? [],
+    }
   }
 
   public setBlockedMembers(ids: number[]) {

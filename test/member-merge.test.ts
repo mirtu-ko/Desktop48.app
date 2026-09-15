@@ -1,7 +1,7 @@
 import type { AllMemberItem } from '../src/preload/ipc-contract'
 import type { MemberTreeLike } from '../src/renderer/src/utils/member-merge'
 import { describe, expect, it } from 'vitest'
-import { mergeMembers } from '../src/renderer/src/utils/member-merge'
+import { buildAdjuncts, mergeMembers } from '../src/renderer/src/utils/member-merge'
 
 /**
  * 用例按真实数据的三种形态构造：
@@ -180,5 +180,143 @@ describe('mergeMembers（两数据源合并的纯函数）', () => {
     expect(onlyTree.ranking).toBe('')
     expect(onlyTree.company).toBe('')
     expect(onlyTree.status).toBe(1)
+  })
+})
+
+/**
+ * 兼任成员（starAdjunctInfo）的展示记录：详情一律取本人档案，档案只负责队伍定位。
+ * 用例覆盖数据里真实存在的四种形态：正常兼任 / 本人档案暂休 / 无效档案 / 队伍查不到。
+ */
+describe('buildAdjuncts（兼任记录 = 本人档案 + 兼任队伍定位）', () => {
+  // 主队：SNH48 TEAM SII（队色 90CCEA）；兼任队伍：GNZ48 TEAM G（队色 AAC913）
+  const tree: MemberTreeLike[] = [
+    {
+      groupName: 'SNH48',
+      groupId: 10,
+      children: [
+        {
+          teamName: 'TEAM SII',
+          value: '101',
+          teamBadge: '/backstage/sii.png',
+          children: [
+            {
+              userId: 1,
+              realName: '甲',
+              nickname: '甲甲',
+              avatar: 'https://www.snh48.com/images/member/zp_10001.jpg',
+              teamColor: '90CCEA',
+              status: 1,
+              wbUid: '123',
+              fullPhoto1: '/photo/1.jpg',
+              fullPhoto2: '',
+            },
+            { userId: 2, realName: '乙', avatar: '', teamColor: '90CCEA', status: 1 },
+          ],
+        },
+      ],
+    },
+    {
+      groupName: 'GNZ48',
+      groupId: 12,
+      children: [
+        {
+          teamName: 'TEAM G',
+          value: '402',
+          teamBadge: '/backstage/gnz-g.png',
+          // 本人档案是暂休态：兼任有效时仍要出现在在团分区
+          children: [{ userId: 4, realName: '丙', avatar: '', teamColor: 'AAC913', status: 2 }],
+        },
+      ],
+    },
+  ]
+
+  const allmembers: AllMemberItem[] = [
+    {
+      sid: '10001',
+      sname: '甲',
+      pocket_id: '1',
+      gid: '10',
+      tname: 'SII',
+      status: '99',
+      ranking: '12',
+      experience: '2012.10.14 加入',
+      company: '上海丝芭文化传媒集团有限公司',
+      birth_day: '05.11',
+    },
+  ]
+
+  const merged = mergeMembers(tree, allmembers)
+
+  const adjuncts = [
+    // 甲：主队 SNH48 TEAM SII → 兼任 GNZ48 TEAM G
+    { adjunctId: 11, userId: 1, starName: '甲', headImg: 'https://source.48.cn/adj/1.jpg', groupId: 12, teamId: 402, status: 1 },
+    // 丙：主队 GNZ48 TEAM G（本人档案暂休）→ 兼任 SNH48 TEAM SII
+    { adjunctId: 12, userId: 4, starName: '丙', headImg: '', groupId: 10, teamId: 101, status: 1 },
+    // 无效档案（status !== 1）不展示
+    { adjunctId: 13, userId: 2, starName: '乙', headImg: '', groupId: 10, teamId: 101, status: 0 },
+    // 队伍 id 在树里查不到 → 定位不到队伍，丢弃
+    { adjunctId: 14, userId: 2, starName: '乙', headImg: '', groupId: 10, teamId: 999, status: 1 },
+    // 本人档案缺失（库里没有这个 userId）→ 姓名 / 头像 / userId 退回归档本身
+    { adjunctId: 15, userId: 999, starName: '戊', headImg: 'https://source.48.cn/adj/5.jpg', groupId: 12, teamId: 402, status: 1 },
+    // 兼任队伍就是本人主队（甲的主队是 SNH48 TEAM SII）→ 不产生新信息，跳过
+    { adjunctId: 16, userId: 1, starName: '甲', headImg: '', groupId: 10, teamId: 101, status: 1 },
+  ]
+
+  const list = buildAdjuncts(merged, tree, adjuncts)
+
+  it('只保留有效且能定位队伍的档案，按档案归入兼任队伍', () => {
+    expect(list.map(member => member.realName)).toEqual(['甲', '丙', '戊'])
+    expect(list.map(member => member.teamName)).toEqual(['TEAM G', 'TEAM SII', 'TEAM G'])
+    expect(list.map(member => member.groupName)).toEqual(['GNZ48', 'SNH48', 'GNZ48'])
+    expect(list.map(member => member.adjunctId)).toEqual([11, 12, 15])
+  })
+
+  it('兼任队伍与本人主队相同时跳过该档案（否则同一分区会出现同一人两张卡）', () => {
+    expect(list.some(member => member.adjunctId === 16)).toBe(false)
+  })
+
+  it('详情字段取自本人档案（抽屉里不再缺资料）', () => {
+    const [jia] = list
+    expect(jia.userId).toBe(1)
+    expect(jia.nickname).toBe('甲甲')
+    expect(jia.wbUid).toBe('123')
+    expect(jia.birthday).toBe('05.11')
+    expect(jia.ranking).toBe('12')
+    expect(jia.experience).toBe('2012.10.14 加入')
+    expect(jia.company).toBe('上海丝芭文化传媒集团有限公司')
+    expect(jia.photos).toEqual(['https://source.48.cn/photo/1.jpg'])
+    // 头像也跟随本人档案，与普通卡片是同一张
+    expect(jia.avatar).toBe('https://www.snh48.com/images/member/zp_10001.jpg')
+  })
+
+  it('队伍名 / 队色 / 徽章换成兼任队伍的，头像圆环仍取主队色', () => {
+    const [jia] = list
+    expect(jia.teamColor).toBe('AAC913')
+    expect(jia.teamBadge).toBe('https://source.48.cn/backstage/gnz-g.png')
+    expect(jia.ringColor).toBe('90CCEA')
+    expect(jia.adjunctId).toBe(11)
+  })
+
+  it('有效兼任按在团展示（本人档案是暂休态也进在团分区）', () => {
+    const bing = list.find(member => member.userId === 4)!
+    expect(bing.status).toBe(1)
+    expect(bing.teamName).toBe('TEAM SII')
+    // 圆环仍是他自己的队伍（GNZ48 TEAM G）色
+    expect(bing.ringColor).toBe('AAC913')
+  })
+
+  it('本人档案缺失时退回归档内容，不整条丢展示', () => {
+    const fallback = list.find(member => member.userId === 999)!
+    expect(fallback.realName).toBe('戊')
+    expect(fallback.avatar).toBe('https://source.48.cn/adj/5.jpg')
+    expect(fallback.teamName).toBe('TEAM G')
+    expect(fallback.ranking).toBe('')
+    expect(fallback.ringColor).toBe('')
+  })
+
+  it('空输入不抛错：没有档案 / 没有成员数据都返回空数组', () => {
+    expect(buildAdjuncts(merged, tree, undefined)).toEqual([])
+    expect(buildAdjuncts(merged, tree, [])).toEqual([])
+    expect(buildAdjuncts([], tree, adjuncts).map(member => member.realName)).toEqual(['甲', '丙', '戊'])
   })
 })

@@ -13,8 +13,11 @@
  * 除已配对的那条外按「同名 + 同期数」判为镜像重复丢弃；仍配不上的（官网独有的
  * 离团成员）作为补充记录追加，能展示、能进「成员库」，但没有 userId 因此不能
  * 屏蔽也不会出现在回放筛选里。
+ *
+ * 兼任成员（starAdjunctInfo）不在这里合并：见文件末尾的 buildAdjuncts ——
+ * 它以合并结果里的本人档案为底、只覆盖队伍定位字段。
  */
-import type { AllMemberItem } from '../../../preload/ipc-contract'
+import type { AllMemberItem, StarAdjunctItem } from '../../../preload/ipc-contract'
 import Constants from '@renderer/utils/constants'
 import Tools from '@renderer/utils/tools'
 
@@ -35,8 +38,17 @@ export interface MemberDetail {
   teamName: string
   /** 已归一化的队伍徽章 */
   teamBadge: string
-  /** 队伍色（HEX 无 #） */
+  /** 队伍色（HEX 无 #）：与 teamName 同一支队伍的颜色 */
   teamColor: string
+  /**
+   * 头像圆环强调色（HEX 无 #），仅兼任记录有值。
+   * 兼任记录展示在「兼任队伍」的分区里（teamName/teamColor 都是兼任队伍的），
+   * 但圆环改用成员本人所属队伍（主队）的颜色，一眼看出兼任成员的来源队伍。
+   * 取值来源见本文件 buildAdjuncts；为空时圆环回退 teamColor / 默认渐变。
+   */
+  ringColor?: string
+  /** 兼职档案主键（starAdjunctInfo.adjunctId），仅兼任记录有值：卡片 key 用它，与本人记录区分 */
+  adjunctId?: number
   /** 1 在团 2 暂休 3 退团，取值见 Constants.MemberStatus */
   status: number
   birthday: string
@@ -58,6 +70,7 @@ export interface MemberDetail {
   /** 经历（接口用 <br> 分行） */
   experience: string
   catchPhrase: string
+  /** 所属公司 */
   company: string
   [key: string]: unknown
 }
@@ -68,6 +81,8 @@ export interface MemberTreeLike {
   groupId?: number | string
   children: Array<{
     teamName: string
+    /** 队伍 id：兼任记录按 id 归位时用；官网补充数据里可能没有 */
+    value?: string
     teamBadge?: string
     children: TreeMemberLike[]
   }>
@@ -275,4 +290,107 @@ export function mergeMembers(
     ...rows.map((row, index) => buildMember(row, paired.get(index), groupNames)),
     ...extras.map(record => buildMember(undefined, record, groupNames)),
   ]
+}
+
+/**
+ * 由兼职成员档案（starAdjunctInfo）构造兼任成员的展示记录（纯函数，可单测）。
+ *
+ * 详情字段不另起炉灶：整条以 `members` 里该成员本人的合并记录（主队档案）打底，
+ * 与普通卡片共用同一份数据源 —— 于是点开抽屉能看到完整的生日 / 写真 / 经历 / 排名，
+ * 而不是一堆空字段。兼职档案只负责「这张卡归到哪支队伍」：
+ *   - 覆盖队伍定位字段（groupId/groupName/teamName/teamColor/teamBadge → 兼任队伍）
+ *   - 带出档案主键 adjunctId（卡片 key 用）
+ * 档案里只有 id，队伍名 / 队色从成员树查表（队色逐成员派生在叶子上，同队必然同色）。
+ *
+ * 两个例外：
+ *   - 头像圆环取**主队色** ringColor：卡片排在兼任队伍分区里，圆环用来标示来源队伍
+ *   - 有效兼任一律按在团（status=1）展示：本人档案可能是暂休 / 退团态
+ *
+ * 被丢弃的两类档案：定位不到队伍（团队名查不到）；兼任队伍与本人主队相同
+ * （不产生任何额外信息，留下只会让同一人在同一分区出现两张卡）。
+ *
+ * @param members  合并后的成员列表（兼任记录的详情来源）
+ * @param tree     成员树：提供队伍名 / 队色 / 徽章，以及「成员 → 本人主队 id」
+ * @param adjuncts starAdjunctInfo 原始数据，仅 status===1 的记录会被展示
+ */
+export function buildAdjuncts(
+  members: MemberDetail[],
+  tree: MemberTreeLike[] | undefined,
+  adjuncts: StarAdjunctItem[] | undefined,
+): MemberDetail[] {
+  if (!adjuncts?.length)
+    return []
+
+  // 队伍 id → 队伍名 / 队色 / 徽章，团体 id → 团体名（档案里只有 id，得回成员树查）
+  const teamNameById = new Map<string, string>()
+  const teamColorById = new Map<string, string>()
+  const teamBadgeById = new Map<string, string>()
+  const groupNameById = new Map<string, string>()
+  // userId → 本人主队 id：识别「兼任队伍 == 主队」的档案（叶子在树里天然带所属队伍，反查即可）
+  const ownTeamIdByUserId = new Map<string, string>()
+  for (const group of tree || []) {
+    if (group.groupId !== undefined)
+      groupNameById.set(String(group.groupId), group.groupName)
+    for (const team of group.children || []) {
+      if (!team.value)
+        continue
+      teamNameById.set(team.value, team.teamName)
+      const badge = text(team.teamBadge)
+      if (badge)
+        teamBadgeById.set(team.value, Tools.sourceUrl(badge))
+      const color = text(team.children.find(child => text(child.teamColor))?.teamColor)
+      if (color)
+        teamColorById.set(team.value, color)
+      for (const leaf of team.children) {
+        const uid = text(leaf.userId)
+        if (uid)
+          ownTeamIdByUserId.set(uid, team.value)
+      }
+    }
+  }
+
+  // userId → 本人（主队）档案：兼任记录详情字段的唯一来源
+  const byUserId = new Map<number, MemberDetail>()
+  for (const member of members) {
+    if (member.userId !== undefined)
+      byUserId.set(member.userId, member)
+  }
+
+  return adjuncts
+    // 只看有效兼任数据
+    .filter(a => Number(a.status) === 1)
+    // 兼任队伍就是本人主队：该条不带来任何新信息，跳过（否则同一分区出现同一人两张卡）
+    .filter(a => ownTeamIdByUserId.get(text(a.userId)) !== String(a.teamId ?? ''))
+    .map((a) => {
+      const teamId = String(a.teamId ?? '')
+      // 本人（主队）档案：详情字段的来源；库里查不到这个人时，下面逐项退回兼职档案
+      const own = byUserId.get(Number(a.userId))
+      const ownUserId = Number(a.userId)
+      return {
+        // 本人档案打底：与普通卡片同一份数据，抽屉里资料是齐的
+        ...own,
+        // —— 定位覆盖：卡片归入兼任队伍的分区 ——
+        groupId: a.groupId,
+        groupName: groupNameById.get(String(a.groupId ?? '')) || own?.groupName || '',
+        teamName: teamNameById.get(teamId) || '',
+        teamColor: teamColorById.get(teamId) || '',
+        teamBadge: teamBadgeById.get(teamId) || '',
+        // 圆环取主队色（兼任队伍色由分区标题承担）
+        ringColor: own?.teamColor || '',
+        // 有效兼任按在团处理（本人档案可能是暂休 / 退团态）
+        status: Constants.MemberStatus.Active,
+        realName: own?.realName || text(a.starName),
+        nickname: own?.nickname || text(a.nickname),
+        abbr: own?.abbr || text(a.abbr),
+        avatar: own?.avatar || text(a.headImg),
+        sid: own?.sid || '',
+        ranking: own?.ranking || '',
+        // 本人档案缺失时仍保留档案里的 userId：屏蔽与回放入口依赖它
+        userId: own?.userId ?? (Number.isFinite(ownUserId) && ownUserId > 0 ? ownUserId : undefined),
+        // 档案主键：卡片 key 用它（见 Members.vue cardKey）
+        adjunctId: a.adjunctId,
+      } as MemberDetail
+    })
+    // 兼任成员必须能定位队伍，否则无法归位展示
+    .filter(member => member.teamName && member.groupName)
 }
