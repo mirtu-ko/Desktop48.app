@@ -151,7 +151,7 @@ const liveBadge = computed(() => {
       background: var(--el-color-danger);
     }
 
-    &.live-badge--review {
+    &.live-badge--playback {
       background: var(--el-color-success);
     }
 
