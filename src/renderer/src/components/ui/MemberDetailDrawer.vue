@@ -1,53 +1,25 @@
 <script setup lang="ts">
+import type { MemberDetail } from '@renderer/utils/member-merge'
 import { Film, Hide, Link, User, View } from '@element-plus/icons-vue'
 import Constants from '@renderer/utils/constants'
 import Tools from '@renderer/utils/tools'
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 
-/** 成员详情（树节点为 starInfo 全量字段的 spread，这里声明展示用到的字段） */
-export interface MemberDetail {
-  userId: number
-  realName: string
-  nickname: string
-  avatar: string
-  teamName: string
-  teamColor: string
-  /** 1 在团 2 暂休 3 退团 */
-  status: number
-  birthday: string
-  constellation: string
-  bloodType: string
-  height: string
-  birthplace: string
-  joinTime: string
-  periodName: string
-  specialty: string
-  hobbies: string
-  wbName: string
-  wbUid: string
-  fullPhoto1?: string
-  fullPhoto2?: string
-  fullPhoto3?: string
-  fullPhoto4?: string
-  [key: string]: unknown
-}
-
+/**
+ * 成员详情抽屉（两个数据源合并后的唯一详情页）：
+ * starInfo 提供头像/写真/微博/状态，allmembers 补齐排名/经历/口头禅/所属公司。
+ */
 const props = defineProps<{ member: MemberDetail | null, blocked?: boolean }>()
 const emit = defineEmits<{ close: [], toggleBlock: [member: MemberDetail] }>()
 
 const router = useRouter()
 
-/** 成员状态元信息：收口于 Constants.MemberStatusMeta（与成员页分区/回放页排序共用） */
+/** 成员状态元信息：收口于 Constants.MemberStatusMeta（与成员页分区共用） */
 const STATUS_META = Constants.MemberStatusMeta
 
 const statusMeta = computed(() =>
   STATUS_META[props.member?.status ?? 1] || STATUS_META[1],
-)
-
-/** 归一化后的头像 */
-const avatar = computed(() =>
-  props.member?.avatar ? Tools.sourceUrl(props.member.avatar) : '',
 )
 
 /** 基础资料（空值字段不展示） */
@@ -63,18 +35,17 @@ const profileItems = computed(() => {
     { label: '出生地', value: member.birthplace },
     { label: '入团时间', value: member.joinTime },
     { label: '期数', value: member.periodName },
+    { label: '总选排名', value: member.ranking ? `第 ${member.ranking} 名` : '' },
   ].filter(item => item.value)
 })
 
-/** 写真图集（fullPhoto1-4，空值过滤 + 相对路径归一化） */
-const photos = computed(() => {
-  const member = props.member
-  if (!member)
-    return []
-  return [member.fullPhoto1, member.fullPhoto2, member.fullPhoto3, member.fullPhoto4]
-    .filter(photo => !!photo)
-    .map(photo => Tools.sourceUrl(photo as string))
-})
+/** 经历：接口用 <br> 分行，按 <br>/<br/> 拆成行数组渲染（避免 v-html 引入 XSS） */
+const experienceLines = computed(() =>
+  (props.member?.experience || '').split(/<br\s*\/?>/i).map(line => line.trim()).filter(Boolean),
+)
+
+/** 官网独有的补充成员没有口袋 userId：屏蔽与回放入口都不可用 */
+const actionable = computed(() => typeof props.member?.userId === 'number')
 
 /** 关闭抽屉（点击遮罩 / ESC / 关闭按钮） */
 function onVisibilityChange(value: boolean) {
@@ -86,7 +57,7 @@ function onVisibilityChange(value: boolean) {
  *  跳转语义由路由 query 承载（原 EventBus 'open-member-playbacks' 事件已移除）：
  *  /lives?tab=playback&member=<userId>，Lives 页解析后切 tab + 应用筛选 */
 function openPlaybacks() {
-  if (!props.member)
+  if (!props.member?.userId)
     return
   emit('close')
   router.push({ path: '/lives', query: { tab: 'playback', member: String(props.member.userId) } })
@@ -100,9 +71,9 @@ function openPlaybacks() {
     @update:model-value="onVisibilityChange"
   >
     <div v-if="member" class="detail">
-      <!-- 头部：头像 + 姓名/昵称 + 队伍徽章 + 状态 -->
+      <!-- 头部：头像 + 姓名/队伍徽章 + 状态徽章 + 昵称 + 微博 -->
       <div class="hero">
-        <el-image class="avatar" :src="avatar" fit="cover">
+        <el-image class="avatar" :src="member.avatar" fit="cover">
           <template #placeholder>
             <div class="avatar-ph" />
           </template>
@@ -119,23 +90,29 @@ function openPlaybacks() {
             <p class="name ellipsis" :title="member.realName">
               {{ member.realName }}
             </p>
-            <div class="tags">
-              <el-tag v-if="blocked" type="danger" size="small" effect="light">
-                已屏蔽
-              </el-tag>
-              <el-tag :type="statusMeta.tag" size="small" effect="light">
-                {{ statusMeta.label }}
-              </el-tag>
-              <span
-                v-if="member.teamName"
-                class="team-badge"
-                :style="member.teamColor ? { '--tb-color': `#${member.teamColor}` } : undefined"
-              >
-                {{ Tools.shortTeamName(member.teamName) }}
-              </span>
-            </div>
+            <span
+              v-if="member.teamName"
+              class="team-badge"
+              :style="member.teamColor ? { '--tb-color': `#${member.teamColor}` } : undefined"
+            >
+              {{ Tools.shortTeamName(member.teamName) }}
+            </span>
           </div>
-          <p class="nick ellipsis" :title="member.nickname">
+          <div class="tags">
+            <el-tag v-if="blocked" type="danger" size="small" effect="light">
+              已屏蔽
+            </el-tag>
+            <el-tag :type="statusMeta.tag" size="small" effect="light">
+              {{ statusMeta.label }}
+            </el-tag>
+            <span v-if="member.groupName" class="group-chip">
+              {{ member.groupName }}
+            </span>
+            <span v-if="member.abbr" class="group-chip">
+              {{ member.abbr }}
+            </span>
+          </div>
+          <p v-if="member.nickname" class="nick ellipsis" :title="member.nickname">
             {{ member.nickname }}
           </p>
           <a
@@ -179,18 +156,47 @@ function openPlaybacks() {
         </p>
       </div>
 
+      <div v-if="member.catchPhrase" class="block">
+        <p class="label">
+          Catch Phrase
+        </p>
+        <p class="value">
+          {{ member.catchPhrase }}
+        </p>
+      </div>
+
+      <div v-if="experienceLines.length" class="block">
+        <p class="label">
+          经历
+        </p>
+        <ul class="experience-list">
+          <li v-for="(line, index) in experienceLines" :key="index">
+            {{ line }}
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="member.company" class="block">
+        <p class="label">
+          所属公司
+        </p>
+        <p class="value">
+          {{ member.company }}
+        </p>
+      </div>
+
       <!-- 写真图集：点击放大预览 -->
-      <div v-if="photos.length" class="block">
+      <div v-if="member.photos.length" class="block">
         <p class="label">
           写真
         </p>
         <div class="photos">
           <el-image
-            v-for="(photo, index) in photos"
+            v-for="(photo, index) in member.photos"
             :key="photo"
             class="photo"
             :src="photo"
-            :preview-src-list="photos"
+            :preview-src-list="member.photos"
             :initial-index="index"
             fit="cover"
             lazy
@@ -205,8 +211,8 @@ function openPlaybacks() {
         </div>
       </div>
 
-      <!-- 回放直达 + 屏蔽操作 -->
-      <div class="actions">
+      <!-- 回放直达 + 屏蔽操作（官网独有的补充成员没有 userId，两者都不展示） -->
+      <div v-if="actionable" class="actions">
         <el-button type="primary" class="playback-btn" :icon="Film" @click="openPlaybacks">
           看 TA 的回放
         </el-button>
@@ -276,7 +282,6 @@ function openPlaybacks() {
   }
 
   .name {
-    flex: 1;
     min-width: 0;
     margin: 0;
     font-size: 20px;
@@ -284,18 +289,28 @@ function openPlaybacks() {
     color: var(--el-text-color-primary);
   }
 
-  .nick {
-    margin: 4px 0 0;
-    font-size: 13px;
-    color: var(--el-text-color-secondary);
-  }
-
   .tags {
     display: flex;
     gap: 8px;
     align-items: center;
-    flex: none;
+    margin-top: 8px;
+    flex-wrap: wrap;
   }
+
+  .nick {
+    margin: 8px 0 0;
+    font-size: 13px;
+    color: var(--el-text-color-secondary);
+  }
+}
+
+.group-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light);
 }
 
 .weibo-link {
@@ -338,6 +353,7 @@ function openPlaybacks() {
   }
 
   .value {
+    min-width: 0;
     color: var(--el-text-color-primary);
   }
 }
@@ -345,8 +361,9 @@ function openPlaybacks() {
 .block {
   .label {
     margin: 0 0 6px;
-    font-size: 12px;
-    color: var(--el-text-color-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--el-text-color-regular);
   }
 
   .value {
@@ -354,13 +371,27 @@ function openPlaybacks() {
     font-size: 14px;
     line-height: 1.6;
     color: var(--el-text-color-primary);
+    white-space: pre-line;
   }
+}
 
-  .photos {
-    display: grid;
-    gap: 10px;
-    grid-template-columns: repeat(2, 1fr);
+/* 经历：无序列表小点 */
+.experience-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--el-text-color-primary);
+
+  li {
+    margin: 2px 0;
   }
+}
+
+.photos {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, 1fr);
 
   .photo,
   .photo-ph {

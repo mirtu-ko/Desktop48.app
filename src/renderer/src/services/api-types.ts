@@ -56,6 +56,28 @@ export interface SyncInfoContent {
   groupInfo: GroupInfoItem[]
 }
 
+/** ===== h5.48.cn jsonp 成员名单（同步成员数据库时的补充数据源） ===== */
+
+/** allmembers.php 的响应信封（jsonp 剥壳后即此结构） */
+export interface AllMemberEnvelope<T> {
+  total?: string
+  rows?: T[]
+}
+
+/** allmembers.php 单条记录（全量字段，沿用原始蛇形命名）：渲染端接口视图，落库侧同名片见 main/data.ts，改动请同步 */
+export interface AllMemberItem {
+  sid: string
+  sname?: string
+  pinyin?: string
+  abbr?: string
+  gid?: string
+  gname?: string
+  tid?: string
+  tname?: string
+  status?: string
+  [key: string]: unknown
+}
+
 /** ===== 直播 / 回放列表（LIVE_LIST_URL，翻页游标结构） ===== */
 
 export interface LiveUserInfo {

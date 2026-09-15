@@ -36,6 +36,7 @@ const api = {
   // ===== 成员与屏蔽名单 =====
   // 对端：main/ipc/register-database-ipc.ts
   saveMemberData: (data: Partial<MemberDataContent>) => ipcRenderer.invoke('saveMemberData', data),
+  getAllMembers: () => ipcRenderer.invoke('getAllMembers'),
   hasMembers: () => ipcRenderer.invoke('hasMembers'),
   getMemberInfo: (userId: number) => ipcRenderer.invoke('getMemberInfo', userId),
   getMemberTree: () => ipcRenderer.invoke('getMemberTree'),

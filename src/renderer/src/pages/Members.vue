@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MemberDetail } from '@renderer/components/ui/MemberDetailDrawer.vue'
+import type { MemberDetail } from '@renderer/utils/member-merge'
 import { Hide, User, View } from '@element-plus/icons-vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
@@ -8,39 +8,45 @@ import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import { useBlockedMembersStore } from '@renderer/stores/blocked-members'
 import Constants from '@renderer/utils/constants'
+import { mergeMembers } from '@renderer/utils/member-merge'
 import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 
-/** 成员树：分团 → 队伍 → 成员（getMemberTree 返回结构） */
-interface TeamNode {
-  teamName: string
-  /** 队伍徽章（seineTeamBadge，可能是相对路径，展示前需归一化） */
-  teamBadge?: string
-  children: MemberDetail[]
-}
+/**
+ * 顶部 tab：5 个分团 + 末尾「成员库」（全部团体）。
+ * key 一律是 groupId —— 与公演页 Constants.GroupTabs 共用同一套分团配置（含主题色），
+ * 展示顺序按需求固定为 SNH48 / GNZ48 / BEJ48 / CKG48 / CGT48 / 成员库。
+ */
+const LIBRARY_KEY = 'library'
+const GROUP_TAB_KEYS = ['10', '12', '11', '14', '21']
 
-interface GroupNode {
-  groupName: string
-  /** 主进程树节点里可能是字符串 id 或缺省，比较时统一 String() 归一化 */
-  groupId: number | string | undefined
-  children: TeamNode[]
-}
+const MEMBER_TABS: Array<{ label: string, key: string, color: string }> = [
+  ...GROUP_TAB_KEYS.map(key => Constants.GroupTabs.find(tab => tab.key === key) ?? { label: key, key, color: '' }),
+  { label: '成员库', key: LIBRARY_KEY, color: Constants.Theme.MEMBERS },
+]
 
+const activeKey = ref('10')
+const isLibrary = computed(() => activeKey.value === LIBRARY_KEY)
+
+/** 合并后的成员列表：成员树（starInfo）为骨架，allmembers 补官网字段，见 utils/member-merge.ts */
+const members = ref<MemberDetail[]>([])
 const loading = ref(true)
-const groups = ref<GroupNode[]>([])
 
-/** 当前分团 groupId：取值见 Constants.GroupTabs（'0'=全部） */
-const groupId = ref('0')
+/** 当前查看详情的成员（null = 抽屉关闭） */
+const selectedMember = ref<MemberDetail | null>(null)
 
-/** 左上角分团切换 tab 选项（与公演页共用同一份分团配置 Constants.GroupTabs） */
-const groupTabs = Constants.GroupTabs
+/** 屏蔽名单：模块级共享状态，机制见 stores/blocked-members.ts */
+const { refreshBlockedMembers, isBlocked, toggleBlock } = useBlockedMembersStore()
 
 /** 成员状态（starInfo.status）取值收口见 Constants.MemberStatus（与详情抽屉/回放页共用） */
 const { Active: STATUS_ACTIVE, Hiatus: STATUS_HIATUS, Left: STATUS_LEFT } = Constants.MemberStatus
 
 interface MemberSection {
+  /** 分区标识（团体 + 队伍 / 状态分区名） */
+  key: string
   title: string
+  /** 队伍徽章（合并时已归一化） */
   teamBadge: string
   /** 分区标题主题色：跟随队伍 teamColor；暂休/退团走弱化灰变体 */
   accent?: string
@@ -48,112 +54,74 @@ interface MemberSection {
   members: MemberDetail[]
 }
 
-/** 头像相对路径归一化 */
-function normalizeMember(member: MemberDetail): MemberDetail {
-  return { ...member, avatar: member.avatar ? Tools.sourceUrl(member.avatar) : '' }
-}
-
-/** 徽章加载失败时隐藏，避免显示碎图 */
-function hideBadge(event: Event) {
-  (event.target as HTMLImageElement).style.visibility = 'hidden'
-}
-
-/** 当前查看详情的成员（null = 抽屉关闭） */
-const selectedMember = ref<MemberDetail | null>(null)
-
-/** 屏蔽名单：模块级共享状态，机制见 use-blocked-members.ts */
-const { refreshBlockedMembers, isBlocked, toggleBlock } = useBlockedMembersStore()
-
-/** API 把“明星殿堂”建模成独立分团（groupId 19），展示上并入 SNH48 的同名队伍 */
-const HALL_GROUP_NAME = '明星殿堂'
-const HALL_HOST_GROUP_NAME = 'SNH48'
-
-/** 展示分节：分团队伍只收在团成员（status=1），末尾追加 暂休（status=2）/ 退团（status=3），均受分团筛选影响 */
-const sections = computed<MemberSection[]>(() => {
-  const hall = groups.value.find(group => group.groupName === HALL_GROUP_NAME)
-  // 纯展示层合并：不改原树，避免副作用（回放筛选、屏蔽成员仍用原结构）
-  const merged = groups.value
-    .filter(group => group.groupName !== HALL_GROUP_NAME)
-    .map((group) => {
-      if (!hall || group.groupName !== HALL_HOST_GROUP_NAME) {
-        return group
-      }
-      const children = [...group.children]
-      for (const team of hall.children) {
-        const index = children.findIndex(item => item.teamName === team.teamName)
-        if (index >= 0) {
-          children[index] = {
-            ...children[index],
-            children: [...children[index].children, ...team.children],
-          }
-        }
-        else {
-          children.push(team)
-        }
-      }
-      return { ...group, children }
-    })
-
-  const list = merged.filter(
-    group => groupId.value === '0' || String(group.groupId) === groupId.value,
-  )
-  const collect = (status: number) =>
-    list.flatMap(group =>
-      group.children.flatMap(team =>
-        team.children.filter(member => member.status === status).map(normalizeMember),
-      ),
-    )
-
-  const result: MemberSection[] = []
-  for (const group of list) {
-    for (const team of group.children) {
-      const members = team.children
-        .filter(member => member.status === STATUS_ACTIVE)
-        .map(normalizeMember)
-      if (members.length) {
-        // 队伍主题色：取队伍内任一成员的 teamColor（与成员卡片徽章同源）
-        const teamColor = team.children.find(member => member.teamColor)?.teamColor || ''
-        result.push({
-          title: groupId.value === '0' ? `${group.groupName} · ${team.teamName}` : team.teamName,
-          teamBadge: team.teamBadge ? Tools.sourceUrl(team.teamBadge) : '',
-          accent: teamColor ? `#${teamColor}` : '',
-          members,
-        })
-      }
+/** 按队伍分区：入参已按树的顺序（团体 → teamSort）排好，用 Map 保住首现顺序 */
+function groupByTeam(list: MemberDetail[], withGroup: boolean): MemberSection[] {
+  const sections = new Map<string, MemberSection>()
+  for (const member of list) {
+    const key = `${member.groupName}/${member.teamName}`
+    const existing = sections.get(key)
+    if (existing) {
+      existing.members.push(member)
+      continue
     }
+    sections.set(key, {
+      key,
+      title: withGroup ? `${member.groupName} · ${member.teamName}` : member.teamName,
+      teamBadge: member.teamBadge,
+      accent: member.teamColor ? `#${member.teamColor}` : '',
+      members: [member],
+    })
   }
-  const hiatus = collect(STATUS_HIATUS)
-  if (hiatus.length) {
-    result.push({ title: '暂休', teamBadge: '', muted: true, members: hiatus })
+  return [...sections.values()]
+}
+
+/**
+ * 展示分区：
+ * - 分团 tab：只列在团成员，按队伍分区
+ * - 成员库：全部分团汇总，按「团体 · 队伍」列在团，末尾追加 暂休 / 退团
+ */
+const sections = computed<MemberSection[]>(() => {
+  const scope = isLibrary.value
+    ? members.value
+    : members.value.filter(member => String(member.groupId) === activeKey.value)
+  const active = groupByTeam(scope.filter(member => member.status === STATUS_ACTIVE), isLibrary.value)
+  if (!isLibrary.value)
+    return active
+
+  const inactiveSections = (status: number, title: string): MemberSection[] => {
+    const list = scope.filter(member => member.status === status)
+    return list.length ? [{ key: title, title, teamBadge: '', muted: true, members: list }] : []
   }
-  const left = collect(STATUS_LEFT)
-  if (left.length) {
-    result.push({ title: '退团', teamBadge: '', muted: true, members: left })
-  }
-  return result
+  return [...active, ...inactiveSections(STATUS_HIATUS, '暂休'), ...inactiveSections(STATUS_LEFT, '退团')]
 })
 
-/** 当前筛选下的成员总数（用于空态判断） */
-const memberCount = computed(() =>
-  sections.value.reduce((sum, section) => sum + section.members.length, 0),
+/** 在团 / 暂休退团人数（分团 tab 只有前者的值，后者为 0） */
+const activeCount = computed(() =>
+  sections.value.filter(section => !section.muted).reduce((sum, section) => sum + section.members.length, 0),
 )
-const activeCount = computed(() => sections.value.filter(section => !section.muted).reduce((sum, section) => sum + section.members.length, 0))
-const inactiveCount = computed(() => sections.value.filter(section => section.muted).reduce((sum, section) => sum + section.members.length, 0))
+const inactiveCount = computed(() =>
+  sections.value.filter(section => section.muted).reduce((sum, section) => sum + section.members.length, 0),
+)
+const memberCount = computed(() => activeCount.value + inactiveCount.value)
 
 // 首次/切换后无成员数据时展示骨架；已有数据刷新不整页遮罩
-const showSkeleton = computed(() => loading.value && groups.value.length === 0)
+const showSkeleton = computed(() => loading.value && members.value.length === 0)
 
 onMounted(() => {
-  fetchGroups()
+  fetchMembers()
   refreshBlockedMembers()
 })
 
-/** 拉取成员树（挂载初始化 / 双击分团 tab 刷新共用） */
-async function fetchGroups() {
+/** 拉取两个数据源并合并（挂载初始化 / 双击 tab / 更新数据库后共用） */
+async function fetchMembers() {
   loading.value = true
   try {
-    // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts（成员树是主进程内存派生，不落盘）
-    groups.value = (await window.mainAPI.getMemberTree()) || []
+    // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts
+    const [tree, payload] = await Promise.all([
+      window.mainAPI.getMemberTree(),
+      window.mainAPI.getAllMembers(),
+    ])
+    members.value = mergeMembers(tree, payload?.allmembers)
   }
   catch (error) {
     console.error('获取成员信息失败:', error)
@@ -164,22 +132,40 @@ async function fetchGroups() {
   }
 }
 
+/** 切换 tab：FloatingTabBar 的 change 事件载荷是 string，这里按已知 tab 收窄 */
+function changeTab(key: string) {
+  if (MEMBER_TABS.some(tab => tab.key === key))
+    activeKey.value = key
+}
+
 /** 成员同步：loading 态与接口调用收口在 use-member-sync.ts（与首页的启动兜底共用一份逻辑） */
 const { isSyncing, syncMembers } = useMemberSync()
 
 /** 更新成员数据库：从接口同步最新名单，成功后刷新本页 */
 async function updateMembers() {
   const ok = await syncMembers()
-  if (ok) {
-    await fetchGroups()
-  }
+  if (ok)
+    await fetchMembers()
+}
+
+/** 屏蔽 / 解除屏蔽：官网独有的补充成员没有 userId，直接忽略（卡片上也不给入口） */
+function toggleBlockMember(member: MemberDetail) {
+  const { userId } = member
+  if (typeof userId !== 'number')
+    return
+  void toggleBlock({ ...member, userId })
+}
+
+/** 徽章加载失败时隐藏，避免显示碎图 */
+function hideBadge(event: Event) {
+  (event.target as HTMLImageElement).style.visibility = 'hidden'
 }
 </script>
 
 <template>
   <div class="page-root">
-    <!-- 左上角浮动分团切换：与公演页同一套交互；双击当前分团刷新成员数据 -->
-    <FloatingTabBar :tabs="groupTabs" :active="groupId" @change="groupId = $event" @refresh="fetchGroups" />
+    <!-- 左上角浮动分团切换：5 个分团 + 成员库；双击当前 tab 刷新列表 -->
+    <FloatingTabBar :tabs="MEMBER_TABS" :active="activeKey" @change="changeTab" @refresh="fetchMembers" />
     <el-scrollbar class="scrollbar-wrapper">
       <CardSkeletonGrid
         v-if="showSkeleton"
@@ -191,12 +177,12 @@ async function updateMembers() {
         :line-widths="[68]"
       />
       <div v-else class="members-container">
-        <section v-for="section in sections" :key="section.title" class="group-section">
+        <section v-for="section in sections" :key="section.key" class="group-section">
           <h2 class="team-title">
             <img
               v-if="section.teamBadge"
               class="team-badge-img"
-              :src="Tools.sourceUrl(section.teamBadge)"
+              :src="section.teamBadge"
               alt=""
               @error="hideBadge"
             >
@@ -209,11 +195,12 @@ async function updateMembers() {
             </span>
           </h2>
           <div class="member-list">
+            <!-- 官网独有的补充成员没有 userId，用 sid 兜底做 key -->
             <div
               v-for="member in section.members"
-              :key="member.userId"
+              :key="member.userId ?? member.sid"
               class="member-card lift-card clickable"
-              :class="{ 'is-blocked': isBlocked(member.userId) }"
+              :class="{ 'is-blocked': !!member.userId && isBlocked(member.userId) }"
               @click="selectedMember = member"
             >
               <el-image class="avatar" :src="member.avatar" fit="cover" lazy>
@@ -228,6 +215,20 @@ async function updateMembers() {
                   </div>
                 </template>
               </el-image>
+
+              <!-- 排名徽章：总选排名非 0 的成员右上角显示皇冠，数字内嵌皇冠中 -->
+              <span v-if="member.ranking" class="rank-crown">
+                <svg
+                  class="rank-crown__svg"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path d="M12 2l2.4 4.9L19 5l-2.1 5.6 2.6 2.3L12 21l-7.5-8.1 2.6-2.3L5 5l4.6 1.9L12 2z" />
+                </svg>
+                <span class="rank-crown__num">{{ member.ranking }}</span>
+              </span>
+
               <div class="member-meta">
                 <p class="member-name ellipsis" :title="member.realName">
                   {{ member.realName }}
@@ -241,32 +242,32 @@ async function updateMembers() {
                 {{ Tools.shortTeamName(member.teamName) }}
               </span>
 
-              <!-- 未屏蔽：悬浮卡片时右上角快捷屏蔽 -->
-              <button
-                v-if="!isBlocked(member.userId)"
-                class="quick-block"
-                title="屏蔽 TA 的直播与回放"
-                @click.stop="toggleBlock(member)"
-              >
-                <el-icon :size="13">
-                  <Hide />
-                </el-icon>
-              </button>
-
-              <!-- 已屏蔽：状态标记 + 悬浮解除按钮 -->
-              <template v-else>
-                <span class="blocked-flag">
-                  <el-icon :size="12">
+              <!-- 屏蔽控件：未屏蔽悬浮出现快捷屏蔽；已屏蔽常驻标记 + 悬浮解除 -->
+              <template v-if="member.userId">
+                <button
+                  v-if="!isBlocked(member.userId)"
+                  class="quick-block"
+                  title="屏蔽 TA 的直播与回放"
+                  @click.stop="toggleBlockMember(member)"
+                >
+                  <el-icon :size="13">
                     <Hide />
                   </el-icon>
-                  已屏蔽
-                </span>
-                <button class="unblock-btn" @click.stop="toggleBlock(member)">
-                  <el-icon :size="13">
-                    <View />
-                  </el-icon>
-                  解除屏蔽
                 </button>
+                <template v-else>
+                  <span class="blocked-flag">
+                    <el-icon :size="12">
+                      <Hide />
+                    </el-icon>
+                    已屏蔽
+                  </span>
+                  <button class="unblock-btn" @click.stop="toggleBlockMember(member)">
+                    <el-icon :size="13">
+                      <View />
+                    </el-icon>
+                    解除屏蔽
+                  </button>
+                </template>
               </template>
             </div>
           </div>
@@ -279,8 +280,8 @@ async function updateMembers() {
           description="暂无成员信息，可在设置里同步成员数据"
         />
       </div>
-      <div class="list-end">
-        在团共 {{ activeCount }} 人，离团 {{ inactiveCount }} 人
+      <div v-if="memberCount > 0" class="list-end">
+        {{ isLibrary ? `在团共 ${activeCount} 人，离团 ${inactiveCount} 人` : `在团共 ${activeCount} 人` }}
       </div>
     </el-scrollbar>
 
@@ -293,12 +294,12 @@ async function updateMembers() {
       <span class="member-count">更新成员数据库</span>
     </FloatingRefreshDock>
 
-    <!-- 成员详情抽屉 -->
+    <!-- 成员详情抽屉：两个数据源合并后的同一个详情页 -->
     <MemberDetailDrawer
       :member="selectedMember"
-      :blocked="selectedMember ? isBlocked(selectedMember.userId) : false"
+      :blocked="!!selectedMember?.userId && isBlocked(selectedMember.userId)"
       @close="selectedMember = null"
-      @toggle-block="toggleBlock"
+      @toggle-block="toggleBlockMember"
     />
   </div>
 </template>
@@ -378,6 +379,42 @@ async function updateMembers() {
     background: var(--el-fill-color-light);
   }
 
+  /* 排名皇冠徽章：头像右上角，数字内嵌皇冠中。
+   * 与快捷屏蔽按钮同占一个角：悬浮时让位给按钮，卡片屏蔽后不再显示排名装饰 */
+  .rank-crown {
+    position: absolute;
+    top: 0px;
+    right: 0px;
+    z-index: 2;
+    display: inline-flex;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+
+    &__svg {
+      width: 46px;
+      height: 34px;
+      color: #ffc53d;
+      fill: #ffc53d;
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+    }
+
+    /* 排名数字：叠加在皇冠图形内部偏下的位置 */
+    &__num {
+      position: absolute;
+      left: 50%;
+      bottom: 8px;
+      transform: translateX(-50%);
+      padding: 0 1px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1.3;
+      text-align: center;
+      color: #fff;
+      text-shadow: 0 0 2px rgba(255, 231, 158, 0.8);
+    }
+  }
+
   .member-meta {
     padding: 8px 10px 10px;
     text-align: center;
@@ -429,10 +466,20 @@ async function updateMembers() {
     transform: scale(1);
   }
 
-  /* 已屏蔽：头像去色弱化 */
-  &.is-blocked .avatar {
-    filter: grayscale(1);
-    opacity: 0.55;
+  &:hover .rank-crown {
+    opacity: 0;
+  }
+
+  /* 已屏蔽：头像去色弱化，排名装饰让位给状态标记 */
+  &.is-blocked {
+    .avatar {
+      filter: grayscale(1);
+      opacity: 0.55;
+    }
+
+    .rank-crown {
+      display: none;
+    }
   }
 
   .blocked-flag {

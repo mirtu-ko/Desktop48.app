@@ -97,3 +97,24 @@ describe('database 配置读写', () => {
     expect(() => ipc.setConfig('toString', 'x')).toThrow('Invalid config key')
   })
 })
+
+/** allmembersSimple 已停止拉取（它是 allmembers 的字段子集），旧库残留要在 init() 清掉，否则会一直占着文件 */
+describe('database 旧库残留字段清理', () => {
+  it('init 删除旧库残留的 allmembersSimple，内存与落盘都不留', () => {
+    const dbPath = tempDatabaseFile()
+    writeFileSync(dbPath, JSON.stringify({
+      allmembers: [{ sid: '10337', sname: '曹可甜' }],
+      allmembersSimple: [{ sid: '10337', sname: '曹可甜', ranking: '3' }],
+    }))
+
+    const instance = new Database(dbPath)
+    instance.init()
+
+    expect('allmembersSimple' in instance.db).toBe(false)
+    expect(instance.getAllMembers()).toEqual({ allmembers: [{ sid: '10337', sname: '曹可甜' }] })
+
+    const raw = JSON.parse(readFileSync(dbPath, 'utf-8')) as Record<string, unknown>
+    expect('allmembersSimple' in raw).toBe(false)
+    expect(raw.allmembers).toEqual([{ sid: '10337', sname: '曹可甜' }])
+  })
+})

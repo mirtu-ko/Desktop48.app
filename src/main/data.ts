@@ -196,6 +196,44 @@ export interface StarOfficialRelationItem {
   [key: string]: unknown
 }
 
+/** ===== allmember 记录：h5.48.cn/resource/jsonp/allmembers.php 返回 rows 的展开（字段名沿用原始蛇形命名） ===== */
+export interface AllMemberItem {
+  sid?: string
+  gid?: string
+  gname?: string
+  sname?: string
+  fname?: string
+  pinyin?: string
+  abbr?: string
+  tid?: string
+  tname?: string
+  pid?: string
+  pname?: string
+  nickname?: string
+  company?: string
+  join_day?: string
+  height?: string
+  birth_day?: string
+  star_sign_12?: string
+  star_sign_48?: string
+  birth_place?: string
+  speciality?: string
+  hobby?: string
+  experience?: string
+  catch_phrase?: string
+  weibo_uid?: string
+  weibo_verifier?: string
+  blood_type?: string
+  tieba_kw?: string
+  status?: string
+  ranking?: string
+  pocket_id?: string
+  is_group_new?: string
+  tcolor?: string
+  gcolor?: string
+  [key: string]: unknown
+}
+
 /**
  * UPDATE_INFO_URL 返回的成员相关全量数据（对应渲染端 api-types.ts 的 SyncInfoContent），
  * 也是 database.json 里成员部分的结构（不含 blockedMemberIds/config）。
@@ -210,6 +248,8 @@ export interface MemberDataContent {
   periodInfo: PeriodInfoItem[]
   teamInfo: TeamInfoItem[]
   starOfficialRelationInfo: StarOfficialRelationItem[]
+  /** h5.48.cn 全量成员名单（allmembers.php） */
+  allmembers: AllMemberItem[]
 }
 
 const data: MemberDataContent = {
@@ -222,6 +262,7 @@ const data: MemberDataContent = {
   periodInfo: [],
   teamInfo: [],
   starOfficialRelationInfo: [],
+  allmembers: [],
 }
 
 export default data
