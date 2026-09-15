@@ -1,5 +1,5 @@
 import type { ComputedRef, Ref } from 'vue'
-import { useEventListener, useResizeObserver } from '@vueuse/core'
+import { useEventListener, useFullscreen, useResizeObserver } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 interface UseVideoRotationOptions {
@@ -151,22 +151,18 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
 
   // 全屏作用在容器而非 media 元素：原生全屏只放大 video 本身，
   // 会让 LIVE 徽标、旋转、录制这些浮层在全屏下集体消失。
-  const isFullscreen = ref(false)
+  // 传入 videoBoxRef，isFullscreen 的语义即「当前全屏元素是否为本容器」——
+  // 与其他浮窗全屏互不干扰，正好是多播放器共存的判定口径。
+  const { isFullscreen, toggle: toggleFullscreenRaw } = useFullscreen(videoBoxRef)
 
   async function toggleFullscreen() {
     try {
-      if (document.fullscreenElement)
-        await document.exitFullscreen()
-      else
-        await videoBoxRef.value?.requestFullscreen()
+      // 容器全屏前若已有元素在全屏，useFullscreen 会先退再进
+      await toggleFullscreenRaw()
     }
     catch (error: any) {
       console.error('[use-video-rotation] 切换全屏失败:', error)
     }
-  }
-
-  function onFullscreenChange() {
-    isFullscreen.value = document.fullscreenElement === videoBoxRef.value
   }
 
   // 系统画中画（原生 PiP）：仅视频适用，电台下宿主隐藏按钮。
@@ -278,7 +274,6 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
   })
 
   // 全局事件监听交给 useEventListener：scope dispose 时自动移除，免手动 add/remove
-  useEventListener(document, 'fullscreenchange', onFullscreenChange)
   // PiP 事件会从媒体元素冒泡到 document，多浮窗共用同一组监听、各自比对元素
   useEventListener(document, 'enterpictureinpicture', onPipStateChange)
   useEventListener(document, 'leavepictureinpicture', onPipStateChange)

@@ -113,7 +113,6 @@ const {
   onTimeUpdate: onDanmakuTimeUpdate,
   ensureBarragesLoaded,
   resetBarrageSource,
-  loadSettings,
   toggleDanmaku,
   updateSettings: onDanmakuSettingsUpdate,
   startAnimation: startDanmakuAnimation,
@@ -270,8 +269,7 @@ const { running: downloading, onActionClick: onDownloadClick } = useMediaDownloa
 })
 
 onMounted(async () => {
-  debugLog('playback', `①录播会话开始（liveId=${props.liveId}, source=${props.source}）: 载入弹幕设置 → 启动弹幕动画 → 拉详情`)
-  loadSettings()
+  debugLog('playback', `①录播会话开始（liveId=${props.liveId}, source=${props.source}）: 启动弹幕动画 → 拉详情`)
   startDanmakuAnimation()
   rootRef.value?.focus()
 

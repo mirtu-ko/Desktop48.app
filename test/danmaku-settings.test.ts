@@ -37,50 +37,44 @@ describe('useDanmakuSettings', () => {
     expect({ ...useDanmakuSettings().settings }).toEqual(DEFAULT_SETTINGS)
   })
 
-  it('save 写入后新实例 load 能读回（跨实例持久化）', () => {
+  it('改设置即落盘（不需要调用方显式 save），新实例能读回', () => {
     const first = useDanmakuSettings()
     first.settings.opacity = 0.5
     first.settings.fontSize = 32
     first.settings.enabled = false
-    first.save()
 
     const second = useDanmakuSettings()
-    second.load()
 
     expect({ ...second.settings }).toEqual({ ...DEFAULT_SETTINGS, opacity: 0.5, fontSize: 32, enabled: false })
   })
 
-  it('save 写的是当时的快照，之后再改设置不会回写已存的值', () => {
-    const { settings, save } = useDanmakuSettings()
-    save()
-    settings.opacity = 0.3
+  it('没存过设置时不为了写默认值而落盘', () => {
+    useDanmakuSettings()
 
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).opacity).toBe(1)
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
   })
 
-  it('没有存过任何设置时 load 保持默认值', () => {
-    const { settings, load } = useDanmakuSettings()
-    load()
-    expect({ ...settings }).toEqual(DEFAULT_SETTINGS)
-  })
-
-  it('存量数据损坏（非 JSON）时 load 不抛错并保持默认值', () => {
+  it('存量数据损坏（非 JSON）时不抛错并保持默认值', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     localStorage.setItem(STORAGE_KEY, '{not json')
 
-    const { settings, load } = useDanmakuSettings()
-
-    expect(() => load()).not.toThrow()
-    expect({ ...settings }).toEqual(DEFAULT_SETTINGS)
+    expect(() => useDanmakuSettings()).not.toThrow()
+    expect({ ...useDanmakuSettings().settings }).toEqual(DEFAULT_SETTINGS)
   })
 
   it('存量数据只有部分字段时只覆盖这些字段（旧版本升级不重置其余项）', () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ speed: 120 }))
 
-    const { settings, load } = useDanmakuSettings()
-    load()
+    expect({ ...useDanmakuSettings().settings }).toEqual({ ...DEFAULT_SETTINGS, speed: 120 })
+  })
 
-    expect({ ...settings }).toEqual({ ...DEFAULT_SETTINGS, speed: 120 })
+  it('每次调用都是一份独立默认值，改过一个实例后新实例仍拿到干净默认值', () => {
+    const first = useDanmakuSettings()
+    first.settings.fontSize = 40
+
+    localStorage.removeItem(STORAGE_KEY)
+
+    expect({ ...useDanmakuSettings().settings }).toEqual(DEFAULT_SETTINGS)
   })
 
   it('每个实例各自持有状态：改一个不影响另一个（回放浮窗与主画面并存）', () => {
@@ -90,5 +84,7 @@ describe('useDanmakuSettings', () => {
     main.settings.fontSize = 40
 
     expect(float.settings.fontSize).toBe(DEFAULT_SETTINGS.fontSize)
+    // 存储里已是新值，只是另一个实例不订阅 storage 事件（与抽取前行为一致）
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).fontSize).toBe(40)
   })
 })
