@@ -1,20 +1,10 @@
+import dayjs from 'dayjs'
+
 /** 一直播 HLS 域名：streamPathHandle 只对它的路径前缀做重写 */
 const YI_ZHI_BO_HOST = 'alcdn.hls.xiaoka.tv'
 
 /** 流地址前缀：http(s)://host/{数字} */
 const STREAM_PATH_REGEX = /^(http|https):\/\/([^/]+)\/(\d+)/
-
-const DATE_FORMAT_REGEXES: Record<string, RegExp> = {
-  'M+': /(M+)/,
-  'd+': /(d+)/,
-  'h+': /(h+)/,
-  'm+': /(m+)/,
-  's+': /(s+)/,
-  'q+': /(q+)/,
-  'S': /(S)/,
-}
-
-const YEAR_REGEX = /(y+)/
 
 /**
  * 将相对路径 / 相对图片路径归一化为 source.48.cn 完整 URL；已是完整 URL 时原样返回
@@ -77,8 +67,8 @@ function lyricsParse(lyrics: string) {
 }
 
 function streamPathHandle(streamPath: string, timestamp: number) {
-  const date = new Date(timestamp)
-  const liveDate = `${date.getFullYear()}${date.getMonth() + 1}${date.getDate()}`
+  // 月日不补零（2026+9+5），与一直播下发的目录格式一致
+  const liveDate = dayjs(timestamp).format('YYYYMD')
   return streamPath.replace(STREAM_PATH_REGEX, (pathPrefix, protocol, host) => {
     if (host.toLowerCase() !== YI_ZHI_BO_HOST) {
       return pathPrefix
@@ -103,7 +93,7 @@ function formatDuration(seconds: number): string {
  * 跨任务的同名冲突由主进程 Start 前的冲突检测兜底（自动加序号）
  */
 function taskFilename(realName: string, startTime: number, ext: string, separator = ''): string {
-  return `${realName}${separator}${dateFormat(startTime, 'yyyyMMddhhmm')}.${ext}`
+  return `${realName}${separator}${dayjs(startTime).format('YYYYMMDDHHmm')}.${ext}`
 }
 
 /**
@@ -113,38 +103,6 @@ function shortTeamName(teamName: string): string {
   return (teamName || '').replace('TEAM ', '')
 }
 
-function dateFormat(timestamp: number, fmt: string): string {
-  const date = new Date(timestamp)
-  const o: any = {
-    'M+': date.getMonth() + 1,
-    'd+': date.getDate(),
-    'h+': date.getHours(),
-    'm+': date.getMinutes(),
-    's+': date.getSeconds(),
-    'q+': Math.floor((date.getMonth() + 3) / 3),
-    'S': date.getMilliseconds(),
-  }
-  // 年份占位符（如 'yyyy'、'yy'）单独按长度截取
-  const yearMatch = YEAR_REGEX.exec(fmt)
-  if (yearMatch) {
-    const yStr = yearMatch[1]
-    fmt = fmt.replace(yStr, `${date.getFullYear()}`.substring(4 - yStr.length))
-  }
-  // 其余占位符按 o 表逐项替换
-  for (const k in o) {
-    const regex = DATE_FORMAT_REGEXES[k]
-    const match = regex.exec(fmt)
-    if (match) {
-      const matchStr = match[1]
-      const replacement = matchStr.length === 1
-        ? o[k]
-        : (`00${o[k]}`).substring(`${o[k]}`.length)
-      fmt = fmt.replace(matchStr, replacement)
-    }
-  }
-  return fmt
-}
-
 /**
  * 纯函数工具集（全部无状态：不碰 DOM / IPC / 响应式）。
  *
@@ -152,7 +110,7 @@ function dateFormat(timestamp: number, fmt: string): string {
  * `this` 陷阱与 `public static` 样板。原来 `private static` 的辅助成员改成模块级
  * 函数/常量后反而成了「真正私有」，外部连名字都看不到。
  *
- * 保留 `Tools` 这个命名空间对象，是为了让 `Tools.dateFormat(...)` 这类调用点保持不变。
+ * 保留 `Tools` 这个命名空间对象，是为了让 `Tools.formatDuration(...)` 这类调用点保持不变。
  */
 const Tools = {
   pictureUrls,
@@ -163,7 +121,6 @@ const Tools = {
   formatDuration,
   taskFilename,
   shortTeamName,
-  dateFormat,
 }
 
 export default Tools

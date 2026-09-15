@@ -2,7 +2,7 @@
 import type { BarrageListItem } from './Barrage.vue'
 import Barrage from '@renderer/components/danmaku/Barrage.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
-import Tools from '@renderer/utils/tools'
+import dayjs from 'dayjs'
 import { computed, ref } from 'vue'
 
 const props = defineProps<{
@@ -17,7 +17,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ seek: [seconds: number] }>()
 
-const startDate = Tools.dateFormat(props.startTime, 'yyyy-MM-dd hh:mm')
+const startDate = dayjs(props.startTime).format('YYYY-MM-DD HH:mm')
 const keyword = ref('')
 
 const statusType = computed(() => props.barrageLoaded ? 'success' : 'info')

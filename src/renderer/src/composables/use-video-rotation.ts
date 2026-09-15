@@ -1,4 +1,5 @@
 import type { ComputedRef, Ref } from 'vue'
+import { useEventListener, useResizeObserver } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 interface UseVideoRotationOptions {
@@ -259,52 +260,33 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
   // 旋转后画面宽高比随之交换，重新上报给浮窗调整窗口形状
   watch(rotationAngle, () => reportAspect())
 
-  let resizeObserver: ResizeObserver | null = null
+  // 容器尺寸观察：电台无视频轨不观察（元素置 null）；ResizeObserver 挂上后
+  // 首帧必回调一次，不需要额外做挂载时的初始快照
+  useResizeObserver(computed(() => (isRadio.value ? null : videoBoxRef.value)), (entries) => {
+    for (const entry of entries) {
+      boxDimensions.value = {
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      }
+    }
+  })
 
   onMounted(() => {
-    if (!isRadio.value && videoBoxRef.value) {
-      boxDimensions.value = {
-        width: videoBoxRef.value.clientWidth,
-        height: videoBoxRef.value.clientHeight,
-      }
-
-      resizeObserver = new ResizeObserver((entries) => {
-        for (const entry of entries) {
-          boxDimensions.value = {
-            width: entry.contentRect.width,
-            height: entry.contentRect.height,
-          }
-        }
-      })
-
-      resizeObserver.observe(videoBoxRef.value)
-    }
-
     const video = getVideo()
     if (video)
       video.addEventListener('resize', handleNativeVideoResize)
-
-    document.addEventListener('fullscreenchange', onFullscreenChange)
-    // PiP 事件会从媒体元素冒泡到 document，多浮窗共用同一组监听、各自比对元素
-    document.addEventListener('enterpictureinpicture', onPipStateChange)
-    document.addEventListener('leavepictureinpicture', onPipStateChange)
   })
+
+  // 全局事件监听交给 useEventListener：scope dispose 时自动移除，免手动 add/remove
+  useEventListener(document, 'fullscreenchange', onFullscreenChange)
+  // PiP 事件会从媒体元素冒泡到 document，多浮窗共用同一组监听、各自比对元素
+  useEventListener(document, 'enterpictureinpicture', onPipStateChange)
+  useEventListener(document, 'leavepictureinpicture', onPipStateChange)
 
   onUnmounted(() => {
     const video = getVideo()
     if (video)
       video.removeEventListener('resize', handleNativeVideoResize)
-    if (resizeObserver) {
-      resizeObserver.disconnect()
-      resizeObserver = null
-    }
-    document.removeEventListener('fullscreenchange', onFullscreenChange)
-    document.removeEventListener('enterpictureinpicture', onPipStateChange)
-    document.removeEventListener('leavepictureinpicture', onPipStateChange)
-    if (rotateHintTimer) {
-      clearTimeout(rotateHintTimer)
-      rotateHintTimer = null
-    }
   })
 
   return {

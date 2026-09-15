@@ -1,9 +1,24 @@
 <script setup lang="ts">
 import appIcon from '@renderer/assets/icon.png'
+import { useEventListener } from '@vueuse/core'
 import { onMounted, onUnmounted, ref } from 'vue'
 
 const isMaximized = ref(false)
 let disposeChange: (() => void) | undefined
+
+onMounted(async () => {
+  // ★ 跨进程：本文件所有 window* 调用对端均为 main/app.ts。
+  // windowOnMaximizeChange 是订阅式通道（主进程主动回推），返回值是退订函数，
+  // 必须在 onUnmounted 调用，否则组件重挂载会累积监听器
+  isMaximized.value = await window.mainAPI.windowIsMaximized()
+  disposeChange = window.mainAPI.windowOnMaximizeChange((value) => {
+    isMaximized.value = value
+  })
+})
+
+onUnmounted(() => {
+  disposeChange?.()
+})
 
 // HTML5 全屏（播放器容器 requestFullscreen）会把标题栏视觉盖住，但
 // -webkit-app-region: drag 仍在原生层拦截点击，顶部浮层会点不中；
@@ -14,22 +29,8 @@ function onFullscreenChange() {
   htmlFullscreen.value = !!document.fullscreenElement
 }
 
-onMounted(async () => {
-  // ★ 跨进程：本文件所有 window* 调用对端均为 main/app.ts。
-  // windowOnMaximizeChange 是订阅式通道（主进程主动回推），返回值是退订函数，
-  // 必须在 onUnmounted 调用，否则组件重挂载会累积监听器
-  isMaximized.value = await window.mainAPI.windowIsMaximized()
-  disposeChange = window.mainAPI.windowOnMaximizeChange((value) => {
-    isMaximized.value = value
-  })
-  onFullscreenChange()
-  document.addEventListener('fullscreenchange', onFullscreenChange)
-})
-
-onUnmounted(() => {
-  disposeChange?.()
-  document.removeEventListener('fullscreenchange', onFullscreenChange)
-})
+useEventListener(document, 'fullscreenchange', onFullscreenChange)
+onFullscreenChange()
 
 function minimize() {
   window.mainAPI.windowMinimize()

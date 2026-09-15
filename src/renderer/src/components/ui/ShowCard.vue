@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { OpenLive } from '@renderer/services/api-types'
 import Tools from '@renderer/utils/tools'
+import dayjs from 'dayjs'
 import CoverImage from './CoverImage.vue'
 
 defineProps<{
@@ -8,7 +9,7 @@ defineProps<{
 }>()
 
 function formatTime(stime: string): string {
-  return Tools.dateFormat(Number.parseInt(stime), 'MM月dd日 hh:mm')
+  return dayjs(Number.parseInt(stime)).format('MM月DD日 HH:mm')
 }
 </script>
 

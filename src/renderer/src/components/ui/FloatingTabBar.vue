@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useEventListener } from '@vueuse/core'
+import { computed, nextTick, onActivated, onDeactivated, ref, watch } from 'vue'
 
 export interface FloatingTabItem {
   label: string
@@ -145,8 +146,7 @@ function onKeydown(event: KeyboardEvent) {
   emit('change', next.key)
 }
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+useEventListener(window, 'keydown', onKeydown)
 onActivated(() => {
   keyboardEnabled.value = true
 })

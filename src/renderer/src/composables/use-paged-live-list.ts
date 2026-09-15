@@ -2,6 +2,7 @@ import type { LiveListContent, LiveListItem } from '@renderer/services/api-types
 import type { UsePagedListOptions } from './use-paged-list'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
+import dayjs from 'dayjs'
 import { ref } from 'vue'
 import { usePagedList } from './use-paged-list'
 
@@ -64,7 +65,7 @@ export function usePagedLiveList<T extends LiveListItem = LiveListItem>({
 export async function enrichLiveItem(item: any, memberError: 'fallback' | 'throw' = 'throw'): Promise<void> {
   item.cover = Tools.pictureUrls(item.coverPath)
   item.userInfo.teamLogo = Tools.pictureUrls(item.userInfo.teamLogo)
-  item.date = Tools.dateFormat(Number.parseFloat(item.ctime), 'yyyy-MM-dd hh:mm:ss')
+  item.date = dayjs(Number.parseFloat(item.ctime)).format('YYYY-MM-DD HH:mm:ss')
   if (memberError === 'fallback') {
     try {
       item.member = await window.mainAPI.getMemberInfo(item.userInfo.userId)
