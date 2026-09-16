@@ -184,7 +184,7 @@ watch(selectedFilter, () => {
       <div v-else-if="playbackList.length === 0 && !loading" class="empty-block">
         暂无回放
       </div>
-      <div v-else class="playback-list">
+      <div v-else class="card-grid">
         <div
           v-for="item in playbackList" :key="item.liveId" class="playback-item"
           @click="onPlaybackClick(item)"
@@ -250,15 +250,7 @@ watch(selectedFilter, () => {
 }
 
 .playback-skeleton {
-  padding: var(--tabbar-offset-top) 16px 8px;
-}
-
-.playback-list {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  /* 顶部留出左上角 tab 栏（--tabbar-offset-top），底留卡片悬停上浮与阴影的空间 */
-  padding: var(--tabbar-offset-top) 16px 8px;
+  padding: var(--page-pad);
 }
 
 .playback-item {

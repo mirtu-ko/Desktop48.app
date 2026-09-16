@@ -68,8 +68,6 @@ function backToTop() {
   el?.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
-// scroll 事件不冒泡，但捕获阶段监听 document 能收到所有元素滚动；
-// 免去切页后重新定位容器，keep-alive / v-show / Suspense 场景天然兼容
 useEventListener(document, 'scroll', onDocScroll, { capture: true })
 
 onMounted(() => {
@@ -83,75 +81,39 @@ watch(() => route.path, () => nextTick(syncFromContainer))
 
 <template>
   <Transition name="back-top">
-    <button
+    <!-- 按钮本体沿用右上角刷新按钮（el-button circle primary，见 FloatingRefreshDock），此处只管定位 -->
+    <el-button
       v-if="visible"
-      type="button"
-      class="back-top"
+      circle
+      type="primary"
+      :icon="Top"
       title="回到顶部"
+      class="back-top"
       @click="backToTop"
-    >
-      <el-icon><Top /></el-icon>
-    </button>
+    />
   </Transition>
 </template>
 
 <style scoped lang="scss">
-/* 右下角全局回顶按钮：右下角空闲（FloatAudioBar 左下、AppDock 居中），直接 fixed 定位 */
+/* 右下角空闲（FloatAudioBar 左下、AppDock 居中），直接 fixed 定位 */
 .back-top {
   position: fixed;
   right: 18px;
   bottom: 26px;
   z-index: 95;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 42px;
-  height: 42px;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  color: var(--el-text-color-regular);
-  /* 玻璃配方与 AppDock / 左右上角浮层同源（见 app.scss 的 --glass-*） */
-  background: var(--glass-sheen), var(--glass-fill);
-  backdrop-filter: var(--glass-blur);
-  box-shadow: var(--glass-shadow), var(--glass-lip);
-  transition:
-    transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1),
-    background 0.2s ease,
-    color 0.2s ease,
-    box-shadow 0.2s ease;
-
-  .el-icon {
-    font-size: 20px;
-  }
-
-  &:hover {
-    transform: translateY(-3px);
-    background: var(--gradient-brand);
-    color: #fff;
-    /* 上色后仍保留玻璃的边，与未悬浮时是同一块材质 */
-    box-shadow:
-      var(--glass-shadow),
-      var(--glass-lip),
-      0 10px 24px -8px rgba(var(--brand-rgb), 0.5);
-  }
-
-  &:active {
-    transform: translateY(-1px);
-  }
 }
 
 /* 显隐过渡：淡入 + 轻微上浮 */
 .back-top-enter-active,
 .back-top-leave-active {
   transition:
-    opacity 0.22s ease,
-    transform 0.22s ease;
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 
 .back-top-enter-from,
 .back-top-leave-to {
   opacity: 0;
-  transform: translateY(10px) scale(0.85);
+  transform: translateY(8px);
 }
 </style>

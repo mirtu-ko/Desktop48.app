@@ -48,11 +48,12 @@
   /* ===== 浮层让位：页面内容为悬浮控件预留的空间 ===== */
   --tabbar-offset-top: 64px; // 左上角 FloatingTabBar 的高度 + 间距
   --dock-reserve: 120px; // 底部悬浮 AppDock 预留的滚动留白（Dock 视觉高约 96px，含后仰板的投影）
+  /* 列表页内容区统一内边距：上留浮动 tab 栏、左右 16、下留卡片悬停上浮与阴影 */
+  --page-pad: var(--tabbar-offset-top) 16px 8px;
 
-  /* ===== 浅色玻璃表层 token：底部 Dock / 左上 tab 栏 / 右上工具条 / 右下回顶钮 /
-   * 左下播放条共用，五处只吃这一套，改这里全部一起变 =====
-   * 观感由四层叠出来：光带给体积、底色定通透、边给「玻璃的厚度」、落影让它浮起来。
-   * 底色是「玻璃」与「白塑料板」的分界 —— 越透越像玻璃，但文字可读性也越依赖光带兜底 */
+  /* ===== 浅色玻璃表层 token：底部 Dock / 左上 tab 栏 / 右上工具条 / 左下播放条共用 =====
+   * 观感由四层叠出来：光带给体积、底色定通透、边给厚度、落影让它浮起来。
+   * 右下角回顶钮不走玻璃，它直接复用刷新按钮的 el-button circle primary */
   --glass-fill: color-mix(in srgb, var(--el-bg-color) 54%, transparent);
   --glass-sheen: linear-gradient(
     170deg,
@@ -66,10 +67,7 @@
   --glass-lip:
     inset 0 1px 0 rgba(255, 255, 255, 0.92), inset 0 -1px 0 rgba(255, 255, 255, 0.52),
     inset 0 0 0 1px rgba(255, 255, 255, 0.34);
-  /* 近处接触影（画影子的「边」）+ 远处环境影（画浮起来的「量」）。
-   * 只有一层时浮层会像「贴」在画布上，故接触影单列、大影直接复用 --shadow-lg。
-   * 最外那圈 1px 冷灰是给浅色底用的：浅底上白边完全看不见，玻璃会「没边」。
-   * 这圈冷灰与 tab 悬浮片的玻璃体同色，统一走 rgba(var(--glass-edge-rgb), α) */
+  /* 最外 1px 冷灰压边（浅底上白边看不见，靠它兜住「有边」）+ 接触影 + --shadow-lg */
   --glass-edge-rgb: 120, 118, 160;
   --glass-shadow:
     0 0 0 1px rgba(var(--glass-edge-rgb), 0.07), 0 2px 6px -1px rgba(var(--shadow-rgb), 0.1), var(--shadow-lg);
@@ -129,8 +127,7 @@ body,
   outline: none !important;
 }
 
-/* 分区标题：画布是渐变，靠不透明底色遮住横线的老办法会露出色块，
- * 因此直接去掉横线，只保留标题文字 */
+/* 分区标题：画布是渐变，横线用底色遮不住会露出色块，这里只留标题文字 */
 .el-divider.el-divider--horizontal {
   border-top: none;
 }
@@ -144,13 +141,12 @@ body,
   background-color: transparent;
 }
 
-/* 横线移除后，左对齐标题不再需要为让位横线而留的缩进，
- * 与下方卡片左边缘对齐 */
+/* 左对齐标题与下方卡片左边缘对齐 */
 .el-divider__text.is-left {
   left: 0;
 }
 
-/* 品牌渐变主按钮：全局统一（原先各页面 :deep 逐个覆写，现收敛到一处） */
+/* 品牌渐变主按钮：全局唯一样式出处 */
 .el-button--primary {
   background: var(--gradient-brand);
   border: none;
@@ -174,7 +170,7 @@ body,
 }
 ::-webkit-scrollbar-thumb {
   background: rgba(var(--shadow-rgb), 0.16);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 2px solid transparent;
   background-clip: content-box;
 
@@ -334,6 +330,50 @@ body,
  * 内容区自带 --dock-reserve 内边距，重复给会变成双份留白 */
 .page-root .el-scrollbar__view {
   padding-bottom: var(--dock-reserve);
+}
+/* ===== 跨页共用的版式片段 =====
+ * 出现在 ≥2 处、且值完全一致的片段收敛到这里，页面与组件里只挂类名 */
+
+/* 卡片网格：直播 / 回放两个列表页共用列宽与内容区留白 */
+.card-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  padding: var(--page-pad);
+}
+
+/* 图片占位兜底：封面 / 头像在加载中或失败时居中显示 */
+.media-ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--el-text-color-placeholder);
+  background: var(--el-fill-color-light);
+}
+
+/* 图片铺满容器：卡片封面 / 唱片盘标 / 电台封面共用 */
+.media-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 详情抽屉内容列：成员详情 / 专辑详情共用 */
+.detail-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* 浮动工具条（FloatingRefreshDock）插槽里的说明文字 */
+.dock-note {
+  margin-left: 8px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
 }
 
 /* ===== 主题色渐变图标磁贴（设置行 / 下载分组头等共用） =====
@@ -505,10 +545,9 @@ body,
 }
 
 /* 悬浮圆形操作按钮（录制 / 下载）：与 RotationControls 胶囊同一套视觉语言。
- * 底色为两层合成：background-color 固定深色底，background-image 是 hover 上色的
- * 白纱叠加层——与 .rotate-btn（透明按钮叠在深色胶囊上）同一合成模型，
- * hover 时深色底不会被替换，半透明白直接压到视频画面上导致泛白。
- * is-active = 任务进行中，实底色用 --ab-active-bg、呼吸光圈用 --ab-pulse */
+ * 底色两层：背景色是固定深色底、背景图是白纱叠加层（同 .rotate-btn）——
+ * 直接换底色会让半透明白压到视频画面上泛白。
+ * is-active = 任务进行中：--ab-active-bg 实底色、--ab-pulse 呼吸光圈 */
 .action-btn {
   --ab-active-bg: rgba(255, 255, 255, 0.18);
   --ab-pulse: rgba(255, 255, 255, 0.45);

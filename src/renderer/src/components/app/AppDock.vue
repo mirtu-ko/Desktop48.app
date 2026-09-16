@@ -170,8 +170,7 @@ onMounted(async () => {
 }
 
 /* ===== 后仰的玻璃板：Dock 的 3D 全部集中在这一层 =====
- * 导航项不能放进这个坐标系：父级 3D 变换下的子元素会被压平，子元素的 rotateX 只剩
- * 「竖向压扁」这一半效果（实测图标 h/w 0.61，比不反向旋转的 0.69 还扁），反不过来 */
+ * 导航项不能进这个坐标系：父级 3D 变换下的子元素会被压平，反向旋转只剩竖向压扁 */
 .dock-board {
   position: absolute;
   inset: 0;
@@ -184,10 +183,9 @@ onMounted(async () => {
   transform: perspective(450px) rotateX(var(--dock-tilt));
   /* 锚在底边：板贴住页面底部不动，只有顶边向后倒 */
   transform-origin: center bottom;
-  /* 玻璃配方与左右上角的浮层同源（:root 的 --glass-*），差异只有两项：
-   * 1) 多叠一层跟随 --glow-color 的氛围投影（板块大、又后仰，需要更散的环境光托住）；
-   * 2) 下边换成更亮的前沿亮线 —— 后仰时它就是这块厚玻璃的断面。
-   * 注意 box-shadow 是「先写的画在上面」，前沿线必须排在 --glass-lip 之前才压得住里面那条 */
+  /* 玻璃配方同源于 :root 的 --glass-*，只多两处：跟随 --glow-color 的氛围投影、
+   * 下边更亮的前沿亮线（后仰时就是这块厚玻璃的断面）。
+   * box-shadow 先写的画在上面，前沿线必须排在 --glass-lip 之前 */
   background: var(--glass-sheen), var(--glass-fill);
   backdrop-filter: var(--glass-blur);
   box-shadow:

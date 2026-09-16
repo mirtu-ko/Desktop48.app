@@ -98,7 +98,7 @@ function onClearAll() {
         <div class="bar-progress-fill" :style="{ width: `${progress * 100}%` }" />
       </div>
 
-      <span class="bar-vinyl" :class="{ 'is-playing': playing }" :style="coverStyle" />
+      <span class="bar-vinyl" :class="{ 'is-playing': playing }" :style="coverStyle" @click="panelVisible = !panelVisible" />
 
       <div class="bar-info">
         <div class="bar-name ellipsis">

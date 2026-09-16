@@ -110,9 +110,8 @@ function onRangeInput(event: Event) {
   height: 28px;
 }
 
-/* 迷你进度条：录播必须可 seek。grow 因子 1：容器富余空间全部归进度条（时间串被推到右端）；
- * shrink 因子 1000：按 basis×factor 加权，空间不足时进度条先收缩（可压到 0），
- * 时间串的份额小到亚像素（100 时仍漏 1px 出省略号），进度条让尽后时间串才截断。*/
+/* 迷你进度条：录播可 seek。grow 1 = 富余空间全归进度条（时间串推到右端）；
+ * shrink 1000 = 空间不足时先收缩（可压到 0），让尽后才轮到时间串截断 */
 .mini-range {
   flex: 1 1000 140px;
   min-width: 0;

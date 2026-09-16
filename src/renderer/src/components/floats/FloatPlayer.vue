@@ -434,9 +434,6 @@ onUnmounted(() => {
   flex-direction: column;
   border-radius: 14px;
   overflow: hidden;
-  /* 覆盖 .frosted-surface 的落影（窗口大、要更重），但补回玻璃的边，
-   * 否则这块深玻璃会少了顶边高光，看起来像一块纯色板 */
-  box-shadow: var(--glass-shadow), var(--glass-lip);
   transition:
     width 0.2s ease,
     height 0.2s ease;

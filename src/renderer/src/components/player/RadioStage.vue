@@ -40,7 +40,7 @@ function setAudioRef(el: unknown) {
         height="100%"
       >
         <el-carousel-item v-for="carousel in carousels" :key="carousel">
-          <img :src="carousel" class="radio-cover" alt="cover" draggable="false">
+          <img :src="carousel" class="media-fill" alt="cover" draggable="false">
         </el-carousel-item>
       </el-carousel>
     </div>
@@ -85,13 +85,6 @@ function setAudioRef(el: unknown) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-}
-
-.radio-cover {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
 }
 
 .audio-player {

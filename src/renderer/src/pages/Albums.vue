@@ -255,12 +255,12 @@ onMounted(fetchAlbums)
             <div class="album-cover">
               <div class="vinyl">
                 <span class="vinyl-label">
-                  <CoverImage class="vinyl-label-img" :src="album.image" :version="imageVersion" loading="lazy" />
+                  <CoverImage class="media-fill" :src="album.image" :version="imageVersion" loading="lazy" />
                 </span>
               </div>
               <!-- 原生懒加载：视口外不请求，滚动接近时浏览器提前预取，比 el-image 的滚动节流更早就位 -->
               <div class="cover-img">
-                <CoverImage class="cover-src" :src="album.image" :version="imageVersion" loading="lazy">
+                <CoverImage class="cover-src media-fill" :src="album.image" :version="imageVersion" loading="lazy">
                   <div class="cover-fallback">
                     <el-icon><Headset /></el-icon>
                   </div>
@@ -338,7 +338,7 @@ onMounted(fetchAlbums)
 
     <!-- 专辑详情抽屉：氛围底 + 旋转黑胶 + 曲目列表 -->
     <el-drawer v-model="detailVisible" size="440px" :with-header="false" destroy-on-close>
-      <div v-if="currentAlbum" class="album-detail">
+      <div v-if="currentAlbum" class="detail-stack">
         <div class="detail-hero">
           <img class="hero-bg" :src="currentAlbum.image" alt="">
           <div class="hero-cover">
@@ -439,11 +439,11 @@ onMounted(fetchAlbums)
 
 .albums-container {
   /* 顶部留出左上角年份切换器空间（--tabbar-offset-top） */
-  padding: var(--tabbar-offset-top) 16px 8px;
+  padding: var(--page-pad);
 }
 
 .albums-skeleton {
-  padding: var(--tabbar-offset-top) 16px 8px;
+  padding: var(--page-pad);
 }
 
 .album-skeleton {
@@ -635,14 +635,6 @@ onMounted(fetchAlbums)
   animation-play-state: paused;
   overflow: hidden;
 
-  /* 卡片盘标图：填满圆形盘面 */
-  .vinyl-label-img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
   /* 中心孔 */
   &::after {
     content: '';
@@ -670,12 +662,8 @@ onMounted(fetchAlbums)
   background: var(--el-fill-color-light);
 }
 
-/* 卡片封面：解码完成才淡入，避免半张图闪现 */
+/* 卡片封面：解码完成才淡入，填满容器见全局 .media-fill */
 .cover-src {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
   animation: cover-fade 0.25s ease;
 }
 
@@ -741,8 +729,8 @@ onMounted(fetchAlbums)
   }
 
   &.album-tag--sg {
-    /* 单曲：青绿（与下载语义色同源） */
-    background: linear-gradient(135deg, var(--color-downloads), #34d399);
+    /* 单曲：青绿（与下载语义色同源），亮端由语义色白化派生 */
+    background: linear-gradient(135deg, var(--color-downloads), color-mix(in srgb, var(--color-downloads) 70%, #fff));
     box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--color-downloads) 55%, transparent);
   }
 }
@@ -759,11 +747,6 @@ onMounted(fetchAlbums)
 }
 
 /* ===== 详情抽屉 ===== */
-.album-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
 
 /* 头部：封面模糊放大的氛围底，内容浮于其上 */
 .detail-hero {

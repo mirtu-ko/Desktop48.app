@@ -494,7 +494,7 @@ function hideLogo(event: Event) {
   margin-bottom: 0;
 }
 
-/* 友情链接：logo 卡片网格，悬浮上浮高亮（现位于权利声明卡片顶部，无需上边距） */
+/* 友情链接：logo 卡片网格，悬浮上浮高亮 */
 .friend-links {
   .links-label {
     display: flex;

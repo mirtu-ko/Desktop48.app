@@ -209,13 +209,8 @@ onDeactivated(() => {
     cursor: grabbing;
 
     &:hover {
-      color: var(--el-text-color-secondary);
       background: transparent;
       box-shadow: none;
-    }
-
-    &.is-active:hover {
-      color: #fff;
     }
   }
 }
@@ -231,7 +226,7 @@ onDeactivated(() => {
   font-size: 15px;
   font-weight: 500;
   line-height: 1;
-  color: var(--el-text-color-secondary);
+  color: var(--el-text-color-primary);
   background: transparent;
   cursor: pointer;
   user-select: none;
@@ -240,30 +235,14 @@ onDeactivated(() => {
     color 0.2s ease,
     box-shadow 0.2s ease;
 
-  /* 悬浮片：亮面玻璃。条本身是 54% 白叠在浅色页面上（合成 ≈99% 白），
-   * 白片在浅色内容上没有亮度差可用，可见度只能靠「往下压一点 + 边」：
-   * 顶部窄镜面给亮面（收得快，否则整片发白变塑料）、冷灰薄雾买可见度、
-   * 折射环 + 外柔环立轮廓（浅底上玻璃的形状只能靠边）。 */
+  /* 悬浮片：品牌紫淡染 + 同色环。条压在白底上已接近全白、亮度没有余量，
+   * 暗底与亮底只能靠色相取可见度；淡染 20% 是上限，再深会压掉深底上的文字对比 */
   &:hover {
-    color: var(--el-text-color-primary);
-    background:
-      linear-gradient(
-        180deg,
-        rgba(255, 255, 255, 0.92) 0%,
-        rgba(255, 255, 255, 0.4) 15%,
-        rgba(255, 255, 255, 0.1) 36%,
-        rgba(255, 255, 255, 0.04) 60%,
-        rgba(255, 255, 255, 0.24) 100%
-      ),
-      rgba(var(--glass-edge-rgb), 0.09);
-    /* 条只有 4px 内边距，竖向外扩会被 overflow 裁掉，投影最大只能做到 4px */
+    background: rgba(var(--brand-rgb), 0.2);
     box-shadow:
-      0 0 0 1px rgba(var(--glass-edge-rgb), 0.1),
-      0 0 0 2px rgba(var(--glass-edge-rgb), 0.05),
-      0 1px 2px -1px rgba(var(--shadow-rgb), 0.22),
-      0 4px 10px -6px rgba(var(--shadow-rgb), 0.42),
-      inset 0 1px 0 rgba(255, 255, 255, 1),
-      inset 0 -1px 0 rgba(255, 255, 255, 0.62);
+      0 0 0 1px rgba(var(--brand-rgb), 0.1),
+      0 0 8px rgba(var(--brand-rgb), 0.2);
+    color: var(--brand-primary-dark);
   }
 
   .tab-icon {
