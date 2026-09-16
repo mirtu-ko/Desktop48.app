@@ -35,13 +35,15 @@
    *        < MiniControls 控制条(20) ≈ player-actions 悬浮按钮(30)
    * 30-89  页内浮动件：弹幕侧栏开关(30)、页内磨砂浮动 Dock/TabBar(6 属容器内微层)
    * 90-99  全局固定浮层：FloatAudioBar 迷你播放条(99)、BackTopButton 回顶按钮(95)
+   * 0-2    AppDock 内部微层（局部堆叠，不出 Dock）：后仰的玻璃板 .dock-board(0)，
+   *        含板内氛围光 < 激活指示条(1) < 导航项(2)
    * 100    AppDock 底部导航（最高固定层）
    * 1000+  FloatPlayer 画中画窗口（动态：1000 + 列表下标，见 FloatPlayer.vue，
    *        需盖过以上所有层；同一时刻只有一个置顶浮窗） */
 
   /* ===== 浮层让位：页面内容为悬浮控件预留的空间 ===== */
   --tabbar-offset-top: 64px; // 左上角 FloatingTabBar 的高度 + 间距
-  --dock-reserve: 120px; // 底部悬浮 AppDock 预留的滚动留白
+  --dock-reserve: 120px; // 底部悬浮 AppDock 预留的滚动留白（Dock 视觉高约 96px，含后仰板的投影）
 
   /* ===== 播放器深色玻璃 token：.action-btn / .player-capsule 体系共用 ===== */
   --player-glass-bg: rgba(15, 17, 26, 0.55);

@@ -1,5 +1,12 @@
 <script setup lang="ts">
-// 统一底部 Dock 导航：磨砂表层复用全局 .frosted-surface
+// 统一底部 Dock 导航：后仰的玻璃板 + 站在板上的图标。
+// 3D 只做在板这一层（.dock-board），导航项待在平板层里 —— 父级 3D 变换会把子元素压平，
+// 子元素的 rotateX 反不过来，所以图标绝不能放进倾斜的坐标系
+
+import type { ComponentPublicInstance, CSSProperties } from 'vue'
+import { useEventListener } from '@vueuse/core'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+
 export interface DockItem {
   /** 路由 path（Constants.Menu 值，如 '/lives'），同时作为激活态匹配标识；点击后原样 push */
   index: string
@@ -12,147 +19,268 @@ export interface DockItem {
   badge?: number
 }
 
-defineProps<{
+const props = defineProps<{
   items: DockItem[]
   active: string
 }>()
 
 const emit = defineEmits<{ change: [index: string] }>()
 
-function change(index: string) {
-  emit('change', index)
+/** 激活指示条尺寸，以及它底边距板下沿的距离（须与 .dock-indicator 的 CSS 一致） */
+const INDICATOR_WIDTH = 13
+const INDICATOR_HEIGHT = 3
+const INDICATOR_BOTTOM = 6
+/** 项没给 color 时的兜底主题色 */
+const FALLBACK_COLOR = 'var(--brand-primary)'
+
+const dockRef = ref<HTMLElement | null>(null)
+/** 首帧定位完成后才放开指示条过渡，否则它会从左上角滑入 */
+const ready = ref(false)
+
+/** 各导航项元素，只在脚本内做测量，不参与渲染 */
+const itemEls: HTMLElement[] = []
+const indicatorStyle = ref<CSSProperties>({ opacity: 0 })
+const activeColor = computed(() => props.items.find(item => item.index === props.active)?.color || FALLBACK_COLOR)
+/** 上一次写入的阴影色源，避免同色反复写 DOM */
+let glowColor = ''
+
+function setItemEl(el: Element | ComponentPublicInstance | null, index: number) {
+  if (el instanceof HTMLElement)
+    itemEls[index] = el
 }
+
+/** 滑动激活指示条：贴住板下沿（y 由 Dock 自身高度算），横坐标取激活项的布局位置 */
+function syncIndicator() {
+  const dock = dockRef.value
+  const el = itemEls[props.items.findIndex(item => item.index === props.active)]
+  if (!dock || !el)
+    return
+  indicatorStyle.value = {
+    transform: `translate(${el.offsetLeft + (el.offsetWidth - INDICATOR_WIDTH) / 2}px, ${dock.offsetHeight - INDICATOR_BOTTOM - INDICATOR_HEIGHT}px)`,
+    opacity: 1,
+  }
+}
+
+function onPointerMove(e: PointerEvent) {
+  const dock = dockRef.value
+  if (!dock)
+    return
+  dock.style.setProperty('--mx', `${e.clientX - dock.getBoundingClientRect().left}px`)
+  dock.style.setProperty('--glow', '1')
+  // 阴影 / 氛围光的色源 = 光标正指向的那一项（图标、标签都算在项内）
+  const color = (e.target as HTMLElement | null)?.closest<HTMLElement>('.dock-item')?.style.getPropertyValue('--item-color')
+  if (color && color !== glowColor) {
+    glowColor = color
+    dock.style.setProperty('--hover-color', color)
+  }
+}
+
+/** 移除内联变量即回落到 CSS 默认值，由过渡曲线负责归位 */
+function onPointerLeave() {
+  const dock = dockRef.value
+  dock?.style.setProperty('--glow', '0')
+  dock?.style.removeProperty('--hover-color')
+  glowColor = ''
+}
+
+watch(() => props.active, () => nextTick(syncIndicator))
+
+useEventListener(dockRef, 'pointermove', onPointerMove)
+useEventListener(dockRef, 'pointerleave', onPointerLeave)
+
+onMounted(async () => {
+  await nextTick()
+  syncIndicator()
+  // 定位落到 DOM 后下一帧再放开过渡，避免首帧被当作一次位置变化
+  requestAnimationFrame(() => {
+    ready.value = true
+  })
+})
 </script>
 
 <template>
-  <nav class="app-dock frosted-surface">
-    <el-tooltip
-      v-for="item in items"
-      :key="item.index"
-      :content="item.label"
-      placement="top"
-      :show-after="400"
-      :offset="10"
+  <nav
+    ref="dockRef"
+    class="app-dock"
+    :class="{ 'is-ready': ready }"
+    :style="{ '--accent-color': activeColor }"
+  >
+    <!-- 后仰的玻璃板（纯背景层，不接事件）：3D 只在这里，图标不会跟着歪 -->
+    <span
+      class="dock-board"
+      aria-hidden="true"
     >
-      <button
-        type="button"
-        class="dock-item"
-        :class="{ 'is-active': active === item.index }"
-        :style="{ '--item-color': item.color || 'var(--brand-primary)' }"
-        @click="change(item.index)"
-      >
-        <span class="dock-icon">
-          <el-icon><component :is="item.icon" /></el-icon>
-          <!-- 角标：正在进行的任务数量，最多 2 位 -->
-          <span
-            v-if="item.badge"
-            class="dock-badge"
-          >{{ item.badge > 99 ? '99+' : item.badge }}</span>
-        </span>
-        <span class="dock-label">{{ item.label }}</span>
-      </button>
-    </el-tooltip>
+      <!-- 光标跟随的氛围光层 -->
+      <span class="dock-glow" />
+    </span>
+    <!-- 滑动激活指示条：位置由脚本测量后注入 -->
+    <span
+      class="dock-indicator"
+      :style="indicatorStyle"
+      aria-hidden="true"
+    />
+
+    <button
+      v-for="(item, i) in items"
+      :key="item.index"
+      :ref="el => setItemEl(el, i)"
+      type="button"
+      class="dock-item"
+      :class="{ 'is-active': active === item.index }"
+      :style="{ '--item-color': item.color || FALLBACK_COLOR }"
+      :aria-current="active === item.index ? 'page' : undefined"
+      @click="emit('change', item.index)"
+    >
+      <span class="dock-icon">
+        <el-icon><component :is="item.icon" /></el-icon>
+        <!-- 角标：正在进行的任务数量，最多 2 位 -->
+        <span
+          v-if="item.badge"
+          class="dock-badge"
+        >{{ item.badge > 99 ? '99+' : item.badge }}</span>
+      </span>
+      <span class="dock-label">{{ item.label }}</span>
+    </button>
   </nav>
 </template>
 
 <style scoped lang="scss">
-/* 底部 Dock：玻璃基底由全局 .frosted-surface 提供，
- * 此处叠加渐变描边、深玻璃质感与逐项主题色 */
+/* 底部 Dock。后仰只做在板这一层：板绕 X 轴转、origin 在底边 → 只有板顶向后倒，
+ * 屏幕上是上窄下宽的梯形；图标待在平板层里，天然是正的 */
 .app-dock {
   position: fixed;
   left: 50%;
-  bottom: 14px;
-  transform: translateX(-50%);
+  bottom: 16px;
   z-index: 100;
   display: flex;
   align-items: flex-end;
-  gap: 6px;
-  padding: 8px 14px;
-  border-radius: 24px;
+  gap: 8px;
+  padding: 8px 30px 10px;
   user-select: none;
-  /* 深玻璃：更透、更模糊，泛出品牌色氛围光 */
+  transform: translateX(-50%);
+
+  /* 后仰角，只在 .dock-board 上用 */
+  --dock-tilt: 30deg;
+  /* 脚本实时写入：--mx 氛围光横坐标 / --glow 显隐 / --hover-color 光标指向项的主题色 */
+  --mx: 50%;
+  --glow: 0;
+  --accent-color: var(--brand-primary);
+  /* 阴影与氛围光的色源：光标正指向那一项优先，离开时回退到激活项 */
+  --glow-color: var(--hover-color, var(--accent-color));
+}
+
+/* ===== 后仰的玻璃板：Dock 的 3D 全部集中在这一层 =====
+ * 导航项不能放进这个坐标系：父级 3D 变换下的子元素会被压平，子元素的 rotateX 只剩
+ * 「竖向压扁」这一半效果（实测图标 h/w 0.61，比不反向旋转的 0.69 还扁），反不过来 */
+.dock-board {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: 18px;
+  /* 悬浮时只调这一档投影浓度，省掉整套阴影重写 */
+  --glow-alpha: 42%;
+  /* perspective 越小透视越强：板顶收得越窄、立体感越猛 */
+  transform: perspective(450px) rotateX(var(--dock-tilt));
+  /* 锚在底边：板贴住页面底部不动，只有顶边向后倒 */
+  transform-origin: center bottom;
+  /* 深玻璃：白色高光层 + 半透底色，模糊拉满让背后内容泛出柔光 */
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.08) 55%),
-    color-mix(in srgb, var(--el-bg-color) 58%, transparent);
-  backdrop-filter: blur(28px) saturate(170%);
-  /* 去掉 .frosted-surface 的 1px 边框，避免与 ::before 渐变描边形成双线 */
-  border: none;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.06) 58%),
+    color-mix(in srgb, var(--el-bg-color) 56%, transparent);
+  backdrop-filter: blur(30px) saturate(180%);
   box-shadow:
     var(--shadow-lg),
-    0 18px 44px -14px rgba(109, 90, 224, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+    0 20px 46px -16px color-mix(in srgb, var(--glow-color) var(--glow-alpha), transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.62),
+    /* 前沿（下边）亮线：后仰时它就是玻璃的厚度边 */ inset 0 -1px 0 rgba(255, 255, 255, 0.85),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.26);
+  transition: box-shadow 0.3s ease;
+}
 
-  /* 渐变描边：上亮下紫，替代纯色边框 */
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    padding: 1px;
-    background: linear-gradient(
-      160deg,
-      rgba(255, 255, 255, 0.95),
-      rgba(255, 255, 255, 0.25) 38%,
-      rgba(109, 90, 224, 0.35)
-    );
-    -webkit-mask:
-      linear-gradient(#fff 0 0) content-box,
-      linear-gradient(#fff 0 0);
-    mask:
-      linear-gradient(#fff 0 0) content-box,
-      linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    pointer-events: none;
-  }
+.app-dock:hover .dock-board {
+  --glow-alpha: 54%;
+}
+
+/* ===== 光标跟随氛围光：贴在板底边、随光标横向滑动的主题色光斑 ===== */
+.dock-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: var(--glow);
+  background: radial-gradient(
+    150px 88px at var(--mx) 116%,
+    color-mix(in srgb, var(--glow-color) 40%, transparent),
+    transparent 72%
+  );
+  transition: opacity 0.35s ease;
+}
+
+/* ===== 滑动激活指示条：激活态的「锚点」，贴住板下沿，切页时弹到下一项 ===== */
+.dock-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 13px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  pointer-events: none;
+  opacity: 0;
+  background: var(--accent-color);
+  box-shadow: 0 0 10px 2px color-mix(in srgb, var(--accent-color) 55%, transparent);
+  animation: dock-dot-pulse 2.4s ease-in-out infinite;
+}
+
+/* 过渡只在首帧定位完成后启用，否则指示条会从左上角飞过来 */
+.app-dock.is-ready .dock-indicator {
+  transition:
+    transform 0.42s cubic-bezier(0.34, 1.4, 0.64, 1),
+    background 0.3s ease;
 }
 
 .dock-item {
   position: relative;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  width: 64px;
-  padding: 8px 0 11px;
+  gap: 5px;
+  width: 56px;
+  padding: 0 0 4px;
   border: none;
-  border-radius: 16px;
   background: transparent;
   color: var(--el-text-color-regular);
   cursor: pointer;
-  /* 弹性回弹曲线，悬浮/按下更灵动 */
-  transition:
-    transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1),
-    background-color 0.2s ease,
-    box-shadow 0.2s ease;
-  animation: dock-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+  animation: dock-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
 
-  /* 入场依次弹出的小动效 */
-  @for $i from 1 through 6 {
-    &:nth-child(#{$i}) {
-      animation-delay: $i * 0.04s;
+  /* 入场依次弹出。装饰层是 span、导航项是 button，用 nth-of-type 才数得对 */
+  @for $i from 1 through 8 {
+    &:nth-of-type(#{$i}) {
+      animation-delay: $i * 0.05s;
     }
   }
 
-  /* 图标块：白色玻璃小磁贴，像一枚迷你 App 图标 */
+  /* 图标块：白色玻璃小磁贴。放大锚在底边 → 悬浮时向上长，不会压到下面的标签 */
   .dock-icon {
     position: relative;
-    width: 40px;
-    height: 40px;
-    border-radius: 13px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.55));
+    width: 40px;
+    height: 40px;
+    border-radius: 13px;
+    transform-origin: center bottom;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.62));
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.9),
-      0 2px 6px -2px rgba(var(--shadow-rgb), 0.14);
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      /* 落在板面上的接触阴影：图标要「压」在板上，不能飘着 */ 0 6px 12px -5px rgba(var(--shadow-rgb), 0.42);
     color: var(--el-text-color-regular);
     transition:
       transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1),
-      background 0.2s ease,
-      color 0.2s ease,
-      box-shadow 0.2s ease;
+      background 0.25s ease,
+      color 0.25s ease,
+      box-shadow 0.25s ease;
 
     .el-icon {
       font-size: 21px;
@@ -163,48 +291,40 @@ function change(index: string) {
       position: absolute;
       top: -5px;
       right: -7px;
-      min-width: 17px;
-      height: 17px;
-      padding: 0 4px;
-      box-sizing: border-box;
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      min-width: 17px;
+      height: 17px;
+      padding: 0 4px;
       border-radius: var(--radius-pill);
       font-size: 10px;
       font-weight: 700;
       line-height: 1;
       color: #fff;
       background: linear-gradient(135deg, color-mix(in srgb, var(--item-color) 80%, #000), var(--item-color));
-      box-shadow:
-        0 0 0 2px rgba(255, 255, 255, 0.85),
-        0 3px 8px -2px color-mix(in srgb, var(--item-color) 70%, transparent);
-      animation: badge-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
   }
 
   .dock-label {
     font-size: 11px;
     line-height: 1.2;
-    letter-spacing: 0.3px;
     color: var(--el-text-color-secondary);
     transition: color 0.2s ease;
   }
 
   &:hover {
-    transform: translateY(-6px);
-
     .dock-icon {
-      transform: scale(1.1);
+      transform: scale(1.2);
       background: linear-gradient(
         135deg,
         color-mix(in srgb, var(--item-color) 22%, #fff),
-        color-mix(in srgb, var(--item-color) 10%, #fff)
+        color-mix(in srgb, var(--item-color) 8%, #fff)
       );
       color: var(--item-color);
       box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.6),
-        0 10px 22px -8px color-mix(in srgb, var(--item-color) 60%, transparent);
+        inset 0 1px 0 rgba(255, 255, 255, 0.8),
+        0 12px 24px -8px color-mix(in srgb, var(--item-color) 60%, transparent);
     }
 
     .dock-label {
@@ -212,15 +332,8 @@ function change(index: string) {
     }
   }
 
+  /* 激活图标：主题色渐变磁贴，像点亮的应用图标（写在 hover 之后才压得住） */
   &.is-active {
-    background: linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--item-color) 14%, transparent),
-      color-mix(in srgb, var(--item-color) 6%, transparent)
-    );
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--item-color) 24%, transparent);
-
-    /* 激活图标：主题色渐变磁贴，像点亮的应用图标 */
     .dock-icon {
       background: linear-gradient(
         135deg,
@@ -229,30 +342,13 @@ function change(index: string) {
         color-mix(in srgb, var(--item-color) 55%, #fff) 100%
       );
       color: #fff;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-      box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.4),
-        0 8px 18px -6px color-mix(in srgb, var(--item-color) 70%, transparent);
+      /* 激活态没有整项底框，全靠磁贴自身撑住：渐变 + 更实的同色光晕 */
+      box-shadow: 0 12px 24px -8px color-mix(in srgb, var(--item-color) 88%, transparent);
     }
 
     .dock-label {
       color: var(--item-color);
       font-weight: 600;
-    }
-
-    /* 底部呼吸光点 */
-    &::after {
-      content: '';
-      position: absolute;
-      left: 50%;
-      bottom: 4px;
-      width: 4px;
-      height: 4px;
-      border-radius: var(--radius-pill);
-      transform: translateX(-50%);
-      background: var(--item-color);
-      box-shadow: 0 0 8px 2px color-mix(in srgb, var(--item-color) 60%, transparent);
-      animation: dock-dot-pulse 2s ease-in-out infinite;
     }
   }
 }
@@ -264,22 +360,22 @@ function change(index: string) {
   }
 }
 
-@keyframes badge-pop {
-  from {
-    opacity: 0;
-    transform: scale(0.4);
-  }
-}
-
+/* 指示条呼吸：只动透明度，位置由 transform 承担，不能被关键帧覆盖 */
 @keyframes dock-dot-pulse {
   0%,
   100% {
     opacity: 1;
-    transform: translateX(-50%) scale(1);
   }
   50% {
-    opacity: 0.55;
-    transform: translateX(-50%) scale(0.8);
+    opacity: 0.45;
+  }
+}
+
+/* 关闭动效偏好：收掉入场与呼吸动画，悬浮反馈（颜色 / 缩放）保留 */
+@media (prefers-reduced-motion: reduce) {
+  .dock-item,
+  .dock-indicator {
+    animation: none;
   }
 }
 </style>
