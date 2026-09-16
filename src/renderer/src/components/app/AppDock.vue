@@ -184,17 +184,17 @@ onMounted(async () => {
   transform: perspective(450px) rotateX(var(--dock-tilt));
   /* 锚在底边：板贴住页面底部不动，只有顶边向后倒 */
   transform-origin: center bottom;
-  /* 深玻璃：白色高光层 + 半透底色，模糊拉满让背后内容泛出柔光 */
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0.06) 58%),
-    color-mix(in srgb, var(--el-bg-color) 56%, transparent);
-  backdrop-filter: blur(30px) saturate(180%);
+  /* 玻璃配方与左右上角的浮层同源（:root 的 --glass-*），差异只有两项：
+   * 1) 多叠一层跟随 --glow-color 的氛围投影（板块大、又后仰，需要更散的环境光托住）；
+   * 2) 下边换成更亮的前沿亮线 —— 后仰时它就是这块厚玻璃的断面。
+   * 注意 box-shadow 是「先写的画在上面」，前沿线必须排在 --glass-lip 之前才压得住里面那条 */
+  background: var(--glass-sheen), var(--glass-fill);
+  backdrop-filter: var(--glass-blur);
   box-shadow:
-    var(--shadow-lg),
-    0 20px 46px -16px color-mix(in srgb, var(--glow-color) var(--glow-alpha), transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.62),
-    /* 前沿（下边）亮线：后仰时它就是玻璃的厚度边 */ inset 0 -1px 0 rgba(255, 255, 255, 0.85),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.26);
+    var(--glass-shadow),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.85),
+    var(--glass-lip),
+    0 20px 46px -16px color-mix(in srgb, var(--glow-color) var(--glow-alpha), transparent);
   transition: box-shadow 0.3s ease;
 }
 

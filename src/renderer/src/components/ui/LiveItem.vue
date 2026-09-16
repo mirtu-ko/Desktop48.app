@@ -141,7 +141,7 @@ const liveBadge = computed(() => {
     left: 8px;
     z-index: 1;
     padding: 2px 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     font-size: 12px;
     line-height: 18px;
     letter-spacing: 1px;

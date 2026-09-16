@@ -54,7 +54,7 @@ const displayLoading = useMinVisibleLoading(() => props.loading)
   gap: 12px;
   max-width: calc(100% - 40px);
   padding: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   overflow-x: auto;
 }
 </style>

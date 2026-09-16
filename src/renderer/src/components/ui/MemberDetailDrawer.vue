@@ -306,7 +306,7 @@ function openPlaybacks() {
 
 .group-chip {
   padding: 2px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 12px;
   line-height: 1.6;
   color: var(--el-text-color-secondary);
@@ -336,7 +336,7 @@ function openPlaybacks() {
   gap: 10px 14px;
   grid-template-columns: repeat(2, 1fr);
   padding: 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--el-fill-color-lighter);
 
   .cell {

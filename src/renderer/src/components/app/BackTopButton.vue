@@ -111,14 +111,10 @@ watch(() => route.path, () => nextTick(syncFromContainer))
   border-radius: 50%;
   cursor: pointer;
   color: var(--el-text-color-regular);
-  /* 深玻璃质感，与 AppDock / FloatAudioBar 同层观感 */
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.08) 55%),
-    color-mix(in srgb, var(--el-bg-color) 58%, transparent);
-  backdrop-filter: blur(28px) saturate(170%);
-  box-shadow:
-    var(--shadow-md),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  /* 玻璃配方与 AppDock / 左右上角浮层同源（见 app.scss 的 --glass-*） */
+  background: var(--glass-sheen), var(--glass-fill);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow), var(--glass-lip);
   transition:
     transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1),
     background 0.2s ease,
@@ -131,11 +127,13 @@ watch(() => route.path, () => nextTick(syncFromContainer))
 
   &:hover {
     transform: translateY(-3px);
-    background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+    background: var(--gradient-brand);
     color: #fff;
+    /* 上色后仍保留玻璃的边，与未悬浮时是同一块材质 */
     box-shadow:
-      var(--shadow-lg),
-      0 10px 24px -8px rgba(109, 90, 224, 0.5);
+      var(--glass-shadow),
+      var(--glass-lip),
+      0 10px 24px -8px rgba(var(--brand-rgb), 0.5);
   }
 
   &:active {

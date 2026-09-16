@@ -464,7 +464,7 @@ function onClearAll() {
     width: 34px;
     height: 34px;
     margin: 0 2px;
-    background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+    background: var(--gradient-brand);
     color: #fff;
     box-shadow: var(--shadow-glow);
 

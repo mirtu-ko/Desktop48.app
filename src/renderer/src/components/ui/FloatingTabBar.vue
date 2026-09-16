@@ -27,7 +27,7 @@ function tabStyle(key: string) {
     return undefined
   if (!activeColor.value) {
     return {
-      background: 'linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light))',
+      background: 'var(--gradient-brand)',
     }
   }
   return {
@@ -193,7 +193,7 @@ onDeactivated(() => {
   align-items: center;
   gap: 4px;
   padding: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   max-width: 75%;
   overflow-x: auto;
   overflow-y: hidden;
@@ -211,6 +211,7 @@ onDeactivated(() => {
     &:hover {
       color: var(--el-text-color-secondary);
       background: transparent;
+      box-shadow: none;
     }
 
     &.is-active:hover {
@@ -226,7 +227,7 @@ onDeactivated(() => {
   flex: none;
   padding: 9px 24px;
   border: none;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 15px;
   font-weight: 500;
   line-height: 1;
@@ -236,11 +237,33 @@ onDeactivated(() => {
   user-select: none;
   transition:
     background 0.2s ease,
-    color 0.2s ease;
+    color 0.2s ease,
+    box-shadow 0.2s ease;
 
+  /* 悬浮片：亮面玻璃。条本身是 54% 白叠在浅色页面上（合成 ≈99% 白），
+   * 白片在浅色内容上没有亮度差可用，可见度只能靠「往下压一点 + 边」：
+   * 顶部窄镜面给亮面（收得快，否则整片发白变塑料）、冷灰薄雾买可见度、
+   * 折射环 + 外柔环立轮廓（浅底上玻璃的形状只能靠边）。 */
   &:hover {
     color: var(--el-text-color-primary);
-    background: color-mix(in srgb, var(--el-border-color-lighter) 40%, transparent);
+    background:
+      linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.92) 0%,
+        rgba(255, 255, 255, 0.4) 15%,
+        rgba(255, 255, 255, 0.1) 36%,
+        rgba(255, 255, 255, 0.04) 60%,
+        rgba(255, 255, 255, 0.24) 100%
+      ),
+      rgba(var(--glass-edge-rgb), 0.09);
+    /* 条只有 4px 内边距，竖向外扩会被 overflow 裁掉，投影最大只能做到 4px */
+    box-shadow:
+      0 0 0 1px rgba(var(--glass-edge-rgb), 0.1),
+      0 0 0 2px rgba(var(--glass-edge-rgb), 0.05),
+      0 1px 2px -1px rgba(var(--shadow-rgb), 0.22),
+      0 4px 10px -6px rgba(var(--shadow-rgb), 0.42),
+      inset 0 1px 0 rgba(255, 255, 255, 1),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.62);
   }
 
   .tab-icon {

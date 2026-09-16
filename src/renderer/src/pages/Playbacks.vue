@@ -232,7 +232,7 @@ watch(selectedFilter, () => {
 /* 筛选控件：圆角化、弱化生硬边框，与胶囊标签呼应 */
 :deep(.el-select__wrapper),
 :deep(.el-cascader .el-input__wrapper) {
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background-color: color-mix(in srgb, var(--el-bg-color) 72%, transparent);
   box-shadow: 0 0 0 1px var(--el-border-color) inset;
   transition:

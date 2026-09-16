@@ -434,7 +434,9 @@ onUnmounted(() => {
   flex-direction: column;
   border-radius: 14px;
   overflow: hidden;
-  box-shadow: var(--shadow-lg);
+  /* 覆盖 .frosted-surface 的落影（窗口大、要更重），但补回玻璃的边，
+   * 否则这块深玻璃会少了顶边高光，看起来像一块纯色板 */
+  box-shadow: var(--glass-shadow), var(--glass-lip);
   transition:
     width 0.2s ease,
     height 0.2s ease;
@@ -466,11 +468,11 @@ onUnmounted(() => {
 .fp-kind {
   flex-shrink: 0;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 11px;
   line-height: 1.4;
   color: #fff;
-  background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+  background: var(--gradient-brand);
 
   &.is-playback {
     background: linear-gradient(135deg, var(--brand-secondary), #ffb0c8);

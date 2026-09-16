@@ -116,7 +116,7 @@ function formatTime(stime: string): string {
   background: rgba(0, 0, 0, 0.7);
   color: white;
   padding: 4px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   font-size: 14px;
 }
 </style>

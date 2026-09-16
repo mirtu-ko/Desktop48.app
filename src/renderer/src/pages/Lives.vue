@@ -214,10 +214,7 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* 底部留出 Dock 空间（--dock-reserve） */
-:deep(.el-scrollbar__view) {
-  padding-bottom: var(--dock-reserve);
-}
+/* 滚动区给 Dock 的底部预留见全局 .page-root .el-scrollbar__view */
 
 .live-skeleton {
   padding: var(--tabbar-offset-top) 16px 8px;

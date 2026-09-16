@@ -434,12 +434,8 @@ onMounted(fetchAlbums)
 </template>
 
 <style scoped lang="scss">
-/* ===== 页面骨架：与直播/公演页同构（相对定位 + 裁剪见全局 .page-root） ===== */
-
-/* 底部留出 Dock 空间（--dock-reserve） */
-:deep(.el-scrollbar__view) {
-  padding-bottom: var(--dock-reserve);
-}
+/* ===== 页面骨架：与直播/公演页同构（相对定位 + 裁剪见全局 .page-root；
+ * 滚动区给 Dock 的底部预留也由全局 .page-root .el-scrollbar__view 统一提供） ===== */
 
 .albums-container {
   /* 顶部留出左上角年份切换器空间（--tabbar-offset-top） */
@@ -565,7 +561,7 @@ onMounted(fetchAlbums)
   /* 播放：品牌渐变实心圆 */
   &.quick-btn--play {
     border: none;
-    background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+    background: var(--gradient-brand);
     color: #fff;
     box-shadow: var(--shadow-glow);
 
@@ -605,7 +601,7 @@ onMounted(fetchAlbums)
   height: 82px;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 50% 50%, rgba(109, 90, 224, 0.18) 0 26%, transparent 27%),
+    radial-gradient(circle at 50% 50%, rgba(var(--brand-rgb), 0.18) 0 26%, transparent 27%),
     repeating-radial-gradient(circle at 50% 50%, #191920 0 2px, #23232c 2px 3px);
   box-shadow:
     0 8px 16px -6px rgba(var(--shadow-rgb), 0.4),
@@ -740,7 +736,7 @@ onMounted(fetchAlbums)
 
   &.album-tag--zj {
     /* 专辑：品牌紫 */
-    background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+    background: var(--gradient-brand);
     box-shadow: 0 3px 8px -3px var(--shadow-glow);
   }
 

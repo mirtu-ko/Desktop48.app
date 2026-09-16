@@ -460,7 +460,7 @@ function hideLogo(event: Event) {
 .legal-block {
   padding: 14px 16px;
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--brand-primary) 4%, transparent);
 }
 
@@ -527,7 +527,7 @@ function hideLogo(event: Event) {
   align-items: center;
   padding: 10px 12px;
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   text-decoration: none;
   transition:
     transform 0.18s ease,

@@ -156,7 +156,7 @@ function resumeFollowing() {
   display: flex;
   gap: 6px;
   padding: 3px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   list-style: none;
   text-align: left;
   font-size: 12px;
