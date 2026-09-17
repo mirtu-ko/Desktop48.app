@@ -165,7 +165,7 @@ onUnmounted(() => {
         :distance="10"
         @end-reached="onInfiniteScroll"
       >
-        <div class="live-list">
+        <div class="card-grid">
           <div v-for="item in liveList" :key="item.liveId" class="live-item" @click="play(item)">
             <!-- enrichLiveItem 在 processItem 阶段已就地补全 cover/date/member，渲染时必然就绪 -->
             <LiveItem :item="item as EnrichedLiveItem" :image-version="imageVersion" />
@@ -182,7 +182,7 @@ onUnmounted(() => {
         title="刷新"
         @refresh="refreshList"
       >
-        <span class="live-count">已加载 {{ liveList.length }} 个直播</span>
+        <span class="dock-note">已加载 {{ liveList.length }} 个直播</span>
       </FloatingRefreshDock>
     </div>
 
@@ -201,26 +201,16 @@ onUnmounted(() => {
   height: 100%;
 }
 
-.live-count {
-  margin-left: 6px;
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-  white-space: nowrap;
-}
-
 .live-main {
   position: relative;
   height: 100%;
   overflow: hidden;
 }
 
-/* 底部留出 Dock 空间（--dock-reserve） */
-:deep(.el-scrollbar__view) {
-  padding-bottom: var(--dock-reserve);
-}
+/* 滚动区给 Dock 的底部预留见全局 .page-root .el-scrollbar__view */
 
 .live-skeleton {
-  padding: var(--tabbar-offset-top) 16px 8px;
+  padding: var(--page-pad);
 }
 
 .live-empty {
@@ -228,14 +218,6 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   align-items: center;
-}
-
-.live-list {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  /* 顶部留出左上角 tab 栏（--tabbar-offset-top），底留卡片悬停上浮与阴影的空间 */
-  padding: var(--tabbar-offset-top) 16px 8px;
 }
 
 .live-item {

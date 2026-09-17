@@ -58,10 +58,10 @@ const liveBadge = computed(() => {
         lazy
       >
         <template #placeholder>
-          <div class="cover-ph" />
+          <div class="media-ph" />
         </template>
         <template #error>
-          <div class="cover-ph">
+          <div class="media-ph">
             <el-icon :size="28">
               <VideoCameraFilled />
             </el-icon>
@@ -125,23 +125,13 @@ const liveBadge = computed(() => {
     }
   }
 
-  .cover-ph {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--el-fill-color-light);
-    color: var(--el-text-color-placeholder);
-  }
-
   .live-badge {
     position: absolute;
     top: 8px;
     left: 8px;
     z-index: 1;
     padding: 2px 8px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     font-size: 12px;
     line-height: 18px;
     letter-spacing: 1px;

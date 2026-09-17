@@ -255,12 +255,12 @@ onMounted(fetchAlbums)
             <div class="album-cover">
               <div class="vinyl">
                 <span class="vinyl-label">
-                  <CoverImage class="vinyl-label-img" :src="album.image" :version="imageVersion" loading="lazy" />
+                  <CoverImage class="media-fill" :src="album.image" :version="imageVersion" loading="lazy" />
                 </span>
               </div>
               <!-- 原生懒加载：视口外不请求，滚动接近时浏览器提前预取，比 el-image 的滚动节流更早就位 -->
               <div class="cover-img">
-                <CoverImage class="cover-src" :src="album.image" :version="imageVersion" loading="lazy">
+                <CoverImage class="cover-src media-fill" :src="album.image" :version="imageVersion" loading="lazy">
                   <div class="cover-fallback">
                     <el-icon><Headset /></el-icon>
                   </div>
@@ -338,7 +338,7 @@ onMounted(fetchAlbums)
 
     <!-- 专辑详情抽屉：氛围底 + 旋转黑胶 + 曲目列表 -->
     <el-drawer v-model="detailVisible" size="440px" :with-header="false" destroy-on-close>
-      <div v-if="currentAlbum" class="album-detail">
+      <div v-if="currentAlbum" class="detail-stack">
         <div class="detail-hero">
           <img class="hero-bg" :src="currentAlbum.image" alt="">
           <div class="hero-cover">
@@ -434,20 +434,16 @@ onMounted(fetchAlbums)
 </template>
 
 <style scoped lang="scss">
-/* ===== 页面骨架：与直播/公演页同构（相对定位 + 裁剪见全局 .page-root） ===== */
-
-/* 底部留出 Dock 空间（--dock-reserve） */
-:deep(.el-scrollbar__view) {
-  padding-bottom: var(--dock-reserve);
-}
+/* ===== 页面骨架：与直播/公演页同构（相对定位 + 裁剪见全局 .page-root；
+ * 滚动区给 Dock 的底部预留也由全局 .page-root .el-scrollbar__view 统一提供） ===== */
 
 .albums-container {
   /* 顶部留出左上角年份切换器空间（--tabbar-offset-top） */
-  padding: var(--tabbar-offset-top) 16px 8px;
+  padding: var(--page-pad);
 }
 
 .albums-skeleton {
-  padding: var(--tabbar-offset-top) 16px 8px;
+  padding: var(--page-pad);
 }
 
 .album-skeleton {
@@ -565,7 +561,7 @@ onMounted(fetchAlbums)
   /* 播放：品牌渐变实心圆 */
   &.quick-btn--play {
     border: none;
-    background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+    background: var(--gradient-brand);
     color: #fff;
     box-shadow: var(--shadow-glow);
 
@@ -605,7 +601,7 @@ onMounted(fetchAlbums)
   height: 82px;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 50% 50%, rgba(109, 90, 224, 0.18) 0 26%, transparent 27%),
+    radial-gradient(circle at 50% 50%, rgba(var(--brand-rgb), 0.18) 0 26%, transparent 27%),
     repeating-radial-gradient(circle at 50% 50%, #191920 0 2px, #23232c 2px 3px);
   box-shadow:
     0 8px 16px -6px rgba(var(--shadow-rgb), 0.4),
@@ -639,14 +635,6 @@ onMounted(fetchAlbums)
   animation-play-state: paused;
   overflow: hidden;
 
-  /* 卡片盘标图：填满圆形盘面 */
-  .vinyl-label-img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
   /* 中心孔 */
   &::after {
     content: '';
@@ -674,12 +662,8 @@ onMounted(fetchAlbums)
   background: var(--el-fill-color-light);
 }
 
-/* 卡片封面：解码完成才淡入，避免半张图闪现 */
+/* 卡片封面：解码完成才淡入，填满容器见全局 .media-fill */
 .cover-src {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
   animation: cover-fade 0.25s ease;
 }
 
@@ -740,13 +724,13 @@ onMounted(fetchAlbums)
 
   &.album-tag--zj {
     /* 专辑：品牌紫 */
-    background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+    background: var(--gradient-brand);
     box-shadow: 0 3px 8px -3px var(--shadow-glow);
   }
 
   &.album-tag--sg {
-    /* 单曲：青绿（与下载语义色同源） */
-    background: linear-gradient(135deg, var(--color-downloads), #34d399);
+    /* 单曲：青绿（与下载语义色同源），亮端由语义色白化派生 */
+    background: linear-gradient(135deg, var(--color-downloads), color-mix(in srgb, var(--color-downloads) 70%, #fff));
     box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--color-downloads) 55%, transparent);
   }
 }
@@ -763,11 +747,6 @@ onMounted(fetchAlbums)
 }
 
 /* ===== 详情抽屉 ===== */
-.album-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
 
 /* 头部：封面模糊放大的氛围底，内容浮于其上 */
 .detail-hero {

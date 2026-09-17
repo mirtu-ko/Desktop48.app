@@ -70,15 +70,15 @@ function openPlaybacks() {
     size="420px"
     @update:model-value="onVisibilityChange"
   >
-    <div v-if="member" class="detail">
+    <div v-if="member" class="detail-stack">
       <!-- 头部：头像 + 姓名/队伍徽章 + 状态徽章 + 昵称 + 微博 -->
       <div class="hero">
         <el-image class="avatar" :src="member.avatar" fit="cover">
           <template #placeholder>
-            <div class="avatar-ph" />
+            <div class="media-ph" />
           </template>
           <template #error>
-            <div class="avatar-ph">
+            <div class="media-ph">
               <el-icon :size="30">
                 <User />
               </el-icon>
@@ -240,12 +240,6 @@ function openPlaybacks() {
 </template>
 
 <style scoped lang="scss">
-.detail {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
 .hero {
   display: flex;
   gap: 16px;
@@ -258,16 +252,6 @@ function openPlaybacks() {
     border-radius: var(--radius-md);
     overflow: hidden;
     box-shadow: var(--shadow-sm);
-  }
-
-  .avatar-ph {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-    color: var(--el-text-color-placeholder);
-    background: var(--el-fill-color-light);
   }
 
   .head {
@@ -306,7 +290,7 @@ function openPlaybacks() {
 
 .group-chip {
   padding: 2px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 12px;
   line-height: 1.6;
   color: var(--el-text-color-secondary);
@@ -336,7 +320,7 @@ function openPlaybacks() {
   gap: 10px 14px;
   grid-template-columns: repeat(2, 1fr);
   padding: 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--el-fill-color-lighter);
 
   .cell {

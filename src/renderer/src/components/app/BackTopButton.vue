@@ -68,8 +68,6 @@ function backToTop() {
   el?.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
-// scroll 事件不冒泡，但捕获阶段监听 document 能收到所有元素滚动；
-// 免去切页后重新定位容器，keep-alive / v-show / Suspense 场景天然兼容
 useEventListener(document, 'scroll', onDocScroll, { capture: true })
 
 onMounted(() => {
@@ -83,77 +81,39 @@ watch(() => route.path, () => nextTick(syncFromContainer))
 
 <template>
   <Transition name="back-top">
-    <button
+    <!-- 按钮本体沿用右上角刷新按钮（el-button circle primary，见 FloatingRefreshDock），此处只管定位 -->
+    <el-button
       v-if="visible"
-      type="button"
-      class="back-top"
+      circle
+      type="primary"
+      :icon="Top"
       title="回到顶部"
+      class="back-top"
       @click="backToTop"
-    >
-      <el-icon><Top /></el-icon>
-    </button>
+    />
   </Transition>
 </template>
 
 <style scoped lang="scss">
-/* 右下角全局回顶按钮：右下角空闲（FloatAudioBar 左下、AppDock 居中），直接 fixed 定位 */
+/* 右下角空闲（FloatAudioBar 左下、AppDock 居中），直接 fixed 定位 */
 .back-top {
   position: fixed;
   right: 18px;
   bottom: 26px;
   z-index: 95;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 42px;
-  height: 42px;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  color: var(--el-text-color-regular);
-  /* 深玻璃质感，与 AppDock / FloatAudioBar 同层观感 */
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.08) 55%),
-    color-mix(in srgb, var(--el-bg-color) 58%, transparent);
-  backdrop-filter: blur(28px) saturate(170%);
-  box-shadow:
-    var(--shadow-md),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55);
-  transition:
-    transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1),
-    background 0.2s ease,
-    color 0.2s ease,
-    box-shadow 0.2s ease;
-
-  .el-icon {
-    font-size: 20px;
-  }
-
-  &:hover {
-    transform: translateY(-3px);
-    background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
-    color: #fff;
-    box-shadow:
-      var(--shadow-lg),
-      0 10px 24px -8px rgba(109, 90, 224, 0.5);
-  }
-
-  &:active {
-    transform: translateY(-1px);
-  }
 }
 
 /* 显隐过渡：淡入 + 轻微上浮 */
 .back-top-enter-active,
 .back-top-leave-active {
   transition:
-    opacity 0.22s ease,
-    transform 0.22s ease;
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 
 .back-top-enter-from,
 .back-top-leave-to {
   opacity: 0;
-  transform: translateY(10px) scale(0.85);
+  transform: translateY(8px);
 }
 </style>

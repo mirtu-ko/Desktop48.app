@@ -283,7 +283,7 @@ function openHistoryStream(show: OpenLive) {
 
 .shows-container {
   /* 顶部留出左上角浮动切换器的空间（--tabbar-offset-top），避免遮挡内容 */
-  padding: var(--tabbar-offset-top) 16px 8px;
+  padding: var(--page-pad);
 }
 
 .skeleton-section {

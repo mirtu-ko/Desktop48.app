@@ -238,10 +238,10 @@ function toggleBlockMember(member: MemberDetail) {
               >
                 <el-image class="avatar" :src="member.avatar" fit="cover" lazy>
                   <template #placeholder>
-                    <div class="avatar-ph" />
+                    <div class="media-ph" />
                   </template>
                   <template #error>
-                    <div class="avatar-ph">
+                    <div class="media-ph">
                       <el-icon :size="30">
                         <User />
                       </el-icon>
@@ -310,7 +310,7 @@ function toggleBlockMember(member: MemberDetail) {
       title="更新成员数据库"
       @refresh="updateMembers"
     >
-      <span class="member-count">更新成员数据库</span>
+      <span class="dock-note">更新成员数据库</span>
     </FloatingRefreshDock>
 
     <!-- 成员详情抽屉：两个数据源合并后的同一个详情页 -->
@@ -324,16 +324,12 @@ function toggleBlockMember(member: MemberDetail) {
 </template>
 
 <style scoped lang="scss">
-/* 页面骨架（相对定位 + 裁剪）见全局 .page-root */
+/* 页面骨架（相对定位 + 裁剪）见全局 .page-root；
+ * 滚动区给 Dock 的底部预留同样由全局 .page-root .el-scrollbar__view 统一提供 */
 
 .members-container {
   /* 顶部留出左上角浮动切换器的空间（--tabbar-offset-top）；底留卡片悬停上浮与阴影的空间 */
-  padding: var(--tabbar-offset-top) 16px 8px;
-}
-
-/* 底部留出 Dock 空间（--dock-reserve） */
-:deep(.el-scrollbar__view) {
-  padding-bottom: var(--dock-reserve);
+  padding: var(--page-pad);
 }
 
 /* 分区标题：队伍徽章图标居左、标题居右的水平布局；
@@ -371,10 +367,9 @@ function toggleBlockMember(member: MemberDetail) {
 }
 
 .members-skeleton {
-  padding: var(--tabbar-offset-top) 16px 8px;
+  padding: var(--page-pad);
 
-  /* 与改版后的卡片对齐：无实底皮肤（透明底），媒体区是 92px 圆形头像（圆角走模板 props）、
-   * 文案行居中 —— 否则加载完成时整块布局会跳一次 */
+  /* 骨架与卡片同构（透明底、92px 圆头像、文案行居中），加载完成时不跳版 */
   :deep(.skeleton-card) {
     overflow: visible;
     border: none;
@@ -391,13 +386,6 @@ function toggleBlockMember(member: MemberDetail) {
     margin-top: 14px;
     padding: 0 4px;
   }
-}
-
-.member-count {
-  margin-left: 6px;
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-  white-space: nowrap;
 }
 
 .member-list {
@@ -477,17 +465,6 @@ function toggleBlockMember(member: MemberDetail) {
       overflow: hidden;
       background: var(--el-fill-color-light);
     }
-
-    /* 头像加载占位 / 失败兜底 */
-    .avatar-ph {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      height: 100%;
-      color: var(--el-text-color-placeholder);
-      background: var(--el-fill-color-light);
-    }
   }
 
   /* 排名皇冠徽章：头像左上角，队色皇冠（MediaIcon 实心壳）+ 内嵌数字；屏蔽后隐藏 */
@@ -513,7 +490,7 @@ function toggleBlockMember(member: MemberDetail) {
       bottom: 8px;
       transform: translateX(-50%);
       padding: 0 1px;
-      border-radius: 4px;
+      border-radius: var(--radius-xs);
       font-size: 11px;
       font-weight: 800;
       line-height: 1.3;
@@ -600,7 +577,7 @@ function toggleBlockMember(member: MemberDetail) {
     gap: 3px;
     align-items: center;
     padding: 2px 8px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     font-size: 11px;
     line-height: 1.6;
     color: #fff;
@@ -617,7 +594,7 @@ function toggleBlockMember(member: MemberDetail) {
     align-items: center;
     padding: 4px 10px;
     border: 1px solid rgba(255, 255, 255, 0.55);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     font-family: inherit;
     font-size: 12px;
     color: #fff;

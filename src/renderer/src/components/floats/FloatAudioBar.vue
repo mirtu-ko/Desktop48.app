@@ -98,7 +98,7 @@ function onClearAll() {
         <div class="bar-progress-fill" :style="{ width: `${progress * 100}%` }" />
       </div>
 
-      <span class="bar-vinyl" :class="{ 'is-playing': playing }" :style="coverStyle" />
+      <span class="bar-vinyl" :class="{ 'is-playing': playing }" :style="coverStyle" @click="panelVisible = !panelVisible" />
 
       <div class="bar-info">
         <div class="bar-name ellipsis">
@@ -464,7 +464,7 @@ function onClearAll() {
     width: 34px;
     height: 34px;
     margin: 0 2px;
-    background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+    background: var(--gradient-brand);
     color: #fff;
     box-shadow: var(--shadow-glow);
 

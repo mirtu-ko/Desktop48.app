@@ -27,7 +27,7 @@ function tabStyle(key: string) {
     return undefined
   if (!activeColor.value) {
     return {
-      background: 'linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light))',
+      background: 'var(--gradient-brand)',
     }
   }
   return {
@@ -193,7 +193,7 @@ onDeactivated(() => {
   align-items: center;
   gap: 4px;
   padding: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   max-width: 75%;
   overflow-x: auto;
   overflow-y: hidden;
@@ -209,12 +209,8 @@ onDeactivated(() => {
     cursor: grabbing;
 
     &:hover {
-      color: var(--el-text-color-secondary);
       background: transparent;
-    }
-
-    &.is-active:hover {
-      color: #fff;
+      box-shadow: none;
     }
   }
 }
@@ -226,21 +222,27 @@ onDeactivated(() => {
   flex: none;
   padding: 9px 24px;
   border: none;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 15px;
   font-weight: 500;
   line-height: 1;
-  color: var(--el-text-color-secondary);
+  color: var(--el-text-color-primary);
   background: transparent;
   cursor: pointer;
   user-select: none;
   transition:
     background 0.2s ease,
-    color 0.2s ease;
+    color 0.2s ease,
+    box-shadow 0.2s ease;
 
+  /* 悬浮片：品牌紫淡染 + 同色环。条压在白底上已接近全白、亮度没有余量，
+   * 暗底与亮底只能靠色相取可见度；淡染 20% 是上限，再深会压掉深底上的文字对比 */
   &:hover {
-    color: var(--el-text-color-primary);
-    background: color-mix(in srgb, var(--el-border-color-lighter) 40%, transparent);
+    background: rgba(var(--brand-rgb), 0.2);
+    box-shadow:
+      0 0 0 1px rgba(var(--brand-rgb), 0.1),
+      0 0 8px rgba(var(--brand-rgb), 0.2);
+    color: var(--brand-primary-dark);
   }
 
   .tab-icon {

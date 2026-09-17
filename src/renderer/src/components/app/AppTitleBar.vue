@@ -92,7 +92,7 @@ function close() {
   justify-content: space-between;
   padding-left: 14px;
   background:
-    radial-gradient(320px 90px at 12% -70%, rgba(109, 90, 224, 0.14), transparent 70%),
+    radial-gradient(320px 90px at 12% -70%, rgba(var(--brand-rgb), 0.14), transparent 70%),
     linear-gradient(90deg, #f1eefd, #eceefa);
   border-bottom: 1px solid var(--el-border-color-lighter);
   box-shadow: 0 1px 2px rgba(var(--shadow-rgb), 0.04);
@@ -158,7 +158,7 @@ function close() {
     }
 
     &:hover {
-      background: rgba(109, 90, 224, 0.1);
+      background: rgba(var(--brand-rgb), 0.1);
       color: var(--brand-primary);
     }
   }

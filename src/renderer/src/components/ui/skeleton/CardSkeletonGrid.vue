@@ -53,7 +53,7 @@ const gridStyle = computed(() => ({
       <div
         v-for="index in count"
         :key="index"
-        class="skeleton-card"
+        class="skeleton-card lift-card"
       >
         <BaseSkeleton
           class="skeleton-media"
@@ -88,14 +88,6 @@ const gridStyle = computed(() => ({
   display: grid;
   gap: var(--card-skeleton-gap);
   grid-template-columns: repeat(auto-fill, minmax(var(--card-skeleton-min-width), 1fr));
-}
-
-.skeleton-card {
-  overflow: hidden;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--radius-md);
-  background: var(--el-bg-color);
-  box-shadow: var(--shadow-sm);
 }
 
 .skeleton-body {

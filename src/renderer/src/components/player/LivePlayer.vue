@@ -447,7 +447,7 @@ onUnmounted(() => {
   flex: 0 1 auto;
   min-width: 0;
   padding: 3px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
   font-size: 12px;

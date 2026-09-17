@@ -434,7 +434,6 @@ onUnmounted(() => {
   flex-direction: column;
   border-radius: 14px;
   overflow: hidden;
-  box-shadow: var(--shadow-lg);
   transition:
     width 0.2s ease,
     height 0.2s ease;
@@ -466,11 +465,11 @@ onUnmounted(() => {
 .fp-kind {
   flex-shrink: 0;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 11px;
   line-height: 1.4;
   color: #fff;
-  background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+  background: var(--gradient-brand);
 
   &.is-playback {
     background: linear-gradient(135deg, var(--brand-secondary), #ffb0c8);
