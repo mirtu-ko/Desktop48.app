@@ -47,7 +47,7 @@
 
   /* ===== 浮层让位：页面内容为悬浮控件预留的空间 ===== */
   --tabbar-offset-top: 64px; // 左上角 FloatingTabBar 的高度 + 间距
-  --dock-reserve: 120px; // 底部悬浮 AppDock 预留的滚动留白（Dock 视觉高约 96px，含后仰板的投影）
+  --dock-reserve: 96px; // 底部悬浮 AppDock 预留的滚动留白（Dock 视觉高约 96px，含后仰板的投影）
   /* 列表页内容区统一内边距：上留浮动 tab 栏、左右 16、下留卡片悬停上浮与阴影 */
   --page-pad: var(--tabbar-offset-top) 16px 8px;
 
@@ -208,7 +208,7 @@ body,
 }
 
 .empty-block {
-  padding: 120px 0;
+  padding: var(--dock-reserve) 0;
   text-align: center;
   color: var(--el-text-color-placeholder);
 }
