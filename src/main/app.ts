@@ -117,8 +117,18 @@ app.whenReady().then(() => {
   createWindow()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0)
+    // macOS 约定：点击 Dock 图标恢复应用。最小化时窗口仍存在，但被系统隐藏，
+    // 需主动 restore 并聚焦；仅当确实没有任何窗口时才新建
+    const win = activeWindow() ?? BrowserWindow.getAllWindows().find(w => !w.isDestroyed())
+    if (win) {
+      if (win.isMinimized())
+        win.restore()
+      win.show()
+      win.focus()
+    }
+    else {
       createWindow()
+    }
   })
 })
 

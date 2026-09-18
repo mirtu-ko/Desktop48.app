@@ -214,7 +214,7 @@ onUnmounted(() => {
 }
 
 .live-empty {
-  height: 100%;
+  height: calc(100% - var(--dock-reserve));
   display: flex;
   justify-content: center;
   align-items: center;
