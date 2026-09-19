@@ -234,8 +234,9 @@ function openPlaybacks() {
         </el-button>
         <el-button
           v-if="followed"
+          type="warning"
           class="unfollow-btn"
-          :icon="Star"
+          :icon="StarFilled"
           @click="emit('toggleFollow', member)"
         >
           取消关注
@@ -252,6 +253,7 @@ function openPlaybacks() {
         </el-button>
         <el-button
           v-if="blocked"
+          type="danger"
           class="block-btn"
           :icon="View"
           @click="emit('toggleBlock', member)"
