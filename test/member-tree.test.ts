@@ -57,15 +57,10 @@ describe('buildMemberTree（database.ts 抽出的纯函数）', () => {
     expect(members[0].teamColor).toBe('#old1')
   })
 
-  it('value 用 id 字符串，group 层带 teams 摘要数组', () => {
+  it('value 用 id 字符串，成员节点展开原始字段', () => {
     const tree = buildMemberTree(members, teams, groups)
     const snh = tree.find(g => g.groupName === 'SNH48')!
     expect(snh.value).toBe('10')
-    expect(snh.teams).toEqual([
-      { teamName: 'TEAM NII', label: 'TEAM NII', value: '101' },
-      { teamName: 'TEAM SII', label: 'TEAM SII', value: '100' },
-      { teamName: '未分队', label: '未分队', value: 'undefined' },
-    ])
     expect(snh.children[0].value).toBe('101')
     // 成员节点展开原始字段
     expect(snh.children.find(t => t.teamName === 'TEAM SII')!.children[0].realName).toBe('成员一')

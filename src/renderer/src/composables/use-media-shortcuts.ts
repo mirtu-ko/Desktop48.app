@@ -11,8 +11,6 @@
 export interface MediaShortcutActions {
   togglePlay: () => void
   toggleFullscreen: () => void
-  /** 无弹幕能力的宿主可不传，D 键自动不响应 */
-  toggleDanmaku?: () => void
   rotateLeft: () => void
   rotateRight: () => void
   resetRotation: () => void
@@ -69,13 +67,6 @@ export function dispatchMediaShortcut(
     case 'ArrowDown':
       if (mediaElement)
         mediaElement.volume = Math.max(0, mediaElement.volume - 0.1)
-      else
-        return false
-      break
-    case 'd':
-    case 'D':
-      if (actions.toggleDanmaku)
-        actions.toggleDanmaku()
       else
         return false
       break

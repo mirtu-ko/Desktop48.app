@@ -6,6 +6,9 @@ import { ref } from 'vue'
  * 成员数据库同步的单一入口（App 根组件与 Members 页共用，避免各写一遍 syncInfo）：
  * - App.vue 初始化通过后调 ensureMembers()：库里没有成员时静默补一次初始同步
  * - Members.vue 的「更新成员数据库」走 syncMembers()：带 loading 态与成功提示
+ *
+ * 本层只管 loading 与用户提示；「数据变了要通知谁」不在这儿 ——
+ * 变更广播紧贴落库点，见 services/apis.ts 的 syncInfo。
  */
 export function useMemberSync() {
   /** 是否正在同步（成员页浮动刷新按钮的 loading 态） */

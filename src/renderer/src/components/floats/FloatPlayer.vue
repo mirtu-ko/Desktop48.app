@@ -5,7 +5,6 @@ import LivePlayer from '@renderer/components/player/LivePlayer.vue'
 import PlaybackPlayer from '@renderer/components/player/PlaybackPlayer.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import {
-  BARRAGE_SIDEBAR_WIDTH,
   CASCADE_MAX,
   CASCADE_RIGHT_OFFSET,
   CASCADE_STEP,
@@ -49,12 +48,6 @@ const barTitle = computed(() => {
 })
 const collapsed = ref(false)
 const expanded = ref(false)
-// 弹幕侧栏是否实际占位（由 PlaybackPlayer 上报：有弹幕且未收起）
-const sidebarActive = ref(false)
-function onSidebar(active: boolean) {
-  sidebarActive.value = active
-  clampPos()
-}
 
 // 系统画中画（PiP）联动：进入 PiP 时自动折叠成胶囊条，退出时若仍处于胶囊态则还原为迷你窗
 function onPip(active: boolean) {
@@ -85,21 +78,20 @@ function fitIntoViewport(base: WindowSize): WindowSize {
 }
 
 // 当前窗口尺寸：折叠态返回胶囊条；否则取视口外接框，
-// 内接出视频比例的最大矩形（回放放大且侧栏实际占位时预留弹幕侧栏宽），窗口高 = 视频区 + 标题条，
+// 内接出视频比例的最大矩形，窗口高 = 视频区 + 标题条，
 // 最后再按视口硬钳制一次，不会被裁掉
 const size = computed<WindowSize>(() => {
   if (collapsed.value)
     return PILL_SIZE
   const ratio = expanded.value ? EXPAND_BOX_RATIO : MINI_BOX_RATIO
-  const sidebar = expanded.value && kind.value === 'playback' && sidebarActive.value ? BARRAGE_SIDEBAR_WIDTH : 0
   const boxW = viewport.value.w * ratio.w
   const boxH = (viewport.value.h - FP_BAR_HEIGHT) * ratio.h
   const video = fitAspectInBox(
     aspect.value,
-    Math.max(140, boxW - sidebar),
+    Math.max(140, boxW),
     Math.max(100, boxH - FP_BAR_HEIGHT),
   )
-  return fitIntoViewport({ w: video.w + sidebar, h: video.h + FP_BAR_HEIGHT })
+  return fitIntoViewport({ w: video.w, h: video.h + FP_BAR_HEIGHT })
 })
 
 // 初始位置：从右上角开始按创建序号级联错位，避免多窗完全重叠
@@ -160,8 +152,6 @@ const DRAG_IGNORE_SELECTOR = [
   '.mini-controls',
   '.rotate-hint',
   '.mask-actions',
-  '.barrage-box',
-  '.barrage-sidebar-toggle',
 ].join(',')
 
 interface DragState {
@@ -420,7 +410,6 @@ onUnmounted(() => {
         :compact="!expanded"
         @avatar="onAvatar"
         @aspect="onAspect"
-        @sidebar="onSidebar"
         @pip="onPip"
       />
     </div>

@@ -3,6 +3,11 @@
  *
  * 「原始数据只读」原则下的内存派生（见项目约定）：本模块不持有任何状态、
  * 不做任何 IO，输入什么就返回什么派生结果——因此可以脱离 Electron 直接单测。
+ *
+ * ⚠️ 与 renderer/src/stores/member-tree.ts **同名但不同层**：那份是渲染端的共享状态单例
+ * （请求缓存 + members-updated 失效订阅）；本文件只是建树规则，不持有任何状态。
+ * 两者不可合并：渲染端 bundle 无法引主进程模块，跨进程的类型只能声明在
+ * preload/ipc-contract.d.ts。
  */
 
 /** starInfo 的一条成员记录（API 原始数据，字段宽容处理） */
@@ -72,7 +77,6 @@ export interface MemberTreeGroupNode {
   groupId: number | string | undefined
   label: string
   value: string
-  teams: MemberTreeTeamSummary[]
   children: MemberTreeTeamNode[]
 }
 
@@ -172,7 +176,6 @@ export function buildMemberTree(
         groupId: group.groupId,
         label: group.groupName,
         value: String(group.groupId),
-        teams: teamNodes.map(({ teamName, label, value }) => ({ teamName, label, value })),
         children: teamNodes,
       }
     })

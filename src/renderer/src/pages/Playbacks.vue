@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import type { MemberTreeGroupPayload } from '../../../preload/ipc-contract'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
 import Apis from '@renderer/services/apis'
 import useFloatPlayersStore from '@renderer/stores/float-players'
+import { useMemberTreeStore } from '@renderer/stores/member-tree'
 import Constants from '@renderer/utils/constants'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
@@ -17,7 +19,13 @@ const props = withDefaults(defineProps<{ memberPreset?: { userId: string } | nul
 // 画中画迷你窗：回放播放挂载点与直播共用同一套
 const { openPlayback } = useFloatPlayersStore()
 
-const memberOption = ref<any[]>([])
+// 成员树（筛选器选项来源）走全局单例 store：与成员页共用同一份，
+// 同步完成 / 增删成员后由 store 统一作废重拉，本页无需订阅事件
+const { memberTree, loadTree } = useMemberTreeStore()
+
+/** 级联筛选器选项：由共享成员树派生（在团成员排前），树更新后自动重算 */
+const memberOption = computed(() => sortMembersByStatus(memberTree.value))
+
 // 级联筛选选中的路径：[groupId] / [groupId, teamId] / [groupId, teamId, userId]
 const selectedFilter = ref<any[]>([])
 
@@ -79,8 +87,7 @@ function filterMethod(node: any, keyword: string) {
 onMounted(async () => {
   // 成员树仅用于筛选器选项，失败不应阻断回放列表本身
   try {
-    // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts
-    memberOption.value = sortMembersByStatus(await window.mainAPI.getMemberTree())
+    await loadTree()
   }
   catch (error) {
     console.error('[Playbacks.vue]获取成员树失败:', error)
@@ -91,16 +98,20 @@ onMounted(async () => {
     refresh()
 })
 
-/** 末级成员排序：在团成员（status=Active）排在前，其余（暂休/退团）保持原有相对顺序排在后 */
-function sortMembersByStatus(tree: any[]): any[] {
-  for (const group of tree || []) {
-    for (const team of group.children || []) {
-      team.children?.sort(
-        (a: any, b: any) => Number(b.status === Constants.MemberStatus.Active) - Number(a.status === Constants.MemberStatus.Active),
-      )
-    }
-  }
-  return tree || []
+/**
+ * 末级成员排序：在团成员（status=Active）排在前，其余（暂休/退团）保持原有相对顺序排在后。
+ * 纯派生、不改动入参 —— 树是 stores/member-tree 的单例缓存，就地排序会污染其他页面。
+ */
+function sortMembersByStatus(tree: MemberTreeGroupPayload[]): MemberTreeGroupPayload[] {
+  return (tree || []).map(group => ({
+    ...group,
+    children: (group.children || []).map(team => ({
+      ...team,
+      children: [...(team.children || [])].sort(
+        (a, b) => Number(b.status === Constants.MemberStatus.Active) - Number(a.status === Constants.MemberStatus.Active),
+      ),
+    })),
+  }))
 }
 
 /** 在成员树里按 userId 找到 [groupId, teamId, userId] 完整路径 */
@@ -116,14 +127,22 @@ function findFilterPath(userId: string): any[] | null {
   return null
 }
 
+/** 预置筛选本次落空（成员刚同步进库、树里还查不到该 memberPreset）：树重载后据此重试 */
+let presetPending = false
+
 /** 应用预置筛选；返回是否实际应用（预置为空或树里找不到时返回 false） */
 function applyPreset(): boolean {
   const userId = props.memberPreset?.userId
-  if (!userId)
+  if (!userId) {
+    presetPending = false
     return false
+  }
   const path = findFilterPath(userId)
-  if (!path)
+  if (!path) {
+    presetPending = true
     return false
+  }
+  presetPending = false
   if (JSON.stringify(selectedFilter.value) !== JSON.stringify(path)) {
     // 筛选变化：交给下方 selectedFilter 的 watch 自动刷新
     selectedFilter.value = path
@@ -138,6 +157,16 @@ function applyPreset(): boolean {
 
 // 成员页每次跳转（含同一成员连续跳转）都应用预置筛选
 watch(() => props.memberPreset, applyPreset)
+
+/**
+ * 成员树更新后重试落空的预置筛选：新增成员刚同步进来时，跳转与重载谁先到不确定，
+ * 先到的那次会在树里找不到人（applyPreset 返回 false），必须等树到了再补一次。
+ * 只在真正落空时重试，避免挂载时白白多拉一次列表。
+ */
+watch(memberOption, () => {
+  if (presetPending)
+    applyPreset()
+})
 
 /** 供父组件（直播页双击「回放」tab）调用：回到顶部并刷新列表 */
 function refreshFromTop() {

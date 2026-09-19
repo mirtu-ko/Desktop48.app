@@ -8,6 +8,7 @@ import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import { useBlockedMembersStore } from '@renderer/stores/blocked-members'
+import { useMemberTreeStore } from '@renderer/stores/member-tree'
 import Constants from '@renderer/utils/constants'
 import { buildAdjuncts, mergeMembers } from '@renderer/utils/member-merge'
 import { ElMessage } from 'element-plus'
@@ -38,6 +39,9 @@ const selectedMember = ref<MemberDetail | null>(null)
 
 /** 屏蔽名单：模块级共享状态，机制见 stores/blocked-members.ts */
 const { refreshBlockedMembers, isBlocked, toggleBlock } = useBlockedMembersStore()
+
+/** 成员树：全局单例（与回放页筛选器共用同一份，同步完成后由 store 统一作废重拉） */
+const { loadTree } = useMemberTreeStore()
 
 /** 成员状态（starInfo.status）取值收口见 Constants.MemberStatus（与详情抽屉/回放页共用） */
 const { Active: STATUS_ACTIVE, Hiatus: STATUS_HIATUS, Left: STATUS_LEFT } = Constants.MemberStatus
@@ -124,13 +128,14 @@ onMounted(() => {
 })
 
 /** 拉取两个数据源并合并（挂载初始化 / 双击 tab / 更新数据库后共用）。
+ * 成员树取自 stores/member-tree（同步完成后会自行失效重拉，故这里按缓存优先读取即可）；
  * 兼任成员（starAdjunctInfo，status===1）由 buildAdjuncts 以本人档案为底就地并入其兼任队伍 */
 async function fetchMembers() {
   loading.value = true
   try {
     // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts
     const [tree, payload] = await Promise.all([
-      window.mainAPI.getMemberTree(),
+      loadTree(),
       window.mainAPI.getAllMembers(),
     ])
     const merged = mergeMembers(tree, payload?.allmembers)
