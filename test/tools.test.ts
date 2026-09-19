@@ -137,3 +137,20 @@ describe('tools.shortTeamName（队伍展示名）', () => {
     expect(Tools.shortTeamName(undefined as unknown as string)).toBe('')
   })
 })
+
+describe('tools.normalizeUserId（成员键归一化）', () => {
+  it('number 原样返回，数字字符串解析成 number', () => {
+    expect(Tools.normalizeUserId(9001)).toBe(9001)
+    expect(Tools.normalizeUserId('9001')).toBe(9001)
+    expect(Tools.normalizeUserId(' 9001 ')).toBe(9001)
+  })
+
+  it('脏值与空值判为 NaN，不截断成数字误命中别人', () => {
+    // parseInt('123abc') 会得到 123 —— 必须判为无效
+    expect(Tools.normalizeUserId('123abc')).toBeNaN()
+    expect(Tools.normalizeUserId('')).toBeNaN()
+    expect(Tools.normalizeUserId('   ')).toBeNaN()
+    expect(Tools.normalizeUserId(undefined)).toBeNaN()
+    expect(Tools.normalizeUserId(null)).toBeNaN()
+  })
+})

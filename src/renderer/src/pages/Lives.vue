@@ -4,11 +4,14 @@ import { Film, VideoCamera } from '@element-plus/icons-vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
+import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
+import { useMemberDetailDrawer } from '@renderer/composables/use-member-detail-drawer'
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
 import Apis from '@renderer/services/apis'
 import EventBus from '@renderer/services/event-bus'
 import useFloatPlayersStore from '@renderer/stores/float-players'
+import { useFollowedMembersStore } from '@renderer/stores/followed-members'
 import { debugLog } from '@renderer/utils/debug'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -18,6 +21,21 @@ const route = useRoute()
 
 // 画中画迷你窗：直播/回放/公演共用全局播放挂载点
 const { openLive } = useFloatPlayersStore()
+
+// 关注名单：模块级共享状态（与成员页共用同一份），直播列表页据此优先展示并加标识。
+// 页面被 keep-alive 缓存（只挂载一次），跨页同步靠这份共享状态而不是重新挂载
+const { followedMembers, refreshFollowedMembers, isFollowed } = useFollowedMembersStore()
+
+// 成员详情抽屉：点卡片上的成员名打开，详情按 userId 反查（数据源见 stores/member-directory）
+const {
+  selectedMember,
+  drawerFollowed,
+  drawerBlocked,
+  openMemberDetail,
+  closeMemberDetail,
+  toggleFollowMember,
+  toggleBlockMember,
+} = useMemberDetailDrawer()
 
 // 顶部浮层 tab 当前选中的视图：live（直播）/ playback（回放）
 const activeTab = ref<'live' | 'playback'>('live')
@@ -38,7 +56,7 @@ function switchTab(tab: string) {
 }
 
 // 成员详情抽屉跳转（/lives?tab=playback&member=<userId>）：
-// 切到回放面板并按该成员预置级联筛选。跳转语义由路由 query 承载（原 EventBus 事件已移除）
+// 切到回放面板并按该成员预置级联筛选，跳转语义由路由 query 承载
 function applyMemberPlaybacksRoute(query: { tab?: string, member?: string }) {
   if (query.member) {
     memberPreset.value = { userId: String(query.member) }
@@ -87,6 +105,23 @@ const showSkeleton = computed(() => loading.value && liveList.value.length === 0
 /** 手动刷新递增，让同一封面的失败图也强制重新请求 */
 const imageVersion = ref(0)
 
+/** 关注名单非空才值得重排：空名单直接复用原数组，省掉一次全量拷贝 + 排序 */
+const hasFollowed = computed(() => followedMembers.value.length > 0)
+
+/** 关注成员优先展示：比较器只输出布尔值差，配合稳定排序，组内各自保持接口返回顺序。
+ * userId 归一化收口在 store 的 isFollowed，页面不自己 parseInt */
+const orderedLiveList = computed(() => {
+  const list = liveList.value
+  if (!hasFollowed.value)
+    return list
+  return [...list].sort(
+    (a, b) => Number(isFollowed(b.userInfo.userId)) - Number(isFollowed(a.userInfo.userId)),
+  )
+})
+
+/** 已加载列表里关注成员的直播条数：dock 文案据此说明「优先展示」是否已生效 */
+const followedLiveCount = computed(() => liveList.value.filter(item => isFollowed(item.userInfo.userId)).length)
+
 // 点击卡片：以画中画迷你窗打开直播，可边看边继续浏览列表
 function play(item: LiveListItem) {
   openLive({
@@ -116,6 +151,7 @@ function refreshList() {
 
 onMounted(() => {
   getLiveList()
+  refreshFollowedMembers()
   // 首次挂载即读取跳转参数（从成员页抽屉跳转过来的场景）
   applyMemberPlaybacksRoute(route.query as { tab?: string, member?: string })
   EventBus.on('live-unavailable', onLiveUnavailable)
@@ -166,9 +202,19 @@ onUnmounted(() => {
         @end-reached="onInfiniteScroll"
       >
         <div class="card-grid">
-          <div v-for="item in liveList" :key="item.liveId" class="live-item" @click="play(item)">
+          <div
+            v-for="item in orderedLiveList"
+            :key="item.liveId"
+            class="live-item"
+            @click="play(item)"
+          >
             <!-- enrichLiveItem 在 processItem 阶段已就地补全 cover/date/member，渲染时必然就绪 -->
-            <LiveItem :item="item as EnrichedLiveItem" :image-version="imageVersion" />
+            <LiveItem
+              :item="item as EnrichedLiveItem"
+              :image-version="imageVersion"
+              :followed="isFollowed(item.userInfo.userId)"
+              @select-member="openMemberDetail"
+            />
           </div>
         </div>
         <div v-if="noMore" class="list-end">
@@ -182,7 +228,10 @@ onUnmounted(() => {
         title="刷新"
         @refresh="refreshList"
       >
-        <span class="dock-note">已加载 {{ liveList.length }} 个直播</span>
+        <!-- 关注条数只在有置顶项时出现：让「优先展示」是可见的，而不是用户自己去数卡片位置 -->
+        <span class="dock-note">
+          已加载 {{ liveList.length }} 个直播<template v-if="followedLiveCount"> · 关注 {{ followedLiveCount }} 条置顶</template>
+        </span>
       </FloatingRefreshDock>
     </div>
 
@@ -190,6 +239,16 @@ onUnmounted(() => {
     <div v-show="activeTab === 'playback'" class="playback-main">
       <Playbacks v-if="playbackMounted" ref="playbackRef" :member-preset="memberPreset" />
     </div>
+
+    <!-- 成员详情抽屉：与成员页共用同一份合并详情（点卡片上的成员名打开） -->
+    <MemberDetailDrawer
+      :member="selectedMember"
+      :blocked="drawerBlocked"
+      :followed="drawerFollowed"
+      @close="closeMemberDetail"
+      @toggle-block="toggleBlockMember"
+      @toggle-follow="toggleFollowMember"
+    />
   </div>
 </template>
 

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import type { MemberDetail } from '@renderer/utils/member-merge'
-import { Hide, User, View } from '@element-plus/icons-vue'
+import { Hide, Star, StarFilled, User, View } from '@element-plus/icons-vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
+import { useMemberActions } from '@renderer/composables/use-member-actions'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import { useBlockedMembersStore } from '@renderer/stores/blocked-members'
+import { useFollowedMembersStore } from '@renderer/stores/followed-members'
 import { useMemberTreeStore } from '@renderer/stores/member-tree'
 import Constants from '@renderer/utils/constants'
 import { buildAdjuncts, mergeMembers } from '@renderer/utils/member-merge'
@@ -38,7 +40,13 @@ const loading = ref(true)
 const selectedMember = ref<MemberDetail | null>(null)
 
 /** 屏蔽名单：模块级共享状态，机制见 stores/blocked-members.ts */
-const { refreshBlockedMembers, isBlocked, toggleBlock } = useBlockedMembersStore()
+const { refreshBlockedMembers } = useBlockedMembersStore()
+
+/** 关注名单：模块级共享状态，机制见 stores/followed-members.ts（直播列表页共用同一份） */
+const { refreshFollowedMembers } = useFollowedMembersStore()
+
+/** 关注 / 屏蔽的互斥规则收口在 use-member-actions.ts（本页卡片与三处详情抽屉共用同一份） */
+const { isBlocked, isFollowed, toggleBlockMember, toggleFollowMember } = useMemberActions()
 
 /** 成员树：全局单例（与回放页筛选器共用同一份，同步完成后由 store 统一作废重拉） */
 const { loadTree } = useMemberTreeStore()
@@ -64,8 +72,7 @@ interface MemberSection {
 /** 按队伍分区：入参已按树的顺序（团体 → teamSort）排好，用 Map 保住首现顺序 */
 function groupByTeam(list: MemberDetail[], withGroup: boolean): MemberSection[] {
   const sections = new Map<string, MemberSection>()
-  // 分团官方 logo → 队伍徽章缺失时做标题左侧图标；表里没有的团体（IDFT / 燃烧吧团魂 等）
-  // 与暂休 / 退团分区一样退回 GroupLogoFallback，标题左侧不留空盒
+  // 队伍徽章缺失时用分团 logo 兜底（表里没有的团体与暂休 / 退团分区一律退 GroupLogoFallback）
   const groupLogoOf = (member: MemberDetail) =>
     Constants.GroupTabs.find(item => item.key === String(member.groupId))?.logoPng
     || Constants.GroupLogoFallback
@@ -125,6 +132,7 @@ const showSkeleton = computed(() => loading.value && members.value.length === 0)
 onMounted(() => {
   fetchMembers()
   refreshBlockedMembers()
+  refreshFollowedMembers()
 })
 
 /** 拉取两个数据源并合并（挂载初始化 / 双击 tab / 更新数据库后共用）。
@@ -183,14 +191,6 @@ function cardKey(member: MemberDetail) {
 function badgeSrc(section: MemberSection) {
   return section.teamBadge || section.groupLogo
 }
-
-/** 屏蔽 / 解除屏蔽：官网独有的补充成员没有 userId，直接忽略（卡片上也不给入口） */
-function toggleBlockMember(member: MemberDetail) {
-  const { userId } = member
-  if (typeof userId !== 'number')
-    return
-  void toggleBlock({ ...member, userId })
-}
 </script>
 
 <template>
@@ -211,7 +211,7 @@ function toggleBlockMember(member: MemberDetail) {
       <div v-else class="members-container">
         <section v-for="section in sections" :key="section.key" class="group-section">
           <h2 class="team-title">
-            <!-- 统一尺寸的徽章盒子：队伍徽章优先，缺则分团 logoPng（查不到团体时退 SNH48 兜底图），各分区标题列起点一致 -->
+            <!-- 徽章盒子固定尺寸，保证各分区标题列起点一致 -->
             <span class="team-badge-box">
               <img
                 v-if="badgeSrc(section)"
@@ -234,7 +234,7 @@ function toggleBlockMember(member: MemberDetail) {
               v-for="member in section.members"
               :key="cardKey(member)"
               class="member-card"
-              :class="{ 'is-blocked': !!member.userId && isBlocked(member.userId) }"
+              :class="{ 'is-blocked': !!member.userId && isBlocked(member.userId), 'is-followed': !!member.userId && isFollowed(member.userId) }"
               @click="selectedMember = member"
             >
               <div
@@ -266,32 +266,30 @@ function toggleBlockMember(member: MemberDetail) {
                   {{ member.realName }}
                 </p>
               </div>
-              <!-- 屏蔽控件：未屏蔽悬浮出现快捷屏蔽；已屏蔽常驻标记 + 悬浮解除 -->
+              <!-- 图标即状态：空心 = 未启用（悬浮才出现），实心 = 已启用（语义色实底、常驻）；两者互斥 -->
               <template v-if="member.userId">
                 <button
-                  v-if="!isBlocked(member.userId)"
-                  class="quick-block"
-                  title="屏蔽 TA 的直播与回放"
-                  @click.stop="toggleBlockMember(member)"
+                  class="quick-follow"
+                  :class="{ 'is-on': isFollowed(member.userId) }"
+                  :title="isFollowed(member.userId) ? '取消关注' : '关注 TA，直播列表优先展示'"
+                  @click.stop="toggleFollowMember(member)"
                 >
-                  <el-icon :size="13">
-                    <Hide />
+                  <el-icon :size="14">
+                    <StarFilled v-if="isFollowed(member.userId)" />
+                    <Star v-else />
                   </el-icon>
                 </button>
-                <template v-else>
-                  <span class="blocked-flag">
-                    <el-icon :size="12">
-                      <Hide />
-                    </el-icon>
-                    已屏蔽
-                  </span>
-                  <button class="unblock-btn" @click.stop="toggleBlockMember(member)">
-                    <el-icon :size="13">
-                      <View />
-                    </el-icon>
-                    解除屏蔽
-                  </button>
-                </template>
+                <button
+                  class="quick-block"
+                  :class="{ 'is-on': isBlocked(member.userId) }"
+                  :title="isBlocked(member.userId) ? '解除屏蔽' : '屏蔽 TA 的直播与回放'"
+                  @click.stop="toggleBlockMember(member)"
+                >
+                  <el-icon :size="14">
+                    <Hide v-if="isBlocked(member.userId)" />
+                    <View v-else />
+                  </el-icon>
+                </button>
               </template>
             </div>
           </div>
@@ -322,8 +320,10 @@ function toggleBlockMember(member: MemberDetail) {
     <MemberDetailDrawer
       :member="selectedMember"
       :blocked="!!selectedMember?.userId && isBlocked(selectedMember.userId)"
+      :followed="!!selectedMember?.userId && isFollowed(selectedMember.userId)"
       @close="selectedMember = null"
       @toggle-block="toggleBlockMember"
+      @toggle-follow="toggleFollowMember"
     />
   </div>
 </template>
@@ -526,10 +526,10 @@ function toggleBlockMember(member: MemberDetail) {
     color: var(--el-text-color-primary);
   }
 
-  /* 快捷屏蔽：悬浮卡片时头像右上角出现 */
+  /* 关注 / 屏蔽钮：空心 = 未启用（悬浮出现），实心 = 已启用（语义色实底 + 白图标，常驻） */
+  .quick-follow,
   .quick-block {
     position: absolute;
-    top: 12px;
     right: 14px;
     display: flex;
     align-items: center;
@@ -549,17 +549,45 @@ function toggleBlockMember(member: MemberDetail) {
     transition:
       opacity 0.15s ease,
       transform 0.15s ease,
-      color 0.15s ease;
-
-    &:hover {
-      color: var(--el-color-danger);
-      transform: scale(1.05);
-    }
+      color 0.15s ease,
+      background-color 0.15s ease;
   }
 
+  /* 关注在上、屏蔽在下：两枚钮错开 32px，互不遮挡 */
+  .quick-follow {
+    top: 12px;
+  }
+
+  .quick-block {
+    top: 44px;
+  }
+
+  &:hover .quick-follow,
   &:hover .quick-block {
     opacity: 1;
     transform: scale(1);
+  }
+
+  /* 已启用：实心常驻（不悬浮也看得见），图标转白压在语义色实底上 */
+  .quick-follow.is-on,
+  .quick-block.is-on {
+    color: #fff;
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .quick-follow.is-on {
+    background: var(--el-color-warning);
+  }
+
+  .quick-block.is-on {
+    background: var(--el-color-danger);
+  }
+
+  /* 单钮悬浮：再放大一档，提示可点（未启用时图标保持灰色空心，避免与已启用混淆） */
+  .quick-follow:hover,
+  .quick-block:hover {
+    transform: scale(1.08);
   }
 
   /* 已屏蔽：头像去色弱化，排名装饰隐藏 */
@@ -574,56 +602,12 @@ function toggleBlockMember(member: MemberDetail) {
     }
   }
 
-  .blocked-flag {
-    position: absolute;
-    top: 12px;
-    right: 14px;
-    display: inline-flex;
-    gap: 3px;
-    align-items: center;
-    padding: 2px 8px;
-    border-radius: var(--radius-pill);
-    font-size: 11px;
-    line-height: 1.6;
-    color: #fff;
-    background: var(--el-color-danger);
-    opacity: 0.92;
-  }
-
-  .unblock-btn {
-    position: absolute;
-    bottom: 50px;
-    left: 50%;
-    display: inline-flex;
-    gap: 4px;
-    align-items: center;
-    padding: 4px 10px;
-    border: 1px solid rgba(255, 255, 255, 0.55);
-    border-radius: var(--radius-pill);
-    font-family: inherit;
-    font-size: 12px;
-    color: #fff;
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(4px);
-    cursor: pointer;
-    opacity: 0;
-    pointer-events: none;
-    transform: translateX(-50%) translateY(4px);
-    transition:
-      opacity 0.18s ease,
-      transform 0.18s ease,
-      background 0.18s ease;
-
-    &:hover {
-      background: var(--el-color-danger);
-    }
-  }
-
-  &:hover .unblock-btn {
-    line-height: 1;
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateX(-50%) translateY(0);
+  /* 已关注：头像外一圈金色光晕，与内圈队色光环叠加。
+   * 必须挂在 .avatar-wrap 上：::before 带 mask-composite: exclude，会裁掉画在 border-box 之外的描边 */
+  &.is-followed .avatar-wrap {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--el-color-warning) 65%, transparent),
+      0 0 16px -2px color-mix(in srgb, var(--el-color-warning) 60%, transparent);
   }
 }
 
