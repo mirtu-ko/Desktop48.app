@@ -10,6 +10,7 @@ import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import Apis from '@renderer/services/apis'
 import { debugLog } from '@renderer/utils/debug'
 import { normalizeCarouselTime, pickPreferredVodStream } from '@renderer/utils/live-stream'
+import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
@@ -42,14 +43,14 @@ const carousels = ref<string[]>([])
 const carouselTime = ref(5000)
 const realName = ref('')
 const userAvatar = ref('')
-// 观看人数：取回放详情 onlineNum，仅供「全部弹幕」面板头部展示（公演回放无此数据，保持 0）
+// 观看人数：取自回放详情 onlineNum，供「全部弹幕」面板头部展示（公演回放无此数据）
 const onlineNumber = ref(0)
 
-// 弹幕展示模式：实时（左下角玻璃条逐条堆叠）| 全部（大玻璃面板展示全部弹幕，可滚动）
+// 弹幕展示模式：实时堆叠 | 全部面板
 type DanmakuMode = 'live' | 'all'
 const danmakuMode = ref<DanmakuMode>('live')
 
-// 「全部」面板的搜索词：命中全量弹幕（含尚未播放的部分），便于直接跳到后面的片段
+// 「全部」面板的搜索词：命中全量弹幕（含尚未播放的部分）
 const keyword = ref('')
 const trimmedKeyword = computed(() => keyword.value.trim().toLowerCase())
 
@@ -99,7 +100,7 @@ const {
 // PiP 状态变化上报父级：进入/退出系统画中画时浮窗自动收窄/还原
 watch(isPip, active => emit('pip', active))
 
-// 弹幕以「左下角玻璃条」呈现：叠加层按播放进度把到点弹幕追加进可见堆叠
+// 弹幕以「左下角玻璃条」呈现
 const danmaku = usePlaybackDanmaku({
   getMedia: getActiveMediaElement,
 })
@@ -116,8 +117,7 @@ const {
   resetBarrageSource,
 } = danmaku
 
-// 「全部」面板渲染的条目：无关键词直接引用全量数组（不复制），
-// 有关键词则按内容 / 用户名过滤（忽略大小写，检索全量而非仅已播放部分）
+// 「全部」面板条目：无关键词直接引用全量数组，否则按内容 / 用户名过滤（忽略大小写）
 const displayEntries = computed(() => {
   const kw = trimmedKeyword.value
   if (!kw)
@@ -128,7 +128,7 @@ const displayEntries = computed(() => {
   )
 })
 
-// 开播时间，与观看人数同处面板头部的 meta 行
+// 开播时间，与观看人数同处面板头部 meta 行
 const startDate = computed(() => dayjs(props.startTime).format('YYYY-MM-DD HH:mm'))
 
 // 切换弹幕展示模式：实时 ⇄ 全部
@@ -147,10 +147,8 @@ const danmakuFontSize = computed(() => {
   return 12
 })
 
-// 弹幕条定位：锚定视频实际渲染区（去 letterbox 黑边）左下角，而非容器左下角 ——
-// 全屏下宽屏容器里的竖屏视频左右是黑边，锚容器会离画面太远。
-// 用 left + bottom 一次定位自下而上堆叠的弹幕条；bottom 不低于 46px，
-// 避开底部居中控制条（其底部 12px、内高约 34px，见 MiniControls）
+// 弹幕条定位：锚视频实际渲染区（去 letterbox 黑边）左下角而非容器左下角 ——
+// 全屏下竖屏视频左右是黑边，锚容器会离画面太远。bottom 不低于 46px 以避开底部控制条
 const danmakuPosition = computed(() => {
   const rect = videoRect.value
   const margin = 12
@@ -205,7 +203,7 @@ const { onKeydown, onPointerDown } = useMediaShortcuts({
   },
 })
 
-// 迷你条拖进度 / 「全部」面板点某条跳转，共用同一 seek 通道：
+// 迷你条拖进度 / 「全部」面板点击跳转共用此 seek 通道：
 // 立即回写 currentTime 让进度条跟手，弹幕游标仍由引擎的 seeking 事件统一重置
 function onMiniSeek(value: number) {
   const mediaElement = getActiveMediaElement()
@@ -216,9 +214,9 @@ function onMiniSeek(value: number) {
 }
 
 /**
- * 离场气泡必须显式钉位：`.danmaku-list__bubbles` 是 column-reverse 的 flex 容器，主轴起点在底部，
- * 绝对定位子元素不写 top/left 会按「唯一 flex 子项」求解静态位置 → 脱离文档流的瞬间先下坠到列表底部再淡出。
- * 在 before-leave（此刻元素仍在文档流内）把布局位置写成内联 top/left，leave-active 生效后即锚在原位。
+ * 离场气泡钉位：`.danmaku-list__bubbles` 是 column-reverse 容器，主轴起点在底部，
+ * 绝对定位子元素（leave-active）不写 top/left 会按「唯一 flex 子项」求解静态位置，
+ * 于是脱流瞬间先坠到列表底部再淡出。before-leave 时元素仍在文档流内，写入内联 top/left 即可锚在原位。
  */
 function onDanmakuBeforeLeave(el: Element) {
   const bubble = el as HTMLElement
@@ -366,13 +364,13 @@ onUnmounted(() => {
             :class="{ 'is-compact': compact }"
             :style="{ fontSize: `${danmakuFontSize}px`, ...danmakuPosition }"
           >
-            <!-- 实时模式：用 v-show 而非 v-if —— TransitionGroup 一旦被卸载重建，
-                 切回实时时现有堆叠会整体重播一遍入场动画 -->
+            <!-- 实时层必须常驻：v-if 会重建 TransitionGroup 导致整摞堆叠重播入场动画，
+                 v-show 的 display:none 又会让 CSS 动画停摆（详见 .is-hidden 处的说明） -->
             <TransitionGroup
-              v-show="danmakuMode === 'live'"
               name="danmaku"
               tag="div"
               class="danmaku-list__bubbles"
+              :class="{ 'is-hidden': danmakuMode !== 'live' }"
               @before-leave="onDanmakuBeforeLeave"
             >
               <div
@@ -387,8 +385,7 @@ onUnmounted(() => {
                 <span v-else class="danmaku-text">{{ item.content }}</span>
               </div>
             </TransitionGroup>
-            <!-- 全部模式：外壳常驻（同 v-show 的理由），内部行懒渲染 ——
-                 否则整份弹幕列表会长期挂在 DOM 上（上千行） -->
+            <!-- 全部模式：外壳常驻（同上），内部行用 v-if 懒渲染，避免上千行长期挂在 DOM 上 -->
             <div
               v-show="danmakuMode === 'all'"
               class="danmaku-all"
@@ -423,6 +420,7 @@ onUnmounted(() => {
                       <span class="danmaku-text">{{ item.content }}</span>
                     </template>
                     <span v-else class="danmaku-text">{{ item.content }}</span>
+                    <span class="danmaku-all__time">{{ formatMediaTime(item.seconds) }}</span>
                   </div>
                   <div v-if="!barrageLoaded" class="danmaku-all__hint">
                     弹幕加载中…
@@ -552,16 +550,14 @@ onUnmounted(() => {
 }
 
 /* ===== 左下角玻璃条（抖音式弹幕）：最新一条在最下方，旧的上移淡出 =====
- * 锚点 left / bottom 由脚本的 danmakuPosition 按「视频实际渲染区」注入。
- * top 与 bottom 双约束把盒子拉伸为确定高度，内部「全部」面板才能用 max-height:100% 收住
- * （旧写法给面板 min(60vh,480px) 绝对值，在约 150px 高的迷你视频区里头部会被 overflow:hidden 裁掉）；
- * width 同样在此定死，否则百分比落在 shrink-to-fit 的绝对定位父上会解析成 auto，面板宽度随内容抖动。 */
+ * left / bottom 由脚本 danmakuPosition 注入；top 与 bottom 双约束把盒子拉伸为确定高度，
+ * 面板的 max-height:100% 才有参照（迷你浮窗下绝对值会顶出容器被裁）。
+ * width 须在此定死：百分比落在 shrink-to-fit 的绝对定位父上会解析成 auto，面板宽度随内容抖动 */
 .danmaku-list {
   position: absolute;
   top: 12px;
   z-index: 10;
-  /* 容器整块不吃鼠标事件（原先只靠气泡自身 pointer-events:none），
-   * 现在盒子被拉伸到整个可用高度，必须显式声明，否则挡住视频的双击全屏 */
+  /* 盒子被拉伸到整个可用高度，必须显式声明，否则挡住视频的双击全屏 */
   pointer-events: none;
   width: min(90%, 440px);
   margin-bottom: 6px;
@@ -570,10 +566,9 @@ onUnmounted(() => {
   align-items: flex-start;
 }
 
-/* 气泡容器：column-reverse 让最新一条贴住容器底部，旧的自上方挤出；
- * height:100% 取自父容器（而非 shrink-to-fit 的内容），使容器尺寸与弹幕条数解耦 ——
- * 离场气泡脱离文档流不会改变容器尺寸，也就不会带动余下气泡整体重排；
- * overflow:hidden 把溢出的旧气泡裁在弹幕区上边界。 */
+/* 气泡容器：column-reverse 让最新一条贴底、旧的自上方挤出。
+ * height:100% 取自父容器而非内容，使容器尺寸与弹幕条数解耦，离场气泡脱流不触发重排；
+ * overflow:hidden 把溢出的旧气泡裁在弹幕区上边界 */
 .danmaku-list__bubbles {
   position: relative;
   display: flex;
@@ -585,8 +580,16 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* 弹幕气泡：半透明磨砂玻璃底，新弹幕从底部挤入、旧的上移；
- * 气泡本身不拦截点击（让鼠标穿过看到播放器） */
+/* 实时层隐藏：不能用 display:none —— 无 box 则 CSS 动画不运行，面板期间新到的弹幕会带着
+ * 未播放的 enter 类一直挂着，收起时集中补播一次。visibility:hidden 仍在渲染树中，动画照常计时收敛。
+ * absolute 是连带项：退出 .danmaku-list 的 flex 主轴，避免与面板同时占位互相挤压 */
+.danmaku-list__bubbles.is-hidden {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+}
+
+/* 弹幕气泡：磨砂玻璃底，不拦截点击（让鼠标穿过看到播放器） */
 .danmaku-bubble {
   display: flex;
   align-items: baseline;
@@ -609,14 +612,13 @@ onUnmounted(() => {
   animation: danmaku-rise 0.28s ease both;
 }
 
-/* 缺 .danmaku-move 时 Vue 不做 FLIP：余下气泡会瞬移补位，与设计意图的「旧的上移」不符 */
+/* 缺此类 Vue 不做 FLIP，余下气泡会瞬移补位 */
 .danmaku-move {
   transition: transform 0.3s ease;
 }
 
-/* 离场元素脱离文档流，余下气泡立刻补位；否则它先占位 0.3s 再突然消失。
- * 这里不写 top/left —— column-reverse 容器里的 static position 落在容器底部，
- * 位置改由 onDanmakuBeforeLeave 在 before-leave 阶段以内联样式钉死（宽度由 max-width:100% 约束） */
+/* 离场元素脱离文档流，余下气泡立刻补位（否则先占位 0.3s 再突然消失）。
+ * 不写 top/left：column-reverse 下 static position 落在容器底部，位置由 onDanmakuBeforeLeave 钉死 */
 .danmaku-leave-active {
   position: absolute;
   transition:
@@ -624,7 +626,7 @@ onUnmounted(() => {
     transform 0.3s ease;
 }
 
-/* 位移方向与列表一致：旧气泡在最上方被挤出，继续上飘才符合「自下往上挤」的语义 */
+/* 旧气泡自最上方被挤出，继续上飘才与列表方向一致 */
 .danmaku-leave-to {
   opacity: 0;
   transform: translateY(-6px);
@@ -657,8 +659,7 @@ onUnmounted(() => {
 }
 
 /* ===== 全部弹幕大玻璃面板：内部滚动 =====
- * 高度上限交给父容器决定（.danmaku-list 因 top+bottom 双约束而有确定高度），
- * 不用 min(60vh, 480px) 这类与容器无关的绝对值——那在迷你浮窗里会顶出容器被裁 */
+ * 高度上限交给父容器（.danmaku-list 因双约束有确定高度），不用 min(60vh,480px) 这类绝对值 */
 .danmaku-all {
   display: flex;
   flex-direction: column;
@@ -669,7 +670,7 @@ onUnmounted(() => {
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
   backdrop-filter: blur(10px);
   overflow: hidden;
-  /* 弹幕区整体已 pointer-events:none，面板需单独恢复交互（滚动 / 悬停高亮） */
+  /* 弹幕区整体 pointer-events:none，面板单独恢复交互 */
   pointer-events: auto;
 }
 
@@ -748,6 +749,15 @@ onUnmounted(() => {
 
 .danmaku-all__row:hover {
   background: rgba(255, 255, 255, 0.06);
+}
+
+/* 发送时间：margin-left:auto 收在行尾，flex-shrink:0 防止被压缩；等宽数字让右边界不抖动 */
+.danmaku-all__time {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .danmaku-all__hint {

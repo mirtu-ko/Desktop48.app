@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { findBarrageIndex, useDanmakuOverlay } from '../src/renderer/src/composables/use-danmaku-overlay'
 
 /**
- * 展示时长与堆叠上限是引擎的行为契约，此处按字面量独立表达：
- * 改动实现常量时这些用例应当失败，提醒契约已变（而不是跟着实现一起漂移）。
+ * 展示时长与堆叠上限是引擎的行为契约，按字面量独立表达：
+ * 改动实现常量时这些用例应当失败，提醒契约已变。
  */
 const DISPLAY_SECONDS = 6
 const MAX_ITEMS = 30
