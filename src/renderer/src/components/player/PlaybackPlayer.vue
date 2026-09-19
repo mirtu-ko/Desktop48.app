@@ -664,7 +664,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   width: min(420px, 100%);
-  max-height: 100%;
+  max-height: 90%;
   border-radius: 14px;
   background: var(--player-glass-bg);
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
