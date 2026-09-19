@@ -104,6 +104,18 @@ function shortTeamName(teamName: string): string {
 }
 
 /**
+ * userId 归一化：成员树给 number、直播 / 回放接口给 string，历史落库两种都有。
+ * 用 Number 而非 parseInt：'123abc' 这类脏值应判为无效，而不是被截断成 123 误命中别人。
+ * 关注 / 屏蔽 / 成员名录三个 store 与直播列表的屏蔽过滤共用同一份口径。
+ */
+function normalizeUserId(userId: number | string | undefined | null): number {
+  if (typeof userId === 'number')
+    return userId
+  const text = String(userId ?? '').trim()
+  return text ? Number(text) : Number.NaN
+}
+
+/**
  * 纯函数工具集（全部无状态：不碰 DOM / IPC / 响应式）。
  *
  * 说明：这里刻意不用 `class + static` —— ES 模块本身就是单例，class 外壳只带来
@@ -121,6 +133,7 @@ const Tools = {
   formatDuration,
   taskFilename,
   shortTeamName,
+  normalizeUserId,
 }
 
 export default Tools

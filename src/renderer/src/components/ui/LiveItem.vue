@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { VideoCameraFilled } from '@element-plus/icons-vue'
+import { StarFilled, VideoCameraFilled } from '@element-plus/icons-vue'
 import Tools from '@renderer/utils/tools'
 import { computed } from 'vue'
 
@@ -9,6 +9,8 @@ interface Member {
 }
 
 interface UserInfo {
+  /** 口袋 userId（列表接口给字符串）：点成员名开详情抽屉时按它反查 */
+  userId: string
   nickname: string
 }
 
@@ -26,7 +28,12 @@ const props = defineProps<{
   item: Item
   /** 刷新版本号：变化时给封面 URL 追加 cache-busting 参数，强制失败图重试 */
   imageVersion?: number | string
+  /** 是否被关注成员的直播：为 true 时封面右上角加实心金星角标 */
+  followed?: boolean
 }>()
+
+/** 点击成员名：交给列表页打开成员详情抽屉（卡片点击是播放，故模板上 .stop） */
+const emit = defineEmits<{ selectMember: [userId: string] }>()
 
 const coverSrc = computed(() => {
   const source = props.item.cover?.[0]
@@ -69,6 +76,10 @@ const liveBadge = computed(() => {
         </template>
       </el-image>
       <span class="live-badge" :class="`live-badge--${liveBadge.type}`">{{ liveBadge.text }}</span>
+      <!-- 关注标识：封面右上角的实心金星（未关注的直播没有这枚角标），该成员同时在列表里置顶 -->
+      <span v-if="followed" class="follow-badge" title="已关注成员 · 优先展示">
+        <el-icon :size="13"><StarFilled /></el-icon>
+      </span>
     </div>
 
     <div class="card-body">
@@ -76,7 +87,14 @@ const liveBadge = computed(() => {
         {{ item.title }}
       </p>
       <div class="member-info">
-        <span class="nickname ellipsis">{{ item.userInfo.nickname }}</span>
+        <!-- 成员名可点开详情抽屉；点击不冒泡，否则连带触发卡片播放 -->
+        <span
+          class="nickname ellipsis"
+          :title="`查看 ${item.userInfo.nickname} 的成员详情`"
+          @click.stop="emit('selectMember', item.userInfo.userId)"
+        >
+          {{ item.userInfo.nickname }}
+        </span>
         <span
           v-if="item.member?.teamName"
           class="team-badge"
@@ -150,6 +168,25 @@ const liveBadge = computed(() => {
     }
   }
 
+  /* 关注标识：封面右上角常驻的实心金星，与成员卡片「已关注」钮同一套语言（语义色实底 + 白图标） */
+  .follow-badge {
+    --fb-color: var(--el-color-warning);
+
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    color: #fff;
+    background: var(--fb-color);
+    box-shadow: 0 3px 10px -3px color-mix(in srgb, var(--fb-color) 85%, transparent);
+  }
+
   .card-body {
     padding: 10px 12px 12px;
     min-width: 0;
@@ -173,8 +210,25 @@ const liveBadge = computed(() => {
 
     .nickname {
       min-width: 0;
+      /* 负外边距抵消内边距：悬浮片撑开但文字不位移 */
+      margin: -2px -6px;
+      padding: 2px 6px;
+      border-radius: var(--radius-xs);
       font-size: 12px;
       color: var(--el-text-color-regular);
+      cursor: pointer;
+      transition:
+        color 0.2s ease,
+        background-color 0.2s ease,
+        box-shadow 0.2s ease;
+
+      /* 可点开成员详情抽屉：悬浮成品牌紫淡染片（与 tab 悬浮同款），
+       * 与标题那套「只变字色」区分开 */
+      &:hover {
+        color: var(--brand-primary-dark);
+        background: rgba(var(--brand-rgb), 0.12);
+        box-shadow: 0 0 0 1px rgba(var(--brand-rgb), 0.3);
+      }
     }
   }
 

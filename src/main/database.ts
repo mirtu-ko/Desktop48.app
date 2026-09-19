@@ -20,6 +20,7 @@ import { LowSync } from 'lowdb'
 import { CONFIG_DEFAULTS } from '../common/app-config'
 import data from './data'
 import { addBlockedMemberId, isBlockedId, removeBlockedId, resolveBlockedMembers } from './domain/blocked-members'
+import { addFollowedMemberId, isFollowedId, removeFollowedId, resolveFollowedMembers } from './domain/followed-members'
 import { buildMemberTree, teamColorOf } from './domain/member-tree'
 import { log } from './logger'
 import { SafeJSONFileSync } from './safe-json-file-sync'
@@ -60,6 +61,8 @@ export interface DatabaseShape {
    * 宽容 number|string：旧库存过字符串形式的 id（blocked-members 的纯函数按此设计）
    */
   blockedMemberIds?: Array<number | string>
+  /** 已关注成员的 userId 列表（宽容 number|string，与 blockedMemberIds 同款设计） */
+  followedMemberIds?: Array<number | string>
   config?: AppConfig
   /** 兼容旧库残留字段（init() 清理）：迁移来源 / 已废弃的持久化树 / 已停止拉取的精简名单 */
   hiddenMemberIds?: number[]
@@ -233,6 +236,42 @@ class Database {
   /** 名单判重的纯函数封装（供内部与其他模块复用） */
   public isBlocked(userId: number) {
     return isBlockedId(this.db.blockedMemberIds || [], userId)
+  }
+
+  public getFollowedMembers() {
+    // 确保 followedMemberIds 存在且为数组
+    if (!this.db.followedMemberIds) {
+      this.db.followedMemberIds = []
+      this.lowdb.write()
+    }
+    // teamColor 纯派生：原始 starInfo 不带颜色，与 getMemberInfo 同款查 teamInfo 补上
+    return resolveFollowedMembers(this.db.followedMemberIds, this.db.starInfo ?? []).map(member => ({
+      ...member,
+      teamColor: teamColorOf(this.db.teamInfo, member.teamId) || member.teamColor || '',
+    }))
+  }
+
+  public setFollowedMembers(ids: number[]) {
+    this.db.followedMemberIds = ids
+    this.lowdb.write()
+  }
+
+  public addFollowedMember(userId: number) {
+    const changed = addFollowedMemberId(this.db.followedMemberIds, userId)
+    if (changed) {
+      this.db.followedMemberIds = changed
+      this.lowdb.write()
+    }
+  }
+
+  public removeFollowedMember(userId: number) {
+    this.db.followedMemberIds = removeFollowedId(this.db.followedMemberIds || [], userId)
+    this.lowdb.write()
+  }
+
+  /** 关注名单判重的纯函数封装（供内部与其他模块复用） */
+  public isFollowed(userId: number) {
+    return isFollowedId(this.db.followedMemberIds || [], userId)
   }
 
   public hasMembers() {

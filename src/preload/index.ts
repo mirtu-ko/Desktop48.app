@@ -44,6 +44,10 @@ const api = {
   setBlockedMembers: (ids: number[]) => ipcRenderer.invoke('setBlockedMembers', ids),
   addBlockedMember: (userId: number) => ipcRenderer.invoke('addBlockedMember', userId),
   removeBlockedMember: (userId: number) => ipcRenderer.invoke('removeBlockedMember', userId),
+  getFollowedMembers: () => ipcRenderer.invoke('getFollowedMembers'),
+  setFollowedMembers: (ids: number[]) => ipcRenderer.invoke('setFollowedMembers', ids),
+  addFollowedMember: (userId: number) => ipcRenderer.invoke('addFollowedMember', userId),
+  removeFollowedMember: (userId: number) => ipcRenderer.invoke('removeFollowedMember', userId),
 
   // ===== 应用配置 =====
   // 对端：main/ipc/register-database-ipc.ts

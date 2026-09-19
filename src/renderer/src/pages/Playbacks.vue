@@ -2,10 +2,13 @@
 import type { MemberTreeGroupPayload } from '../../../preload/ipc-contract'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
+import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
+import { useMemberDetailDrawer } from '@renderer/composables/use-member-detail-drawer'
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
 import Apis from '@renderer/services/apis'
 import useFloatPlayersStore from '@renderer/stores/float-players'
+import { useFollowedMembersStore } from '@renderer/stores/followed-members'
 import { useMemberTreeStore } from '@renderer/stores/member-tree'
 import Constants from '@renderer/utils/constants'
 import { ElMessage } from 'element-plus'
@@ -22,6 +25,21 @@ const { openPlayback } = useFloatPlayersStore()
 // 成员树（筛选器选项来源）走全局单例 store：与成员页共用同一份，
 // 同步完成 / 增删成员后由 store 统一作废重拉，本页无需订阅事件
 const { memberTree, loadTree } = useMemberTreeStore()
+
+// 关注名单：与成员页 / 直播 tab 共用同一份（模块级单例），回放卡片据此打关注标识。
+// 回放是历史归档、且列表常带成员筛选，故只做标识不重排（重排会打乱时间倒序与筛选语义）
+const { refreshFollowedMembers, isFollowed } = useFollowedMembersStore()
+
+// 成员详情抽屉：点卡片上的成员名打开，详情按 userId 反查（数据源见 stores/member-directory）
+const {
+  selectedMember,
+  drawerFollowed,
+  drawerBlocked,
+  openMemberDetail,
+  closeMemberDetail,
+  toggleFollowMember,
+  toggleBlockMember,
+} = useMemberDetailDrawer()
 
 /** 级联筛选器选项：由共享成员树派生（在团成员排前），树更新后自动重算 */
 const memberOption = computed(() => sortMembersByStatus(memberTree.value))
@@ -85,6 +103,8 @@ function filterMethod(node: any, keyword: string) {
 
 // 初始化
 onMounted(async () => {
+  // 关注名单与列表互不依赖：并行拉取，失败不影响列表本身
+  refreshFollowedMembers()
   // 成员树仅用于筛选器选项，失败不应阻断回放列表本身
   try {
     await loadTree()
@@ -218,7 +238,12 @@ watch(selectedFilter, () => {
           v-for="item in playbackList" :key="item.liveId" class="playback-item"
           @click="onPlaybackClick(item)"
         >
-          <LiveItem :item="item" class="live-card" />
+          <LiveItem
+            :item="item"
+            class="live-card"
+            :followed="isFollowed(item.userInfo.userId)"
+            @select-member="openMemberDetail"
+          />
         </div>
       </div>
       <div v-if="noMore && playbackList.length > 0" class="list-end">
@@ -245,6 +270,16 @@ watch(selectedFilter, () => {
         }"
       />
     </FloatingRefreshDock>
+
+    <!-- 成员详情抽屉：与成员页共用同一份合并详情（点成员名打开） -->
+    <MemberDetailDrawer
+      :member="selectedMember"
+      :blocked="drawerBlocked"
+      :followed="drawerFollowed"
+      @close="closeMemberDetail"
+      @toggle-block="toggleBlockMember"
+      @toggle-follow="toggleFollowMember"
+    />
   </div>
 </template>
 

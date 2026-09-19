@@ -47,6 +47,14 @@ export interface BlockedMember {
   [key: string]: unknown
 }
 
+// 与 renderer stores/followed-members.ts 的 FollowedMember 同构（跨进程镜像）
+export interface FollowedMember {
+  userId: number
+  realName: string
+  teamColor: string
+  [key: string]: unknown
+}
+
 /** getMemberInfo 返回：成员原始字段 + 主进程派生的队伍色（teamColorOf，成员不在库时为 undefined） */
 export type MemberInfo = StarInfoItem & { teamColor: string }
 
@@ -129,6 +137,10 @@ export interface mainAPI {
   setBlockedMembers: (ids: number[]) => Promise<void>
   addBlockedMember: (userId: number) => Promise<void>
   removeBlockedMember: (userId: number) => Promise<void>
+  getFollowedMembers: () => Promise<FollowedMember[]>
+  setFollowedMembers: (ids: number[]) => Promise<void>
+  addFollowedMember: (userId: number) => Promise<void>
+  removeFollowedMember: (userId: number) => Promise<void>
 
   // ===== 应用配置 =====
   // 键与值类型见 common/app-config.ts（ConfigKey / AppConfig）；init() 已补齐默认值，

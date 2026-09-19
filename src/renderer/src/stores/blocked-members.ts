@@ -4,6 +4,7 @@
  * 屏蔽名单定义在模块作用域，**不随任何组件卸载而销毁**：
  * 成员页与设置页调用 useBlockedMembersStore() 读写的是同一份名单，跨页自动同步。
  */
+import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
@@ -37,13 +38,15 @@ export function useBlockedMembersStore() {
     blockedMembers.value = (await window.mainAPI.getBlockedMembers()) || []
   }
 
-  function isBlocked(userId: number) {
-    return blockedMembers.value.some(member => Number(member.userId) === Number(userId))
+  /** 是否已屏蔽：入参兼容 number / string / undefined，与 isFollowed 同一套归一化 */
+  function isBlocked(userId: number | string | undefined | null) {
+    const id = Tools.normalizeUserId(userId)
+    return Number.isFinite(id) && blockedMembers.value.some(member => Number(member.userId) === id)
   }
 
   /** 屏蔽 / 解除屏蔽（成员页卡片与详情抽屉共用，带消息反馈） */
   async function toggleBlock(member: BlockTarget) {
-    const userId = Number(member.userId)
+    const userId = Tools.normalizeUserId(member.userId)
     try {
       if (isBlocked(userId)) {
         await window.mainAPI.removeBlockedMember(userId)
@@ -63,9 +66,12 @@ export function useBlockedMembersStore() {
   }
 
   /** 解除单个屏蔽（设置页名单 tag 的 ×，静默） */
-  async function unblockMember(userId: number) {
-    await window.mainAPI.removeBlockedMember(userId)
-    blockedMembers.value = blockedMembers.value.filter(item => Number(item.userId) !== Number(userId))
+  async function unblockMember(userId: number | string) {
+    const id = Tools.normalizeUserId(userId)
+    if (!Number.isFinite(id))
+      return
+    await window.mainAPI.removeBlockedMember(id)
+    blockedMembers.value = blockedMembers.value.filter(item => Number(item.userId) !== id)
   }
 
   /** 清空名单（确认弹窗由调用方负责） */

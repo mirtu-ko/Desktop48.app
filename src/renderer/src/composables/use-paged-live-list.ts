@@ -48,7 +48,7 @@ export function usePagedLiveList<T extends LiveListItem = LiveListItem>({
     options.filterItems = async (items) => {
       await updateBlockedMemberIds()
       return items.filter(
-        (item: any) => !blockedMemberIds.value.includes(Number.parseInt(item.userInfo.userId)),
+        (item: any) => !blockedMemberIds.value.includes(Tools.normalizeUserId(item.userInfo.userId)),
       )
     }
   }

@@ -1,6 +1,7 @@
 import type { GroupRecord, MemberRecord, TeamRecord } from '../src/main/domain/member-tree'
 import { describe, expect, it } from 'vitest'
 import { addBlockedMemberId, isBlockedId, removeBlockedId, resolveBlockedMembers } from '../src/main/domain/blocked-members'
+import { addFollowedMemberId, isFollowedId, removeFollowedId, resolveFollowedMembers } from '../src/main/domain/followed-members'
 import { buildMemberTree } from '../src/main/domain/member-tree'
 
 describe('buildMemberTree（database.ts 抽出的纯函数）', () => {
@@ -124,5 +125,34 @@ describe('blocked-members 纯函数', () => {
     expect(resolveBlockedMembers([1, 999], starInfo)).toEqual([starInfo[0]])
     expect(resolveBlockedMembers(undefined, starInfo)).toEqual([])
     expect(resolveBlockedMembers([1], undefined)).toEqual([])
+  })
+})
+
+describe('followed-members 纯函数', () => {
+  const starInfo: MemberRecord[] = [
+    { userId: 1, realName: '甲' },
+    { userId: 2, realName: '乙' },
+  ]
+
+  it('addFollowedMemberId 幂等，已存在返回 null', () => {
+    expect(addFollowedMemberId([], 1)).toEqual([1])
+    expect(addFollowedMemberId([1], 1)).toBeNull()
+    expect(addFollowedMemberId(undefined, 3)).toEqual([3])
+    // 不改动入参
+    const list = [1]
+    addFollowedMemberId(list, 2)
+    expect(list).toEqual([1])
+  })
+
+  it('isFollowedId / removeFollowedId 做数值归一化（与屏蔽名单同款兼容字符串 id）', () => {
+    expect(isFollowedId(['1', 2], 1)).toBe(true)
+    expect(removeFollowedId(['1', 2], 1)).toEqual([2])
+    expect(removeFollowedId(undefined, 1)).toEqual([])
+  })
+
+  it('resolveFollowedMembers 跳过查不到的 id，成员表缺失时为空', () => {
+    expect(resolveFollowedMembers([1, 999], starInfo)).toEqual([starInfo[0]])
+    expect(resolveFollowedMembers(undefined, starInfo)).toEqual([])
+    expect(resolveFollowedMembers([1], undefined)).toEqual([])
   })
 })
