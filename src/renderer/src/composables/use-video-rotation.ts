@@ -36,6 +36,36 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
     return normalizedAngle === 90 || normalizedAngle === 270
   })
 
+  // 视频实际渲染区（object-fit: contain 的 letterbox 结果）在容器内的矩形：
+  // 竖屏视频放进宽屏全屏容器时左右有黑边，弹幕锚在本矩形左下角才不会离画面太远。
+  // bottom 为相对容器底边的偏移，便于自下而上堆叠的弹幕条定位。
+  const videoRect = computed(() => {
+    const boxW = boxDimensions.value.width || videoBoxRef.value?.clientWidth || 0
+    const boxH = boxDimensions.value.height || videoBoxRef.value?.clientHeight || 0
+    if (boxW <= 0 || boxH <= 0)
+      return null
+    // 元数据未就绪：按撑满容器兜底，位置稳定在容器左下角
+    if (videoWidth.value <= 0 || videoHeight.value <= 0)
+      return { left: 0, top: 0, width: boxW, height: boxH, bottom: 0 }
+
+    // 旋转 90/270 时显示宽高交换
+    const ratio = isVerticalRotation.value
+      ? videoHeight.value / videoWidth.value
+      : videoWidth.value / videoHeight.value
+    // contain：撑满一条边，另一条边居中留黑边
+    const [width, height] = ratio < boxW / boxH
+      ? [boxH * ratio, boxH]
+      : [boxW, boxW / ratio]
+    // 矩形两轴都居中，故 left/right 与 top/bottom 各自对称
+    return {
+      left: (boxW - width) / 2,
+      top: (boxH - height) / 2,
+      width,
+      height,
+      bottom: (boxH - height) / 2,
+    }
+  })
+
   // 旋转 90/270 度时，视频显示宽高会交换，这里单独计算一个缩放系数，
   // 保证旋转后的画面仍然完整落在容器内。
   function calculateRotationScale() {
@@ -414,6 +444,7 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
   return {
     rotationAngle,
     isVerticalRotation,
+    videoRect,
     videoWrapperStyle,
     videoStyle,
     rotateHint,

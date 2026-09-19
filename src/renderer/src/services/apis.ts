@@ -160,7 +160,7 @@ function openLive(liveId: string): Promise<OpenLiveDetail> {
 }
 
 /**
- * 下载弹幕：原文（LRC 格式文本），解析见 use-barrage-list / Tools.lyricsParse
+ * 下载弹幕：原文（LRC 格式文本），解析见 use-playback-danmaku / Tools.lyricsParse
  * @param barrageUrl 弹幕地址
  */
 function barrage(barrageUrl: string): Promise<string> {
