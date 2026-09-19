@@ -1,5 +1,6 @@
 import ApiUrls from '@renderer/services/api-urls'
 import Apis from '@renderer/services/apis'
+import EventBus from '@renderer/services/event-bus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
@@ -106,5 +107,40 @@ describe('apis.syncInfo 的补充源降级', () => {
     await expect(Apis.syncInfo()).rejects.toThrow('服务端异常')
 
     expect(saveMemberData).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 落库成功即广播 members-updated（消费方 stores/member-tree.ts）。
+ * 广播点选在这里而不是调用方 use-member-sync：走到落库这一步的任何调用方都会通知到，
+ * 不依赖「记得在封装层补一句」的约定；反过来，没落库就不能广播，否则下游白白重拉一遍。
+ */
+describe('apis.syncInfo 的变更广播', () => {
+  it('落库成功后广播一次 members-updated', async () => {
+    stubNet({ allMembers: 'cb({"total":"1","rows":[{"sid":"10337","sname":"曹可甜"}]})' })
+    const onUpdated = vi.fn()
+    EventBus.on('members-updated', onUpdated)
+
+    try {
+      await Apis.syncInfo()
+      expect(onUpdated).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      EventBus.off('members-updated', onUpdated)
+    }
+  })
+
+  it('主数据源失败、未落库时不广播', async () => {
+    stubNet({ update: JSON.stringify({ status: 500, success: false, message: '服务端异常' }) })
+    const onUpdated = vi.fn()
+    EventBus.on('members-updated', onUpdated)
+
+    try {
+      await expect(Apis.syncInfo()).rejects.toThrow('服务端异常')
+      expect(onUpdated).not.toHaveBeenCalled()
+    }
+    finally {
+      EventBus.off('members-updated', onUpdated)
+    }
   })
 })

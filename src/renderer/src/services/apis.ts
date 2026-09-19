@@ -12,6 +12,7 @@ import type {
 import { debugLog } from '@renderer/utils/debug'
 import { ElMessage } from 'element-plus'
 import ApiUrls from './api-urls'
+import EventBus from './event-bus'
 import Request from './request'
 
 /**
@@ -63,6 +64,7 @@ async function fetchAllMembersOrSkip(): Promise<AllMemberItem[] | undefined> {
 /**
  * 同步成员信息：拉取并落库（database.json 的 starInfo/teamInfo/groupInfo），
  * 同时从 h5.48.cn 的 allmembers.php 拉取补充成员名单一并存库。
+ * 落库成功后广播 members-updated（见 event-bus.ts），依赖成员树的页面据此作废缓存。
  *
  * allmembers 是**次要数据源**：它返回 undefined 时只跳过本次补充，9 个主分节照常落库
  * （缺 key → saveMemberData 保留旧值），它的抖动不该把主流程拖挂。
@@ -76,6 +78,9 @@ async function syncInfo(): Promise<SyncInfoContent> {
   const allmembers = await fetchAllMembersOrSkip()
   // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts（写 database.json 并重建成员树）
   await window.mainAPI.saveMemberData(allmembers ? { ...content, allmembers } : content)
+  // 广播紧贴数据变更点（而不是调用方 use-member-sync）：成员树 store 据此作废缓存重拉，
+  // 任何调用方走到这里都会通知，不必依赖「记得在封装层补一句」的约定
+  EventBus.emit('members-updated')
   return content
 }
 

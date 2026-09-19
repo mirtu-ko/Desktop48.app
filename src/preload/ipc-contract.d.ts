@@ -77,7 +77,6 @@ export interface MemberTreeGroupPayload {
   groupId: number | string | undefined
   label: string
   value: string
-  teams: Array<{ teamName: string, label: string, value: string }>
   children: MemberTreeTeamPayload[]
 }
 

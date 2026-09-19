@@ -119,7 +119,7 @@ beforeEach(() => {
   // 取到帧即视为进入 PiP，与浏览器行为对齐，方便断言 isPip
   pipImpl = async (video) => {
     fakeDocument.pictureInPictureElement = video
-    return { width: 405, height: 720 }
+    return { width: 540, height: 960 }
   }
   vi.stubGlobal('document', fakeDocument)
   vi.stubGlobal('requestAnimationFrame', vi.fn(() => ++rafSeq))
@@ -150,13 +150,13 @@ describe('useVideoRotation 画中画', () => {
     expect(videos).toHaveLength(1)
   })
 
-  it('旋转后走 canvas 镜像：canvas 取旋转后的比例，最长边压到 720', async () => {
+  it('旋转后走 canvas 镜像：canvas 取旋转后的比例，最长边压到 960', async () => {
     const { rotation, source } = mount(90)
 
     await rotation.togglePip()
 
     expect(canvases).toHaveLength(1)
-    expect([canvases[0].width, canvases[0].height]).toEqual([405, 720])
+    expect([canvases[0].width, canvases[0].height]).toEqual([540, 960])
     // 旋转真正落在像素上：绘制前按 90° 旋转
     expect(canvases[0].ctx.rotate).toHaveBeenCalledWith(Math.PI / 2)
     // 源画面原封不动留在页面里，进 PiP 的是影子 video
