@@ -35,6 +35,7 @@
   --color-members: #3b82f6; // 成员：蓝
   --color-downloads: #10b981; // 下载：绿
   --color-setting: #6d5ae0; // 设置：品牌紫
+  --color-follow: #ffc53d; // 关注 / 已关注：鎏金（与 Element Plus warning 状态色语义解耦）
 
   /* ===== z-index 分层表：全项目堆叠层级一览，新增层先在此登记 =====
    * 1-9    组件内微层：卡片徽章/标签、播放器内 loading 与占位（局部堆叠，互不越界）

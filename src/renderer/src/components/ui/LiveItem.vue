@@ -130,7 +130,7 @@ const liveBadge = computed(() => {
 
   /* 关注卡高亮：整卡金色描边 + 轻发光 + 底部淡金底染（比角落单颗星更醒目） */
   &.live-card--followed {
-    --fb-color: var(--el-color-warning);
+    --fb-color: var(--color-follow);
 
     border-color: var(--fb-color);
     box-shadow:
@@ -191,7 +191,7 @@ const liveBadge = computed(() => {
 
   /* 关注标识：封面右上角「已关注」胶囊，配合整卡金色描边/底染，扫一眼即可认出关注成员 */
   .follow-badge {
-    --fb-color: var(--el-color-warning);
+    --fb-color: var(--color-follow);
 
     position: absolute;
     top: 8px;
