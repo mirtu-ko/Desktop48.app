@@ -28,10 +28,13 @@
   --radius-pill: 999px;
 
   /* ===== 语义主题色 =====
-   * 主题色的唯一来源是 TS 侧的 Constants.Theme；这里只登记样式里真正消费到的两个
-   * （Albums 页的直播 / 下载徽章），其余菜单色由模板内联 `--item-color` 等处注入 */
+   * 主题色的唯一来源是 TS 侧的 Constants.Theme；这里登记样式名与默认色，方便在模板里直接引用。*/
   --color-lives: #ff5e7e; // 直播 / 录制：玫红
+  --color-shows: #f59e0b; // 公演：琥珀
+  --color-albums: #d946ef; // 专辑：品红
+  --color-members: #3b82f6; // 成员：蓝
   --color-downloads: #10b981; // 下载：绿
+  --color-setting: #6d5ae0; // 设置：品牌紫
 
   /* ===== z-index 分层表：全项目堆叠层级一览，新增层先在此登记 =====
    * 1-9    组件内微层：卡片徽章/标签、播放器内 loading 与占位（局部堆叠，互不越界）
