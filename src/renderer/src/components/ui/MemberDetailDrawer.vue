@@ -335,7 +335,7 @@ function openPlaybacks() {
   color: #fff;
 
   &--follow {
-    background: var(--el-color-warning);
+    background: var(--color-follow);
   }
 
   &--block {

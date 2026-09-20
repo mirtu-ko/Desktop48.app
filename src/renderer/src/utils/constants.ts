@@ -62,6 +62,7 @@ const Constants = {
     MEMBERS: '#3b82f6', // 成员：蓝
     DOWNLOADS: '#10b981', // 下载：绿
     SETTING: '#6d5ae0', // 设置：品牌紫
+    FOLLOW: '#ffc53d', // 关注 / 已关注：鎏金
   },
 
   /**

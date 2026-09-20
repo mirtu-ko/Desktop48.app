@@ -28,7 +28,7 @@ const props = defineProps<{
   item: Item
   /** 刷新版本号：变化时给封面 URL 追加 cache-busting 参数，强制失败图重试 */
   imageVersion?: number | string
-  /** 是否被关注成员的直播：为 true 时封面右上角加实心金星角标 */
+  /** 是否被关注成员的直播：为 true 时整卡金色描边高亮，右上角标「已关注」胶囊 */
   followed?: boolean
 }>()
 
@@ -55,7 +55,7 @@ const liveBadge = computed(() => {
 </script>
 
 <template>
-  <div class="live-card lift-card clickable">
+  <div class="live-card lift-card clickable" :class="{ 'live-card--followed': followed }">
     <div class="cover-container">
       <el-image
         :key="coverSrc"
@@ -76,9 +76,10 @@ const liveBadge = computed(() => {
         </template>
       </el-image>
       <span class="live-badge" :class="`live-badge--${liveBadge.type}`">{{ liveBadge.text }}</span>
-      <!-- 关注标识：封面右上角的实心金星（未关注的直播没有这枚角标），该成员同时在列表里置顶 -->
+      <!-- 关注标识：封面右上角「已关注」胶囊角标；卡片同时有金色描边与淡金底染（未关注无此标记） -->
       <span v-if="followed" class="follow-badge" title="已关注成员 · 优先展示">
-        <el-icon :size="13"><StarFilled /></el-icon>
+        <el-icon :size="12"><StarFilled /></el-icon>
+        <span>已关注</span>
       </span>
     </div>
 
@@ -127,6 +128,26 @@ const liveBadge = computed(() => {
     }
   }
 
+  /* 关注卡高亮：整卡金色描边 + 轻发光 + 底部淡金底染（比角落单颗星更醒目） */
+  &.live-card--followed {
+    --fb-color: var(--color-follow);
+
+    border-color: var(--fb-color);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--fb-color) 60%, transparent),
+      0 3px 14px -6px color-mix(in srgb, var(--fb-color) 55%, transparent);
+
+    .card-body {
+      background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--fb-color) 6%, transparent));
+    }
+
+    &:hover {
+      box-shadow:
+        0 0 0 1px var(--fb-color),
+        0 8px 18px -8px color-mix(in srgb, var(--fb-color) 60%, transparent);
+    }
+  }
+
   .cover-container {
     position: relative;
     width: 100%;
@@ -156,7 +177,7 @@ const liveBadge = computed(() => {
     color: #fff;
 
     &.live-badge--live {
-      background: var(--el-color-danger);
+      background: var(--color-lives);
     }
 
     &.live-badge--playback {
@@ -164,25 +185,26 @@ const liveBadge = computed(() => {
     }
 
     &.live-badge--radio {
-      background: var(--el-color-warning);
+      background: var(--color-albums);
     }
   }
 
-  /* 关注标识：封面右上角常驻的实心金星，与成员卡片「已关注」钮同一套语言（语义色实底 + 白图标） */
+  /* 关注标识：封面右上角「已关注」胶囊，配合整卡金色描边/底染，扫一眼即可认出关注成员 */
   .follow-badge {
-    --fb-color: var(--el-color-warning);
+    --fb-color: var(--color-follow);
 
     position: absolute;
     top: 8px;
     right: 8px;
     z-index: 1;
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: var(--radius-pill);
     color: #fff;
+    font-size: 12px;
+    line-height: 1;
     background: var(--fb-color);
     box-shadow: 0 3px 10px -3px color-mix(in srgb, var(--fb-color) 85%, transparent);
   }

@@ -577,7 +577,7 @@ function badgeSrc(section: MemberSection) {
   }
 
   .quick-follow.is-on {
-    background: var(--el-color-warning);
+    background: var(--color-follow);
   }
 
   .quick-block.is-on {
@@ -602,12 +602,15 @@ function badgeSrc(section: MemberSection) {
     }
   }
 
-  /* 已关注：头像外一圈金色光晕，与内圈队色光环叠加。
-   * 必须挂在 .avatar-wrap 上：::before 带 mask-composite: exclude，会裁掉画在 border-box 之外的描边 */
-  &.is-followed .avatar-wrap {
-    box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--el-color-warning) 65%, transparent),
-      0 0 16px -2px color-mix(in srgb, var(--el-color-warning) 60%, transparent);
+  /* 已关注：头像光环整体换成温暖金色单环——不再叠加「外描边 + 光晕」的双层阴影，
+   * 配合右上角金星钮，单环即可一眼识别关注状态，更干净优雅 */
+  &.is-followed .avatar-wrap::before {
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--color-follow) 75%, #fff),
+      var(--color-follow) 55%,
+      color-mix(in srgb, var(--color-follow) 85%, #ffd257)
+    );
   }
 }
 
