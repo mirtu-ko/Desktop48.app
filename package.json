@@ -1,10 +1,13 @@
 {
   "name": "Desktop48",
   "type": "module",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Desktop48",
   "author": "Zack",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "homepage": "https://electron-vite.org",
   "main": "./out/main/index.js",
   "scripts": {

@@ -20,6 +20,16 @@ nsis:
   createDesktopShortcut: always
 mac:
   entitlementsInherit: build/entitlements.mac.plist
+  # macos-latest / macos-14 / macos-15 都是 arm64（M1）runner，
+  # 不显式写 arch 就只能产出 Apple Silicon 单架构包，Intel Mac 装不上。
+  # 这里两个架构都出；产物名必须带 ${arch}，否则两个架构会撞同一个文件名。
+  # 只出 dmg：zip 是 Squirrel.Mac 自动更新专用的，本项目无自动更新（未依赖 electron-updater），
+  # 去掉可省掉一次 100+MB 的压缩。若以后接入自动更新，必须把 zip 加回来。
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
@@ -27,7 +37,8 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  # 必须带 ${arch}：x64 与 arm64 两个产物否则会撞同名（Desktop48-0.1.6.dmg）
+  artifactName: ${name}-${version}-${arch}.${ext}
 linux:
   target:
     - AppImage

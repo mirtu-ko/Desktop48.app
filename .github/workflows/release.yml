@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out git repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Create release
         env:
@@ -34,12 +34,16 @@ jobs:
 
     steps:
       - name: Check out git repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20 # 根据你的项目需求选择 Node 版本
+          # 必须是 22.12+：electron@44 的 engines 下限是 >=22.12.0，vitest@5 更是直接排除了 Node 20。
+          # 24 = 当前 Active LTS（安全支持到 2028-04），与 Electron 44 内置的 Node 运行时同线。
+          # 改这里之前先看 .nvmrc 和 package.json 的 engines，三者要保持一致。
+          node-version: 24
+          cache: npm # 缓存 npm 下载目录（不含 node_modules），key 由 package-lock.json 的 hash 决定
 
       - name: Install Dependencies
         run: npm ci --legacy-peer-deps # 当前依赖树包含 vite/electron-vite 的 peer 冲突，发布流程按本地安装方式忽略 peer 校验
