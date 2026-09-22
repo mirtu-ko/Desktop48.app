@@ -2,7 +2,7 @@ import type { AppConfig, ConfigKey } from '../common/app-config'
 import type { electronAPI as ElectronAPI, FfmpegDownloadProgress, mainAPI, MemberDataContent, NetRequestOptions } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
-// 替代 @electron-toolkit/preload，仅暴露渲染进程实际需要的最小 API
+// 仅暴露渲染进程实际需要的最小 API
 // sandbox 模式下 require 只能加载 electron 内置模块，无法 require 第三方包
 const electronAPI = {
   process: {

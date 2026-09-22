@@ -109,7 +109,7 @@ const imageVersion = ref(0)
 const hasFollowed = computed(() => followedMembers.value.length > 0)
 
 /** 关注成员优先展示：比较器只输出布尔值差，配合稳定排序，组内各自保持接口返回顺序。
- * userId 归一化收口在 store 的 isFollowed，页面不自己 parseInt */
+ * userId 归一化集中在 store 的 isFollowed，页面不自己 parseInt */
 const orderedLiveList = computed(() => {
   const list = liveList.value
   if (!hasFollowed.value)

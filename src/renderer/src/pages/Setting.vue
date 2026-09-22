@@ -9,7 +9,7 @@ import { useRouter } from 'vue-router'
 
 const router = useRouter()
 
-// 配置三项（下载目录 / ffmpeg 目录 / User-Agent）的状态与读写收口在 use-app-config.ts
+// 配置三项（下载目录 / ffmpeg 目录 / User-Agent）的状态与读写集中在 use-app-config.ts
 const {
   downloadDirectory,
   ffmpegDirectory,

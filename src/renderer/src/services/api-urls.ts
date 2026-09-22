@@ -1,8 +1,5 @@
 /**
  * 全部接口地址（无状态常量）。
- *
- * 说明：不用 `class + static` —— ES 模块本身就是单例，class 外壳对纯常量没有任何收益。
- * 保留 `ApiUrls` 命名空间对象，是为了让 `ApiUrls.LIVE_LIST_URL` 这类访问保持不变。
  */
 const ApiUrls = {
   OPEN_LIVE_LIST_URL: 'https://pocketapi.48.cn/live/api/v1/live/getOpenLiveList',

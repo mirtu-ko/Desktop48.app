@@ -26,7 +26,7 @@ const followedMembers = ref<FollowedMember[]>([])
 /** 判存走 Set：isFollowed 在 v-for 与排序比较器里被逐条调用，避免线性扫名单 */
 const followedIdSet = computed(() => new Set(followedMembers.value.map(member => Number(member.userId))))
 
-/** 关注名单的单一数据源：读取、判断、关注 / 取关都在此收口（落库走 window.mainAPI → database.json） */
+/** 关注名单的单一数据源：读取、判断、关注 / 取关都在此统一处理（落库走 window.mainAPI → database.json） */
 export function useFollowedMembersStore() {
   /** 从主进程拉取最新名单（页面挂载时调用） */
   async function refreshFollowedMembers() {

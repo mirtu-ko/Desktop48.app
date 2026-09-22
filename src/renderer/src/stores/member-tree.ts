@@ -7,11 +7,8 @@
  * 无法引主进程模块，跨进程的类型只能声明在 preload/ipc-contract.d.ts。
  *
  * 成员树是主进程的**内存派生数据**（不落盘，见 main/database.ts 的 rebuildMemberTree），
- * 此前由成员页与回放页各自持有：缓存生命周期被绑在组件上，而页面被 keep-alive 缓存后
- * 只会在 onMounted 拉一次 —— 成员同步完成、库里多了新成员，回放页的筛选器仍停在旧快照上
- * （表现为「新增成员选不到」）。
  *
- * 这里把它收成唯一数据源：
+ * 作为全局唯一数据源：
  * - 读：消费方 `await loadTree()`，并发调用共享同一次请求；
  * - 写：数据库更新（services/apis.ts 的 syncInfo 落库后广播 members-updated）时
  *   由本文件作废缓存并立刻重拉 —— 订阅收在这里，消费方不必各自监听事件。

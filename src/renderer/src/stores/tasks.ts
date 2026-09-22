@@ -199,9 +199,8 @@ async function ensureRestored() {
 }
 
 /**
- * 应用级安装：由入口 main.ts 显式调用一次，注册事件订阅并恢复一次任务快照。
- *  副作用从"import 即执行"改为"显式安装"，消除 import 顺序依赖与 HMR 重复订阅；
- *  重复调用安全（幂等），HMR 时自动卸载旧实例监听。
+ * 应用级安装：注册事件订阅并恢复一次任务快照。
+ * 由入口 main.ts 显式调用；重复调用安全（幂等），HMR 时自动卸载旧实例监听。
  */
 export function installTasks() {
   if (installed)

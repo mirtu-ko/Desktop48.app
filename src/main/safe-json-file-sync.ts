@@ -3,10 +3,9 @@ import { dirname } from 'node:path'
 import { log } from './logger'
 
 /**
- * lowdb 的安全 JSON 文件适配器，替代原生 JSONFileSync。
+ * lowdb 的安全 JSON 文件适配器：原子替换并在损坏时回退备份。
  *
- * 原生 JSONFileSync 虽然用了 tmp + rename，但没有 fsync——断电时 rename 可能
- * 先于数据真正落盘，留下半截文件。本适配器补齐完整落盘链路：
+ * rename 前必须 fsync，否则断电时数据可能尚未真正落盘。
  *
  * 写：open tmp → write → fsync → close → rename（同目录原子替换）
  * 读：主文件可解析则用之；解析失败则隔离为 .corrupt，回退 .bak

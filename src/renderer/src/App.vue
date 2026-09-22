@@ -15,9 +15,6 @@ import { useRoute, useRouter } from 'vue-router'
 
 /**
  * 应用根组件：标题栏 + 初始化门 + 主界面骨架（Dock 导航 / 路由视图 / 全局浮层）。
- *
- * 主界面原先是 pages/Index.vue，但它并不在路由表里，本质是布局壳而非页面，
- * 故合并到此，不再两层套壳。
  */
 
 const router = useRouter()
@@ -31,7 +28,6 @@ function onInitialized() {
 }
 
 // 菜单值即路由 path，两者共用同一份定义（见 utils/constants.ts 的 Menu），
-// 此前这里手工维护的 pathToMenu 是与 Constants.Menu / routes.ts 重复的第三份副本
 const MENU_PATHS: string[] = Object.values(Constants.Menu)
 
 /** 未知 path（如重定向发生前的 '/'）一律回退到直播页，保证 Dock 始终有高亮项 */
@@ -58,7 +54,7 @@ const dockItems = computed(() => [
   { index: Constants.Menu.SETTING, label: '设置', icon: Setting, color: Constants.Theme.SETTING },
 ])
 
-/** path 带前导斜杠，是绝对路径——此前传的是 'lives' 这种相对路径，会被 vue-router 按"相对当前路径"解析 */
+/** 导航 path 必须带前导斜杠，确保 vue-router 按绝对路径解析 */
 function changeMenu(path: string) {
   activeIndex.value = path
   router.push(path)
@@ -75,8 +71,7 @@ watch(
 // 启动兜底：数据库没有成员信息时自动同步一次（逻辑见 use-member-sync.ts）
 const { ensureMembers } = useMemberSync()
 
-// 原 Index.vue 是挂在「初始化通过」分支上的，合并后要显式等这一时机，
-// 否则会在 ffmpeg 环境就绪前就去访问数据库
+// ffmpeg 环境自检完成后再访问数据库，避免初始化阶段触发数据依赖
 watch(isInitialized, async (ready) => {
   if (ready) {
     await ensureMembers()

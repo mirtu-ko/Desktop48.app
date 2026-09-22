@@ -16,7 +16,7 @@ const emit = defineEmits<{ close: [], toggleBlock: [member: MemberDetail], toggl
 
 const router = useRouter()
 
-/** 成员状态元信息：收口于 Constants.MemberStatusMeta（与成员页分区共用） */
+/** 成员状态元信息：使用 Constants.MemberStatusMeta（与成员页分区共用） */
 const STATUS_META = Constants.MemberStatusMeta
 
 const statusMeta = computed(() =>

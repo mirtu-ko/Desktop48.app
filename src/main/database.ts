@@ -122,7 +122,7 @@ class Database {
       delete this.db.hiddenMemberIds
     }
 
-    // 清理旧库遗留的派生字段：memberTree 现在是纯内存派生，不再持久化
+    // memberTree 是内存派生数据，清理旧库中的持久化副本
     delete this.db.memberTree
 
     // 清理已废弃的存储字段：allmembersSimple 是 allmembers 的字段子集，已停止拉取与落库

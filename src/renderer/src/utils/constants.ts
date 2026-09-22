@@ -1,6 +1,6 @@
 /**
  * 成员状态（starInfo.status 字段取值，接口约定）：成员页分区、详情抽屉标签、回放页排序共用。
- * 附展示元信息（标签文案 + 语义色），三处此前各自硬编码 1/2/3，收口于此
+ * 附展示元信息（标签文案 + 语义色），页面、详情与排序共用同一份定义。
  */
 const MemberStatus = {
   Active: 1,
@@ -24,9 +24,7 @@ const GROUP_LOGO_FALLBACK = 'https://www.snh48.com/images/index/about-logo-snh.p
 /**
  * 全局常量表（全部无状态）。
  *
- * 说明：这里刻意不用 `class + static` —— ES 模块本身就是单例，一个模块无论被
- * `import` 多少次都只求值一次，class 外壳不带来任何收益，反而多出 `public static`
- * 样板与 `this` 陷阱。跨组件共享的「状态」请放 `stores/`，这里只放常量。
+ * 跨组件共享的状态放 stores/，这里只保存无状态常量。
  */
 const Constants = {
   /**

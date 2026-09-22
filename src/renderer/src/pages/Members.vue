@@ -45,13 +45,13 @@ const { refreshBlockedMembers } = useBlockedMembersStore()
 /** 关注名单：模块级共享状态，机制见 stores/followed-members.ts（直播列表页共用同一份） */
 const { refreshFollowedMembers } = useFollowedMembersStore()
 
-/** 关注 / 屏蔽的互斥规则收口在 use-member-actions.ts（本页卡片与三处详情抽屉共用同一份） */
+/** 关注 / 屏蔽的互斥规则集中在 use-member-actions.ts（本页卡片与三处详情抽屉共用同一份） */
 const { isBlocked, isFollowed, toggleBlockMember, toggleFollowMember } = useMemberActions()
 
 /** 成员树：全局单例（与回放页筛选器共用同一份，同步完成后由 store 统一作废重拉） */
 const { loadTree } = useMemberTreeStore()
 
-/** 成员状态（starInfo.status）取值收口见 Constants.MemberStatus（与详情抽屉/回放页共用） */
+/** 成员状态（starInfo.status）取值见 Constants.MemberStatus（与详情抽屉 / 回放页共用） */
 const { Active: STATUS_ACTIVE, Hiatus: STATUS_HIATUS, Left: STATUS_LEFT } = Constants.MemberStatus
 
 interface MemberSection {
@@ -164,7 +164,7 @@ function changeTab(key: string) {
     activeKey.value = key
 }
 
-/** 成员同步：loading 态与接口调用收口在 use-member-sync.ts（与首页的启动兜底共用一份逻辑） */
+/** 成员同步：loading 态与接口调用集中在 use-member-sync.ts（与首页启动兜底共用） */
 const { isSyncing, syncMembers } = useMemberSync()
 
 /** 更新成员数据库：从接口同步最新名单，成功后刷新本页 */
@@ -602,8 +602,7 @@ function badgeSrc(section: MemberSection) {
     }
   }
 
-  /* 已关注：头像光环整体换成温暖金色单环——不再叠加「外描边 + 光晕」的双层阴影，
-   * 配合右上角金星钮，单环即可一眼识别关注状态，更干净优雅 */
+  /* 已关注：头像使用单层金色光环，配合右上角金星钮识别状态 */
   &.is-followed .avatar-wrap::before {
     background: linear-gradient(
       135deg,

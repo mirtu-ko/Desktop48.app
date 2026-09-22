@@ -71,7 +71,7 @@ const filled = computed(() => props.name.endsWith('Filled'))
 </template>
 
 <style scoped>
-/* 播放器统一线性壳：全项目同一套 stroke 粗细，替代 @element-plus/icons-vue 混排 */
+/* 播放器统一线性壳：全项目使用同一套 stroke 粗细 */
 .media-icon {
   display: block;
   flex-shrink: 0;

@@ -21,9 +21,6 @@ log('[app.ts] Electron 版本:', process.versions.electron)
 log('[app.ts] Node.js 版本:', process.versions.node)
 log('[app.ts] Chromium 版本:', process.versions.chrome)
 
-// 系统服务类 IPC 通道（openPath/selectDirectory/pathJoin/netRequest/getDesktopPath/checkFfmpegBinaries）
-// 已移至 ipc/register-system-ipc.ts，由上方 registerAllIPC() 统一注册
-
 // 保持对主窗口的引用，供自定义标题栏窗口控制使用
 let mainWindow: BrowserWindow | null = null
 
@@ -86,9 +83,6 @@ export function activeWindow(): BrowserWindow | null {
   return null
 }
 
-// 窗口控制通道（windowMinimize/windowToggleMaximize/windowClose/windowIsMaximized）
-// 已移至 ipc/register-window-ipc.ts，由 registerAllIPC() 统一注册
-
 // 当运行第二个实例时，聚焦到已有窗口（单实例锁在 index.ts 中已获取）
 app.on('second-instance', () => {
   const win = activeWindow() ?? BrowserWindow.getAllWindows().find(w => !w.isDestroyed())
@@ -140,8 +134,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  // 直播流会话与转流进程清理（原 stream.ts 模块级 before-quit，现改为显式调用，
-  // 使全部退出清理集中在此处可见）
+  // 应用退出前统一清理直播会话与转流进程
   cleanupStreamSessions()
   // 对仍在运行的所有 ffmpeg 任务写 'q' 优雅收尾，避免退出后残留孤儿进程
   stopAllFfmpegTasks()

@@ -104,7 +104,7 @@ function shortTeamName(teamName: string): string {
 }
 
 /**
- * userId 归一化：成员树给 number、直播 / 回放接口给 string，历史落库两种都有。
+ * userId 归一化：成员树为 number，接口可能为 string。
  * 用 Number 而非 parseInt：'123abc' 这类脏值应判为无效，而不是被截断成 123 误命中别人。
  * 关注 / 屏蔽 / 成员名录三个 store 与直播列表的屏蔽过滤共用同一份口径。
  */
@@ -116,13 +116,7 @@ function normalizeUserId(userId: number | string | undefined | null): number {
 }
 
 /**
- * 纯函数工具集（全部无状态：不碰 DOM / IPC / 响应式）。
- *
- * 说明：这里刻意不用 `class + static` —— ES 模块本身就是单例，class 外壳只带来
- * `this` 陷阱与 `public static` 样板。原来 `private static` 的辅助成员改成模块级
- * 函数/常量后反而成了「真正私有」，外部连名字都看不到。
- *
- * 保留 `Tools` 这个命名空间对象，是为了让 `Tools.formatDuration(...)` 这类调用点保持不变。
+ * 纯函数工具集：不依赖 DOM、IPC 或响应式状态。
  */
 const Tools = {
   pictureUrls,

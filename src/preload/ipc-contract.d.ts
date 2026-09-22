@@ -14,7 +14,7 @@ import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
 
 // ===== 基础环境 =====
 
-// 最小化 electronAPI 类型（替代 @electron-toolkit/preload）
+// 渲染进程所需的最小运行环境信息
 export interface electronAPI {
   process: {
     platform: string

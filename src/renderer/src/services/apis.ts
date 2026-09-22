@@ -312,11 +312,7 @@ async function request<T>(url: string, data: object, headers: Record<string, str
 /**
  * 渲染层接口层（全部无状态）。
  *
- * 说明：不用 `class + static` + `instance()` —— ES 模块本身就是单例，`Apis.instance()`
- * 只是给一个"没有任何实例字段的类"套上无意义的间接层。
- * 内部互相调用一律走模块级函数，而不是对象字面量里的 `this`（后者一被解构就断），
- * 所以下面这些函数里搜不到 `this`；只有导出时才组装成命名空间对象，
- * 于是 12 处调用点只需去掉 `.instance()`。
+ * 接口函数全部为模块级封装，内部不依赖对象实例状态。
  */
 const Apis = {
   syncInfo,

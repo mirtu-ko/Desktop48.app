@@ -1,5 +1,5 @@
 /**
- * ⚠️ 全局单例 store（原 composables/use-audio-player.ts）
+ * ⚠️ 全局单例 store（模块作用域共享）
  *
  * 播放列表、播放进度与那个全局唯一的 HTML5 Audio 元素都定义在模块作用域，
  * **不随任何组件卸载而销毁**：专辑页负责入队/点播，FloatAudioBar 负责展示与移除，

@@ -297,7 +297,7 @@ async function getLiveOne() {
   }
 }
 
-// 下载发起流程收口在 useMediaDownload（目录校验/文件名/任务下发与直播录制共用）。
+// 下载发起流程由 useMediaDownload 统一处理（目录校验 / 文件名 / 任务下发与直播录制共用）。
 // 回放地址用当前已解析的 playStreamPath（VOD 地址稳定，无需重新拉详情）
 const { running: downloading, onActionClick: onDownloadClick } = useMediaDownload({
   kind: 'download',

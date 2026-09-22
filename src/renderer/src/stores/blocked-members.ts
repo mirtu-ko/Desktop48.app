@@ -27,7 +27,7 @@ interface BlockTarget {
 const blockedMembers = ref<BlockedMember[]>([])
 
 /**
- * 屏蔽名单的单一数据源：读取、判断、屏蔽 / 解除 / 清空都在这里收口。
+ * 屏蔽名单的单一数据源：读取、判断、屏蔽 / 解除 / 清空都在这里统一处理。
  *
  * ★ 跨进程：本文件所有 window.mainAPI.*BlockedMember* 调用经 preload/index.ts
  * 转到 main/ipc/register-database-ipc.ts，名单落盘在 database.json。

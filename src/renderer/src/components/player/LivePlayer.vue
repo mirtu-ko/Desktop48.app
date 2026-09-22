@@ -213,7 +213,7 @@ function handleRetryExhausted() {
 }
 
 // ── 录制 ─────────────────────────────────────────────────────────
-// 录制发起流程收口在 useMediaDownload（目录校验/文件名/任务下发与回放下载共用）；
+// 录制发起流程由 useMediaDownload 统一处理（目录校验 / 文件名 / 任务下发与回放下载共用）；
 // 录制走原始 RTMP 地址直存文件，和页面播放的 HTTP-FLV 链路保持解耦。
 // 状态查询与停止取共享任务 store：任务由谁发起、下载页是否挂载都不影响这里
 const { running: recording, onActionClick: onRecordClick } = useMediaDownload({

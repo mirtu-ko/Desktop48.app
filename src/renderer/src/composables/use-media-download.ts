@@ -54,8 +54,7 @@ export function useMediaDownload(options: {
       filename,
       liveId: options.liveId(),
     }
-    // 任务由 useTasksStore 模块级单例直接接住并启动，状态在按钮上就地可见，
-    // 不再跳转下载页——播放器本身也是浮窗，跳走反而打断浏览
+    // 任务由全局 store 接管，状态在播放器按钮就地可见。
     await handleTask(task, options.kind)
   }
 

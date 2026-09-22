@@ -11,7 +11,7 @@ import { onScopeDispose, ref, watch } from 'vue'
  * 传入的是 getter（`() => props.loading`）而不是值，这样内部 watch 能直接跟随来源。
  * 每次调用返回独立状态，所以放 composables 而不是 stores。
  *
- * @returns 供 UI 消费的可见性（用它替代原始 loading 去驱动指示）
+ * @returns 供 UI 消费的可见性，避免用原始 loading 直接驱动指示
  */
 export default function useMinVisibleLoading(isLoading: () => boolean, minMs = 600) {
   const visible = ref(false)

@@ -146,5 +146,5 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
   })
 }
 
-// 具体任务通道组（downloadTask / recordTask）的配置与注册在 ipc/register-task-ipc.ts，
-// 本模块只提供通用工厂，不再自带副作用调用。
+// downloadTask / recordTask 的具体配置与注册在 ipc/register-task-ipc.ts。
+// 本模块只提供通用工厂，注册由 registerTaskIPC() 显式调用。

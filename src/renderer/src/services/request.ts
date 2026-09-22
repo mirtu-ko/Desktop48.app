@@ -53,9 +53,7 @@ async function get(url: string, headers: Record<string, string> = {}): Promise<s
 /**
  * 渲染层网络入口（全部无状态）。
  *
- * 说明：不用 `class + static` —— ES 模块本身就是单例，class 外壳对无状态函数没有收益，
- * 还会让 `this.tracedNetRequest` 这种隐式耦合出现（对象字面量里的 `this` 一旦被解构就会断）。
- * 内部一律直接调用模块级函数，只有导出时才组装成命名空间对象。
+ * 请求经模块级函数转发，避免对象方法解构后丢失上下文。
  */
 const Request = {
   post,

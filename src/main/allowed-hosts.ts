@@ -1,5 +1,5 @@
 // 主进程网络请求白名单。
-// 不再从渲染层的 api-urls.ts 派生：主进程的安全策略不应随渲染层文件改动而静默变化。
+// 主进程独立维护安全策略，避免渲染层 URL 配置影响白名单。
 const ALLOWED_HOSTS = new Set([
   'pocketapi.48.cn',
   'www.cgt48.com',

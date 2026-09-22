@@ -3,7 +3,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ref } from 'vue'
 
 /**
- * 应用配置的读写收口：三项配置（下载目录 / ffmpeg 目录 / User-Agent）的状态、
+ * 应用配置的集中管理
  * 持久化与目录选择流程都在这里，Setting.vue 只负责模板接线。
  *
  * ★ 跨进程：本文件的 getConfig / setConfig / selectDirectory / openPath /
