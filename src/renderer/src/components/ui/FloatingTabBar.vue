@@ -32,7 +32,7 @@ function tabStyle(key: string) {
   }
   return {
     background: `linear-gradient(135deg, ${activeColor.value}, ${activeColor.value})`,
-    boxShadow: `0 4px 12px -4px ${activeColor.value}cc`,
+    boxShadow: `0 4px 12px -4px color-mix(in srgb, ${activeColor.value} 80%, transparent)`,
   }
 }
 

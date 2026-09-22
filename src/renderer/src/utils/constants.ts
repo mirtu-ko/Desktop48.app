@@ -28,7 +28,7 @@ const GROUP_LOGO_FALLBACK = 'https://www.snh48.com/images/index/about-logo-snh.p
  */
 const Constants = {
   /**
-   * 菜单（键命名与 Theme 保持一致：全大写下划线）。
+   * 菜单（键名为全大写下划线）。
    *
    * 值**就是路由 path**（带前导斜杠），Dock 高亮与 router.push 共用同一份值，
    * 因此不需要再单独维护一张"path ↔ 菜单键"的映射表。
@@ -48,20 +48,6 @@ const Constants = {
 
   MemberStatus,
   MemberStatusMeta,
-
-  /**
-   * 语义主题色：页面/功能主题色的唯一来源（Dock 菜单、任务分组、设置行、
-   * app.scss 的 --color-* 变量均与此保持一致），改色只需改这里
-   */
-  Theme: {
-    LIVES: '#ff5e7e', // 直播 / 录制：玫红
-    SHOWS: '#f59e0b', // 公演：琥珀
-    ALBUMS: '#d946ef', // 专辑：品红
-    MEMBERS: '#3b82f6', // 成员：蓝
-    DOWNLOADS: '#10b981', // 下载：绿
-    SETTING: '#6d5ae0', // 设置：品牌紫
-    FOLLOW: '#ffc53d', // 关注 / 已关注：鎏金
-  },
 
   /**
    * 分团切换 tab（公演页 / 成员页左上角浮动切换器共用）：key 即 groupId。

@@ -50,7 +50,7 @@ function goMembers() {
   router.push('/members')
 }
 
-/** 友情链接（logo 加载失败时回退为首字磁贴）；主题色复用 Constants 的语义色 */
+/** 友情链接（logo 加载失败时回退为首字磁贴）；应用内主题色引用 app.scss 变量 */
 interface FriendLink {
   name: string
   url: string
@@ -64,9 +64,9 @@ interface FriendLink {
 
 const friendLinks: FriendLink[] = [
   { name: 'SNH48 官方网站', url: 'https://www.snh48.com/', abbr: 'SNH', color: Constants.GroupTabs[1].color },
-  { name: 'SNH48 官方直播', url: 'https://live.48.cn/', abbr: 'Live', color: Constants.Theme.SETTING },
-  { name: '口袋48 APP', url: 'https://h5.48.cn/pocket48/index_pc.html', abbr: '48', color: Constants.Theme.MEMBERS, logo: 'https://h5.48.cn/pocket48/image/logo.png' },
-  { name: '塞纳河48 APP', url: 'https://www.ckg48.cn/', abbr: 'CKG', color: Constants.Theme.SHOWS, logo: 'https://www.ckg48.cn/favicon.ico' },
+  { name: 'SNH48 官方直播', url: 'https://live.48.cn/', abbr: 'Live', color: 'var(--color-setting)' },
+  { name: '口袋48 APP', url: 'https://h5.48.cn/pocket48/index_pc.html', abbr: '48', color: 'var(--color-members)', logo: 'https://h5.48.cn/pocket48/image/logo.png' },
+  { name: '塞纳河48 APP', url: 'https://www.ckg48.cn/', abbr: 'CKG', color: 'var(--color-shows)', logo: 'https://www.ckg48.cn/favicon.ico' },
   {
     name: '新浪微博',
     url: 'https://weibo.com/u/2689280541',
@@ -119,7 +119,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            :style="{ '--tile-color': Constants.Theme.SETTING }"
+            :style="{ '--tile-color': 'var(--color-setting)' }"
           >
             <el-icon><Connection /></el-icon>
           </span>
@@ -151,7 +151,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            :style="{ '--tile-color': Constants.Theme.DOWNLOADS }"
+            :style="{ '--tile-color': 'var(--color-downloads)' }"
           >
             <el-icon><Folder /></el-icon>
           </span>
@@ -189,7 +189,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            :style="{ '--tile-color': Constants.Theme.SHOWS }"
+            :style="{ '--tile-color': 'var(--color-shows)' }"
           >
             <el-icon><Cpu /></el-icon>
           </span>
@@ -227,7 +227,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            :style="{ '--tile-color': Constants.Theme.LIVES }"
+            :style="{ '--tile-color': 'var(--color-lives)' }"
           >
             <el-icon><Hide /></el-icon>
           </span>

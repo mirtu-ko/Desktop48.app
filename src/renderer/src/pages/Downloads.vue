@@ -2,7 +2,6 @@
 import type { TaskKind } from '@renderer/stores/tasks'
 import { Check, Download, Loading, VideoCamera } from '@element-plus/icons-vue'
 import useTasksStore from '@renderer/stores/tasks'
-import Constants from '@renderer/utils/constants'
 import { computed, onMounted } from 'vue'
 
 // 任务状态由 useTasksStore 这个模块级单例持有：本页卸载后任务照常运行，
@@ -14,10 +13,10 @@ onMounted(() => {
   restoreTasks('record')
 })
 
-// 分区展示配置：图标与主题色与底部 Dock 的语义保持一致（直播-玫红 / 下载-绿，取自 Constants.Theme）
+// 分区展示配置：图标与主题色引用 app.scss 的 --color-* 变量。
 const taskGroups = computed(() => [
-  { kind: 'record' as TaskKind, title: '直播录制', icon: VideoCamera, color: Constants.Theme.LIVES, emptyText: '暂无录制任务', tasks: recordTasks.value },
-  { kind: 'download' as TaskKind, title: '回放下载', icon: Download, color: Constants.Theme.DOWNLOADS, emptyText: '暂无下载任务', tasks: downloadTasks.value },
+  { kind: 'record' as TaskKind, title: '直播录制', icon: VideoCamera, color: 'var(--color-lives)', emptyText: '暂无录制任务', tasks: recordTasks.value },
+  { kind: 'download' as TaskKind, title: '回放下载', icon: Download, color: 'var(--color-downloads)', emptyText: '暂无下载任务', tasks: downloadTasks.value },
 ])
 </script>
 

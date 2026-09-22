@@ -43,15 +43,15 @@ const { recordTasks, downloadTasks } = useTasksStore()
 // Dock「下载」角标：正在下载中的任务数量
 const runningTaskCount = computed(() => downloadTasks.value.filter(task => task.status === 'running').length + recordTasks.value.filter(task => task.status === 'running').length)
 
-// 底部 Dock 菜单项（语义色统一取自 Constants.Theme；每项专属色用于激活/悬浮的图标渐变）。
+// 底部 Dock 菜单项（语义色引用 app.scss 的 --color-* 变量）。
 // index 就是路由 path（Constants.Menu 的值），同时充当激活态匹配标识
 const dockItems = computed(() => [
-  { index: Constants.Menu.LIVES, label: '直播', icon: VideoCamera, color: Constants.Theme.LIVES },
-  { index: Constants.Menu.SHOWS, label: '公演', icon: Microphone, color: Constants.Theme.SHOWS },
-  { index: Constants.Menu.ALBUMS, label: '专辑', icon: Headset, color: Constants.Theme.ALBUMS },
-  { index: Constants.Menu.MEMBERS, label: '成员', icon: User, color: Constants.Theme.MEMBERS },
-  { index: Constants.Menu.DOWNLOADS, label: '下载', icon: Download, color: Constants.Theme.DOWNLOADS, badge: runningTaskCount.value },
-  { index: Constants.Menu.SETTING, label: '设置', icon: Setting, color: Constants.Theme.SETTING },
+  { index: Constants.Menu.LIVES, label: '直播', icon: VideoCamera, color: 'var(--color-lives)' },
+  { index: Constants.Menu.SHOWS, label: '公演', icon: Microphone, color: 'var(--color-shows)' },
+  { index: Constants.Menu.ALBUMS, label: '专辑', icon: Headset, color: 'var(--color-albums)' },
+  { index: Constants.Menu.MEMBERS, label: '成员', icon: User, color: 'var(--color-members)' },
+  { index: Constants.Menu.DOWNLOADS, label: '下载', icon: Download, color: 'var(--color-downloads)', badge: runningTaskCount.value },
+  { index: Constants.Menu.SETTING, label: '设置', icon: Setting, color: 'var(--color-setting)' },
 ])
 
 /** 导航 path 必须带前导斜杠，确保 vue-router 按绝对路径解析 */

@@ -24,14 +24,19 @@ describe('constants.Menu 与路由表', () => {
   })
 })
 
-describe('constants.Theme', () => {
-  it('覆盖每个 Menu 页面（额外语义色如 FOLLOW 不受菜单键约束）', () => {
-    const menuKeys = Object.keys(Constants.Menu)
-    expect(menuKeys.every(key => Object.hasOwn(Constants.Theme, key))).toBe(true)
+describe('app.scss 语义主题色', () => {
+  const source = readFileSync(new URL('../src/renderer/src/assets/css/app.scss', import.meta.url), 'utf-8')
+  const matches = [...source.matchAll(/--color-([a-z]+):\s*(#[0-9a-f]{6})\b/gi)]
+  const themeColors = new Map(matches.map(match => [match[1].toLowerCase(), match[2]]))
+
+  it('覆盖每个 Menu 页面和 FOLLOW 语义色，且键不重复', () => {
+    const expectedKeys = [...Object.keys(Constants.Menu).map(key => key.toLowerCase()), 'follow'].sort()
+    expect(themeColors.size).toBe(matches.length)
+    expect([...themeColors.keys()].sort()).toEqual(expectedKeys)
   })
 
   it('值都是六位十六进制色（Dock / 任务分组 / 设置行共用同一份）', () => {
-    for (const color of Object.values(Constants.Theme))
+    for (const color of themeColors.values())
       expect(color).toMatch(/^#[0-9a-f]{6}$/i)
   })
 })

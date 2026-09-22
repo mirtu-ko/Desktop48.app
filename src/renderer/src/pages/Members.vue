@@ -26,7 +26,7 @@ const GROUP_TAB_KEYS = ['10', '12', '11', '14', '21']
 
 const MEMBER_TABS: Array<{ label: string, key: string, color: string }> = [
   ...GROUP_TAB_KEYS.map(key => Constants.GroupTabs.find(tab => tab.key === key) ?? { label: key, key, color: '' }),
-  { label: '成员库', key: LIBRARY_KEY, color: Constants.Theme.MEMBERS },
+  { label: '成员库', key: LIBRARY_KEY, color: 'var(--color-members)' },
 ]
 
 const activeKey = ref('10')
@@ -484,7 +484,7 @@ function badgeSrc(section: MemberSection) {
 
     /* 队色皇冠：沿用 avatar-wrap 注入的 --avatar-accent；无队色回退金色 */
     .media-icon {
-      color: var(--avatar-accent, #ffc53d);
+      color: var(--avatar-accent, var(--color-follow));
       filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
     }
 
@@ -501,7 +501,7 @@ function badgeSrc(section: MemberSection) {
       line-height: 1.3;
       text-align: center;
       color: #fff;
-      text-shadow: 0 0 2px color-mix(in srgb, var(--avatar-accent, #ffc53d) 70%, transparent);
+      text-shadow: 0 0 2px color-mix(in srgb, var(--avatar-accent, var(--color-follow)) 70%, transparent);
     }
   }
 
