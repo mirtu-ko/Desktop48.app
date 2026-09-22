@@ -25,8 +25,9 @@ describe('constants.Menu 与路由表', () => {
 })
 
 describe('constants.Theme', () => {
-  it('键与 Menu 完全对齐（每个页面都有主题色，也没有多余项）', () => {
-    expect(Object.keys(Constants.Theme).sort()).toEqual(Object.keys(Constants.Menu).sort())
+  it('覆盖每个 Menu 页面（额外语义色如 FOLLOW 不受菜单键约束）', () => {
+    const menuKeys = Object.keys(Constants.Menu)
+    expect(menuKeys.every(key => Object.hasOwn(Constants.Theme, key))).toBe(true)
   })
 
   it('值都是六位十六进制色（Dock / 任务分组 / 设置行共用同一份）', () => {
