@@ -46,7 +46,7 @@ jobs:
           cache: npm # 缓存 npm 下载目录（不含 node_modules），key 由 package-lock.json 的 hash 决定
 
       - name: Install Dependencies
-        run: npm ci --legacy-peer-deps # 当前依赖树包含 vite/electron-vite 的 peer 冲突，发布流程按本地安装方式忽略 peer 校验
+        run: npm ci
 
       # 构建并发布
       # 这里的 GH_TOKEN 是 GitHub 自动生成的，无需手动设置

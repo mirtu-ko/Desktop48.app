@@ -8,7 +8,7 @@ import { useMemberDetailDrawer } from '@renderer/composables/use-member-detail-d
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
 import Apis from '@renderer/services/apis'
 import useFloatPlayersStore from '@renderer/stores/float-players'
-import { useFollowedMembersStore } from '@renderer/stores/followed-members'
+import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { useMemberTreeStore } from '@renderer/stores/member-tree'
 import Constants from '@renderer/utils/constants'
 import { ElMessage } from 'element-plus'

@@ -30,7 +30,7 @@ export function usePagedLiveList<T extends LiveListItem = LiveListItem>({
   const blockedMemberIds = ref<number[]>([])
   async function updateBlockedMemberIds() {
     // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts
-    const blockedMembers = await window.mainAPI.getBlockedMembers()
+    const blockedMembers = await window.mainAPI.getMemberFlags('blocked')
     blockedMemberIds.value = blockedMembers.map(member => member.userId)
   }
 

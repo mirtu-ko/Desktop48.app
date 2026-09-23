@@ -5,8 +5,7 @@
  * 状态取点击前的快照，避免被自己的写入影响；官网独有的补充成员没有 userId，直接忽略。
  */
 import type { MemberDetail } from '@renderer/utils/member-merge'
-import { useBlockedMembersStore } from '@renderer/stores/blocked-members'
-import { useFollowedMembersStore } from '@renderer/stores/followed-members'
+import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 
 export function useMemberActions() {
   const { isFollowed, toggleFollow, unfollowMember } = useFollowedMembersStore()

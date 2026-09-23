@@ -1,4 +1,5 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
+import type { MemberFlagKind } from '../common/member-flags'
 import type {
   AllMemberItem,
   DomainInfoItem,
@@ -18,9 +19,9 @@ import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { LowSync } from 'lowdb'
 import { CONFIG_DEFAULTS } from '../common/app-config'
+import { assertMemberFlagKind } from '../common/member-flags'
 import data from './data'
-import { addBlockedMemberId, isBlockedId, removeBlockedId, resolveBlockedMembers } from './domain/blocked-members'
-import { addFollowedMemberId, isFollowedId, removeFollowedId, resolveFollowedMembers } from './domain/followed-members'
+import { addMemberFlagId, removeMemberFlagId, resolveMemberFlags } from './domain/member-flags'
 import { buildMemberTree, teamColorOf } from './domain/member-tree'
 import { log } from './logger'
 import { SafeJSONFileSync } from './safe-json-file-sync'
@@ -58,7 +59,7 @@ export interface DatabaseShape {
   allmembers?: AllMemberItem[]
   /**
    * 已屏蔽成员的 userId 列表（旧库可能残留 hiddenMemberIds，init() 时迁移）。
-   * 宽容 number|string：旧库存过字符串形式的 id（blocked-members 的纯函数按此设计）
+   * 宽容 number|string：旧库存过字符串形式的 id（member-flags 的纯函数按此设计）
    */
   blockedMemberIds?: Array<number | string>
   /** 已关注成员的 userId 列表（宽容 number|string，与 blockedMemberIds 同款设计） */
@@ -71,11 +72,11 @@ export interface DatabaseShape {
 }
 
 /**
- * lowdb 数据库门面：负责原子读写、config CRUD 与成员/屏蔽名单查询。
+ * lowdb 数据库门面：负责原子读写、config CRUD 与成员标记名单查询。
  *
  * 职责边界：
  * - 建树逻辑在 `domain/member-tree.ts`（纯函数）
- * - 屏蔽名单的匹配/过滤在 `domain/blocked-members.ts`（纯函数），本类只管落库
+ * - 屏蔽 / 关注名单的匹配与过滤在 `domain/member-flags.ts`（纯函数），本类只管落库
  * - IPC 注册在 `ipc/register-database-ipc.ts`
  *
  * 模块导入无副作用：单例懒创建（首次 instance() 时构造），init() 由 app.ts 显式调用。
@@ -198,16 +199,6 @@ class Database {
     }
   }
 
-  public getBlockedMembers() {
-    // 确保 blockedMemberIds 存在且为数组
-    if (!this.db.blockedMemberIds) {
-      this.db.blockedMemberIds = []
-      this.lowdb.write()
-    }
-    return resolveBlockedMembers(this.db.blockedMemberIds, this.db.starInfo ?? [])
-  }
-
-  /** 读取 h5.48.cn 的 allmembers 成员名单（同步成员数据库时落库，见 apis.syncInfo）+ 兼职成员档案 */
   public getAllMembers() {
     return {
       allmembers: this.db.allmembers ?? [],
@@ -215,63 +206,49 @@ class Database {
     }
   }
 
-  public setBlockedMembers(ids: number[]) {
-    this.db.blockedMemberIds = ids
-    this.lowdb.write()
-  }
-
-  public addBlockedMember(userId: number) {
-    const changed = addBlockedMemberId(this.db.blockedMemberIds, userId)
-    if (changed) {
-      this.db.blockedMemberIds = changed
+  /** 屏蔽 / 关注共用的名单字段；持久化键保持旧格式，避免迁移已有 database.json */
+  private memberFlagIds(kind: MemberFlagKind): Array<number | string> {
+    assertMemberFlagKind(kind)
+    const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
+    if (!Array.isArray(this.db[key])) {
+      this.db[key] = []
       this.lowdb.write()
     }
+    return this.db[key] || []
   }
 
-  public removeBlockedMember(userId: number) {
-    this.db.blockedMemberIds = removeBlockedId(this.db.blockedMemberIds || [], userId)
-    this.lowdb.write()
-  }
-
-  /** 名单判重的纯函数封装（供内部与其他模块复用） */
-  public isBlocked(userId: number) {
-    return isBlockedId(this.db.blockedMemberIds || [], userId)
-  }
-
-  public getFollowedMembers() {
-    // 确保 followedMemberIds 存在且为数组
-    if (!this.db.followedMemberIds) {
-      this.db.followedMemberIds = []
-      this.lowdb.write()
-    }
-    // teamColor 纯派生：原始 starInfo 不带颜色，与 getMemberInfo 同款查 teamInfo 补上
-    return resolveFollowedMembers(this.db.followedMemberIds, this.db.starInfo ?? []).map(member => ({
+  public getMemberFlags(kind: MemberFlagKind) {
+    const ids = this.memberFlagIds(kind)
+    return resolveMemberFlags<StarInfoItem>(ids, this.db.starInfo ?? []).map(member => ({
       ...member,
+      userId: Number(member.userId),
+      realName: member.realName || '',
       teamColor: teamColorOf(this.db.teamInfo, member.teamId) || member.teamColor || '',
     }))
   }
 
-  public setFollowedMembers(ids: number[]) {
-    this.db.followedMemberIds = ids
+  public setMemberFlags(kind: MemberFlagKind, ids: Array<number | string>) {
+    assertMemberFlagKind(kind)
+    const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
+    this.db[key] = ids
     this.lowdb.write()
   }
 
-  public addFollowedMember(userId: number) {
-    const changed = addFollowedMemberId(this.db.followedMemberIds, userId)
+  public addMemberFlag(kind: MemberFlagKind, userId: number) {
+    assertMemberFlagKind(kind)
+    const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
+    const changed = addMemberFlagId(this.db[key], userId)
     if (changed) {
-      this.db.followedMemberIds = changed
+      this.db[key] = changed
       this.lowdb.write()
     }
   }
 
-  public removeFollowedMember(userId: number) {
-    this.db.followedMemberIds = removeFollowedId(this.db.followedMemberIds || [], userId)
+  public removeMemberFlag(kind: MemberFlagKind, userId: number) {
+    assertMemberFlagKind(kind)
+    const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
+    this.db[key] = removeMemberFlagId(this.db[key], userId)
     this.lowdb.write()
-  }
-
-  /** 关注名单判重的纯函数封装（供内部与其他模块复用） */
-  public isFollowed(userId: number) {
-    return isFollowedId(this.db.followedMemberIds || [], userId)
   }
 
   public hasMembers() {

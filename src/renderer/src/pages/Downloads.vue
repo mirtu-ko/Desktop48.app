@@ -2,16 +2,11 @@
 import type { TaskKind } from '@renderer/stores/tasks'
 import { Check, Download, Loading, VideoCamera } from '@element-plus/icons-vue'
 import useTasksStore from '@renderer/stores/tasks'
-import { computed, onMounted } from 'vue'
+import { computed } from 'vue'
 
 // 任务状态由 useTasksStore 这个模块级单例持有：本页卸载后任务照常运行，
 // 从悬浮迷你窗等任意入口发起的任务也不会因为本页未挂载而丢失
-const { downloadTasks, recordTasks, removeTask, restoreTasks, stopTaskByLiveId, openSaveDirectory } = useTasksStore()
-
-onMounted(() => {
-  restoreTasks('download')
-  restoreTasks('record')
-})
+const { downloadTasks, recordTasks, removeTask, stopTaskByLiveId, openSaveDirectory } = useTasksStore()
 
 // 分区展示配置：图标与主题色引用 app.scss 的 --color-* 变量。
 const taskGroups = computed(() => [

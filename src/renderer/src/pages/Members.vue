@@ -8,8 +8,8 @@ import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
 import { useMemberActions } from '@renderer/composables/use-member-actions'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
-import { useBlockedMembersStore } from '@renderer/stores/blocked-members'
-import { useFollowedMembersStore } from '@renderer/stores/followed-members'
+import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
+
 import { useMemberTreeStore } from '@renderer/stores/member-tree'
 import Constants from '@renderer/utils/constants'
 import { buildAdjuncts, mergeMembers } from '@renderer/utils/member-merge'
@@ -39,10 +39,10 @@ const loading = ref(true)
 /** 当前查看详情的成员（null = 抽屉关闭） */
 const selectedMember = ref<MemberDetail | null>(null)
 
-/** 屏蔽名单：模块级共享状态，机制见 stores/blocked-members.ts */
+/** 屏蔽名单：模块级共享状态，机制见 stores/member-flags.ts */
 const { refreshBlockedMembers } = useBlockedMembersStore()
 
-/** 关注名单：模块级共享状态，机制见 stores/followed-members.ts（直播列表页共用同一份） */
+/** 关注名单：模块级共享状态，机制见 stores/member-flags.ts（直播列表页共用同一份） */
 const { refreshFollowedMembers } = useFollowedMembersStore()
 
 /** 关注 / 屏蔽的互斥规则集中在 use-member-actions.ts（本页卡片与三处详情抽屉共用同一份） */

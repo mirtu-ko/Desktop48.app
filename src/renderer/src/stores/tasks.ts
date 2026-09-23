@@ -220,7 +220,6 @@ export function useTasksStore() {
     recordTasks,
     handleTask,
     removeTask,
-    restoreTasks,
     isTaskRunning,
     stopTaskByLiveId,
     openSaveDirectory,

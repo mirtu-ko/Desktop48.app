@@ -9,6 +9,7 @@
  * 成员树见 main/domain/member-tree.ts（buildMemberTree）。
  */
 import type { AppConfig, ConfigKey } from '../common/app-config'
+import type { MemberFlag, MemberFlagKind } from '../common/member-flags'
 import type { AllMemberItem, MemberDataContent, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
 
@@ -39,23 +40,8 @@ export interface NetRequestOptions {
 // 类型随契约一起暴露（preload/index.ts 实现侧与渲染端合并函数引用）
 export type { AllMemberItem, MemberDataContent, StarAdjunctItem }
 
-// 与 renderer composables/use-blocked-members.ts 的 BlockedMember 同构（跨进程镜像）
-export interface BlockedMember {
-  userId: number
-  realName: string
-  teamColor: string
-  [key: string]: unknown
-}
-
-// 与 renderer stores/followed-members.ts 的 FollowedMember 同构（跨进程镜像）
-export interface FollowedMember {
-  userId: number
-  realName: string
-  teamColor: string
-  [key: string]: unknown
-}
-
-/** getMemberInfo 返回：成员原始字段 + 主进程派生的队伍色（teamColorOf，成员不在库时为 undefined） */
+// 类型随契约一起暴露（preload/index.ts 实现侧与渲染端引用）
+export type { MemberFlag, MemberFlagKind }
 export type MemberInfo = StarInfoItem & { teamColor: string }
 
 /**
@@ -133,14 +119,10 @@ export interface mainAPI {
   hasMembers: () => Promise<boolean>
   getMemberInfo: (userId: number) => Promise<MemberInfo | undefined>
   getMemberTree: () => Promise<MemberTreeGroupPayload[]>
-  getBlockedMembers: () => Promise<BlockedMember[]>
-  setBlockedMembers: (ids: number[]) => Promise<void>
-  addBlockedMember: (userId: number) => Promise<void>
-  removeBlockedMember: (userId: number) => Promise<void>
-  getFollowedMembers: () => Promise<FollowedMember[]>
-  setFollowedMembers: (ids: number[]) => Promise<void>
-  addFollowedMember: (userId: number) => Promise<void>
-  removeFollowedMember: (userId: number) => Promise<void>
+  getMemberFlags: (kind: MemberFlagKind) => Promise<MemberFlag[]>
+  setMemberFlags: (kind: MemberFlagKind, ids: Array<number | string>) => Promise<void>
+  addMemberFlag: (kind: MemberFlagKind, userId: number) => Promise<void>
+  removeMemberFlag: (kind: MemberFlagKind, userId: number) => Promise<void>
 
   // ===== 应用配置 =====
   // 键与值类型见 common/app-config.ts（ConfigKey / AppConfig）；init() 已补齐默认值，

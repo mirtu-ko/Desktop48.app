@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Connection, Cpu, Document, Folder, Hide } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
-import { useBlockedMembersStore } from '@renderer/stores/blocked-members'
+import { useBlockedMembersStore } from '@renderer/stores/member-flags'
 import Constants from '@renderer/utils/constants'
 import { ElMessageBox } from 'element-plus'
 import { onMounted } from 'vue'
@@ -22,7 +22,7 @@ const {
   setUserAgent,
 } = useAppConfig()
 
-/** 屏蔽名单：模块级共享状态，机制见 use-blocked-members.ts */
+/** 屏蔽名单：模块级共享状态，机制见 stores/member-flags.ts */
 const { blockedMembers, refreshBlockedMembers, unblockMember, clearBlockedMembers } = useBlockedMembersStore()
 
 onMounted(async () => {

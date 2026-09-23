@@ -6,6 +6,7 @@
  * 通道清单与渲染端 preload/index.ts 的 mainAPI 契约一一对应，两边改动请同步。
  */
 import type { ConfigKey } from '../../common/app-config'
+import type { MemberFlagKind } from '../../common/member-flags'
 import { Database } from '../database'
 import { handleTraced } from './trace'
 
@@ -15,15 +16,10 @@ export function registerDatabaseIPC(): void {
   handleTraced('saveMemberData', async (_event, content) => db().saveMemberData(content))
   handleTraced('getAllMembers', async () => db().getAllMembers())
   handleTraced('getMemberInfo', async (_event, userId) => db().getMemberInfo(userId))
-  handleTraced('getBlockedMembers', async () => db().getBlockedMembers())
-  handleTraced('setBlockedMembers', async (_event, ids) => db().setBlockedMembers(ids))
-  handleTraced('addBlockedMember', async (_event, userId) => db().addBlockedMember(userId))
-  handleTraced('removeBlockedMember', async (_event, userId) => db().removeBlockedMember(userId))
-  handleTraced('getFollowedMembers', async () => db().getFollowedMembers())
-  handleTraced('setFollowedMembers', async (_event, ids) => db().setFollowedMembers(ids))
-  handleTraced('addFollowedMember', async (_event, userId) => db().addFollowedMember(userId))
-  handleTraced('removeFollowedMember', async (_event, userId) => db().removeFollowedMember(userId))
-  handleTraced('hasMembers', async () => db().hasMembers())
+  handleTraced('getMemberFlags', async (_event, kind: MemberFlagKind) => db().getMemberFlags(kind))
+  handleTraced('setMemberFlags', async (_event, kind: MemberFlagKind, ids: Array<number | string>) => db().setMemberFlags(kind, ids))
+  handleTraced('addMemberFlag', async (_event, kind: MemberFlagKind, userId: number) => db().addMemberFlag(kind, userId))
+  handleTraced('removeMemberFlag', async (_event, kind: MemberFlagKind, userId: number) => db().removeMemberFlag(kind, userId))
   handleTraced('getConfig', async (_event, key: ConfigKey) => db().getConfig(key))
   handleTraced('setConfig', async (_event, key: ConfigKey, value: string) => db().setConfig(key, value))
   // memberTree 是内存派生数据（不落盘），直接返回内存字段

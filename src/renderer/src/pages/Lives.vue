@@ -11,7 +11,7 @@ import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-page
 import Apis from '@renderer/services/apis'
 import EventBus from '@renderer/services/event-bus'
 import useFloatPlayersStore from '@renderer/stores/float-players'
-import { useFollowedMembersStore } from '@renderer/stores/followed-members'
+import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { debugLog } from '@renderer/utils/debug'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'

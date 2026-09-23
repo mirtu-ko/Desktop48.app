@@ -14,10 +14,10 @@ function blocked(userId: number) {
 }
 
 /** preload 暴露的 mainAPI 替身（Node 环境没有 window） */
-function stubMainApi(api: { getBlockedMembers?: () => Promise<any[]>, getMemberInfo?: (_userId: number) => Promise<any> }) {
+function stubMainApi(api: { getMemberFlags?: (_kind: string) => Promise<any[]>, getMemberInfo?: (_userId: number) => Promise<any> }) {
   vi.stubGlobal('window', {
     mainAPI: {
-      getBlockedMembers: api.getBlockedMembers ?? (async () => []),
+      getMemberFlags: api.getMemberFlags ?? (async () => []),
       getMemberInfo: api.getMemberInfo ?? (async () => undefined),
     },
   })
@@ -58,7 +58,7 @@ describe('usePagedLiveList（{ next, liveList } 响应适配）', () => {
 
 describe('usePagedLiveList 屏蔽成员过滤', () => {
   it('默认过滤掉被屏蔽的成员（userId 来自接口的字符串）', async () => {
-    stubMainApi({ getBlockedMembers: async () => [blocked(10)] })
+    stubMainApi({ getMemberFlags: async () => [blocked(10)] })
     const list = usePagedLiveList({
       loadPage: () => ({ next: '0', liveList: [liveItem('a', '10'), liveItem('b', '11')] }),
     })
@@ -70,7 +70,7 @@ describe('usePagedLiveList 屏蔽成员过滤', () => {
 
   it('取消屏蔽后同一场直播重新出现（每页都重拉名单，不吃缓存）', async () => {
     let blockedIds: number[] = [10]
-    stubMainApi({ getBlockedMembers: async () => blockedIds.map(blocked) })
+    stubMainApi({ getMemberFlags: async () => blockedIds.map(blocked) })
 
     const pages = [
       { next: '2', liveList: [liveItem('a', '10')] },
@@ -88,8 +88,8 @@ describe('usePagedLiveList 屏蔽成员过滤', () => {
   })
 
   it('filterBlocked=false 时完全不拉屏蔽名单（成员页等非直播场景）', async () => {
-    const getBlockedMembers = vi.fn(async () => [blocked(10)])
-    stubMainApi({ getBlockedMembers })
+    const getMemberFlags = vi.fn(async () => [blocked(10)])
+    stubMainApi({ getMemberFlags })
     const list = usePagedLiveList({
       filterBlocked: false,
       loadPage: () => ({ next: '0', liveList: [liveItem('a', '10')] }),
@@ -97,7 +97,7 @@ describe('usePagedLiveList 屏蔽成员过滤', () => {
 
     await list.getList()
 
-    expect(getBlockedMembers).not.toHaveBeenCalled()
+    expect(getMemberFlags).not.toHaveBeenCalled()
     expect(list.list.value.map(i => i.liveId)).toEqual(['a'])
   })
 })

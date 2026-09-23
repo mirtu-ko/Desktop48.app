@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { electronAPI as ElectronAPI, FfmpegDownloadProgress, mainAPI, MemberDataContent, NetRequestOptions } from './ipc-contract'
+import type { electronAPI as ElectronAPI, FfmpegDownloadProgress, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 // 仅暴露渲染进程实际需要的最小 API
@@ -40,14 +40,10 @@ const api = {
   hasMembers: () => ipcRenderer.invoke('hasMembers'),
   getMemberInfo: (userId: number) => ipcRenderer.invoke('getMemberInfo', userId),
   getMemberTree: () => ipcRenderer.invoke('getMemberTree'),
-  getBlockedMembers: () => ipcRenderer.invoke('getBlockedMembers'),
-  setBlockedMembers: (ids: number[]) => ipcRenderer.invoke('setBlockedMembers', ids),
-  addBlockedMember: (userId: number) => ipcRenderer.invoke('addBlockedMember', userId),
-  removeBlockedMember: (userId: number) => ipcRenderer.invoke('removeBlockedMember', userId),
-  getFollowedMembers: () => ipcRenderer.invoke('getFollowedMembers'),
-  setFollowedMembers: (ids: number[]) => ipcRenderer.invoke('setFollowedMembers', ids),
-  addFollowedMember: (userId: number) => ipcRenderer.invoke('addFollowedMember', userId),
-  removeFollowedMember: (userId: number) => ipcRenderer.invoke('removeFollowedMember', userId),
+  getMemberFlags: (kind: MemberFlagKind) => ipcRenderer.invoke('getMemberFlags', kind),
+  setMemberFlags: (kind: MemberFlagKind, ids: Array<number | string>) => ipcRenderer.invoke('setMemberFlags', kind, ids),
+  addMemberFlag: (kind: MemberFlagKind, userId: number) => ipcRenderer.invoke('addMemberFlag', kind, userId),
+  removeMemberFlag: (kind: MemberFlagKind, userId: number) => ipcRenderer.invoke('removeMemberFlag', kind, userId),
 
   // ===== 应用配置 =====
   // 对端：main/ipc/register-database-ipc.ts
