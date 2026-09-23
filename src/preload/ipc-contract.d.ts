@@ -1,6 +1,7 @@
 /**
  * preload IPC 契约的单一来源：
- * - `index.ts` 用 `satisfies mainAPI` 在编译期校验实现与契约一致（新增/改名通道漏改会直接 typecheck 报错）
+ * - `IpcInvokeMap` 同时约束 preload 的通用 `invokeIpc()` 与主进程的通用 `handleTraced()`
+ * - `IpcEventMap` 约束渲染层事件订阅；新增/改名通道漏改会直接 typecheck 报错
  * - 文件末尾通过 `declare global` 暴露给渲染进程的 `window.mainAPI`
  * - 分组顺序与 `index.ts` 中的实现保持一致，便于按域对照阅读
  *
@@ -103,78 +104,98 @@ export interface LiveStreamSession {
   liveId: string
 }
 
+// ===== 类型化 IPC 通道映射 =====
+
+interface InvokeSpec<Args extends readonly unknown[], Return> {
+  args: Args
+  return: Return
+}
+
+/** 通用任务通道前缀；具体通道由 `${prefix}Start|List|Remove|Progress|End|Error` 组成。 */
+export type TaskChannelPrefix = 'downloadTask' | 'recordTask'
+
+interface StaticIpcInvokeMap {
+  netRequest: InvokeSpec<[options: NetRequestOptions], string>
+  saveMemberData: InvokeSpec<[content: Partial<MemberDataContent>], { ok: true }>
+  getAllMembers: InvokeSpec<[], AllMembersPayload>
+  hasMembers: InvokeSpec<[], boolean>
+  getMemberInfo: InvokeSpec<[userId: number], MemberInfo | undefined>
+  getMemberTree: InvokeSpec<[], MemberTreeGroupPayload[]>
+  getMemberFlags: InvokeSpec<[kind: MemberFlagKind], MemberFlag[]>
+  setMemberFlags: InvokeSpec<[kind: MemberFlagKind, ids: Array<number | string>], void>
+  addMemberFlag: InvokeSpec<[kind: MemberFlagKind, userId: number], void>
+  removeMemberFlag: InvokeSpec<[kind: MemberFlagKind, userId: number], void>
+  getConfig: InvokeSpec<[key: ConfigKey], string>
+  setConfig: InvokeSpec<[key: ConfigKey, value: string], void>
+  openPath: InvokeSpec<[filePath: string], void>
+  getDesktopPath: InvokeSpec<[], string>
+  selectDirectory: InvokeSpec<[], string | null>
+  pathJoin: InvokeSpec<[...paths: string[]], string>
+  checkFfmpegBinaries: InvokeSpec<[dir: string], boolean>
+  downloadFfmpeg: InvokeSpec<[], string>
+  createLiveStream: InvokeSpec<[rtmpUrl: string, liveId: string], LiveStreamSession>
+  stopLiveStream: InvokeSpec<[liveId: string], void>
+  windowMinimize: InvokeSpec<[], void>
+  windowToggleMaximize: InvokeSpec<[], void>
+  windowClose: InvokeSpec<[], void>
+  windowIsMaximized: InvokeSpec<[], boolean>
+  preventSleep: InvokeSpec<[], number>
+  allowSleep: InvokeSpec<[id: number], void>
+}
+
+type TaskInvokeMap = {
+  [K in TaskChannelPrefix as `${K}Start`]: InvokeSpec<[url: string, filename: string, liveId: string], string>
+} & {
+  [K in TaskChannelPrefix as `${K}List`]: InvokeSpec<[], TaskSnapshot[]>
+} & {
+  [K in TaskChannelPrefix as `${K}Remove`]: InvokeSpec<[liveId: string], void>
+}
+
+export type IpcInvokeMap = StaticIpcInvokeMap & TaskInvokeMap
+export type IpcInvokeChannel = keyof IpcInvokeMap
+export type IpcInvokeArgs<Channel extends IpcInvokeChannel> = IpcInvokeMap[Channel]['args']
+export type IpcInvokeReturn<Channel extends IpcInvokeChannel> = IpcInvokeMap[Channel]['return']
+
+/** 渲染层 invoke API：由通道映射派生，避免在 mainAPI 中重复声明参数与返回值。 */
+export type IpcInvokeApi = {
+  [Channel in IpcInvokeChannel]: (...args: IpcInvokeArgs<Channel>) => Promise<IpcInvokeReturn<Channel>>
+}
+
+type TaskEventMap = {
+  [K in TaskChannelPrefix as `${K}Progress`]: [liveId: string, time: string]
+} & {
+  [K in TaskChannelPrefix as `${K}End`]: [liveId: string, filePath: string]
+} & {
+  [K in TaskChannelPrefix as `${K}Error`]: [liveId: string, error: string]
+}
+
+export type IpcEventMap = {
+  ffmpegDownloadProgress: [progress: FfmpegDownloadProgress]
+  windowOnMaximizeChange: [isMaximized: boolean]
+} & TaskEventMap
+
+export type IpcEventChannel = keyof IpcEventMap
+export type IpcEventArgs<Channel extends IpcEventChannel> = IpcEventMap[Channel]
+
 // ===== 主进程 API 契约 =====
 
-export interface mainAPI {
-  // ===== 运行环境 =====
-  getPlatform: () => string
+/** 事件通道与渲染层订阅 API 同源推导；ffmpeg 进度因方法名带 on 前缀单独声明。 */
+type IpcEventSubscriptionApi = {
+  [Channel in Exclude<IpcEventChannel, 'ffmpegDownloadProgress'>]: (
+    callback: (...args: IpcEventArgs<Channel>) => void,
+  ) => () => void
+}
 
-  // ===== 网络请求 =====
-  // 返回 utf-8 响应体字符串，由渲染端自行解析 JSON
-  netRequest: (options: NetRequestOptions) => Promise<string>
-
-  // ===== 成员与屏蔽名单 =====
-  saveMemberData: (content: Partial<MemberDataContent>) => Promise<{ ok: true }>
-  getAllMembers: () => Promise<AllMembersPayload>
-  hasMembers: () => Promise<boolean>
-  getMemberInfo: (userId: number) => Promise<MemberInfo | undefined>
-  getMemberTree: () => Promise<MemberTreeGroupPayload[]>
-  getMemberFlags: (kind: MemberFlagKind) => Promise<MemberFlag[]>
-  setMemberFlags: (kind: MemberFlagKind, ids: Array<number | string>) => Promise<void>
-  addMemberFlag: (kind: MemberFlagKind, userId: number) => Promise<void>
-  removeMemberFlag: (kind: MemberFlagKind, userId: number) => Promise<void>
-
-  // ===== 应用配置 =====
-  // 键与值类型见 common/app-config.ts（ConfigKey / AppConfig）；init() 已补齐默认值，
-  // getConfig 恒返回生效值，无需传 defaultValue
+export type mainAPI = Omit<IpcInvokeApi, 'getConfig' | 'setConfig'> & IpcEventSubscriptionApi & {
+  // ===== 需要保留键关联类型的配置 API =====
   getConfig: <K extends ConfigKey>(key: K) => Promise<AppConfig[K]>
   setConfig: <K extends ConfigKey>(key: K, value: AppConfig[K]) => Promise<void>
 
-  // ===== 文件系统与目录 =====
-  openPath: (filePath: string) => Promise<void>
-  getDesktopPath: () => Promise<string>
-  selectDirectory: () => Promise<string | null>
-  pathJoin: (...paths: string[]) => Promise<string>
-
-  // ===== FFmpeg 环境 =====
-  checkFfmpegBinaries: (dir: string) => Promise<boolean>
-  downloadFfmpeg: () => Promise<string>
+  // ===== 非 invoke / 非标准命名的渲染层 API =====
+  getPlatform: () => string
   onFfmpegDownloadProgress: (callback: (progress: FfmpegDownloadProgress) => void) => () => void
-
-  // ===== 直播播放 =====
-  // createLiveStream 只登记会话，FFmpeg 由 main/http-server.ts 在播放器实际拉流时才 spawn
-  createLiveStream: (rtmpUrl: string, liveId: string) => Promise<LiveStreamSession>
-  stopLiveStream: (liveId: string) => Promise<void>
-
-  // ===== 下载任务 =====
-  // 对端：main/ipc/register-task-ipc.ts；Start 返回落盘文件路径
-  downloadTaskStart: (url: string, filename: string, liveId: string) => Promise<string>
-  downloadTaskProgress: (callback: (liveId: string, time: string) => void) => () => void
-  downloadTaskEnd: (callback: (liveId: string, filePath: string) => void) => () => void
-  downloadTaskError: (callback: (liveId: string, error: string) => void) => () => void
   downloadTaskStop: (liveId: string) => void
-  downloadTaskList: () => Promise<TaskSnapshot[]>
-  downloadTaskRemove: (liveId: string) => Promise<void>
-
-  // ===== 录制任务 =====
-  // 通道与下载同构
-  recordTaskStart: (url: string, filename: string, liveId: string) => Promise<string>
-  recordTaskProgress: (callback: (liveId: string, time: string) => void) => () => void
-  recordTaskEnd: (callback: (liveId: string, filePath: string) => void) => () => void
-  recordTaskError: (callback: (liveId: string, error: string) => void) => () => void
   recordTaskStop: (liveId: string) => void
-  recordTaskList: () => Promise<TaskSnapshot[]>
-  recordTaskRemove: (liveId: string) => Promise<void>
-
-  // ===== 窗口与电源 =====
-  windowMinimize: () => Promise<void>
-  windowToggleMaximize: () => Promise<void>
-  windowClose: () => Promise<void>
-  windowIsMaximized: () => Promise<boolean>
-  windowOnMaximizeChange: (callback: (isMaximized: boolean) => void) => () => void
-  // preventSleep 返回 powerSaveBlocker id
-  preventSleep: () => Promise<number>
-  allowSleep: (id: number) => Promise<void>
 }
 
 // 渲染进程全局 Window 声明：类型契约仍以本文件为唯一来源，

@@ -6,6 +6,7 @@ import icon from '../../resources/icon.png?asset'
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
 import { registerAllIPC } from './ipc'
+import { sendIpc } from './ipc/send'
 import { log } from './logger'
 import { cleanupStreamSessions } from './stream'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
@@ -67,10 +68,7 @@ function createWindow(): void {
 
 // 监听窗口最大化 / 还原状态变化并通知渲染进程
 function wireWindowEvents(win: BrowserWindow): void {
-  const send = () => {
-    if (!win.isDestroyed())
-      win.webContents.send('windowOnMaximizeChange', win.isMaximized())
-  }
+  const send = () => sendIpc(win.webContents, 'windowOnMaximizeChange', win.isMaximized())
   win.on('maximize', send)
   win.on('unmaximize', send)
 }

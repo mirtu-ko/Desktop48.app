@@ -9,10 +9,14 @@
  * 仅覆盖 invoke（请求-响应）通道；send/once 类单向通知由各业务模块自行记日志。
  */
 import type { IpcMainInvokeEvent } from 'electron'
+import type { IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn } from '../../preload/ipc-contract'
 import { ipcMain } from 'electron'
 import { debug, isVerboseEnabled } from '../logger'
 
-type InvokeHandler = (event: IpcMainInvokeEvent, ...args: any[]) => any
+type InvokeHandler<Channel extends IpcInvokeChannel> = (
+  event: IpcMainInvokeEvent,
+  ...args: IpcInvokeArgs<Channel>
+) => IpcInvokeReturn<Channel> | Promise<IpcInvokeReturn<Channel>>
 
 const MAX_ARG_PREVIEW = 300
 
@@ -37,7 +41,7 @@ function summarizeArgs(args: unknown[]): string {
     .join(', ')
 }
 
-export function handleTraced(channel: string, handler: InvokeHandler): void {
+export function handleTraced<Channel extends IpcInvokeChannel>(channel: Channel, handler: InvokeHandler<Channel>): void {
   if (!isVerboseEnabled()) {
     ipcMain.handle(channel, handler)
     return

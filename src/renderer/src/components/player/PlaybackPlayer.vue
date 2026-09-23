@@ -635,7 +635,7 @@ onUnmounted(() => {
 /* 作者名 / 正文：气泡与「全部」面板共用同一套行内排版 */
 .danmaku-author {
   flex-shrink: 0;
-  max-width: 40%;
+  max-width: calc(100% - 96px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -643,7 +643,9 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
+/* 正文可压缩可换行：名字拿不下的宽度由正文让出，长弹幕靠换行而非截断姓名收场 */
 .danmaku-text {
+  min-width: 0;
   overflow-wrap: break-word;
 }
 
@@ -749,6 +751,11 @@ onUnmounted(() => {
 
 .danmaku-all__row:hover {
   background: rgba(255, 255, 255, 0.06);
+}
+
+/* 面板行宽固定且宽裕，名字可用额度比实时气泡更大（仍留出正文最小可读宽度） */
+.danmaku-all__row .danmaku-author {
+  max-width: calc(100% - 140px);
 }
 
 /* 发送时间：margin-left:auto 收在行尾，flex-shrink:0 防止被压缩；等宽数字让右边界不抖动 */

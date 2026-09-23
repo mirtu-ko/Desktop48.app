@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createGunzip } from 'node:zlib'
 import { app, net } from 'electron'
+import { sendIpc } from '../ipc/send'
 import { handleTraced } from '../ipc/trace'
 import { log, warn } from '../logger'
 
@@ -48,7 +49,6 @@ export function pickFfmpegSource(platform: string, arch: string): FfmpegDownload
 }
 
 /** 下载进度回推通道（渲染端经 preload 的 onFfmpegDownloadProgress 订阅） */
-const FFMPEG_DOWNLOAD_PROGRESS_CHANNEL = 'ffmpegDownloadProgress'
 
 /**
  * 下载落盘目录：userData/ffmpeg。安装目录受代码签名/权限约束不能作为写入目标，
@@ -165,10 +165,7 @@ async function runDownload(sender: WebContents): Promise<string> {
   }
   await fs.promises.mkdir(dir, { recursive: true })
 
-  const reportProgress = (p: FfmpegDownloadProgress) => {
-    if (!sender.isDestroyed())
-      sender.send(FFMPEG_DOWNLOAD_PROGRESS_CHANNEL, p)
-  }
+  const reportProgress = (p: FfmpegDownloadProgress) => sendIpc(sender, 'ffmpegDownloadProgress', p)
   const tempPath = `${targetPath}.download`
   try {
     log('[ffmpeg-download]开始下载 ffmpeg:', source.url)

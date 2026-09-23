@@ -1,9 +1,11 @@
 import type { IpcMainInvokeEvent } from 'electron'
+import type { TaskChannelPrefix } from '../../preload/ipc-contract'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ipcMain } from 'electron'
 import { isAllowedStreamUrl } from '../allowed-hosts'
 import { Database } from '../database'
+import { sendIpc } from '../ipc/send'
 import { handleTraced } from '../ipc/trace'
 import { log, warn } from '../logger'
 import { FfmpegProcess, hasFfmpegSlot, MAX_CONCURRENT_FFMPEG_TASKS, resolveFfmpegBinary } from './ffmpeg-process'
@@ -12,7 +14,7 @@ import { TaskRegistry } from './task-registry'
 
 interface FfmpegTaskConfig {
   /** IPC 通道名前缀，如 'downloadTask' / 'recordTask' */
-  channelPrefix: string
+  channelPrefix: TaskChannelPrefix
   /** 日志前缀，如 'downloadTask' / 'recordTask' */
   logTag: string
   /** ffmpeg 输出参数（位于 '-c copy' 之后、输出文件之前） */
@@ -71,10 +73,7 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
     await registry.waitForClose(liveId)
 
     // 窗口销毁后不能再用 event.sender.send，否则会抛 "Object has been destroyed"
-    const safeSend = (channel: string, ...args: unknown[]) => {
-      if (!event.sender.isDestroyed())
-        event.sender.send(channel, ...args)
-    }
+    // 窗口销毁后的事件直接由 sendIpc 忽略，业务代码无需重复判断。
     // 外部 stop：向 ffmpeg stdin 写 'q' 优雅退出（once 监听器在 close 时显式移除，
     // 避免同 liveId 多次重启导致监听器无限累积）。
     // 先于 proc 声明：onClose 回调需要引用它们做监听器清理
@@ -95,13 +94,13 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
       ffmpegArgs,
       filePath,
       handlers: {
-        onProgress: time => safeSend(`${channelPrefix}Progress`, liveId, time),
+        onProgress: time => sendIpc(event.sender, `${channelPrefix}Progress`, liveId, time),
         onStderr: message => log(`[${logTag}]ffmpeg stderr(no match):`, message.trim()),
         onError: (err) => {
           const errMsg = `[${logTag}]ffmpeg error: ${err.message}`
           registry.clearClose(liveId)
           registry.markError(liveId, errMsg)
-          safeSend(`${channelPrefix}Error`, liveId, errMsg)
+          sendIpc(event.sender, `${channelPrefix}Error`, liveId, errMsg)
         },
         onClose: (code, signal) => {
           ipcMain.removeListener(stopChannel, stopListener)
@@ -110,12 +109,12 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
           if (code === 0 || signal === 'SIGINT') {
             log(`[${logTag}]spawn ffmpeg end`, liveId, filePath)
             registry.markFinish(liveId)
-            safeSend(`${channelPrefix}End`, liveId, filePath)
+            sendIpc(event.sender, `${channelPrefix}End`, liveId, filePath)
           }
           else {
             const errMsg = `[${logTag}]ffmpeg exited with code ${code}`
             registry.markError(liveId, errMsg)
-            safeSend(`${channelPrefix}Error`, liveId, errMsg)
+            sendIpc(event.sender, `${channelPrefix}Error`, liveId, errMsg)
           }
         },
       },

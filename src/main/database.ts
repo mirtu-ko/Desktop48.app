@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { MemberFlagKind } from '../common/member-flags'
+import type { MemberFlag, MemberFlagKind } from '../common/member-flags'
 import type {
   AllMemberItem,
   DomainInfoItem,
@@ -139,7 +139,7 @@ class Database {
   }
 
   /** 保存 API 同步来的成员相关原始数据（10 个分节全量落库）；清洗/派生只发生在内存里（建树），落盘的只有原始内容 */
-  public saveMemberData(content: Partial<MemberDataContent>) {
+  public saveMemberData(content: Partial<MemberDataContent>): { ok: true } {
     log('[database.ts] save-member-data 开始写入:', content.starInfo?.length, content.teamInfo?.length, content.groupInfo?.length)
     if (content.officialInfo)
       this.db.officialInfo = content.officialInfo
@@ -180,7 +180,7 @@ class Database {
     return { ok: true }
   }
 
-  public getMemberInfo(userId: number) {
+  public getMemberInfo(userId: number): (StarInfoItem & { teamColor: string }) | undefined {
     const member = this.db.starInfo?.find(m => Number(m.userId) === Number(userId))
     if (!member)
       return member
@@ -188,7 +188,7 @@ class Database {
     // 与成员树同款规则查 teamInfo 补上；浅拷贝返回，不改写原始数据
     return {
       ...member,
-      teamColor: teamColorOf(this.db.teamInfo, member.teamId) || member.teamColor || '',
+      teamColor: teamColorOf(this.db.teamInfo, member.teamId) || (typeof member.teamColor === 'string' ? member.teamColor : ''),
     }
   }
 
@@ -210,13 +210,13 @@ class Database {
     return this.db[key] || []
   }
 
-  public getMemberFlags(kind: MemberFlagKind) {
+  public getMemberFlags(kind: MemberFlagKind): MemberFlag[] {
     const ids = this.memberFlagIds(kind)
     return resolveMemberFlags<StarInfoItem>(ids, this.db.starInfo ?? []).map(member => ({
       ...member,
       userId: Number(member.userId),
       realName: member.realName || '',
-      teamColor: teamColorOf(this.db.teamInfo, member.teamId) || member.teamColor || '',
+      teamColor: teamColorOf(this.db.teamInfo, member.teamId) || (typeof member.teamColor === 'string' ? member.teamColor : ''),
     }))
   }
 
