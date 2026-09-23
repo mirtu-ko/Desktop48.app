@@ -47,7 +47,7 @@ const coverSrc = computed(() => {
 const liveBadge = computed(() => {
   if (props.item.liveType === 1) {
     return props.item.liveMode === 1
-      ? { text: '录屏', type: 'playback' }
+      ? { text: '录屏', type: 'Screen' }
       : { text: '直播', type: 'live' }
   }
   return { text: '电台', type: 'radio' }
@@ -180,12 +180,12 @@ const liveBadge = computed(() => {
       background: var(--color-lives);
     }
 
-    &.live-badge--playback {
-      background: var(--el-color-success);
+    &.live-badge--Screen {
+      background: var(--color-shows);
     }
 
     &.live-badge--radio {
-      background: var(--color-albums);
+      background: var(--color-downloads);
     }
   }
 

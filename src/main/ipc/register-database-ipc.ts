@@ -15,6 +15,7 @@ export function registerDatabaseIPC(): void {
 
   handleTraced('saveMemberData', async (_event, content) => db().saveMemberData(content))
   handleTraced('getAllMembers', async () => db().getAllMembers())
+  handleTraced('hasMembers', async () => db().hasMembers())
   handleTraced('getMemberInfo', async (_event, userId) => db().getMemberInfo(userId))
   handleTraced('getMemberFlags', async (_event, kind: MemberFlagKind) => db().getMemberFlags(kind))
   handleTraced('setMemberFlags', async (_event, kind: MemberFlagKind, ids: Array<number | string>) => db().setMemberFlags(kind, ids))

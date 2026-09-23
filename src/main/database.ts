@@ -17,7 +17,6 @@ import type { MemberTreeGroupNode } from './domain/member-tree'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
-import { LowSync } from 'lowdb'
 import { CONFIG_DEFAULTS } from '../common/app-config'
 import { assertMemberFlagKind } from '../common/member-flags'
 import data from './data'
@@ -72,7 +71,7 @@ export interface DatabaseShape {
 }
 
 /**
- * lowdb 数据库门面：负责原子读写、config CRUD 与成员标记名单查询。
+ * JSON 数据库门面：负责原子读写、config CRUD 与成员标记名单查询。
  *
  * 职责边界：
  * - 建树逻辑在 `domain/member-tree.ts`（纯函数）
@@ -90,14 +89,12 @@ class Database {
 
   private static database: Database | null = null
 
-  private adapter: SafeJSONFileSync<DatabaseShape>
-  private lowdb: LowSync<DatabaseShape>
+  private storage: SafeJSONFileSync<DatabaseShape>
   private readonly dbPath: string
 
   constructor(dbPath?: string) {
     this.dbPath = dbPath ?? join(app.getPath('userData'), 'database.json')
-    this.adapter = new SafeJSONFileSync(this.dbPath)
-    this.lowdb = new LowSync(this.adapter, data)
+    this.storage = new SafeJSONFileSync(this.dbPath)
   }
 
   public static instance() {
@@ -109,12 +106,8 @@ class Database {
     if (!existsSync(dirname(this.dbPath))) {
       mkdirSync(dirname(this.dbPath), { recursive: true })
     }
-    this.lowdb.read()
-    if (!this.lowdb.data) {
-      this.lowdb.data = data
-      this.lowdb.write()
-    }
-    this.db = this.lowdb.data
+    // 没有可读主文件/备份时使用独立的默认数据，避免多个 Database 实例共享可变对象。
+    this.db = this.storage.read() ?? structuredClone(data)
     this.membersDB = this.db.starInfo
 
     // 迁移旧存储字段：hiddenMemberIds → blockedMemberIds（一次性，读到旧键即搬运并删除）
@@ -141,7 +134,7 @@ class Database {
 
     // 建树（纯内存派生，不写回原始数据）
     this.rebuildMemberTree()
-    this.lowdb.write()
+    this.storage.write(this.db)
     log('[database.ts]数据库路径', this.dbPath)
   }
 
@@ -183,7 +176,7 @@ class Database {
     // 同步缓存引用：starInfo 是整组替换，不刷新的话 hasMembers 等会读到旧数据直到重启
     this.membersDB = this.db.starInfo
     this.rebuildMemberTree()
-    this.lowdb.write()
+    this.storage.write(this.db)
     return { ok: true }
   }
 
@@ -212,7 +205,7 @@ class Database {
     const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
     if (!Array.isArray(this.db[key])) {
       this.db[key] = []
-      this.lowdb.write()
+      this.storage.write(this.db)
     }
     return this.db[key] || []
   }
@@ -231,7 +224,7 @@ class Database {
     assertMemberFlagKind(kind)
     const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
     this.db[key] = ids
-    this.lowdb.write()
+    this.storage.write(this.db)
   }
 
   public addMemberFlag(kind: MemberFlagKind, userId: number) {
@@ -240,7 +233,7 @@ class Database {
     const changed = addMemberFlagId(this.db[key], userId)
     if (changed) {
       this.db[key] = changed
-      this.lowdb.write()
+      this.storage.write(this.db)
     }
   }
 
@@ -248,7 +241,7 @@ class Database {
     assertMemberFlagKind(kind)
     const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
     this.db[key] = removeMemberFlagId(this.db[key], userId)
-    this.lowdb.write()
+    this.storage.write(this.db)
   }
 
   public hasMembers() {
@@ -269,7 +262,7 @@ class Database {
     const config = this.db.config ?? { ...CONFIG_DEFAULTS }
     config[key] = value
     this.db.config = config
-    this.lowdb.write()
+    this.storage.write(this.db)
   }
 
   /** 重建内存派生的成员树 */

@@ -3,7 +3,7 @@ import { dirname } from 'node:path'
 import { log } from './logger'
 
 /**
- * lowdb 的安全 JSON 文件适配器：原子替换并在损坏时回退备份。
+ * database.json 的安全 JSON 存储：原子替换并在损坏时回退备份。
  *
  * rename 前必须 fsync，否则断电时数据可能尚未真正落盘。
  *
