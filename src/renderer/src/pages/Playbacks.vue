@@ -19,7 +19,7 @@ const props = withDefaults(defineProps<{ memberPreset?: { userId: string } | nul
   memberPreset: null,
 })
 
-// 画中画迷你窗：回放播放挂载点与直播共用同一套
+// 独立播放窗：回放播放挂载点与直播共用同一套
 const { openPlayback } = useFloatPlayersStore()
 
 // 成员树（筛选器选项来源）走全局单例 store：与成员页共用同一份，
@@ -196,7 +196,7 @@ function refreshFromTop() {
 
 defineExpose({ refreshFromTop })
 
-// 点击回放：以画中画迷你窗打开，可边看边继续浏览列表
+// 点击回放：以独立播放窗打开，可边看边继续浏览列表
 function onPlaybackClick(item: any) {
   openPlayback({
     liveId: item.liveId,

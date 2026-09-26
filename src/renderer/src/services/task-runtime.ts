@@ -67,6 +67,35 @@ function cleanupListeners(task: TaskState) {
 }
 
 /**
+ * 「任务已登记」快照并入本地镜像时的处置方式：
+ * - `skip`：本窗口已在跟踪该任务，无需处理
+ * - `resync`：本窗口有卡片但没在跟踪它（监听器已清空，如重启一个已结束的任务）→ 按快照重新对齐
+ * - `mirror`：本窗口没有该任务（在别的窗口发起）→ 新建一张镜像卡片
+ */
+export type TaskMergeAction = 'skip' | 'resync' | 'mirror'
+
+/**
+ * 判断主进程广播的「任务已登记」快照该如何并入本地列表。
+ *
+ * 抽成纯函数的原因：这段判据是**跨窗同步的核心**，但它依赖的全是「列表 + 快照」本身，
+ * 不含任何 IPC / Vue 依赖。留在 stores/tasks.ts 里会因为该模块顶层就读 `window.mainAPI`
+ * 而永远测不到。
+ *
+ * 幂等判据说明：`unsubscribers.length === 0` 表示本窗口没在跟踪它。这等于拿
+ * 「基础设施字段」当业务信号 —— 成立的前提是 startTask / restoreTask 都会在任务 running 时
+ * 注册监听器，而 end / error / stop 会清空它们，因此「running 且无监听器」
+ * 只可能是「本窗口没参与这条任务」。改动那两处时必须同步复核这里。
+ */
+export function decideTaskMerge(list: readonly TaskState[], snapshot: TaskSnapshot): TaskMergeAction {
+  const existing = list.find(item => item.liveId === snapshot.liveId)
+  if (!existing)
+    return 'mirror'
+  if (snapshot.status === 'running' && existing.unsubscribers.length === 0)
+    return 'resync'
+  return 'skip'
+}
+
+/**
  * 注册任务结束（end / error）监听器；start 与 restore 共用。
  * 两者都把任务置为 finished，差别只在 error 额外打日志、且不触发完成提示。
  */

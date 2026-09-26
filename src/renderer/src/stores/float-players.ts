@@ -1,87 +1,53 @@
 /**
- * ⚠️ 全局单例 store（原 composables/use-float-players.ts）
+ * 独立播放窗的渲染端入口。
  *
- * 画中画窗口列表定义在模块作用域，**不随任何组件卸载而销毁**：
- * 直播 / 回放 / 公演三个列表页调用 useFloatPlayersStore() 打开的是同一组迷你窗。
+ * 早期这里是「全局单例浮窗列表」（DOM 浮层），现已改为真正的 Electron 独立窗口：
+ * 窗口的创建 / 去重 / 聚焦 / 关闭全部由主进程（main/float-window.ts）持有，
+ * 本 store 只负责把页面意图转成一次 IPC 调用，因此不再持有任何可变状态。
+ *
+ * 页面 API（openLive / openPlayback）保持不变：直播 / 回放 / 公演三个列表页无需改动。
  */
-import { ref } from 'vue'
+import type { FloatPlayerKind, FloatPlayerPayload } from '../../../preload/ipc-contract'
+import EventBus from '@renderer/services/event-bus'
 
-export interface FloatPlayerPayload {
-  liveId: string
-  /** 主播名称：有值时迷你窗标题栏展示为 nickname + title */
-  nickname?: string
-  /** 播放器头部标题 */
-  title: string
-  startTime: number
-  /** 1=视频直播 2=电台 */
-  liveType?: number
-  /** 0=直播 1=录屏 */
-  liveMode?: number
-  /** 数据源：user=用户直播(getLiveOne)，open=开放公演(getOpenLiveOne) */
-  source?: string
-  /** open 模式下的顶部头像（公演封面，完整 URL） */
-  avatar?: string
-}
+export type { FloatPlayerKind, FloatPlayerPayload } from '../../../preload/ipc-contract'
 
-export interface FloatPlayerItem {
-  id: string
-  /** live=直播，playback=回放 */
-  kind: 'live' | 'playback'
-  payload: FloatPlayerPayload
-  /** 创建序号：用于迷你窗级联定位，避免多窗完全重叠 */
-  order: number
-}
-
-// 模块级单例：跨页面（直播/回放/公演 keep-alive 复用）共享同一份播放窗口列表
-const players = ref<FloatPlayerItem[]>([])
-let seed = 0
-
-function createId() {
-  return `fp-${Date.now().toString(36)}-${(seed++).toString(36)}`
-}
-
-/**
- * 画中画迷你窗全局管理：打开可拖拽的悬浮播放窗，边看边继续浏览列表。
- * 同一直播/回放重复点击时置顶复用。
- */
 export function useFloatPlayersStore() {
-  /** 打开直播迷你窗；同一直播已存在时直接置顶复用 */
+  /** 打开直播播放窗；同一路直播已打开时由主进程聚焦复用 */
   function openLive(payload: FloatPlayerPayload) {
     openPlayer('live', payload)
   }
 
-  /** 打开回放迷你窗；同一回放已存在时直接置顶复用 */
+  /** 打开回放播放窗；同一路回放已打开时由主进程聚焦复用 */
   function openPlayback(payload: FloatPlayerPayload) {
     openPlayer('playback', payload)
   }
 
-  function openPlayer(kind: 'live' | 'playback', payload: FloatPlayerPayload) {
-    const existing = players.value.find(
-      p => p.kind === kind && p.payload.liveId === payload.liveId,
-    )
-    if (existing) {
-      focusPlayer(existing.id)
-      return
-    }
-    players.value.push({ id: createId(), kind, payload, order: seed++ })
+  function openPlayer(kind: FloatPlayerKind, payload: FloatPlayerPayload) {
+    void window.mainAPI.openFloatWindow(kind, payload).catch((error: unknown) => {
+      console.error('[float-players] 打开独立播放窗失败:', error)
+    })
   }
 
-  /** 把指定窗口移到数组末尾（z-index 取数组下标，达到置顶效果） */
-  function focusPlayer(id: string) {
-    const idx = players.value.findIndex(p => p.id === id)
-    if (idx < 0)
-      return
-    const [item] = players.value.splice(idx, 1)
-    players.value.push(item)
-  }
+  return { openLive, openPlayback }
+}
 
-  function closePlayer(id: string) {
-    const idx = players.value.findIndex(p => p.id === id)
-    if (idx >= 0)
-      players.value.splice(idx, 1)
-  }
+/**
+ * 主窗口侧的独立播放窗桥接（仿 installTasks：显式安装、幂等）。
+ *
+ * 独立播放窗是另一个渲染进程，它发出的 EventBus 事件到不了主窗口。
+ * 播放窗把 live-unavailable 上报主进程，主进程再转发给主窗口，这里把它重新注入本地 EventBus，
+ * 列表页（Lives.vue）的自动刷新因此不受影响。
+ */
+let installed = false
 
-  return { players, openLive, openPlayback, focusPlayer, closePlayer }
+export function installFloatPlayers(): void {
+  if (installed)
+    return
+  installed = true
+  window.mainAPI.liveUnavailable((liveId) => {
+    EventBus.emit('live-unavailable', liveId)
+  })
 }
 
 export default useFloatPlayersStore

@@ -19,7 +19,7 @@ import Playbacks from './Playbacks.vue'
 
 const route = useRoute()
 
-// 画中画迷你窗：直播/回放/公演共用全局播放挂载点
+// 独立播放窗：直播/回放/公演共用全局播放挂载点
 const { openLive } = useFloatPlayersStore()
 
 // 关注名单：模块级共享状态（与成员页共用同一份），直播列表页据此优先展示并加标识。
@@ -122,7 +122,7 @@ const orderedLiveList = computed(() => {
 /** 已加载列表里关注成员的直播条数：dock 文案据此说明「优先展示」是否已生效 */
 const followedLiveCount = computed(() => liveList.value.filter(item => isFollowed(item.userInfo.userId)).length)
 
-// 点击卡片：以画中画迷你窗打开直播，可边看边继续浏览列表
+// 点击卡片：以独立播放窗打开直播，可边看边继续浏览列表
 function play(item: LiveListItem) {
   openLive({
     liveId: item.liveId,

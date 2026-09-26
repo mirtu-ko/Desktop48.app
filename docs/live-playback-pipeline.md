@@ -43,11 +43,18 @@ FFmpeg 为外部可执行程序，只能由主进程 spawn。这一约束决定�
      │        show → payload（结构转换），仅 status===2 才继续
      ▼
 [stores/float-players.ts]  openLive(payload) → openPlayer('live', payload)
-     │        模块级单例数组，跨页面共享；同 liveId 已存在时 focusPlayer 置顶复用
-     ▼  （Vue 响应式自动触发，不存在显式的弹窗调用）
-[FloatPlayerHost.vue]  v-for="item in players"
+     │        薄封装：只把页面意图转成一次 IPC 调用，自身不持有任何状态
+     ▼  window.mainAPI.openFloatWindow(kind, payload)
+                    ===== 进程边界 =====
+                 [preload/index.ts]                   ipcRenderer.invoke
+                 [main/ipc/register-float-window-ipc] handleTraced 包装
+                 [main/float-window.ts] openFloatWindow
+                    ├─ Map<`${kind}:${liveId}`, record> 去重：已存在 → restore/show/focus 复用
+                    └─ 否则 new BrowserWindow（frame:false / alwaysOnTop）
+                       并 loadURL / loadFile 到 `#/float?kind=..&liveId=..`
      ▼
-[FloatPlayer.vue]  窗口外壳：拖拽 / 三态尺寸 / z-index
+[独立窗口渲染进程]  main.ts 按 hash 分流 → mount(FloatWindowApp)，不挂 App.vue
+     │        FloatWindowApp 经 floatPlayerGetPayload(kind, liveId) 回取全量载荷
      │        payload 展开为 props
      ▼
 [LivePlayer.vue]  onMounted → resumeLive() → session.getLiveOne()
@@ -87,6 +94,40 @@ FFmpeg 为外部可执行程序，只能由主进程 spawn。这一约束决定�
 mpegts 解析 FLV → MSE → <video> 渲染 → oncanplay → 加载态解除
 ```
 
+### 1.1 独立播放窗（窗口形态）
+
+直播 / 回放点击后打开的是**真正的 Electron 独立窗口**，可以拖到应用窗口之外。
+早期实现是主窗口内的 DOM 浮层（`position: fixed` + 坐标钳制），物理上无法移出应用，已整体替换。
+
+| 关注点   | 实现                                                                                                                                                                                                                                                                                    |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 窗口创建 | `main/float-window.ts` 的 `openFloatWindow`，`frame:false` + `alwaysOnTop`                                                                                                                                                                                                              |
+| 页面复用 | 与主窗口共用同一份 `index.html`；`renderer/src/main.ts` 按 hash 是否以 `FLOAT_WINDOW_HASH_PATH` 开头分流（常量在主进程拼 hash 与渲染端分流两处共用）                                                                                                                                    |
+| 载荷传递 | hash 只带 `kind` + `liveId`，全量载荷由主进程持有、播放窗经 `floatPlayerGetPayload` 回取                                                                                                                                                                                                |
+| 移动     | 标题栏整条 `-webkit-app-region: drag`，交给系统；无任何自研拖拽代码                                                                                                                                                                                                                     |
+| 缩放     | 系统边框自由缩放；`@aspect` 到达时**按工作区整体重算**（不是只保宽度），并保持右上角不动；用户手动缩放过则一律不再自动改尺寸                                                                                                                                                            |
+| 初始尺寸 | **按所在显示器工作区比例自适应**，不写死像素：视频区宽 = 工作区宽 × 0.45（横屏的决定项）、高上限 = 工作区高 × 0.7（竖屏的决定项），按视频比例内接后叠加标题栏（`computeInitialWindowSize`）。两个比例各管一个方向，横竖屏互不干扰；`workArea` 是 DIP，故 4K@200% 与 1080p@100% 观感一致 |
+| 层级     | `播放中置顶`：播放器上报播放状态变化 → 主进程 `setAlwaysOnTop`；暂停 / 结束取消置顶。创建时先置顶，加载期间不会掉到别的窗口后面。层级为默认 `floating`（在 Dock / 任务栏之下），要盖住全屏应用需改 `screen-saver`                                                                       |
+| 去重     | `Map<kind:liveId>`：重复点击同一路只聚焦已有窗口，不新建                                                                                                                                                                                                                                |
+| 尺寸常量 | `src/common/float-window.ts`（主进程与渲染端共用：`FLOAT_WINDOW_HASH_PATH`、`FLOAT_BAR_HEIGHT`、`fitAspectInBox`、`computeInitialWindowSize` 及两个 `FLOAT_INITIAL_*_RATIO`）                                                                                                           |
+| 生命周期 | 关闭主窗口 → `closeAllFloatWindows()` 一并关闭全部播放窗 + `cleanupStreamSessions()` → `window-all-closed` 触发退出                                                                                                                                                                     |
+| 跨窗事件 | 播放窗的 `live-unavailable` 经 `notifyLiveUnavailable` 上报主进程，再转发主窗口 EventBus                                                                                                                                                                                                |
+| 任务状态 | 下载 / 录制任务列表是主进程注册表的镜像，**每个窗口都要 `installTasks()`**；`Started` / `End` / `Error` 广播给全部窗口，`Progress` 只回发起方（高频且仅用于调试）。删除不广播，前提是只有一个窗口能发起删除                                                                             |
+| 性能     | `backgroundThrottling:false`：失焦时 Chromium 默认节流 rAF/定时器，会让弹幕与轮询卡顿                                                                                                                                                                                                   |
+
+⚠️ 窗口控制通道（`windowClose` / `windowMinimize` 等）一律以 `BrowserWindow.fromWebContents(event.sender)`
+定位窗口，而不是恒取主窗口 —— 否则播放窗的关闭按钮会关掉主窗口。
+
+⚠️ **平台差异（Linux 尤其）**：
+
+- `will-resize` / `resized` 事件 **只有 macOS / Windows 触发**，Linux 不发射。因此「用户手动缩放过」不能只靠
+  `will-resize` 置位，`fitFloatWindowAspect` 里另有一道兜底：当前尺寸偏离「上次程序设置的尺寸」超过 2px 即视为用户缩放。
+- Wayland 下 `setSize` / `setPosition` / `setAlwaysOnTop` **不保证被合成器采纳**，`openFloatWindow` 的初始 x/y 可能失效。
+  尺寸定形通常仍生效，故未做分支处理。
+- `closeAllFloatWindows()` 用 `destroy()`，**不触发 `unload`**，渲染端的 `stopLiveStream` 不会执行。
+  转流进程由 `http-server.ts` 的 `req.on('close')` SIGKILL 兜底，`streamSessions` 条目由
+  `cleanupStreamSessions()` 清理 —— macOS 关主窗口不退出应用，所以这一步必须挂在主窗口 `closed` 上而不只是 `before-quit`。
+
 ## 2. 各阶段数据形态
 
 ### ① 列表项 `OpenLive`（`getOpenLiveList` 返回）
@@ -121,17 +162,22 @@ const payload = {
 `payload` 在后续三层中原样透传（数组项 → FloatPlayer → LivePlayer props），
 可作为追踪整条链路的线索。
 
-### ③ `players` 数组（模块级单例）
+### ③ 独立播放窗记录（主进程 Map）
 
 ```js
-const players = [
-  { id: 'fp-m0x8k2-0', kind: 'live', payload, order: 1 }
-]
+// main/float-window.ts
+records.get('live:68a3f1c2b4e5d60012345678')
+// → { win, payload, aspectFitted, userResized }
 ```
 
 `stores/float-players.ts` 对外暴露 `openLive` / `openPlayback` 两个语义入口，
-内部都走 `openPlayer(kind, payload)`；同 `liveId` 已存在时直接 `focusPlayer`
-把它移到数组末尾（z-index 取数组下标，实现置顶）而**不新建**。
+内部都走 `openPlayer(kind, payload)` → `window.mainAPI.openFloatWindow`。
+去重与置顶由主进程负责：以 `kind:liveId` 为键查 `records`，已存在则
+`restore/show/focus` 复用而**不新建**窗口。
+
+载荷本身也由主进程持有，播放窗渲染进程经 `floatPlayerGetPayload` 回取
+（hash 里只带 `kind` 与 `liveId` 两个短参数，避免长文本与中文进 hash，
+也让窗口 reload 后能自愈）。
 
 ### ④ 详情归一化结果 `LiveDetail`
 
@@ -186,7 +232,7 @@ handleCreateLiveStream → assertLocalServerAvailable + isAllowedStreamUrl
 播放器 GET 本地地址    → http-server 查 Map 取出 rtmpUrl → createFlvStreamProcess 才 spawn
 ```
 
-采用延迟启动的收益：若浮窗创建后立即关闭，不会遗留无用的 FFmpeg 进程；
+采用延迟启动的收益：若播放窗创建后立即关闭，不会遗留无用的 FFmpeg 进程；
 多次点击同一直播（`existingSession.inputUrl === rtmpUrl`）时直接复用会话，
 不重复登记。
 
@@ -195,7 +241,7 @@ handleCreateLiveStream → assertLocalServerAvailable + isAllowedStreamUrl
 回收路径为双向，渲染进程与主进程各自独立兜底：
 
 ```
-关闭浮窗 → players 移除条目 → LivePlayer.onUnmounted
+关闭播放窗 → 窗口销毁（float-window.ts 的 closed 回调从 records 移除）→ LivePlayer.onUnmounted
    ├─ session.dispose()       置 isDisposed + 递增令牌失效 + stopStreamNow
    ├─ retry.clearTimer()      清重试计时器
    ├─ polling.stopAll()       停轮询
@@ -222,7 +268,7 @@ handleCreateLiveStream → assertLocalServerAvailable + isAllowedStreamUrl
               │                                     │
   session ──onSessionStart──▶ beginSession ──▶ retry.reset() + mediaLoading=true
   session ──onBeforeRebuild─▶ rebuildMedia  ──▶ retry.clearTimer() + player.destroyPlayer()
-  session ──onAvatar/onOnlineNum/onUnavailable─▶ 上报浮窗头 / 写入 polling / 广播下架+关窗
+  session ──onAvatar/onOnlineNum/onUnavailable─▶ 上报标题栏 / 写入 polling / 广播下架+关窗
   player  ──onCanPlay───────▶ onPlayerCanPlay ─▶ retry.isRecoveringStream=false
   player  ──onError─────────▶ handleStreamError ─▶ 网络错保持 loading / 致命错销毁播放器 → retry.schedule()
   retry   ──attempt─────────▶ recoverStream  ──▶ session.fetchLiveDetail + applyLiveDetail + restartLiveStream
@@ -243,7 +289,7 @@ handleCreateLiveStream → assertLocalServerAvailable + isAllowedStreamUrl
 | `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位               | 地址来源、错误处理策略          |
 | `use-stream-retry`   | 重试节奏（默认 2 秒 × 3 次，决策走纯函数）       | 具体恢复逻辑（由 attempt 注入） |
 | `use-live-polling`   | 已播时长、在线人数定时刷新                       | 播放行为本身                    |
-| `use-video-rotation` | 旋转 / 容器全屏 / 原生 PiP / 播放暂停 / 音量     | 地址、重试                      |
+| `use-video-rotation` | 旋转 / 容器全屏 / 播放暂停 / 音量                | 地址、重试                      |
 | `use-sleep-blocker`  | 播放期间阻止系统休眠                             | 播放行为                        |
 | `use-media-download` | 录制发起（走原始 RTMP 直存文件，不经本地转封装） | 页面播放链路                    |
 
@@ -282,7 +328,7 @@ useLiveSession({ liveId: props.liveId }) // 错误：传入的是快照
 错误提示由 `services/apis.ts` 的 `request()` 统一弹窗（网络/非 JSON/业务失败三类，
 3 秒同文案去重），此处**不重复弹**，只广播
 `EventBus.emit('live-unavailable', liveId)` 让列表页刷新，然后 `emit('close')`
-关掉浮窗。重试耗尽走的是同一条下架路径（见 `handleRetryExhausted`）。
+关掉播放窗。重试耗尽走的是同一条下架路径（见 `handleRetryExhausted`）。
 
 ⚠️ 只有**确定性失败**才该走这条路。pocketapi 的 `getLiveOne` 会随机返回
 `{status:1017, message:'参数错误'}`——同一份 body 连续请求约 1/3 命中，与请求参数、
@@ -349,7 +395,8 @@ PlaybackPlayer
 | 位置                                                             | 观察内容                         |
 | ---------------------------------------------------------------- | -------------------------------- |
 | `pages/Shows.vue` → `openLiveStream`                             | 原始 `show` 数据与 status 分流   |
-| `stores/float-players.ts` → `openPlayer`                         | `players` 数组变化与去重置顶     |
+| `stores/float-players.ts` → `openPlayer`                         | 页面意图转成的 IPC 载荷          |
+| `main/float-window.ts` → `openFloatWindow`                       | 独立窗去重/聚焦、初始尺寸与摆位  |
 | `composables/use-live-session.ts` → `fetchLiveDetail`            | 归一化后的详情与 rtmp 地址       |
 | `composables/use-live-session.ts` → `startLiveStream`            | 主进程返回的本地地址             |
 | `main/stream.ts` → `handleCreateLiveStream`                      | 白名单校验与会话登记             |

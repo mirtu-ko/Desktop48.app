@@ -1,5 +1,5 @@
 import type { ComputedRef, Ref } from 'vue'
-import { useEventListener, useFullscreen, useResizeObserver } from '@vueuse/core'
+import { useFullscreen, useResizeObserver } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 interface UseVideoRotationOptions {
@@ -191,175 +191,6 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
     }
   }
 
-  // 系统画中画（原生 PiP）：仅视频适用，电台下宿主隐藏按钮。
-  // 各版本 TS 的 DOM 库对 PiP 覆盖不一（有的已含 exitPictureInPicture），
-  // 用交叉类型统一补面型，避免与 lib 声明冲突
-  interface PipApi {
-    pictureInPictureElement?: Element | null
-    exitPictureInPicture?: () => Promise<unknown>
-    requestPictureInPicture?: () => Promise<unknown>
-  }
-
-  const isPip = ref(false)
-
-  // PiP 窗口取的是 video 的解码帧，DOM 与 CSS 不参与合成 —— wrapper 上的 rotate 带不进去，
-  // 直接给 video 加 transform 也一样被忽略（规范写死）。Electron 也没实现 Document PiP
-  // （requestWindow 能 resolve，但窗口根本不会被创建）。所以旋转只能落到像素上：
-  // 按当前角度把画面画进 canvas，用 captureStream() 喂一个影子 video，再对影子 video 请求 PiP。
-  // 角度为 0 时仍走直连路径，不引入任何额外开销。
-  const PIP_MIRROR_MAX_EDGE = 960
-
-  interface PipMirror {
-    element: HTMLVideoElement
-    canvas: HTMLCanvasElement
-    ctx: CanvasRenderingContext2D
-    stream: MediaStream
-    raf: number
-  }
-
-  let pipMirror: PipMirror | null = null
-
-  /** 影子 canvas 只喂 PiP 小窗，最长边压到 PIP_MIRROR_MAX_EDGE，省掉整帧的重绘 */
-  function mirrorSize(video: HTMLVideoElement) {
-    const width = video.videoWidth || 480
-    const height = video.videoHeight || 270
-    const longest = Math.max(width, height)
-    const k = longest > PIP_MIRROR_MAX_EDGE ? PIP_MIRROR_MAX_EDGE / longest : 1
-    return { width: Math.round(width * k), height: Math.round(height * k) }
-  }
-
-  /** 按当前角度把源画面旋转后居中铺满 canvas；入口角度下正好满幅，之后换角度则留边 */
-  function paintMirrorFrame(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, video: HTMLVideoElement, angle: number) {
-    const sourceWidth = video.videoWidth
-    const sourceHeight = video.videoHeight
-    if (!sourceWidth || !sourceHeight)
-      return
-    const swap = angle % 180 !== 0
-    const rotatedWidth = swap ? sourceHeight : sourceWidth
-    const rotatedHeight = swap ? sourceWidth : sourceHeight
-    const scale = Math.min(canvas.width / rotatedWidth, canvas.height / rotatedHeight)
-    ctx.save()
-    ctx.translate(canvas.width / 2, canvas.height / 2)
-    ctx.rotate((angle * Math.PI) / 180)
-    ctx.scale(scale, scale)
-    ctx.drawImage(video, -sourceWidth / 2, -sourceHeight / 2)
-    ctx.restore()
-  }
-
-  function destroyPipMirror() {
-    if (!pipMirror)
-      return
-    cancelAnimationFrame(pipMirror.raf)
-    pipMirror.stream.getTracks().forEach(track => track.stop())
-    pipMirror.element.srcObject = null
-    pipMirror.element.remove()
-    pipMirror = null
-  }
-
-  /**
-   * 源画面本身一动不动（不重连、不二次拉流），只是每帧多画一次。
-   * PiP 上的播放 / 静音按钮作用在影子 video 上，转发回真实元素，免得按了没反应。
-   */
-  function createPipMirror(video: HTMLVideoElement, angle: number): PipMirror | null {
-    const canvas = document.createElement('canvas')
-    if (typeof canvas.captureStream !== 'function')
-      return null
-    const swap = angle % 180 !== 0
-    const size = mirrorSize(video)
-    // canvas 取旋转后的比例，PiP 窗口才会跟着定形成竖的
-    canvas.width = swap ? size.height : size.width
-    canvas.height = swap ? size.width : size.height
-    const ctx = canvas.getContext('2d')
-    if (!ctx)
-      return null
-    paintMirrorFrame(canvas, ctx, video, angle)
-
-    const element = document.createElement('video')
-    element.muted = true
-    element.playsInline = true
-    // 影子 video 必须在文档里才吃得到帧；压成 2px 且近乎透明，不影响观感与布局
-    element.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none'
-
-    const mirror: PipMirror = { element, canvas, ctx, stream: canvas.captureStream(30), raf: 0 }
-    const paint = () => {
-      paintMirrorFrame(canvas, ctx, video, rotationAngle.value)
-      mirror.raf = requestAnimationFrame(paint)
-    }
-    paint()
-
-    document.body.appendChild(element)
-    element.srcObject = mirror.stream
-    element.addEventListener('play', () => {
-      if (video.paused)
-        void Promise.resolve(video.play()).catch((error: any) => console.error('[use-video-rotation] 同步播放失败:', error))
-    })
-    element.addEventListener('pause', () => {
-      if (!video.paused)
-        video.pause()
-    })
-    element.addEventListener('volumechange', () => {
-      video.muted = element.muted
-    })
-    return mirror
-  }
-
-  /** 旋转非 0 时用影子 video 请求 PiP；失败（无 captureStream / PiP 被拒）返回 false 交给直连路径 */
-  async function requestMirrorPip(video: HTMLVideoElement): Promise<boolean> {
-    destroyPipMirror()
-    const mirror = createPipMirror(video, rotationAngle.value)
-    if (!mirror)
-      return false
-    pipMirror = mirror
-    const target = mirror.element as HTMLVideoElement & PipApi
-    try {
-      await mirror.element.play()
-      if (!target.requestPictureInPicture)
-        throw new Error('requestPictureInPicture 不可用')
-      await target.requestPictureInPicture()
-      return true
-    }
-    catch (error: any) {
-      console.error('[use-video-rotation] 画中画镜像路径失败，回退直连:', error)
-      destroyPipMirror()
-      return false
-    }
-  }
-
-  async function togglePip() {
-    const video = getVideo() as (HTMLVideoElement & PipApi) | null
-    const doc = document as Document & PipApi
-    // 已在画中画的正是本播放器（真实 video 或影子 video）→ 退出；其他浮窗占用时直接请求，Chromium 会接管切换
-    const pipElement = doc.pictureInPictureElement
-    if (pipElement && (pipElement === video || pipElement === pipMirror?.element)) {
-      void doc.exitPictureInPicture?.().catch((error: any) => {
-        console.error('[use-video-rotation] 退出画中画失败:', error)
-      })
-      return
-    }
-    if (!video?.requestPictureInPicture)
-      return
-    try {
-      // 容器全屏下把 video 摘进 PiP 会只剩黑底空容器：先退全屏再进
-      if (document.fullscreenElement)
-        await document.exitFullscreen().catch(() => undefined)
-      if (rotationAngle.value !== 0 && await requestMirrorPip(video))
-        return
-      await video.requestPictureInPicture()
-    }
-    catch (error: any) {
-      console.error('[use-video-rotation] 切换画中画失败:', error)
-    }
-  }
-
-  function onPipStateChange() {
-    const doc = document as Document & PipApi
-    const element = doc.pictureInPictureElement
-    isPip.value = !!element && (element === getVideo() || element === pipMirror?.element)
-    // 退出（含用户直接关掉 PiP 窗口）时拆掉影子链路，别让帧循环空转
-    if (!element)
-      destroyPipMirror()
-  }
-
   // 旋转 90/270 时原生控制条会跟着画面侧躺，改用自绘迷你条（见 MiniControls）
   const playing = ref(false)
   const muted = ref(false)
@@ -429,13 +260,7 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
       video.addEventListener('resize', handleNativeVideoResize)
   })
 
-  // 全局事件监听交给 useEventListener：scope dispose 时自动移除，免手动 add/remove
-  // PiP 事件会从媒体元素冒泡到 document，多浮窗共用同一组监听、各自比对元素
-  useEventListener(document, 'enterpictureinpicture', onPipStateChange)
-  useEventListener(document, 'leavepictureinpicture', onPipStateChange)
-
   onUnmounted(() => {
-    destroyPipMirror()
     const video = getVideo()
     if (video)
       video.removeEventListener('resize', handleNativeVideoResize)
@@ -454,8 +279,6 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
     onBoxDblClick,
     isFullscreen,
     toggleFullscreen,
-    isPip,
-    togglePip,
     playing,
     muted,
     togglePlay,

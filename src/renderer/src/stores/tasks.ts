@@ -13,7 +13,7 @@
 import type { TaskPayload, TaskSnapshot } from '@renderer/services/task-payload'
 import type { TaskChannelAdapter, TaskState } from '@renderer/services/task-runtime'
 import type { Ref } from 'vue'
-import { createTaskState, openSaveDirectory, restoreTask, startTask, stopTask } from '@renderer/services/task-runtime'
+import { createTaskState, decideTaskMerge, openSaveDirectory, restoreTask, startTask, stopTask } from '@renderer/services/task-runtime'
 import { debugLog } from '@renderer/utils/debug'
 import { ElMessage } from 'element-plus'
 import { reactive, ref } from 'vue'
@@ -22,6 +22,8 @@ export type TaskKind = 'download' | 'record'
 
 interface TaskKindConfig {
   channels: TaskChannelAdapter
+  /** 主进程广播的「任务已登记」订阅：其它窗口据此把任务补进本地镜像列表 */
+  started: (_callback: (_snapshot: TaskSnapshot) => void) => () => void
   list: Ref<TaskState[]>
   listApi: () => Promise<TaskSnapshot[]>
   removeApi: (_liveId: string) => Promise<void>
@@ -39,8 +41,12 @@ interface TaskKindConfig {
 // 持续回推 progress / end / error 事件（见 preload 里返回 unsubscribe 的那几个）。
 //
 // 模块级单例：任务不随 Downloads 页面卸载而消失。
-// 否则在列表页/悬浮迷你窗发起的录制会因为 Downloads 未挂载而丢失事件，
+// 否则在列表页发起的录制会因为 Downloads 未挂载而丢失事件，
 // 只能靠「先跳到下载页」这种副作用来保证任务被接住。
+//
+// ⚠️ 单例只在**单个渲染进程**内共享。独立播放窗是另一个渲染进程，
+// 因此每个窗口都要调用 installTasks() 各自镜像一份主进程注册表，
+// 并由主进程广播 Started/Progress/End/Error 保持同步（见 main/ipc/send.ts 的 broadcastIpc）。
 const downloadTasks = ref<TaskState[]>([])
 const recordTasks = ref<TaskState[]>([])
 
@@ -55,6 +61,7 @@ const taskConfigs: Record<TaskKind, TaskKindConfig> = {
       stop: window.mainAPI.downloadTaskStop,
     },
     list: downloadTasks,
+    started: window.mainAPI.downloadTaskStarted,
     listApi: () => window.mainAPI.downloadTaskList(),
     removeApi: liveId => window.mainAPI.downloadTaskRemove(liveId),
     runningMessage: '该回放正在下载',
@@ -72,6 +79,7 @@ const taskConfigs: Record<TaskKind, TaskKindConfig> = {
       stop: window.mainAPI.recordTaskStop,
     },
     list: recordTasks,
+    started: window.mainAPI.recordTaskStarted,
     listApi: () => window.mainAPI.recordTaskList(),
     removeApi: liveId => window.mainAPI.recordTaskRemove(liveId),
     runningMessage: '该直播正在录制',
@@ -143,17 +151,56 @@ async function handleTask(payload: TaskPayload, kind: TaskKind) {
   await launchTask(newTask(payload), config, config.startMessage)
 }
 
+/**
+ * 移除任务卡片，并同步删除主进程快照（否则刷新后该任务会再次出现）。
+ *
+ * ⚠️ 跨窗契约：**删除不广播**（TaskEventMap 里没有 Removed 通道），因此其它窗口的镜像
+ * 不会跟着删。当前只有一个窗口能发起删除（下载页只在主窗口挂载），故无可见影响。
+ * 将来若在独立播放窗也加删除入口，必须先给 Remove 补广播，否则两个窗口的镜像会分叉。
+ */
 async function removeTask(task: TaskState, kind: TaskKind) {
   const config = taskConfigs[kind]
   const index = config.list.value.findIndex(item => item.liveId === task.liveId)
   if (index !== -1)
     config.list.value.splice(index, 1)
-  // 同步删除主进程快照，否则刷新后该任务会再次出现
   await config.removeApi(task.liveId)
 }
 
-// 刷新不会清空主进程实际运行的 ffmpeg，任务状态仍以主进程为准
-async function restoreTasks(kind: TaskKind) {
+/**
+ * 把主进程广播的「任务已登记」快照并入本地列表。
+ *
+ * 任务状态由主进程注册表统一持有，而每个窗口各存一份镜像：任务可能在**别的窗口**
+ * 发起（典型场景是独立播放窗里点录制 / 下载），本窗口必须据此补出同一张卡片，
+ * 否则主窗口的下载页永远看不到它。
+ *
+ * 判据本身抽在 task-runtime.ts 的 `decideTaskMerge`（纯函数，可单测）。
+ *
+ * 镜像一律不挂完成提示：提示只由发起窗口给，否则同一任务会在两个窗口各弹一次。
+ */
+function mergeStartedTask(snapshot: TaskSnapshot, config: TaskKindConfig) {
+  const action = decideTaskMerge(config.list.value, snapshot)
+  if (action === 'skip')
+    return
+
+  if (action === 'resync') {
+    const existing = config.list.value.find(item => item.liveId === snapshot.liveId)
+    if (existing)
+      restoreTask(existing, snapshot, config.channels, config.logTag)
+    return
+  }
+
+  const task = newTask({ url: snapshot.url, filename: snapshot.filename, liveId: snapshot.liveId })
+  restoreTask(task, snapshot, config.channels, config.logTag)
+  config.list.value.push(task)
+  debugLog('tasks', `并入其它窗口发起的 ${config.logTag} 任务:`, snapshot.liveId)
+}
+
+/**
+ * 从主进程快照恢复任务列表。
+ * 刷新不会清空主进程实际运行的 ffmpeg，任务状态仍以主进程为准。
+ * silent 用于播放窗：它只做静默镜像，不重复弹完成提示。
+ */
+async function restoreTasks(kind: TaskKind, silent: boolean) {
   const config = taskConfigs[kind]
   const snapshots = await config.listApi()
   debugLog('tasks', `从主进程恢复 ${kind} 任务快照: ${snapshots.length} 个`)
@@ -162,7 +209,7 @@ async function restoreTasks(kind: TaskKind) {
     if (config.list.value.some(item => item.liveId === snapshot.liveId))
       continue
     const task = newTask({ url: snapshot.url, filename: snapshot.filename, liveId: snapshot.liveId })
-    restoreTask(task, snapshot, config.channels, config.logTag, onTaskEnd(config))
+    restoreTask(task, snapshot, config.channels, config.logTag, silent ? undefined : onTaskEnd(config))
     config.list.value.push(task)
   }
 }
@@ -191,24 +238,32 @@ let restored = false
 let installed = false
 
 /** 首次调用时从主进程恢复一次任务快照（幂等） */
-async function ensureRestored() {
+async function ensureRestored(silent: boolean) {
   if (restored)
     return
   restored = true
-  await Promise.all([restoreTasks('download'), restoreTasks('record')])
+  await Promise.all([restoreTasks('download', silent), restoreTasks('record', silent)])
 }
 
 /**
- * 应用级安装：注册事件订阅并恢复一次任务快照。
- * 由入口 main.ts 显式调用；重复调用安全（幂等），HMR 时自动卸载旧实例监听。
+ * 应用级安装：注册事件订阅并恢复一次任务快照。**每个窗口都要调用**。
+ *
+ * 任务列表是主进程注册表的镜像，而渲染端 store 是模块级单例、不跨进程共享：
+ * 独立播放窗若不安装，就既看不到别处发起的任务（播放器按钮状态错），
+ * 也不会把本窗发起的任务同步给主窗口的下载页。
+ *
+ * 传 `{ silent: true }` 走静默模式（独立播放窗用）：只镜像状态，不弹完成提示。
  */
-export function installTasks() {
+export function installTasks(options: { silent?: boolean } = {}) {
   if (installed)
     return
   installed = true
+  // 订阅「任务已登记」广播：把其它窗口发起的任务补进本窗口列表
+  for (const config of Object.values(taskConfigs))
+    config.started(snapshot => mergeStartedTask(snapshot, config))
   // 应用启动即恢复一次：播放器可能在下载页从未挂载过的情况下进入，
   // 此时也要能正确显示「录制中」并能停止
-  void ensureRestored().catch((error: any) => {
+  void ensureRestored(options.silent ?? false).catch((error: any) => {
     console.error('[stores/tasks] 恢复任务列表失败:', error)
   })
 }

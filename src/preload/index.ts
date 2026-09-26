@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { electronAPI as ElectronAPI, FfmpegDownloadProgress, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions } from './ipc-contract'
+import type { electronAPI as ElectronAPI, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, TaskSnapshot } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 // 仅暴露渲染进程实际需要的最小 API
@@ -92,6 +92,9 @@ const api = {
   // ===== 下载任务 =====
   // 对端：main/ipc/register-task-ipc.ts，通用任务机制在 main/ffmpeg/register-ffmpeg-task.ts
   downloadTaskStart: (url: string, filename: string, liveId: string) => invokeIpc('downloadTaskStart', url, filename, liveId),
+  // 任务已在主进程登记（广播给全部窗口）：其它窗口据此把它补进自己的任务列表
+  downloadTaskStarted: (callback: (_snapshot: TaskSnapshot) => void) =>
+    onIpc('downloadTaskStarted', callback),
   downloadTaskProgress: (callback: (_liveId: string, _time: string) => void) =>
     onIpc('downloadTaskProgress', callback),
   downloadTaskEnd: (callback: (_liveId: string, _filePath: string) => void) =>
@@ -105,6 +108,9 @@ const api = {
   // ===== 录制任务 =====
   // 对端：main/ipc/register-task-ipc.ts，通用任务机制在 main/ffmpeg/register-ffmpeg-task.ts
   recordTaskStart: (url: string, filename: string, liveId: string) => invokeIpc('recordTaskStart', url, filename, liveId),
+  // 任务已在主进程登记（广播给全部窗口）：其它窗口据此把它补进自己的任务列表
+  recordTaskStarted: (callback: (_snapshot: TaskSnapshot) => void) =>
+    onIpc('recordTaskStarted', callback),
   recordTaskProgress: (callback: (_liveId: string, _time: string) => void) =>
     onIpc('recordTaskProgress', callback),
   recordTaskEnd: (callback: (_liveId: string, _filePath: string) => void) =>
@@ -114,6 +120,17 @@ const api = {
   recordTaskStop: (liveId: string) => ipcRenderer.send(`recordTaskStop:${liveId}`),
   recordTaskList: () => invokeIpc('recordTaskList'),
   recordTaskRemove: (liveId: string) => invokeIpc('recordTaskRemove', liveId),
+
+  // ===== 独立播放窗口 =====
+  // 对端：main/ipc/register-float-window-ipc.ts，窗口生命周期在 main/float-window.ts
+  openFloatWindow: (kind: FloatPlayerKind, payload: FloatPlayerPayload) => invokeIpc('openFloatWindow', kind, payload),
+  floatPlayerGetPayload: (kind: FloatPlayerKind, liveId: string) => invokeIpc('floatPlayerGetPayload', kind, liveId),
+  floatWindowFitAspect: (aspect: number) => invokeIpc('floatWindowFitAspect', aspect),
+  floatWindowSetPlaying: (playing: boolean) => invokeIpc('floatWindowSetPlaying', playing),
+  notifyLiveUnavailable: (liveId: string) => invokeIpc('notifyLiveUnavailable', liveId),
+  // liveUnavailable 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
+  liveUnavailable: (callback: (_liveId: string) => void) =>
+    onIpc('liveUnavailable', callback),
 
   // ===== 窗口与电源 =====
   // 对端：main/ipc/register-window-ipc.ts，窗口引用与休眠状态归 main/app.ts 管理

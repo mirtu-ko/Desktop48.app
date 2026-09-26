@@ -28,11 +28,11 @@ const props = defineProps({
   source: { type: String, default: 'user' },
   /** open 模式下的顶部头像（公演封面，完整 URL） */
   avatarUrl: { type: String, default: '' },
-  /** 迷你窗紧凑模式：缩小弹幕字号与玻璃条尺寸，适配画中画小窗口 */
+  /** 紧凑模式：缩小弹幕字号与玻璃条尺寸，适配小尺寸独立播放窗 */
   compact: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['avatar', 'aspect', 'pip'])
+const emit = defineEmits(['avatar', 'aspect', 'playing'])
 
 const playStreamPath = ref('')
 const isRadio = ref(false)
@@ -66,7 +66,7 @@ function getActiveMediaElement() {
 
 // =========== 画面旋转 / 容器全屏 / 迷你控制条（与 LivePlayer 共用 useVideoRotation） ===========
 // 旋转只作用于 video wrapper，弹幕叠加层与之同级不参与旋转；
-// 但其锚点取自 videoRect（已含 90/270° 的显示宽高交换），画中画与全屏下都贴住画面左下角。
+// 但其锚点取自 videoRect（已含 90/270° 的显示宽高交换），全屏下也贴住画面左下角。
 const {
   rotationAngle,
   isVerticalRotation,
@@ -80,8 +80,6 @@ const {
   onBoxDblClick,
   isFullscreen,
   toggleFullscreen,
-  isPip,
-  togglePip,
   playing,
   muted,
   togglePlay,
@@ -97,8 +95,10 @@ const {
 })
 // =========== 画面旋转结束 ===========
 
-// PiP 状态变化上报父级：进入/退出系统画中画时浮窗自动收窄/还原
-watch(isPip, active => emit('pip', active))
+// 播放/暂停上报父级：独立播放窗据此决定是否置顶（播放中才置顶）。
+// 只上报「变化」而不带上初值：窗口刚打开时还在加载，此刻保持创建时的置顶态，
+// 免得视频还没出画面就先掉到别的窗口后面。
+watch(playing, value => emit('playing', value))
 
 // 弹幕以「左下角玻璃条」呈现
 const danmaku = usePlaybackDanmaku({
@@ -480,8 +480,6 @@ onUnmounted(() => {
             :playing="playing"
             :muted="muted"
             :is-fullscreen="isFullscreen"
-            :show-pip="!isRadio"
-            :is-pip="isPip"
             :show-progress="true"
             :current-time="currentTime"
             :duration="mediaDuration"
@@ -489,7 +487,6 @@ onUnmounted(() => {
             @toggle-play="togglePlay"
             @toggle-mute="toggleMute"
             @toggle-fullscreen="toggleFullscreen"
-            @toggle-pip="togglePip"
             @seek="onMiniSeek"
           >
             <!-- 弹幕模式切换（实时 ⇄ 全部）：最左端，有弹幕时显示 -->

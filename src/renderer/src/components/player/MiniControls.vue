@@ -10,17 +10,11 @@ const props = defineProps({
   showProgress: { type: Boolean, default: false },
   currentTime: { type: Number, default: 0 },
   duration: { type: Number, default: 0 },
-  /** 系统画中画：仅视频轨适用，电台（纯音频）由宿主传 false 隐藏 */
-  showPip: { type: Boolean, default: false },
-  isPip: { type: Boolean, default: false },
-  /** 迷你浮窗：时间串只显示当前进度，总时长让位给进度条 */
+  /** 紧凑模式：时间串只显示当前进度，总时长让位给进度条 */
   compact: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['togglePlay', 'toggleMute', 'toggleFullscreen', 'togglePip', 'seek'])
-
-// PiP 能力探测（Chromium/Electron 常开，防御性判断环境）
-const pipSupported = (document as Document & { pictureInPictureEnabled?: boolean }).pictureInPictureEnabled === true
+const emit = defineEmits(['togglePlay', 'toggleMute', 'toggleFullscreen', 'seek'])
 
 function timeText(): string {
   const current = formatMediaTime(props.currentTime)
@@ -62,15 +56,6 @@ function onRangeInput(event: Event) {
 
     <button class="mini-btn player-capsule__btn" :aria-label="muted ? '取消静音' : '静音'" @click="emit('toggleMute')">
       <MediaIcon :name="muted ? 'volumeOff' : 'volumeOn'" :size="16" />
-    </button>
-    <button
-      v-if="showPip && pipSupported"
-      class="mini-btn player-capsule__btn"
-      :aria-label="isPip ? '退出画中画' : '画中画'"
-      :title="isPip ? '退出画中画' : '画中画'"
-      @click="emit('togglePip')"
-    >
-      <MediaIcon name="pip" :size="16" />
     </button>
     <button
       class="mini-btn player-capsule__btn"

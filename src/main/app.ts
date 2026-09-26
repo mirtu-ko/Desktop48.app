@@ -5,6 +5,7 @@ import { app, BrowserWindow, powerSaveBlocker, shell } from 'electron'
 import icon from '../../resources/icon.png?asset'
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
+import { closeAllFloatWindows } from './float-window'
 import { registerAllIPC } from './ipc'
 import { sendIpc } from './ipc/send'
 import { log } from './logger'
@@ -48,6 +49,13 @@ function createWindow(): void {
   win.on('closed', () => {
     if (mainWindow === win)
       mainWindow = null
+    // 主窗口关闭即关闭所有独立播放窗，否则它们会让 window-all-closed 不触发、应用无法退出
+    closeAllFloatWindows()
+    // 播放窗被 destroy() 关闭，渲染端的 stopLiveStream 不会执行（destroy 不触发 unload），
+    // 转流进程靠 http-server 的连接关闭回收，但 streamSessions 里的条目会留下。
+    // macOS 关主窗口不退出应用 → before-quit 不触发 → 必须在这里清，否则条目一直残留。
+    // 幂等：Windows / Linux 上随后 before-quit 再清一次无害。
+    cleanupStreamSessions()
   })
   wireWindowEvents(win)
 
@@ -132,7 +140,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  // 应用退出前统一清理直播会话与转流进程
+  // 应用退出前统一清理独立播放窗 / 直播会话 / 转流进程
+  closeAllFloatWindows()
   cleanupStreamSessions()
   // 对仍在运行的所有 ffmpeg 任务写 'q' 优雅收尾，避免退出后残留孤儿进程
   stopAllFfmpegTasks()

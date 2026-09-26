@@ -46,8 +46,7 @@
    * 0-2    AppDock 内部微层（局部堆叠，不出 Dock）：后仰的玻璃板 .dock-board(0)，
    *        含板内氛围光 < 激活指示条(1) < 导航项(2)
    * 100    AppDock 底部导航（最高固定层）
-   * 1000+  FloatPlayer 画中画窗口（动态：1000 + 列表下标，见 FloatPlayer.vue，
-   *        需盖过以上所有层；同一时刻只有一个置顶浮窗） */
+   * 注：直播 / 回放播放窗已是独立 BrowserWindow，不再参与本窗口的层叠体系 */
 
   /* ===== 浮层让位：页面内容为悬浮控件预留的空间 ===== */
   --tabbar-offset-top: 64px; // 左上角 FloatingTabBar 的高度 + 间距
@@ -270,7 +269,7 @@ body,
   box-shadow: var(--glass-shadow), var(--glass-lip);
 }
 
-/* 深玻璃变体：悬浮窗（FloatPlayer）用。背后是视频画面，底色要更实才压得住，
+/* 深玻璃变体：独立播放窗（FloatWindowApp 的标题栏）用。背后是视频画面，底色要更实才压得住，
  * 光带同步收敛，否则大片高光会糊住画面。只覆写 token，不重写上面那三条声明 */
 .frosted-surface--deep {
   --glass-fill: color-mix(in srgb, var(--el-bg-color) 88%, transparent);

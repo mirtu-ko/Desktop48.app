@@ -104,6 +104,32 @@ export interface LiveStreamSession {
   liveId: string
 }
 
+// ===== 独立播放窗口 =====
+
+/** 独立播放窗类型：live=直播，playback=回放（对端：main/float-window.ts） */
+export type FloatPlayerKind = 'live' | 'playback'
+
+/**
+ * 独立播放窗载荷：渲染端组装（stores/float-players.ts），主进程窗口管理器持有，
+ * 播放窗渲染进程再经 floatPlayerGetPayload 回取。必须可结构化克隆。
+ */
+export interface FloatPlayerPayload {
+  liveId: string
+  /** 主播名称：有值时标题栏展示为 nickname + title */
+  nickname?: string
+  /** 播放器头部标题 */
+  title: string
+  startTime: number
+  /** 1=视频直播 2=电台 */
+  liveType?: number
+  /** 0=直播 1=录屏 */
+  liveMode?: number
+  /** 数据源：user=用户直播(getLiveOne)，open=开放公演(getOpenLiveOne) */
+  source?: string
+  /** open 模式下的顶部头像（公演封面，完整 URL） */
+  avatar?: string
+}
+
 // ===== 类型化 IPC 通道映射 =====
 
 interface InvokeSpec<Args extends readonly unknown[], Return> {
@@ -111,8 +137,14 @@ interface InvokeSpec<Args extends readonly unknown[], Return> {
   return: Return
 }
 
-/** 通用任务通道前缀；具体通道由 `${prefix}Start|List|Remove|Progress|End|Error` 组成。 */
+/**
+ * 通用任务通道前缀；具体通道由
+ * `${prefix}Start|List|Remove|Started|Progress|End|Error` 组成。
+ */
 export type TaskChannelPrefix = 'downloadTask' | 'recordTask'
+
+// 类型随契约一起暴露：preload 的事件订阅签名与渲染端 stores/tasks.ts 都要用它
+export type { TaskSnapshot }
 
 interface StaticIpcInvokeMap {
   netRequest: InvokeSpec<[options: NetRequestOptions], string>
@@ -135,6 +167,11 @@ interface StaticIpcInvokeMap {
   downloadFfmpeg: InvokeSpec<[], string>
   createLiveStream: InvokeSpec<[rtmpUrl: string, liveId: string], LiveStreamSession>
   stopLiveStream: InvokeSpec<[liveId: string], void>
+  openFloatWindow: InvokeSpec<[kind: FloatPlayerKind, payload: FloatPlayerPayload], void>
+  floatPlayerGetPayload: InvokeSpec<[kind: FloatPlayerKind, liveId: string], FloatPlayerPayload | null>
+  floatWindowFitAspect: InvokeSpec<[aspect: number], void>
+  floatWindowSetPlaying: InvokeSpec<[playing: boolean], void>
+  notifyLiveUnavailable: InvokeSpec<[liveId: string], void>
   windowMinimize: InvokeSpec<[], void>
   windowToggleMaximize: InvokeSpec<[], void>
   windowClose: InvokeSpec<[], void>
@@ -167,11 +204,27 @@ type TaskEventMap = {
   [K in TaskChannelPrefix as `${K}End`]: [liveId: string, filePath: string]
 } & {
   [K in TaskChannelPrefix as `${K}Error`]: [liveId: string, error: string]
+} & {
+  /**
+   * 任务已在主进程登记。任务状态由主进程注册表统一持有、每个窗口各存一份镜像，
+   * 因此这类事件广播给全部窗口（见 main/ipc/send.ts 的 broadcastIpc）：
+   * 在独立播放窗发起的录制 / 下载，主窗口据此把它补进下载页列表。
+   *
+   * ⚠️ 与 Progress / End / Error 不同，**删除类操作没有对应事件、也不广播**
+   * （`${prefix}Remove` 是 invoke 通道）。跨窗一致性的前提是「只有一个窗口能发起删除」——
+   * 下载页只在主窗口挂载。若将来播放窗也加删除入口，必须先补一个 Removed 广播事件，
+   * 否则各窗口的镜像列表会分叉。
+   *
+   * 另外注意 Progress 只发给发起方（高频心跳，仅用于调试日志），别误当成广播事件。
+   */
+  [K in TaskChannelPrefix as `${K}Started`]: [snapshot: TaskSnapshot]
 }
 
 export type IpcEventMap = {
   ffmpegDownloadProgress: [progress: FfmpegDownloadProgress]
   windowOnMaximizeChange: [isMaximized: boolean]
+  /** 主进程转发：独立播放窗报告某直播已下架，主窗口据此刷新列表（对端：main/float-window.ts） */
+  liveUnavailable: [liveId: string]
 } & TaskEventMap
 
 export type IpcEventChannel = keyof IpcEventMap

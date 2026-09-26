@@ -6,7 +6,6 @@ import AppTitleBar from '@renderer/components/app/AppTitleBar.vue'
 import BackTopButton from '@renderer/components/app/BackTopButton.vue'
 import Initialize from '@renderer/components/app/Initialize.vue'
 import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
-import FloatPlayerHost from '@renderer/components/floats/FloatPlayerHost.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import useTasksStore from '@renderer/stores/tasks'
 import Constants from '@renderer/utils/constants'
@@ -146,9 +145,6 @@ onErrorCaptured((error, instance, info) => {
 
         <!-- 右下角全局回到顶部按钮：自动定位当前页面的主滚动容器 -->
         <BackTopButton />
-
-        <!-- 全局画中画迷你窗：跨页面持续播放 -->
-        <FloatPlayerHost />
 
         <!-- 全局音乐迷你播放条：跨页面持续播放专辑歌曲 -->
         <FloatAudioBar />
