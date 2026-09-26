@@ -1,11 +1,11 @@
-import type { IpcMainInvokeEvent } from 'electron'
 import type { TaskChannelPrefix } from '../../preload/ipc-contract'
+import type { TaskSnapshot } from './task-registry'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ipcMain } from 'electron'
 import { isAllowedStreamUrl } from '../allowed-hosts'
 import { Database } from '../database'
-import { sendIpc } from '../ipc/send'
+import { broadcastIpc, sendIpc } from '../ipc/send'
 import { handleTraced } from '../ipc/trace'
 import { log, warn } from '../logger'
 import { FfmpegProcess, hasFfmpegSlot, MAX_CONCURRENT_FFMPEG_TASKS, resolveFfmpegBinary } from './ffmpeg-process'
@@ -35,11 +35,11 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
   // 查询当前所有任务快照，供渲染端刷新后恢复列表
   handleTraced(`${channelPrefix}List`, () => registry.list())
   // 从快照表删除任务（对应渲染端移除卡片）
-  handleTraced(`${channelPrefix}Remove`, (_event: IpcMainInvokeEvent, liveId: string) => {
+  handleTraced(`${channelPrefix}Remove`, (_event, liveId: string) => {
     registry.remove(liveId)
   })
 
-  handleTraced(`${channelPrefix}Start`, async (event: IpcMainInvokeEvent, url: string, filename: string, liveId: string) => {
+  handleTraced(`${channelPrefix}Start`, async (event, url: string, filename: string, liveId: string) => {
     // 输入地址白名单：url 直接交给 ffmpeg（-i），不经校验会形成 netRequest 之外的安全旁路
     if (!isAllowedStreamUrl(url))
       throw new Error(`任务源地址不在允许范围内: ${url}`)
@@ -72,8 +72,13 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
     // 同一 liveId 上一进程可能仍在优雅退出（写文件尾），等待其完全退出后再启动
     await registry.waitForClose(liveId)
 
-    // 窗口销毁后不能再用 event.sender.send，否则会抛 "Object has been destroyed"
-    // 窗口销毁后的事件直接由 sendIpc 忽略，业务代码无需重复判断。
+    // 任务状态事件分两类：
+    // - Started / End / Error 一律**广播**给全部窗口：任务列表的镜像在「每个窗口」里各有一份
+    //   （见 renderer 的 stores/tasks.ts），在独立播放窗发起的录制 / 下载，
+    //   主窗口的下载页也必须能同步状态。窗口销毁后的事件由 sendIpc 忽略。
+    // - Progress 只回**发起方**：它目前只喂 debugLog，没有任何窗口拿它渲染；
+    //   而它是 ffmpeg 心跳级的高频事件，广播等于白白遍历一遍所有窗口。
+    //   ⚠️ 将来若有窗口要显示进度条，必须改回 broadcastIpc。
     // 外部 stop：向 ffmpeg stdin 写 'q' 优雅退出（once 监听器在 close 时显式移除，
     // 避免同 liveId 多次重启导致监听器无限累积）。
     // 先于 proc 声明：onClose 回调需要引用它们做监听器清理
@@ -100,7 +105,7 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
           const errMsg = `[${logTag}]ffmpeg error: ${err.message}`
           registry.clearClose(liveId)
           registry.markError(liveId, errMsg)
-          sendIpc(event.sender, `${channelPrefix}Error`, liveId, errMsg)
+          broadcastIpc(`${channelPrefix}Error`, liveId, errMsg)
         },
         onClose: (code, signal) => {
           ipcMain.removeListener(stopChannel, stopListener)
@@ -109,12 +114,12 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
           if (code === 0 || signal === 'SIGINT') {
             log(`[${logTag}]spawn ffmpeg end`, liveId, filePath)
             registry.markFinish(liveId)
-            sendIpc(event.sender, `${channelPrefix}End`, liveId, filePath)
+            broadcastIpc(`${channelPrefix}End`, liveId, filePath)
           }
           else {
             const errMsg = `[${logTag}]ffmpeg exited with code ${code}`
             registry.markError(liveId, errMsg)
-            sendIpc(event.sender, `${channelPrefix}Error`, liveId, errMsg)
+            broadcastIpc(`${channelPrefix}Error`, liveId, errMsg)
           }
         },
       },
@@ -123,7 +128,7 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
     registry.registerClose(liveId, proc.closePromise)
     activeProcess = proc
     // 记录任务快照（running），冲突保护可能已改用带序号的新文件名，快照以实际路径为准
-    registry.put({
+    const snapshot: TaskSnapshot = {
       liveId,
       url,
       filename: path.basename(filePath),
@@ -131,13 +136,19 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
       saveDirectory: saveDir,
       status: 'running',
       startedAt: Date.now(),
-    })
+    }
+    registry.put(snapshot)
 
     ipcMain.once(stopChannel, stopListener)
 
     // IPC 调用只表示 ffmpeg 已成功启动；任务结束由 End/Error 通道通知。
+    // 「任务已登记」在 spawn 成功后才广播：spawn 失败时发起窗口会撤销占位卡片，
+    // 若提前广播，其它窗口就会留下一张永不结束的幻影卡片。
     return new Promise<string>((resolve, reject) => {
-      proc.child.once('spawn', () => resolve(filePath))
+      proc.child.once('spawn', () => {
+        broadcastIpc(`${channelPrefix}Started`, snapshot)
+        resolve(filePath)
+      })
       proc.child.once('error', (err) => {
         reject(new Error(`[${logTag}]ffmpeg error: ${err.message}`))
       })

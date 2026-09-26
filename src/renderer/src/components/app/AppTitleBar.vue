@@ -2,6 +2,7 @@
 import appIcon from '@renderer/assets/icon.png'
 import { useEventListener } from '@vueuse/core'
 import { onMounted, onUnmounted, ref } from 'vue'
+import { FLOAT_BAR_HEIGHT } from '../../../../common/float-window'
 
 const isMaximized = ref(false)
 let disposeChange: (() => void) | undefined
@@ -47,7 +48,12 @@ function close() {
 </script>
 
 <template>
-  <div class="app-title-bar" :class="{ 'is-html-fullscreen': htmlFullscreen }" @dblclick="onDoubleClick">
+  <div
+    class="app-title-bar"
+    :class="{ 'is-html-fullscreen': htmlFullscreen }"
+    :style="{ height: `${FLOAT_BAR_HEIGHT}px` }"
+    @dblclick="onDoubleClick"
+  >
     <div class="title-bar-brand">
       <img class="tb-logo" :src="appIcon" alt="logo" draggable="false">
       <span class="tb-name">Desktop48</span>
@@ -82,10 +88,9 @@ function close() {
 </template>
 
 <style scoped lang="scss">
-/* 高度与 utils/float-player-layout.ts 的 FP_BAR_HEIGHT 保持一致：
-   浮窗以 36px 为拖拽带上沿做 y 钳制 / 吸顶，改动需同步 */
+/* 高度由 FLOAT_BAR_HEIGHT 经 :style 注入（与独立播放窗标题栏同源，不再靠注释人工同步）。
+   这里只留 flex 布局，height 见模板上的 :style 绑定 */
 .app-title-bar {
-  height: 36px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -103,7 +108,7 @@ function close() {
 }
 
 /* 全屏（top layer）盖住了标题栏，拖拽区却照常在原生层吞点击：
-   落进这条 36px 带的浮层按钮（如旋转胶囊最左侧）会点不中。
+   落进这条标题栏带的浮层按钮（如旋转胶囊最左侧）会点不中。
    全屏期间标题栏不可见也无拖拽需求，整条转为 no-drag */
 .app-title-bar.is-html-fullscreen {
   -webkit-app-region: no-drag;

@@ -67,6 +67,30 @@ function cleanupListeners(task: TaskState) {
 }
 
 /**
+ * 「任务已登记」快照并入本地镜像的处置：
+ * - skip：本窗口已在跟踪该任务
+ * - resync：有卡片但没在跟踪（监听器已清空）→ 按快照重新对齐，existing 为对应列表项
+ * - mirror：本窗口没有该任务（在别的窗口发起）→ 新建镜像卡片
+ */
+export type TaskMergeDecision
+  = | { action: 'skip' | 'mirror' }
+    | { action: 'resync', existing: TaskState }
+
+/**
+ * 判断主进程广播的「任务已登记」快照该如何并入本地列表（纯函数，便于单测）。
+ * `unsubscribers.length === 0` 表示本窗口没在跟踪它：前提是 startTask / restoreTask
+ * 都会在 running 时注册监听器，end / error / stop 会清空它们，改动时需同步复核。
+ */
+export function decideTaskMerge(list: readonly TaskState[], snapshot: TaskSnapshot): TaskMergeDecision {
+  const existing = list.find(item => item.liveId === snapshot.liveId)
+  if (!existing)
+    return { action: 'mirror' }
+  if (snapshot.status === 'running' && existing.unsubscribers.length === 0)
+    return { action: 'resync', existing }
+  return { action: 'skip' }
+}
+
+/**
  * 注册任务结束（end / error）监听器；start 与 restore 共用。
  * 两者都把任务置为 finished，差别只在 error 额外打日志、且不触发完成提示。
  */

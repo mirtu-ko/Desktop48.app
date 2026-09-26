@@ -33,11 +33,11 @@ const props = defineProps({
   source: { type: String, default: 'user' },
   /** open 模式下的顶部头像（公演封面，完整 URL） */
   avatarUrl: { type: String, default: '' },
-  /** 迷你窗紧凑模式：隐藏次要信息，适配小尺寸画中画窗口 */
+  /** 紧凑模式：隐藏次要信息，适配小尺寸独立播放窗 */
   compact: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['close', 'avatar', 'aspect', 'pip'])
+const emit = defineEmits(['close', 'avatar', 'aspect', 'playing'])
 
 const nativeVideo = ref<HTMLVideoElement | null>(null)
 // 电台模式的 audio 元素由 RadioStage 挂载/卸载时经 @audio 事件回传
@@ -76,8 +76,6 @@ const {
   onBoxDblClick,
   isFullscreen,
   toggleFullscreen,
-  isPip,
-  togglePip,
   playing,
   muted,
   togglePlay,
@@ -92,8 +90,10 @@ const {
   onAspect: aspect => emit('aspect', aspect),
 })
 
-// PiP 状态变化上报父级：进入/退出系统画中画时浮窗自动收窄/还原
-watch(isPip, active => emit('pip', active))
+// 播放/暂停上报父级：独立播放窗据此决定是否置顶（播放中才置顶）。
+// 只上报「变化」而不带上初值：窗口刚打开时还在加载，此刻保持创建时的置顶态，
+// 免得视频还没出画面就先掉到别的窗口后面。
+watch(playing, value => emit('playing', value))
 
 // ── 直播轮询：已播时长 + 在线人数 ────────────────────────────────
 const polling = useLivePolling({
@@ -382,12 +382,9 @@ onUnmounted(() => {
         :playing="playing"
         :muted="muted"
         :is-fullscreen="isFullscreen"
-        :show-pip="!isRadio"
-        :is-pip="isPip"
         @toggle-play="togglePlay"
         @toggle-mute="toggleMute"
         @toggle-fullscreen="toggleFullscreen"
-        @toggle-pip="togglePip"
       >
         <template #leading>
           <span class="live-status">

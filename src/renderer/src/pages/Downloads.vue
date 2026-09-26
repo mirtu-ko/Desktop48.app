@@ -4,8 +4,9 @@ import { Check, Download, Loading, VideoCamera } from '@element-plus/icons-vue'
 import useTasksStore from '@renderer/stores/tasks'
 import { computed } from 'vue'
 
-// 任务状态由 useTasksStore 这个模块级单例持有：本页卸载后任务照常运行，
-// 从悬浮迷你窗等任意入口发起的任务也不会因为本页未挂载而丢失
+// 任务状态由 useTasksStore 这个模块级单例持有：本页卸载后任务照常运行。
+// 任务可能在任意窗口发起（列表页、独立播放窗），由主进程广播事件把各窗口的镜像
+// 保持同步，本页无需自己拉取或轮询
 const { downloadTasks, recordTasks, removeTask, stopTaskByLiveId, openSaveDirectory } = useTasksStore()
 
 // 分区展示配置：图标与主题色引用 app.scss 的 --color-* 变量。

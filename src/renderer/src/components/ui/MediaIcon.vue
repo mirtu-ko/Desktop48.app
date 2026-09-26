@@ -23,8 +23,6 @@ const ICONS = {
   // 窗口换档：与 AppTitleBar 最大化/还原同一语言——单框=放大，双叠框=还原
   windowMaximize: 'M5 5h14v14H5z',
   windowRestore: 'M5 15V5h10M8 8h11v11H8z',
-  // 画中画：外框 + 右下小窗
-  pip: 'M4 5h16v14H4zM12 11h6v5h-6z',
   // 窗口 / 标题栏动作
   close: 'M6 6 18 18M18 6 6 18',
   minus: 'M5 12h14',
