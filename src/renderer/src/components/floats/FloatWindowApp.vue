@@ -30,10 +30,21 @@ const payload = ref<FloatPlayerPayload | null | undefined>(undefined)
 const avatarUrl = ref('')
 const viewportWidth = ref(window.innerWidth)
 
+// 最大化状态由主进程持有：挂载时查一次初值，之后靠 windowOnMaximizeChange 推回来
+const isMaximized = ref(false)
+let disposeMaximizeChange: (() => void) | undefined
+
 onMounted(() => {
   EventBus.on('live-unavailable', onLiveUnavailable)
   void window.mainAPI.floatPlayerGetPayload(kind, liveId).then((value) => {
     payload.value = value
+  })
+  void window.mainAPI.windowIsMaximized().then((value) => {
+    isMaximized.value = value
+  })
+  // 订阅式通道返回退订函数，必须在 onUnmounted 调用，否则重挂载会累积监听器
+  disposeMaximizeChange = window.mainAPI.windowOnMaximizeChange((value) => {
+    isMaximized.value = value
   })
 })
 
@@ -48,13 +59,18 @@ const barTitle = computed(() => {
 // 窄窗切紧凑布局（替代旧三态里的「迷你态」），由窗口宽度驱动
 const compact = computed(() => viewportWidth.value < 520)
 
-/** 关闭 / 最小化：窗口控制通道按 event.sender 定位，关的是本窗而非主窗口 */
+/** 窗口控制通道按 event.sender 定位，作用于本窗而非主窗口 */
 function onClose() {
   void window.mainAPI.windowClose()
 }
 
 function onMinimize() {
   void window.mainAPI.windowMinimize()
+}
+
+/** 切换由主进程执行，新状态经 windowOnMaximizeChange 推回来（不做本地乐观更新） */
+function onToggleMaximize() {
+  void window.mainAPI.windowToggleMaximize()
 }
 
 /** 子播放器上报视频宽高比 → 主进程按比例定形窗口（用户手动缩放过则不再打扰） */
@@ -81,7 +97,10 @@ useEventListener(window, 'resize', () => {
   viewportWidth.value = window.innerWidth
 })
 
-onUnmounted(() => EventBus.off('live-unavailable', onLiveUnavailable))
+onUnmounted(() => {
+  EventBus.off('live-unavailable', onLiveUnavailable)
+  disposeMaximizeChange?.()
+})
 
 // 全屏时标题栏虽不可见，其原生拖拽区仍可能吞点击（与 AppTitleBar 同款问题）：全屏期间停用 drag
 const htmlFullscreen = ref(false)
@@ -92,15 +111,24 @@ useEventListener(document, 'fullscreenchange', () => {
 
 <template>
   <div class="fw-root frosted-surface frosted-surface--deep">
-    <div class="fw-bar" :class="{ 'is-html-fullscreen': htmlFullscreen }" :style="{ height: `${FLOAT_BAR_HEIGHT}px` }">
+    <div
+      class="fw-bar"
+      :class="{ 'is-html-fullscreen': htmlFullscreen }"
+      :style="{ height: `${FLOAT_BAR_HEIGHT}px` }"
+      @dblclick="onToggleMaximize"
+    >
       <span class="fw-kind" :class="{ 'is-playback': kind === 'playback' }">
         {{ kind === 'live' ? '直播' : '回放' }}
       </span>
       <img v-if="avatarUrl" :src="avatarUrl" alt="avatar" class="fw-avatar" draggable="false">
       <span class="fw-title ellipsis" :title="barTitle">{{ barTitle }}</span>
-      <div class="fw-actions">
+      <!-- 双击标题栏同效；按钮区拦住冒泡，免得双击按钮时顺带切换最大化 -->
+      <div class="fw-actions" @dblclick.stop>
         <el-button circle size="small" title="最小化" @click.stop="onMinimize">
           <MediaIcon name="minus" :size="15" class="fw-icon" />
+        </el-button>
+        <el-button circle size="small" :title="isMaximized ? '还原' : '最大化'" @click.stop="onToggleMaximize">
+          <MediaIcon :name="isMaximized ? 'windowRestore' : 'windowMaximize'" :size="15" class="fw-icon" />
         </el-button>
         <el-button circle size="small" title="关闭" class="fw-icon--close" @click.stop="onClose">
           <MediaIcon name="close" :size="15" class="fw-icon" />

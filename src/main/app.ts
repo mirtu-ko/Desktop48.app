@@ -7,9 +7,9 @@ import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
 import { closeAllFloatWindows } from './float-window'
 import { registerAllIPC } from './ipc'
-import { sendIpc } from './ipc/send'
 import { log } from './logger'
 import { cleanupStreamSessions } from './stream'
+import { wireWindowMaximizeEvents } from './window-events'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
 
 // 数据库初始化与全部 IPC 通道注册（database.ts 模块本身无副作用，单例在此显式拉起）
@@ -57,7 +57,7 @@ function createWindow(): void {
     // 幂等：Windows / Linux 上随后 before-quit 再清一次无害。
     cleanupStreamSessions()
   })
-  wireWindowEvents(win)
+  wireWindowMaximizeEvents(win)
 
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -72,13 +72,6 @@ function createWindow(): void {
   else {
     win.loadFile(fileURLToPath(new URL('../renderer/index.html', import.meta.url)))
   }
-}
-
-// 监听窗口最大化 / 还原状态变化并通知渲染进程
-function wireWindowEvents(win: BrowserWindow): void {
-  const send = () => sendIpc(win.webContents, 'windowOnMaximizeChange', win.isMaximized())
-  win.on('maximize', send)
-  win.on('unmaximize', send)
 }
 
 // 取当前可用主窗口；窗口已销毁时返回 null。

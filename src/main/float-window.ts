@@ -10,11 +10,9 @@ import { fileURLToPath } from 'node:url'
 import { is } from '@electron-toolkit/utils'
 import { BrowserWindow, screen, shell } from 'electron'
 import icon from '../../resources/icon.png?asset'
-import { computeInitialWindowSize, FLOAT_DEFAULT_ASPECT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_ASPECT, FLOAT_WINDOW_HASH_PATH } from '../common/float-window'
+import { computeInitialWindowSize, decideAutoFit, FLOAT_DEFAULT_ASPECT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, FLOAT_WINDOW_HASH_PATH, resolveFloatWindowPosition } from '../common/float-window'
 import { log } from './logger'
-
-/** 窗口距工作区右上角的留白 */
-const EDGE_MARGIN = 24
+import { wireWindowMaximizeEvents } from './window-events'
 
 /** 判定「用户手动缩放过」的尺寸容差（DIP），避免 Linux 窗口管理器取整被误判 */
 const RESIZE_DETECT_EPSILON = 2
@@ -22,8 +20,13 @@ const RESIZE_DETECT_EPSILON = 2
 interface FloatWindowRecord {
   win: BrowserWindow
   payload: FloatPlayerPayload
-  /** 用户是否手动缩放过：置位后不再自动改尺寸，尊重用户的选择 */
+  /** 用户是否手动缩放过 / 最大化过：置位后不再自动改尺寸，尊重用户的选择 */
   userResized: boolean
+  /**
+   * 自动定形是否已落定（首次定形完成 / 用户最大化）。
+   * 落定前不采信 userResized，判据与原因见 common/float-window.ts 的 FloatFitState。
+   */
+  autoFitSettled: boolean
   /** 最近一次程序设置的尺寸；Linux 上 will-resize 不触发，靠尺寸比对反推用户缩放 */
   lastProgrammaticSize: WindowSize | null
 }
@@ -55,15 +58,6 @@ function resolveAnchorDisplay(mainWindow: BrowserWindow | null) {
     : screen.getPrimaryDisplay()
 }
 
-/** 摆在主窗口所在显示器的右上角 */
-function resolvePlacement(mainWindow: BrowserWindow | null, width: number): { x: number, y: number } {
-  const { workArea } = resolveAnchorDisplay(mainWindow)
-  return {
-    x: Math.round(workArea.x + workArea.width - width - EDGE_MARGIN),
-    y: Math.round(workArea.y + EDGE_MARGIN),
-  }
-}
-
 /**
  * 加载独立播放窗页面：与主窗口复用同一份 index.html，靠 hash 分流到播放器根组件。
  * hash 只带短 key，全量载荷由渲染端经 floatPlayerGetPayload 回取。
@@ -92,12 +86,15 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
     return
   }
 
-  // 电台无视频轨、不会上报 aspect，用横向兜底比例，避免一开就是一条竖带
-  const initialAspect = kind === 'live' && payload.liveType === 2 ? FLOAT_RADIO_ASPECT : FLOAT_DEFAULT_ASPECT
-  // 初始尺寸按主窗口所在显示器的工作区比例推导（见 common/float-window.ts 的尺寸策略）
+  // 电台（liveType===2）无视频轨、永不上报 aspect：给固定竖屏尺寸。
+  // 回放列表项自带 liveType（Playbacks.vue 透传），建窗时即可判定，不必等详情接口
+  const isRadio = payload.liveType === 2
+  // 视频窗按主窗口所在显示器的工作区比例推导（见 common/float-window.ts 的尺寸策略）
   const workArea = resolveAnchorDisplay(mainWindow).workArea
-  const { w: width, h: height } = computeInitialWindowSize(initialAspect, workArea)
-  const { x, y } = resolvePlacement(mainWindow, width)
+  const { w: width, h: height } = isRadio
+    ? FLOAT_RADIO_WINDOW_SIZE
+    : computeInitialWindowSize(FLOAT_DEFAULT_ASPECT, workArea)
+  const { x, y } = resolveFloatWindowPosition(workArea, { w: width, h: height }, records.size)
 
   const win = new BrowserWindow({
     width,
@@ -108,7 +105,7 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
     minHeight: FLOAT_MIN_HEIGHT,
     frame: false, // 纯自定义标题栏，整条 fw-bar 即拖动区
     resizable: true,
-    maximizable: false,
+    maximizable: true, // 标题栏自带最大化 / 还原按钮，见 FloatWindowApp.vue
     fullscreenable: true, // 播放器容器全屏依赖它，关掉会被系统拒绝
     // 创建即置顶：打开瞬间不会被主窗口盖住；之后由播放状态接管（见 setFloatWindowPlaying）
     alwaysOnTop: true,
@@ -128,11 +125,21 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
     win,
     payload,
     userResized: false,
+    autoFitSettled: false,
     lastProgrammaticSize: { w: width, h: height },
   }
   records.set(key, record)
 
   win.once('ready-to-show', () => win.show())
+
+  // 最大化 / 还原状态推给本窗渲染进程：标题栏按钮的图标要跟着换
+  wireWindowMaximizeEvents(win)
+  // 最大化视同用户接管尺寸（否则后续 aspect 定形会把最大化抹掉），
+  // 同时置位 autoFitSettled：最大化本身就是一次尺寸落定
+  win.on('maximize', () => {
+    record.userResized = true
+    record.autoFitSettled = true
+  })
 
   // 置顶不跟 focus / blur 联动：播放状态由渲染端上报（见 setFloatWindowPlaying）。
   // will-resize 只在用户手动缩放时触发（程序化设置不触发，Linux 不发射，
@@ -163,9 +170,10 @@ export function getFloatWindowPayload(kind: FloatPlayerKind, liveId: string): Fl
 }
 
 /**
- * 按视频宽高比定形窗口（首次元数据到达时调用）。
- * 用户手动缩放过则不再自动改尺寸（含首次）；必须按工作区整体重算而不能保住当前宽度，
- * 否则横屏视频会停留在 9:16 兜底算出的窄宽度上。
+ * 按视频宽高比定形窗口（元数据到达 / 旋屏时调用）。
+ * 首次定形无条件执行（判据见 common/float-window.ts 的 decideAutoFit），
+ * 落定后才尊重用户手动缩放；必须按工作区整体重算而不能保住当前宽度，
+ * 否则横屏会停在 9:16 兜底算出的窄宽度上。
  */
 export function fitFloatWindowAspect(sender: WebContents, aspect: number): void {
   if (!(aspect > 0))
@@ -177,16 +185,13 @@ export function fitFloatWindowAspect(sender: WebContents, aspect: number): void 
   if (!record)
     return
 
-  // Linux 上 will-resize 不触发，改用「当前尺寸是否偏离上次程序设置值」反推用户缩放。
-  // 放在这里而不是靠 resized 事件：resized 同样是 macOS / Windows 限定。
-  if (!record.userResized && record.lastProgrammaticSize) {
-    const [w, h] = win.getSize()
-    const { w: expectedW, h: expectedH } = record.lastProgrammaticSize
-    if (Math.abs(w - expectedW) > RESIZE_DETECT_EPSILON || Math.abs(h - expectedH) > RESIZE_DETECT_EPSILON)
-      record.userResized = true
-  }
-  if (record.userResized)
+  const [currentW, currentH] = win.getSize()
+  const { userResized, fit } = decideAutoFit(record, { w: currentW, h: currentH }, RESIZE_DETECT_EPSILON)
+  record.userResized = userResized
+  if (!fit) {
+    log('[float-window] 用户已接管尺寸，跳过自动定形:', record.payload.liveId, aspect)
     return
+  }
 
   const bounds = win.getBounds()
   const { workArea } = screen.getDisplayMatching(bounds)
@@ -198,6 +203,8 @@ export function fitFloatWindowAspect(sender: WebContents, aspect: number): void 
   // 这里不额外分支：采纳与否都不影响「尺寸按比例定形」这一主目标
   win.setBounds({ x, y, width: w, height: h })
   record.lastProgrammaticSize = { w, h }
+  // 定形落定：之后才采信「用户缩放过」的信号（含 Linux 的尺寸比对兜底）
+  record.autoFitSettled = true
 }
 
 /**

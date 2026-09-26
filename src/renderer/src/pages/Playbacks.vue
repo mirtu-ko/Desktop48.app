@@ -203,6 +203,9 @@ function onPlaybackClick(item: any) {
     nickname: item.userInfo.nickname,
     title: item.title,
     startTime: Number.parseInt(item.ctime),
+    // 列表项自带 liveType，建窗时即可判定电台（见 main/float-window.ts 的 openFloatWindow），
+    // 不必等详情接口回来
+    liveType: item.liveType ?? 1,
   })
 }
 
