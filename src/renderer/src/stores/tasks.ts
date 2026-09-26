@@ -35,18 +35,9 @@ interface TaskKindConfig {
   logTag: string
 }
 
-// ★ 跨进程：下方 taskConfigs 里的 downloadTask* / recordTask* 通道全部经
-// preload/index.ts 转到 main/ipc/register-task-ipc.ts（机制在 main/ffmpeg/register-ffmpeg-task.ts）。
-// 与其它 IPC 不同，这组是**双向**的：invoke 发起任务，主进程再用 ipcRenderer.on
-// 持续回推 progress / end / error 事件（见 preload 里返回 unsubscribe 的那几个）。
-//
-// 模块级单例：任务不随 Downloads 页面卸载而消失。
-// 否则在列表页发起的录制会因为 Downloads 未挂载而丢失事件，
-// 只能靠「先跳到下载页」这种副作用来保证任务被接住。
-//
-// ⚠️ 单例只在**单个渲染进程**内共享。独立播放窗是另一个渲染进程，
-// 因此每个窗口都要调用 installTasks() 各自镜像一份主进程注册表，
-// 并由主进程广播 Started/Progress/End/Error 保持同步（见 main/ipc/send.ts 的 broadcastIpc）。
+// 任务通道是双向的：invoke 发起任务，主进程经 ipcRenderer.on 回推状态。
+// store 是单个渲染进程内的单例；独立播放窗是另一个进程，每个窗口都要
+// installTasks() 各自镜像主进程注册表，由广播事件保持同步。
 const downloadTasks = ref<TaskState[]>([])
 const recordTasks = ref<TaskState[]>([])
 
@@ -152,11 +143,9 @@ async function handleTask(payload: TaskPayload, kind: TaskKind) {
 }
 
 /**
- * 移除任务卡片，并同步删除主进程快照（否则刷新后该任务会再次出现）。
- *
- * ⚠️ 跨窗契约：**删除不广播**（TaskEventMap 里没有 Removed 通道），因此其它窗口的镜像
- * 不会跟着删。当前只有一个窗口能发起删除（下载页只在主窗口挂载），故无可见影响。
- * 将来若在独立播放窗也加删除入口，必须先给 Remove 补广播，否则两个窗口的镜像会分叉。
+ * 移除任务卡片，并同步删除主进程快照（否则刷新后任务会再次出现）。
+ * ⚠️ 删除不广播（TaskEventMap 无 Removed 通道）：目前只有主窗口能删除，故无可见影响；
+ * 将来若在播放窗也加删除入口，必须先补 Removed 广播，否则两窗镜像会分叉。
  */
 async function removeTask(task: TaskState, kind: TaskKind) {
   const config = taskConfigs[kind]
@@ -167,25 +156,16 @@ async function removeTask(task: TaskState, kind: TaskKind) {
 }
 
 /**
- * 把主进程广播的「任务已登记」快照并入本地列表。
- *
- * 任务状态由主进程注册表统一持有，而每个窗口各存一份镜像：任务可能在**别的窗口**
- * 发起（典型场景是独立播放窗里点录制 / 下载），本窗口必须据此补出同一张卡片，
- * 否则主窗口的下载页永远看不到它。
- *
- * 判据本身抽在 task-runtime.ts 的 `decideTaskMerge`（纯函数，可单测）。
- *
- * 镜像一律不挂完成提示：提示只由发起窗口给，否则同一任务会在两个窗口各弹一次。
+ * 把主进程广播的「任务已登记」快照并入本地列表（判据见 task-runtime.ts 的 decideTaskMerge）。
+ * 镜像一律不挂完成提示：提示只由发起窗口给，避免两个窗口各弹一次。
  */
 function mergeStartedTask(snapshot: TaskSnapshot, config: TaskKindConfig) {
-  const action = decideTaskMerge(config.list.value, snapshot)
-  if (action === 'skip')
+  const decision = decideTaskMerge(config.list.value, snapshot)
+  if (decision.action === 'skip')
     return
 
-  if (action === 'resync') {
-    const existing = config.list.value.find(item => item.liveId === snapshot.liveId)
-    if (existing)
-      restoreTask(existing, snapshot, config.channels, config.logTag)
+  if (decision.action === 'resync') {
+    restoreTask(decision.existing, snapshot, config.channels, config.logTag)
     return
   }
 
@@ -245,15 +225,7 @@ async function ensureRestored(silent: boolean) {
   await Promise.all([restoreTasks('download', silent), restoreTasks('record', silent)])
 }
 
-/**
- * 应用级安装：注册事件订阅并恢复一次任务快照。**每个窗口都要调用**。
- *
- * 任务列表是主进程注册表的镜像，而渲染端 store 是模块级单例、不跨进程共享：
- * 独立播放窗若不安装，就既看不到别处发起的任务（播放器按钮状态错），
- * 也不会把本窗发起的任务同步给主窗口的下载页。
- *
- * 传 `{ silent: true }` 走静默模式（独立播放窗用）：只镜像状态，不弹完成提示。
- */
+/** 应用级安装：订阅任务事件并恢复快照，每个窗口都要调用；silent 模式只镜像不弹提示 */
 export function installTasks(options: { silent?: boolean } = {}) {
   if (installed)
     return

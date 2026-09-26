@@ -10,19 +10,13 @@ import { FLOAT_BAR_HEIGHT } from '../../../../common/float-window'
 
 /**
  * 独立播放窗根组件（无边框 + 自定义标题栏）。
- *
- * 入参来自 window.location.hash：hash 只带 kind + liveId 短 key，全量载荷经
- * floatPlayerGetPayload 回取（主进程持有窗口注册表，顺带存载荷；reload 后可自愈）。
- *
- * 窗口的移动由标题栏的 -webkit-app-region: drag 交给系统，缩放由系统边框负责，
- * 因此这里没有任何 Pointer 拖拽 / 三态 / 吸附代码（那是 DOM 浮层时代的实现）。
+ * hash 只带 kind + liveId 短 key，全量载荷经 floatPlayerGetPayload 回取；
+ * 移动 / 缩放分别交给系统拖拽区与边框，这里不含任何 Pointer 逻辑。
  */
 
 /** 解析 `#/float?kind=live&liveId=xxx`；URLSearchParams 自动 percent-decode */
 function parseHash(): { kind: FloatPlayerKind, liveId: string } {
-  const raw = window.location.hash.replace(/^#/, '')
-  const query = raw.includes('?') ? raw.slice(raw.indexOf('?') + 1) : ''
-  const params = new URLSearchParams(query)
+  const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
   return {
     kind: params.get('kind') === 'playback' ? 'playback' : 'live',
     liveId: params.get('liveId') ?? '',
@@ -31,15 +25,16 @@ function parseHash(): { kind: FloatPlayerKind, liveId: string } {
 
 const { kind, liveId } = parseHash()
 
-const payload = ref<FloatPlayerPayload | null>(null)
+// undefined=载荷加载中；null=主进程已查不到，窗口信息失效
+const payload = ref<FloatPlayerPayload | null | undefined>(undefined)
 const avatarUrl = ref('')
 const viewportWidth = ref(window.innerWidth)
-const loadFailed = ref(false)
 
-onMounted(async () => {
-  payload.value = await window.mainAPI.floatPlayerGetPayload(kind, liveId)
-  if (!payload.value)
-    loadFailed.value = true
+onMounted(() => {
+  EventBus.on('live-unavailable', onLiveUnavailable)
+  void window.mainAPI.floatPlayerGetPayload(kind, liveId).then((value) => {
+    payload.value = value
+  })
 })
 
 // 标题栏文案与旧浮窗一致：有主播名时展示「主播名: 标题」
@@ -77,10 +72,7 @@ function onPlaying(playing: boolean) {
   void window.mainAPI.floatWindowSetPlaying(playing)
 }
 
-/**
- * 独立播放窗是另一个渲染进程，与主窗口不共享 EventBus：
- * 本地 live-unavailable 必须上报主进程，再由主进程转发给主窗口，列表页才会自动刷新。
- */
+/** 播放窗与主窗口不共享 EventBus：上报主进程转发给主窗口，列表页才能刷新 */
 function onLiveUnavailable(id: string) {
   void window.mainAPI.notifyLiveUnavailable(id)
 }
@@ -89,7 +81,6 @@ useEventListener(window, 'resize', () => {
   viewportWidth.value = window.innerWidth
 })
 
-onMounted(() => EventBus.on('live-unavailable', onLiveUnavailable))
 onUnmounted(() => EventBus.off('live-unavailable', onLiveUnavailable))
 
 // 全屏时标题栏虽不可见，其原生拖拽区仍可能吞点击（与 AppTitleBar 同款问题）：全屏期间停用 drag
@@ -133,9 +124,8 @@ useEventListener(document, 'fullscreenchange', () => {
         @playing="onPlaying"
         @close="onClose"
       />
-      <!-- PlaybackPlayer 没有 close emit（回放不依赖「直播下架」这条关闭路径），
-           因此这里不绑 @close：回放窗只能靠标题栏的关闭按钮退出。
-           若将来给 PlaybackPlayer 加 close，记得同步补上绑定 -->
+      <!-- PlaybackPlayer 无 close emit（回放不依赖「直播下架」关闭路径），故不绑 @close：
+           将来若给它加 close，记得同步补上绑定 -->
       <PlaybackPlayer
         v-else-if="payload"
         :live-title="payload.title"
@@ -148,7 +138,7 @@ useEventListener(document, 'fullscreenchange', () => {
         @aspect="onAspect"
         @playing="onPlaying"
       />
-      <div v-else-if="loadFailed" class="fw-hint">
+      <div v-else-if="payload === null" class="fw-hint">
         播放信息已失效，请关闭后重新打开
       </div>
       <div v-else class="fw-hint">
@@ -166,8 +156,7 @@ useEventListener(document, 'fullscreenchange', () => {
   overflow: hidden;
 }
 
-/* 高度由 FLOAT_BAR_HEIGHT 经 :style 注入：主进程算窗口尺寸时用的就是这个常量，
-   同源后不再需要「改这里记得改那边」的人工同步 */
+/* 高度来自共享常量 FLOAT_BAR_HEIGHT，主进程算窗口尺寸用同一个值 */
 .fw-bar {
   display: flex;
   align-items: center;

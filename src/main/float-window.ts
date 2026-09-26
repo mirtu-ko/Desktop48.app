@@ -1,13 +1,7 @@
 /**
- * 独立播放窗口（直播 / 回放）的生命周期管理。
- *
- * 与已废弃的 DOM 浮层（FloatPlayer.vue）的差异：
- * - 去掉迷你 / 放大 / 折叠三态、贴边吸附、多窗级联，只保留「按视频比例定形一次 + 自由缩放」；
- * - 按 `kind:liveId` 去重：同一路直播 / 回放重复点击只聚焦已存在的窗口；
- * - 窗口引用与载荷在此集中持有，渲染端经 floatPlayerGetPayload 回取（避免长文本进 hash）。
- *
- * 窗口控制通道（windowMinimize / windowClose 等）由 register-window-ipc.ts 按 event.sender
- * 定位窗口，本模块不重复注册；休眠阻止按 webContents 隔离，多窗口天然支持。
+ * 独立播放窗口（直播 / 回放）的生命周期管理：
+ * 按 `kind:liveId` 去重，窗口引用与载荷在此集中持有，渲染端经 floatPlayerGetPayload 回取。
+ * 窗口控制通道由 register-window-ipc.ts 按 event.sender 定位，本模块不重复注册。
  */
 import type { WebContents } from 'electron'
 import type { WindowSize } from '../common/float-window'
@@ -22,12 +16,7 @@ import { log } from './logger'
 /** 窗口距工作区右上角的留白 */
 const EDGE_MARGIN = 24
 
-/**
- * 判定「用户手动缩放过」时允许的尺寸偏差（DIP）。
- *
- * 用于 Linux 兜底（见 fitFloatWindowAspect）：窗口管理器可能对程序设置的尺寸做
- * 细微取整，留 2px 容差避免把这种偏差误判成用户缩放。
- */
+/** 判定「用户手动缩放过」的尺寸容差（DIP），避免 Linux 窗口管理器取整被误判 */
 const RESIZE_DETECT_EPSILON = 2
 
 interface FloatWindowRecord {
@@ -35,10 +24,7 @@ interface FloatWindowRecord {
   payload: FloatPlayerPayload
   /** 用户是否手动缩放过：置位后不再自动改尺寸，尊重用户的选择 */
   userResized: boolean
-  /**
-   * 最近一次**由程序设置**的尺寸；用于在 `will-resize` 不触发的平台（Linux）上
-   * 靠「当前尺寸 ≠ 上次程序设置值」反推用户是否手动缩放过。
-   */
+  /** 最近一次程序设置的尺寸；Linux 上 will-resize 不触发，靠尺寸比对反推用户缩放 */
   lastProgrammaticSize: WindowSize | null
 }
 
@@ -148,12 +134,9 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
 
   win.once('ready-to-show', () => win.show())
 
-  // 置顶不跟 focus / blur 联动：「播放中就一直浮在最前」才是这个窗口存在的意义，
-  // 而不是「被点过才浮」。状态由渲染端上报（见 setFloatWindowPlaying）。
-  //
-  // will-resize 只在用户手动缩放时触发（程序化 setSize/setBounds 不会），
-  // 但**平台受限**：Electron 只保证 macOS / Windows 触发，Linux 不发射。
-  // 因此这里只是「提前置位」的快路径，真正的判据在 fitFloatWindowAspect 里按尺寸比对兜底。
+  // 置顶不跟 focus / blur 联动：播放状态由渲染端上报（见 setFloatWindowPlaying）。
+  // will-resize 只在用户手动缩放时触发（程序化设置不触发，Linux 不发射，
+  // 漏掉的由 fitFloatWindowAspect 按尺寸比对兜底）。
   win.on('will-resize', () => {
     record.userResized = true
   })
@@ -180,15 +163,9 @@ export function getFloatWindowPayload(kind: FloatPlayerKind, liveId: string): Fl
 }
 
 /**
- * 按视频宽高比定形窗口。
- *
- * 首次元数据到达时调用；**用户手动缩放过则一律不再自动改尺寸**（含首次）——
- * 用户显式拖出来的尺寸优先于「比例正确」这个次要目标。若首次定形也强行覆盖，
- * 用户在元数据到达前抢先缩放的那次操作会被无声撤销。
- *
- * 关键：**按工作区整体重算，而不是保住当前宽度**。建窗时真实比例还不知道，用的是 9:16 兜底，
- * 算出的宽度是「竖屏被高度上限回缩后」的窄值（1080p 上 405）。若定形时只保宽度，
- * 横屏视频就会永远卡在 405 宽 —— 表现为「横屏视频打开后窗口特别小」。
+ * 按视频宽高比定形窗口（首次元数据到达时调用）。
+ * 用户手动缩放过则不再自动改尺寸（含首次）；必须按工作区整体重算而不能保住当前宽度，
+ * 否则横屏视频会停留在 9:16 兜底算出的窄宽度上。
  */
 export function fitFloatWindowAspect(sender: WebContents, aspect: number): void {
   if (!(aspect > 0))
@@ -225,12 +202,7 @@ export function fitFloatWindowAspect(sender: WebContents, aspect: number): void 
 
 /**
  * 播放状态驱动置顶：播放中置顶，暂停 / 结束取消置顶。
- *
- * 渲染端只在状态**变化**时上报（不带初值），所以窗口打开后的加载期间保持创建时的置顶态，
- * 不会因为视频还没出画面就先掉到别的窗口后面。
- *
- * 层级用默认的 `floating`：位于普通窗口之上、Dock / 任务栏之下 —— 对「播放器浮窗」正合适。
- * 若将来要盖住全屏的其他应用，需改成 `screen-saver`（会变得很霸道，属产品取舍）。
+ * 渲染端只在状态变化时上报，加载期间保持创建时的置顶态；层级用默认 floating。
  */
 export function setFloatWindowPlaying(sender: WebContents, playing: boolean): void {
   const win = BrowserWindow.fromWebContents(sender)
@@ -240,16 +212,9 @@ export function setFloatWindowPlaying(sender: WebContents, playing: boolean): vo
 }
 
 /**
- * 关闭全部独立播放窗（主窗口关闭 / 应用退出时调用，确保随后 window-all-closed 能触发退出）。
- *
- * 用 `destroy()` 而非 `close()`：主窗口关闭 / 应用退出路径上不能等待渲染端确认，
- * 否则一个卡住的播放窗会阻塞整个退出流程。
- *
- * 代价：`destroy()` 不触发 `close` / `beforeunload` / `unload`，渲染端的
- * `onUnmounted → session.dispose() → stopLiveStream` **不会执行**。转流进程不靠它回收：
- * 渲染进程销毁 → HTTP 连接断开 → `http-server.ts` 的 `req.on('close')` 会 SIGKILL 掉 ffmpeg。
- * 残留的只是 `stream.ts` 的 `streamSessions` 条目，由 app.ts 在主窗口关闭 / before-quit 时
- * 调 `cleanupStreamSessions()` 清掉（macOS 关主窗口不退出应用，这条兜底是必要的）。
+ * 关闭全部独立播放窗（主窗口关闭 / 应用退出时调用，确保 window-all-closed 能触发退出）。
+ * 用 destroy() 而非 close()：退出路径不能等待渲染端确认；destroy 不触发 unload，
+ * 转流进程靠 http-server 的连接关闭回收，streamSessions 条目由 app.ts 兜底清理。
  */
 export function closeAllFloatWindows(): void {
   for (const { win } of [...records.values()]) {
