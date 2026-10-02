@@ -62,12 +62,12 @@ function onVisibilityChange(value: boolean) {
     emit('close')
 }
 
-/** 点击「看 TA 的回放」：跳转 /lives?tab=playback&member=<userId>，由 Lives 页切 tab 并应用筛选 */
+/** 跳转回放页并预置成员筛选 */
 function openPlaybacks() {
   if (!props.member?.userId)
     return
   emit('close')
-  router.push({ path: '/lives', query: { tab: 'playback', member: String(props.member.userId) } })
+  router.push({ path: '/lives/playbacks', query: { member: String(props.member.userId) } })
 }
 </script>
 
