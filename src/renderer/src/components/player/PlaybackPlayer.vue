@@ -138,6 +138,20 @@ function toggleDanmakuMode() {
   danmakuMode.value = danmakuMode.value === 'live' ? 'all' : 'live'
 }
 
+/**
+ * 面板展开时按下画面空白处收起。用 pointerdown 而非 click：click 的 target 是按下 / 抬起
+ * 两点的最近公共祖先，在搜索框里拖选文字后松手会被误判成「点在面板外」。
+ * 控制条与右上角悬浮钮不算空白区 —— 那里是操作，收起面板会打断拖动进度。
+ */
+function onVideoPointerDown(event: PointerEvent) {
+  if (danmakuMode.value !== 'all')
+    return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.danmaku-all, .mini-controls, .player-actions'))
+    return
+  danmakuMode.value = 'live'
+}
+
 // 弹幕字号随画面渲染高度等比缩放（写死 px 在大画面里偏小），上下限按窗口形态区分：
 // 窄浮窗 10~14px，主窗 / 全屏 12~20px
 const DANMAKU_FONT_RATIO = 0.027
@@ -336,6 +350,7 @@ onUnmounted(() => {
           ref="videoBoxRef"
           class="video-box-inner"
           :class="{ 'vertical-rotation': !isRadio && isVerticalRotation }"
+          @pointerdown="onVideoPointerDown"
           @dblclick="onBoxDblClick"
         >
           <RadioStage
