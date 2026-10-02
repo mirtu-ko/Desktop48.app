@@ -21,6 +21,8 @@ export interface UsePagedListOptions<T> {
   itemKey?: (_item: T) => string
   /** 请求失败时是否标记为"没有更多"，从而停止触底重试；Lives 默认 false，Playbacks 为 true */
   stopOnError?: boolean
+  /** 绑定到 el-scrollbar 的 ref（列表滚动容器）：回顶与触底位置判定都读它；不传则内部自建（同 useLoadMore） */
+  scrollbarRef?: Ref<any>
 }
 
 /**
@@ -28,7 +30,7 @@ export interface UsePagedListOptions<T> {
  * - 列表 / 游标 / loading / noMore 四件套
  * - 请求序号丢弃过期响应，避免刷新与滚动并发导致数据错乱
  * - 去重追加 + 触底加载（useLoadMore）
- * - 刷新重置（refresh）与仅重置（reset，供多列表联动场景使用）
+ * - 刷新重置（refresh）、回顶刷新（refreshFromTop）与仅重置（reset，供多列表联动场景使用）
  */
 export function usePagedList<T>({
   loadPage,
@@ -36,6 +38,7 @@ export function usePagedList<T>({
   filterItems,
   itemKey = item => (item as any).liveId,
   stopOnError = false,
+  scrollbarRef = ref<any>(null),
 }: UsePagedListOptions<T>) {
   const list = ref<T[]>([]) as Ref<T[]>
   const listNext = ref('0')
@@ -117,7 +120,6 @@ export function usePagedList<T>({
   }
 
   // 统一的触底加载：直播 / 回放 / 公演共用同一套交互逻辑
-  const scrollbarRef = ref<any>(null)
   const { onInfiniteScroll } = useLoadMore({
     load: getList,
     disabled,
@@ -138,6 +140,12 @@ export function usePagedList<T>({
     return getList()
   }
 
+  /** 回到列表顶部并拉取第一页：手动刷新按钮与「双击回顶」手势的统一入口；列表未渲染时静默跳过 */
+  function refreshFromTop(): Promise<boolean> {
+    scrollbarRef.value?.setScrollTop?.(0)
+    return refresh()
+  }
+
   return {
     list, // 列表数据
     listNext, // 分页游标
@@ -151,6 +159,7 @@ export function usePagedList<T>({
     getList, // 分页加载函数
     reset, // 仅重置列表状态，不发起请求（多列表联动的刷新序列里使用）
     refresh, // 刷新重置后拉取第一页
+    refreshFromTop, // 回顶 + 刷新重置（手动刷新 / 双击回顶手势）
   }
 }
 

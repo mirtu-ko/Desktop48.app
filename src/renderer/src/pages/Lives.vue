@@ -35,16 +35,19 @@ const {
   toggleBlockMember,
 } = useMemberDetailDrawer()
 
+// 列表滚动容器：绑给模板，并交给 usePagedLiveList 做回顶与触底判定
+const liveScrollRef = ref<any>(null)
+
 // 分页状态与触底加载：见 composables/use-paged-live-list.ts（直播/回放共用）
 const {
   list: liveList,
   loading,
   noMore,
-  scrollbarRef: liveScrollRef,
   onInfiniteScroll,
   getList: getLiveList,
-  refresh,
+  refreshFromTop,
 } = usePagedLiveList({
+  scrollbarRef: liveScrollRef,
   loadPage: next => Apis.lives(next),
   // 封面/队伍Logo/日期/成员信息补全：与回放页共用 enrichLiveItem，成员查询失败逐条容错
   processItem: item => enrichLiveItem(item, 'fallback'),
@@ -109,8 +112,7 @@ function onLiveUnavailable(liveId: string) {
 // 手动/自动刷新：重置分页后拉取最新列表，并回到列表顶部
 function refreshList() {
   imageVersion.value += 1
-  liveScrollRef.value?.setScrollTop?.(0)
-  refresh()
+  refreshFromTop()
 }
 
 onMounted(() => {

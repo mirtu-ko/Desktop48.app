@@ -52,15 +52,19 @@ const memberOption = computed(() => sortMembersByStatus(memberTree.value))
 // 级联筛选选中的路径：[groupId] / [groupId, teamId] / [groupId, teamId, userId]
 const selectedFilter = ref<any[]>([])
 
+// 列表滚动容器：绑给模板，并交给 usePagedLiveList 做回顶与触底判定
+const playbackScrollRef = ref<any>(null)
+
 // 分页状态与触底加载：见 composables/use-paged-live-list.ts（直播/回放共用）
 const {
   list: playbackList,
   loading,
   noMore,
-  scrollbarRef: playbackScrollRef,
   onInfiniteScroll,
   refresh,
+  refreshFromTop,
 } = usePagedLiveList({
+  scrollbarRef: playbackScrollRef,
   // 只发送被选中层级的对应参数，未选中层级保持 '0'
   loadPage: (next) => {
     const params: {
@@ -183,8 +187,7 @@ function applyPreset(): boolean {
   }
   else {
     // 筛选没变也要重新拉取：上次请求可能失败或返回为空
-    playbackScrollRef.value?.setScrollTop?.(0)
-    refresh()
+    refreshFromTop()
   }
   return true
 }
@@ -201,14 +204,6 @@ watch(memberOption, () => {
   if (presetPending)
     applyPreset()
 })
-
-/** 供父组件（直播页双击「回放」tab）调用：回到顶部并刷新列表 */
-function refreshFromTop() {
-  playbackScrollRef.value?.setScrollTop?.(0)
-  refresh()
-}
-
-defineExpose({ refreshFromTop })
 
 // 点击回放：以独立播放窗打开，可边看边继续浏览列表
 function onPlaybackClick(item: any) {
@@ -229,8 +224,7 @@ onUnmounted(() => {
 
 // 筛选内容变化（选中或清空）时自动触发查询，无需手动点刷新
 watch(selectedFilter, () => {
-  playbackScrollRef.value?.setScrollTop?.(0)
-  refresh()
+  refreshFromTop()
 })
 </script>
 
@@ -275,7 +269,7 @@ watch(selectedFilter, () => {
     </el-scrollbar>
 
     <!-- 右上角浮动筛选/刷新工具条：不占行，内容滚过时呈现磨砂玻璃 -->
-    <FloatingRefreshDock :loading="loading" title="刷新" @refresh="refresh">
+    <FloatingRefreshDock :loading="loading" title="刷新" @refresh="refreshFromTop">
       <el-cascader
         v-model="selectedFilter"
         style="width: 240px" transfer
