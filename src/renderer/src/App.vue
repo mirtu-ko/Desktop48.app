@@ -7,8 +7,10 @@ import BackTopButton from '@renderer/components/app/BackTopButton.vue'
 import Initialize from '@renderer/components/app/Initialize.vue'
 import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
+import EventBus from '@renderer/services/event-bus'
 import useTasksStore from '@renderer/stores/tasks'
 import Constants from '@renderer/utils/constants'
+import { scrollPageToTop } from '@renderer/utils/page-scroll'
 import { computed, KeepAlive, onErrorCaptured, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -29,12 +31,17 @@ function onInitialized() {
 // 菜单值即路由 path，两者共用同一份定义（见 utils/constants.ts 的 Menu），
 const MENU_PATHS: string[] = Object.values(Constants.Menu)
 
-/** 未知 path（如重定向发生前的 '/'）一律回退到直播页，保证 Dock 始终有高亮项 */
+/** 解析路由所属 Dock 菜单；子页复用父菜单高亮，未知回退直播 */
 function resolveActiveMenu(path: string): string {
-  return MENU_PATHS.includes(path) ? path : Constants.Menu.LIVES
+  return MENU_PATHS.find(menuPath =>
+    path === menuPath || path.startsWith(`${menuPath}/`),
+  ) ?? Constants.Menu.LIVES
 }
 
 const activeIndex = ref(resolveActiveMenu(route.path))
+
+/** 直播子页路径；从其他 Dock 切回时恢复 */
+let lastLivePath = '/lives'
 
 // 任务状态由 useTasksStore 模块级单例持有，跨页面实时更新 Dock 角标
 const { recordTasks, downloadTasks } = useTasksStore()
@@ -56,7 +63,24 @@ const dockItems = computed(() => [
 /** 导航 path 必须带前导斜杠，确保 vue-router 按绝对路径解析 */
 function changeMenu(path: string) {
   activeIndex.value = path
-  router.push(path)
+
+  // 已在同一菜单时不重复 push，避免子页被推回 /lives
+  if (resolveActiveMenu(route.path) === path)
+    return
+
+  // 从其他 Dock 切回直播时恢复上次页签
+  router.push(path === Constants.Menu.LIVES ? lastLivePath : path)
+}
+
+/**
+ * 双击 Dock 当前项：页面回到顶部；直播页再刷新列表。
+ * 回顶是通用 DOM 动作（复用 BackTopButton 的容器口径），刷新必须由页面自己执行 ——
+ * 根组件拿不到页面实例，走事件广播，见 services/event-bus.ts 的 lives-refresh
+ */
+function onDockRevisit(path: string) {
+  scrollPageToTop()
+  if (path === Constants.Menu.LIVES)
+    EventBus.emit('lives-refresh')
 }
 
 // 路由变化时自动同步菜单高亮
@@ -64,7 +88,12 @@ watch(
   () => route.path,
   (newPath) => {
     activeIndex.value = resolveActiveMenu(newPath)
+
+    // 只记 path，不携带临时 query
+    if (resolveActiveMenu(newPath) === Constants.Menu.LIVES)
+      lastLivePath = newPath
   },
+  { immediate: true },
 )
 
 // 启动兜底：数据库没有成员信息时自动同步一次（逻辑见 use-member-sync.ts）
@@ -141,6 +170,7 @@ onErrorCaptured((error, instance, info) => {
           :items="dockItems"
           :active="activeIndex"
           @change="changeMenu"
+          @revisit="onDockRevisit"
         />
 
         <!-- 右下角全局回到顶部按钮：自动定位当前页面的主滚动容器 -->

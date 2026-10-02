@@ -2,22 +2,27 @@
 import type { MemberTreeGroupPayload } from '../../../preload/ipc-contract'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
+import LiveTabBar from '@renderer/components/ui/LiveTabBar.vue'
 import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
 import { useMemberDetailDrawer } from '@renderer/composables/use-member-detail-drawer'
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
 import Apis from '@renderer/services/apis'
+import EventBus from '@renderer/services/event-bus'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { useMemberTreeStore } from '@renderer/stores/member-tree'
 import Constants from '@renderer/utils/constants'
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 
 // 组件 props：成员详情「看 TA 的回放」跳转时预置的成员筛选；每次跳转都是新对象，保证 watch 必触发
 const props = withDefaults(defineProps<{ memberPreset?: { userId: string } | null }>(), {
   memberPreset: null,
 })
+
+const route = useRoute()
 
 // 独立播放窗：回放播放挂载点与直播共用同一套
 const { openPlayback } = useFloatPlayersStore()
@@ -47,15 +52,19 @@ const memberOption = computed(() => sortMembersByStatus(memberTree.value))
 // 级联筛选选中的路径：[groupId] / [groupId, teamId] / [groupId, teamId, userId]
 const selectedFilter = ref<any[]>([])
 
+// 列表滚动容器：绑给模板，并交给 usePagedLiveList 做回顶与触底判定
+const playbackScrollRef = ref<any>(null)
+
 // 分页状态与触底加载：见 composables/use-paged-live-list.ts（直播/回放共用）
 const {
   list: playbackList,
   loading,
   noMore,
-  scrollbarRef: playbackScrollRef,
   onInfiniteScroll,
   refresh,
+  refreshFromTop,
 } = usePagedLiveList({
+  scrollbarRef: playbackScrollRef,
   // 只发送被选中层级的对应参数，未选中层级保持 '0'
   loadPage: (next) => {
     const params: {
@@ -101,8 +110,17 @@ function filterMethod(node: any, keyword: string) {
   )
 }
 
+// 只刷新当前可见列表
+function onLivesRefresh() {
+  if (route.path === '/lives/playbacks')
+    refreshFromTop()
+}
+
 // 初始化
 onMounted(async () => {
+  // 双击 Dock 后由可见页刷新
+  EventBus.on('lives-refresh', onLivesRefresh)
+
   // 关注名单与列表互不依赖：并行拉取，失败不影响列表本身
   refreshFollowedMembers()
   // 成员树仅用于筛选器选项，失败不应阻断回放列表本身
@@ -169,8 +187,7 @@ function applyPreset(): boolean {
   }
   else {
     // 筛选没变也要重新拉取：上次请求可能失败或返回为空
-    playbackScrollRef.value?.setScrollTop?.(0)
-    refresh()
+    refreshFromTop()
   }
   return true
 }
@@ -188,14 +205,6 @@ watch(memberOption, () => {
     applyPreset()
 })
 
-/** 供父组件（直播页双击「回放」tab）调用：回到顶部并刷新列表 */
-function refreshFromTop() {
-  playbackScrollRef.value?.setScrollTop?.(0)
-  refresh()
-}
-
-defineExpose({ refreshFromTop })
-
 // 点击回放：以独立播放窗打开，可边看边继续浏览列表
 function onPlaybackClick(item: any) {
   openPlayback({
@@ -209,15 +218,20 @@ function onPlaybackClick(item: any) {
   })
 }
 
+onUnmounted(() => {
+  EventBus.off('lives-refresh', onLivesRefresh)
+})
+
 // 筛选内容变化（选中或清空）时自动触发查询，无需手动点刷新
 watch(selectedFilter, () => {
-  playbackScrollRef.value?.setScrollTop?.(0)
-  refresh()
+  refreshFromTop()
 })
 </script>
 
 <template>
   <div class="page-root">
+    <LiveTabBar @refresh="refreshFromTop" />
+
     <el-scrollbar
       ref="playbackScrollRef"
       class="scrollbar-wrapper"
@@ -255,7 +269,7 @@ watch(selectedFilter, () => {
     </el-scrollbar>
 
     <!-- 右上角浮动筛选/刷新工具条：不占行，内容滚过时呈现磨砂玻璃 -->
-    <FloatingRefreshDock :loading="loading" title="刷新" @refresh="refresh">
+    <FloatingRefreshDock :loading="loading" title="刷新" @refresh="refreshFromTop">
       <el-cascader
         v-model="selectedFilter"
         style="width: 240px" transfer

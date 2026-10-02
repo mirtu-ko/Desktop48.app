@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app, dialog, net, shell } from 'electron'
 import { isAllowedUrl } from '../allowed-hosts'
+import { isPathInAllowedRoots } from '../allowed-path'
 import { Database } from '../database'
 import { handleTraced } from './trace'
 
@@ -21,7 +22,7 @@ const NET_REQUEST_MAX_BYTES = 32 * 1024 * 1024
 
 export function registerSystemIPC(): void {
   handleTraced('openPath', async (_event: IpcMainInvokeEvent, filePath: string) => {
-    // 校验路径：允许系统标准用户目录 + 用户配置的下载目录/ffmpeg目录
+    // 校验路径：允许系统标准用户目录 + 用户配置的下载目录/ffmpeg目录（判定见 allowed-path.ts）
     const allowedRoots = [
       app.getPath('desktop'),
       app.getPath('downloads'),
@@ -37,15 +38,7 @@ export function registerSystemIPC(): void {
         allowedRoots.push(dir)
     }
     const resolved = path.resolve(filePath)
-    // 必须比较到分隔符边界，否则 Downloads_backup 会被误判为在 Downloads 之内；
-    // Windows 路径大小写不敏感，统一转小写后比较
-    const normalize = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p)
-    const target = normalize(resolved)
-    const inAllowedRoot = allowedRoots.some((root) => {
-      const rootPath = normalize(path.resolve(root))
-      return target === rootPath || target.startsWith(rootPath.endsWith(path.sep) ? rootPath : rootPath + path.sep)
-    })
-    if (!inAllowedRoot) {
+    if (!isPathInAllowedRoots(resolved, allowedRoots)) {
       throw new Error(`路径不在允许范围内: ${filePath}`)
     }
     // openPath 以返回值（而非 reject）报告失败，必须 await 并检查，否则错误被静默丢弃

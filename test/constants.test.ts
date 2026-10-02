@@ -16,9 +16,13 @@ describe('constants.Menu 与路由表', () => {
     // 只做文本比对，不 import routes.ts：那会把 6 个 .vue 组件连同播放器依赖
     // 一起拉进 Node 测试环境，收益不抵成本
     const source = readFileSync(new URL('../src/renderer/src/routes.ts', import.meta.url), 'utf-8')
+    const menuPaths = new Set(Object.values(Constants.Menu))
     const routePaths = [...source.matchAll(/path: '([^']+)'/g)]
       .map(match => match[1])
-      .filter(path => path !== '/') // 根路径是 redirect，不对应菜单项
+      // 排除根 redirect 与菜单子页
+      .filter(path => path !== '/' && ![...menuPaths].some(
+        menuPath => menuPath !== path && path.startsWith(`${menuPath}/`),
+      ))
 
     expect(new Set(routePaths)).toEqual(new Set(Object.values(Constants.Menu)))
   })

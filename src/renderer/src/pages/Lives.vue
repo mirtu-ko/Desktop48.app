@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import type { LiveListItem } from '@renderer/services/api-types'
-import { Film, VideoCamera } from '@element-plus/icons-vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
-import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
+import LiveTabBar from '@renderer/components/ui/LiveTabBar.vue'
 import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
 import { useMemberDetailDrawer } from '@renderer/composables/use-member-detail-drawer'
@@ -13,9 +12,8 @@ import EventBus from '@renderer/services/event-bus'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { debugLog } from '@renderer/utils/debug'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import Playbacks from './Playbacks.vue'
 
 const route = useRoute()
 
@@ -37,56 +35,19 @@ const {
   toggleBlockMember,
 } = useMemberDetailDrawer()
 
-// 顶部浮层 tab 当前选中的视图：live（直播）/ playback（回放）
-const activeTab = ref<'live' | 'playback'>('live')
-// 是否加载过回放面板，首次切换到回放时才渲染，避免进入页面即请求回放列表
-const playbackMounted = ref(false)
-// 成员详情「看 TA 的回放」预置筛选：每次跳转都新建对象，同一成员连续跳转也能触发 Playbacks 的 watch
-const memberPreset = ref<{ userId: string } | null>(null)
-
-const viewTabs = [
-  { label: '直播', key: 'live', icon: VideoCamera },
-  { label: '回放', key: 'playback', icon: Film },
-]
-
-function switchTab(tab: string) {
-  if (tab === 'playback')
-    playbackMounted.value = true
-  activeTab.value = tab as 'live' | 'playback'
-}
-
-// 成员详情抽屉跳转（/lives?tab=playback&member=<userId>）：
-// 切到回放面板并按该成员预置级联筛选，跳转语义由路由 query 承载
-function applyMemberPlaybacksRoute(query: { tab?: string, member?: string }) {
-  if (query.member) {
-    memberPreset.value = { userId: String(query.member) }
-    switchTab('playback')
-  }
-  else if (query.tab === 'playback') {
-    switchTab('playback')
-  }
-}
-
-// 双击当前 tab：直播 tab 刷新直播列表，回放 tab 转发给回放组件刷新
-const playbackRef = ref<InstanceType<typeof Playbacks> | null>(null)
-
-function onTabsRefresh() {
-  if (activeTab.value === 'playback')
-    playbackRef.value?.refreshFromTop()
-  else
-    refreshList()
-}
+// 列表滚动容器：绑给模板，并交给 usePagedLiveList 做回顶与触底判定
+const liveScrollRef = ref<any>(null)
 
 // 分页状态与触底加载：见 composables/use-paged-live-list.ts（直播/回放共用）
 const {
   list: liveList,
   loading,
   noMore,
-  scrollbarRef: liveScrollRef,
   onInfiniteScroll,
   getList: getLiveList,
-  refresh,
+  refreshFromTop,
 } = usePagedLiveList({
+  scrollbarRef: liveScrollRef,
   loadPage: next => Apis.lives(next),
   // 封面/队伍Logo/日期/成员信息补全：与回放页共用 enrichLiveItem，成员查询失败逐条容错
   processItem: item => enrichLiveItem(item, 'fallback'),
@@ -134,6 +95,12 @@ function play(item: LiveListItem) {
   })
 }
 
+// 只刷新当前可见列表
+function onLivesRefresh() {
+  if (route.path === '/lives')
+    refreshList()
+}
+
 // 浮窗放流失败（流已不存在/直播下架）时，若该直播属于本页列表则自动刷新
 function onLiveUnavailable(liveId: string) {
   const inList = liveList.value.some(item => item.liveId === liveId)
@@ -145,36 +112,29 @@ function onLiveUnavailable(liveId: string) {
 // 手动/自动刷新：重置分页后拉取最新列表，并回到列表顶部
 function refreshList() {
   imageVersion.value += 1
-  liveScrollRef.value?.setScrollTop?.(0)
-  refresh()
+  refreshFromTop()
 }
 
 onMounted(() => {
   getLiveList()
   refreshFollowedMembers()
-  // 首次挂载即读取跳转参数（从成员页抽屉跳转过来的场景）
-  applyMemberPlaybacksRoute(route.query as { tab?: string, member?: string })
   EventBus.on('live-unavailable', onLiveUnavailable)
-})
-
-// keep-alive 下 Lives 只挂载一次，抽屉的后续跳转通过 query 变化触发
-watch(() => route.query, (query) => {
-  // 仅在当前路由就是 /lives 时响应，避免其他页面 query 变化误触发
-  if (route.path === '/lives')
-    applyMemberPlaybacksRoute(query as { tab?: string, member?: string })
+  // 双击底部 Dock 的直播项（根组件广播）：回顶由根组件做，这里只负责刷新当前可见的列表
+  EventBus.on('lives-refresh', onLivesRefresh)
 })
 
 onUnmounted(() => {
   EventBus.off('live-unavailable', onLiveUnavailable)
+  EventBus.off('lives-refresh', onLivesRefresh)
 })
 </script>
 
 <template>
   <div class="page-root">
     <!-- 左上角浮层 tab：在直播与回放之间切换，悬浮于列表之上；双击当前 tab 刷新 -->
-    <FloatingTabBar :tabs="viewTabs" :active="activeTab" @change="switchTab" @refresh="onTabsRefresh" />
+    <LiveTabBar @refresh="refreshList" />
 
-    <div v-show="activeTab === 'live'" class="live-main">
+    <div class="live-main">
       <!-- 首屏骨架：比全屏 loading 蒙层更稳定，能预先表达卡片布局和即将出现的内容 -->
       <el-scrollbar
         v-if="showSkeleton"
@@ -235,11 +195,6 @@ onUnmounted(() => {
       </FloatingRefreshDock>
     </div>
 
-    <!-- 回放面板：复用回放组件，首次切换时才渲染并保持状态 -->
-    <div v-show="activeTab === 'playback'" class="playback-main">
-      <Playbacks v-if="playbackMounted" ref="playbackRef" :member-preset="memberPreset" />
-    </div>
-
     <!-- 成员详情抽屉：与成员页共用同一份合并详情（点卡片上的成员名打开） -->
     <MemberDetailDrawer
       :member="selectedMember"
@@ -254,11 +209,6 @@ onUnmounted(() => {
 
 <style scoped lang="scss">
 /* 页面骨架（相对定位 + 裁剪）由模板上的全局 .page-root 提供 */
-
-/* 回放面板与直播共用整页高度 */
-.playback-main {
-  height: 100%;
-}
 
 .live-main {
   position: relative;

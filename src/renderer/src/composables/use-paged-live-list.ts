@@ -1,4 +1,5 @@
 import type { LiveListContent, LiveListItem } from '@renderer/services/api-types'
+import type { Ref } from 'vue'
 import type { UsePagedListOptions } from './use-paged-list'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
@@ -15,6 +16,8 @@ export interface UsePagedLiveListOptions<T> {
   filterBlocked?: boolean
   /** 请求失败时是否标记为"没有更多"，从而停止触底重试；Lives 默认 false，Playbacks 为 true */
   stopOnError?: boolean
+  /** 列表滚动容器 ref：透传给 usePagedList，见 use-paged-list.ts */
+  scrollbarRef?: Ref<any>
 }
 
 /**
@@ -26,6 +29,7 @@ export function usePagedLiveList<T extends LiveListItem = LiveListItem>({
   processItem,
   filterBlocked = true,
   stopOnError = false,
+  scrollbarRef,
 }: UsePagedLiveListOptions<T>) {
   const blockedMemberIds = ref<number[]>([])
   async function updateBlockedMemberIds() {
@@ -37,6 +41,7 @@ export function usePagedLiveList<T extends LiveListItem = LiveListItem>({
   const options: UsePagedListOptions<T> = {
     itemKey: item => item.liveId,
     stopOnError,
+    scrollbarRef,
     loadPage: async (next) => {
       const content = await loadPage(next)
       return { next: content.next, items: content.liveList || [] }
