@@ -24,7 +24,7 @@ const props = defineProps<{
   active: string
 }>()
 
-const emit = defineEmits<{ change: [index: string] }>()
+const emit = defineEmits<{ change: [index: string], revisit: [index: string] }>()
 
 /** 激活指示条尺寸，以及它底边距板下沿的距离（须与 .dock-indicator 的 CSS 一致） */
 const INDICATOR_WIDTH = 13
@@ -47,6 +47,16 @@ let glowColor = ''
 function setItemEl(el: Element | ComponentPublicInstance | null, index: number) {
   if (el instanceof HTMLElement)
     itemEls[index] = el
+}
+
+/**
+ * 双击导航项：只对当前项生效（非当前项的第一次 click 已经导航过去，双击不再额外响应），
+ * 语义交给父组件 —— 回顶 / 刷新是页面级动作，Dock 只管报告手势。
+ * 与左上角 FloatingTabBar 的「双击当前 tab 刷新」是同一套手势语言。
+ */
+function onItemDblClick(item: DockItem) {
+  if (item.index === props.active)
+    emit('revisit', item.index)
 }
 
 /** 滑动激活指示条：贴住板下沿（y 由 Dock 自身高度算），横坐标取激活项的布局位置 */
@@ -130,6 +140,7 @@ onMounted(async () => {
       :style="{ '--item-color': item.color || FALLBACK_COLOR }"
       :aria-current="active === item.index ? 'page' : undefined"
       @click="emit('change', item.index)"
+      @dblclick="onItemDblClick(item)"
     >
       <span class="dock-icon">
         <el-icon><component :is="item.icon" /></el-icon>

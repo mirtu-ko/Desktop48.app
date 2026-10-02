@@ -7,8 +7,10 @@ import BackTopButton from '@renderer/components/app/BackTopButton.vue'
 import Initialize from '@renderer/components/app/Initialize.vue'
 import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
+import EventBus from '@renderer/services/event-bus'
 import useTasksStore from '@renderer/stores/tasks'
 import Constants from '@renderer/utils/constants'
+import { scrollPageToTop } from '@renderer/utils/page-scroll'
 import { computed, KeepAlive, onErrorCaptured, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -57,6 +59,17 @@ const dockItems = computed(() => [
 function changeMenu(path: string) {
   activeIndex.value = path
   router.push(path)
+}
+
+/**
+ * 双击 Dock 当前项：页面回到顶部；直播页再刷新列表。
+ * 回顶是通用 DOM 动作（复用 BackTopButton 的容器口径），刷新必须由页面自己执行 ——
+ * 根组件拿不到页面实例，走事件广播，见 services/event-bus.ts 的 lives-refresh
+ */
+function onDockRevisit(path: string) {
+  scrollPageToTop()
+  if (path === Constants.Menu.LIVES)
+    EventBus.emit('lives-refresh')
 }
 
 // 路由变化时自动同步菜单高亮
@@ -141,6 +154,7 @@ onErrorCaptured((error, instance, info) => {
           :items="dockItems"
           :active="activeIndex"
           @change="changeMenu"
+          @revisit="onDockRevisit"
         />
 
         <!-- 右下角全局回到顶部按钮：自动定位当前页面的主滚动容器 -->

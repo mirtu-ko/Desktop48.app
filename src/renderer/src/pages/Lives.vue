@@ -67,9 +67,10 @@ function applyMemberPlaybacksRoute(query: { tab?: string, member?: string }) {
   }
 }
 
-// 双击当前 tab：直播 tab 刷新直播列表，回放 tab 转发给回放组件刷新
 const playbackRef = ref<InstanceType<typeof Playbacks> | null>(null)
 
+/** 刷新当前可见的列表：直播 tab 刷新直播列表，回放 tab 转发给回放组件刷新。
+ * 双击左上角 tab 与双击底部 Dock 的直播项（经 lives-refresh 事件转发）共用 */
 function onTabsRefresh() {
   if (activeTab.value === 'playback')
     playbackRef.value?.refreshFromTop()
@@ -155,6 +156,8 @@ onMounted(() => {
   // 首次挂载即读取跳转参数（从成员页抽屉跳转过来的场景）
   applyMemberPlaybacksRoute(route.query as { tab?: string, member?: string })
   EventBus.on('live-unavailable', onLiveUnavailable)
+  // 双击底部 Dock 的直播项（根组件广播）：回顶由根组件做，这里只负责刷新当前可见的列表
+  EventBus.on('lives-refresh', onTabsRefresh)
 })
 
 // keep-alive 下 Lives 只挂载一次，抽屉的后续跳转通过 query 变化触发
@@ -166,6 +169,7 @@ watch(() => route.query, (query) => {
 
 onUnmounted(() => {
   EventBus.off('live-unavailable', onLiveUnavailable)
+  EventBus.off('lives-refresh', onTabsRefresh)
 })
 </script>
 
