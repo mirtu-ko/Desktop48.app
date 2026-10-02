@@ -630,10 +630,11 @@ onUnmounted(() => {
   transform: translateY(-6px);
 }
 
-/* 作者名 / 正文：气泡与「全部」面板共用同一套行内排版 */
+/* 作者名 / 正文：气泡与「全部」面板共用同一套行内排版。
+ * 上限只能写 100%：气泡宽度由内容撑出，百分比按气泡自身解析，减去预留额度会在短弹幕上截掉名字 */
 .danmaku-author {
   flex-shrink: 0;
-  max-width: calc(100% - 8em);
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -753,7 +754,7 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* 面板行宽固定且宽裕，名字可用额度比实时气泡更大（仍留出正文最小可读宽度） */
+/* 面板行是满宽固定宽度，可以给正文留固定额度（气泡宽度由内容撑出，留不得） */
 .danmaku-all__row .danmaku-author {
   max-width: calc(100% - 140px);
 }
