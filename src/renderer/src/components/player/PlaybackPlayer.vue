@@ -138,13 +138,13 @@ function toggleDanmakuMode() {
   danmakuMode.value = danmakuMode.value === 'live' ? 'all' : 'live'
 }
 
-// 弹幕字号按窗口大小自适应：迷你浮窗 10px，普通浮窗/主画面 12px，全屏 14px
+// 弹幕字号随画面渲染高度等比缩放（写死 px 在大画面里偏小），上下限按窗口形态区分：
+// 窄浮窗 10~14px，主窗 / 全屏 12~20px
+const DANMAKU_FONT_RATIO = 0.027
 const danmakuFontSize = computed(() => {
-  if (isFullscreen.value)
-    return 14
-  if (props.compact)
-    return 10
-  return 12
+  const [min, max] = props.compact ? [10, 14] : [12, 20]
+  const height = videoRect.value?.height ?? 0
+  return Math.min(max, Math.max(min, Math.round(height * DANMAKU_FONT_RATIO)))
 })
 
 // 弹幕条定位：锚视频实际渲染区（去 letterbox 黑边）左下角而非容器左下角 ——
@@ -556,7 +556,8 @@ onUnmounted(() => {
   z-index: 10;
   /* 盒子被拉伸到整个可用高度，必须显式声明，否则挡住视频的双击全屏 */
   pointer-events: none;
-  width: min(90%, 440px);
+  /* 宽度上限用 em，跟随字号缩放 */
+  width: min(90%, 37em);
   margin-bottom: 6px;
   display: flex;
   flex-direction: column-reverse;
@@ -571,7 +572,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column-reverse;
   align-items: flex-start;
-  gap: 6px;
+  gap: 0.5em;
   width: 100%;
   height: 100%;
   overflow: hidden;
@@ -586,14 +587,14 @@ onUnmounted(() => {
   visibility: hidden;
 }
 
-/* 弹幕气泡：磨砂玻璃底，不拦截点击（让鼠标穿过看到播放器） */
+/* 弹幕气泡：磨砂玻璃底，不拦截点击（让鼠标穿过看到播放器）；内边距 / 圆角随字号缩放 */
 .danmaku-bubble {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 0.5em;
   max-width: 100%;
-  padding: 6px 12px;
-  border-radius: 16px;
+  padding: 0.5em 1em;
+  border-radius: 1.33em;
   background: var(--player-glass-bg);
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
   backdrop-filter: blur(8px);
@@ -632,7 +633,7 @@ onUnmounted(() => {
 /* 作者名 / 正文：气泡与「全部」面板共用同一套行内排版 */
 .danmaku-author {
   flex-shrink: 0;
-  max-width: calc(100% - 96px);
+  max-width: calc(100% - 8em);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -658,12 +659,14 @@ onUnmounted(() => {
 }
 
 /* ===== 全部弹幕大玻璃面板：内部滚动 =====
- * 高度上限交给父容器（.danmaku-list 因双约束有确定高度），不用 min(60vh,480px) 这类绝对值 */
+ * 高度上限交给父容器（.danmaku-list 因双约束有确定高度），不用 min(60vh,480px) 这类绝对值；
+ * 字号固定，不跟随实时气泡缩放 */
 .danmaku-all {
   display: flex;
   flex-direction: column;
   width: min(420px, 100%);
   max-height: 90%;
+  font-size: 13px;
   border-radius: 14px;
   background: var(--player-glass-bg);
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
@@ -785,16 +788,20 @@ onUnmounted(() => {
 
 /* 迷你窗：玻璃条更瘦，最多占八成宽 */
 .danmaku-list.is-compact {
-  width: min(80%, 440px);
+  width: min(80%, 44em);
+}
+
+.danmaku-list.is-compact .danmaku-all {
+  font-size: 12px;
 }
 
 .danmaku-list.is-compact .danmaku-list__bubbles {
-  gap: 4px;
+  gap: 0.4em;
 }
 
 .danmaku-list.is-compact .danmaku-bubble {
-  padding: 4px 9px;
-  border-radius: 13px;
+  padding: 0.4em 0.9em;
+  border-radius: 1.3em;
 }
 
 /* 迷你窗视频区只有百余像素，面板要收住就得压缩头部：meta 行让位给搜索框与列表 */
