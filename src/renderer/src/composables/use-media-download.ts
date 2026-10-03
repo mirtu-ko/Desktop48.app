@@ -68,7 +68,7 @@ export function useMediaDownload(options: {
     ElMessage({ message: options.kind === 'record' ? '已结束录制' : '已停止下载', type: 'success' })
   }
 
-  return { running, onActionClick, stopTask: stopTaskByLiveId }
+  return { running, onActionClick }
 }
 
 export default useMediaDownload

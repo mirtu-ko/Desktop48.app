@@ -148,8 +148,10 @@ export class FfmpegProcess {
       return true
     }
     catch (e) {
+      // 写 q 失败（stdin 已关闭 / 管道断开）只能回退到信号终止；
+      // 不打日志的话，上层只会看到「停止失败已强杀」，看不到真正的原因
+      error('[ffmpeg-process] 写 q 失败，回退 SIGINT:', e)
       this.child.kill('SIGINT')
-      void e
       return false
     }
   }

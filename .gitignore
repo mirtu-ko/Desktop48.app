@@ -11,5 +11,4 @@ build/icons
 *.log*
 .cache/
 .tmp/
-tsconfig.web.tsbuildinfo
-test/data.ts
+*.tsbuildinfo

@@ -6,6 +6,7 @@
  * 建模依据：代码中的实际字段访问 + database.json 真实数据（syncInfo）。
  * 宽容原则：只用到的字段才声明为必需，其余保持可选，避免过度承诺。
  */
+import type { MemberInfo } from '../../../preload/ipc-contract'
 
 /** ===== 接口信封（request 解析层使用，不直接暴露给消费方） ===== */
 export interface ApiEnvelope<T> {
@@ -103,6 +104,20 @@ export interface LiveListItem {
 export interface LiveListContent<T = LiveListItem> {
   next: string
   liveList: T[]
+}
+
+/**
+ * 列表条目经 enrichLiveItem 补全后的展示形态：接口原字段 + 派生字段。
+ * 与 LiveListItem 分开建模，使「哪些是接口给的、哪些是我们算的」在类型上可见——
+ * 也让 enrichLiveItem 可以返回新对象而不必原地改写入参。
+ */
+export interface LiveListItemView extends LiveListItem {
+  /** coverPath 归一化后的图片 URL 列表（首张为封面） */
+  cover: string[]
+  /** ctime 按 'YYYY-MM-DD HH:mm:ss' 格式化后的可读日期 */
+  date: string
+  /** 关联成员；查询失败降级为 null（直播页逐条容错） */
+  member: MemberInfo | null
 }
 
 /** ===== 直播 / 回放详情（LIVE_ONE_URL） ===== */

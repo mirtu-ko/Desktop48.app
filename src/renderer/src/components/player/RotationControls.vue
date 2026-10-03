@@ -23,11 +23,13 @@ const emit = defineEmits<{
       placement="bottom"
       :show-after="400"
     >
+      <!-- 0 度时重置无意义，但不设 disabled：项目约定开关态用样式表达，
+           真 disabled 会让按钮退出焦点序列。点击无副作用，aria 照实说明。 -->
       <button
         class="rotate-btn rotate-angle player-capsule__btn"
         :class="{ 'is-zero': angle === 0 }"
         :aria-disabled="angle === 0"
-        :aria-label="`当前旋转 ${angle} 度，点击重置`"
+        :aria-label="angle === 0 ? '当前未旋转' : `当前旋转 ${angle} 度，点击重置`"
         @click="emit('reset')"
       >
         {{ angle }}°

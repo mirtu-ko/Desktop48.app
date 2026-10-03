@@ -9,6 +9,8 @@
   --brand-rgb: 109, 90, 224;
   /* 品牌渐变：主按钮与各处激活态共用，避免逐处手写同一串渐变 */
   --gradient-brand: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-light));
+  /* 品牌渐变的 hover 变体：两端向「更亮 / 更偏紫」方向各挪一档 */
+  --gradient-brand-hover: linear-gradient(135deg, var(--brand-primary-light), var(--brand-secondary));
 
   /* ===== 阴影体系：统一为偏紫的柔和多层阴影，替代零散的黑灰投影 ===== */
   /* 阴影色 = 品牌深紫（与 --brand-primary-dark 同值，改一个另一个要跟着改） */
@@ -156,7 +158,7 @@ body,
   box-shadow: var(--shadow-glow);
 
   &:hover {
-    background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-secondary));
+    background: var(--gradient-brand-hover);
   }
 }
 

@@ -25,7 +25,6 @@ import RadioStage from './RadioStage.vue'
 import RotationControls from './RotationControls.vue'
 
 const props = defineProps({
-  liveTitle: { type: String, required: true },
   liveId: { type: String, required: true },
   /** 开演时间（毫秒时间戳），用于计算已播时长 */
   startTime: { type: Number, required: true },
@@ -326,8 +325,6 @@ onMounted(() => {
     { immediate: true },
   )
 
-  window.addEventListener('keydown', onKeyDown)
-
   // 迷你窗存在即启动播放会话
   resumeLive()
 })
@@ -504,10 +501,6 @@ onUnmounted(() => {
 
 .video-box-background {
   background: #0c0c0c;
-}
-
-.video-box.vertical-rotation {
-  overflow: hidden;
 }
 
 /* LIVE 状态段：内嵌在 MiniControls 胶囊最左段的芯片（样式作用于插槽内容）。

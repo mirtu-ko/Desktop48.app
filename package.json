@@ -5,7 +5,7 @@
   "description": "Desktop48",
   "author": "Zack",
   "license": "MIT",
-  "homepage": "https://electron-vite.org",
+  "homepage": "https://github.com/mirtu-ko/desktop48.app",
   "main": "./out/main/index.js",
   "engines": {
     "node": ">=22.12.0"

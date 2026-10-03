@@ -33,6 +33,7 @@ function pictureUrls(picturesStr: string) {
   return picturesStr.split(',').map(picture => toSourceUrl(picture))
 }
 
+/** 归一单个图片地址为可直接 <img src> 的 URL */
 function sourceUrl(sourcePath: string) {
   return toSourceUrl(sourcePath)
 }
@@ -79,14 +80,6 @@ function streamPathHandle(streamPath: string, timestamp: number) {
 }
 
 /**
- * 秒数 → m:ss（分钟不补零，如 6:05）；曲目总时长 / 迷你播放条进度共用
- */
-function formatDuration(seconds: number): string {
-  const total = Math.max(0, Math.floor(seconds || 0))
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
-}
-
-/**
  * 下载/录制任务文件名：成员名 + 任务开始时间（yyyyMMddhhmm）+ 扩展名。
  * separator 为成员名与时间戳之间的分隔符（录制为空格、回放下载紧连，保持既有命名）；
  * 同场直播同一时刻只允许一个任务，文件名保持分钟精度即可，
@@ -124,7 +117,6 @@ const Tools = {
   timeToSecond,
   lyricsParse,
   streamPathHandle,
-  formatDuration,
   taskFilename,
   shortTeamName,
   normalizeUserId,

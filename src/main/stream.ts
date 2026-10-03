@@ -1,8 +1,7 @@
 import { spawn } from 'node:child_process'
-import fs from 'node:fs'
-import path from 'node:path'
 import { isAllowedStreamUrl } from './allowed-hosts'
 import { Database } from './database'
+import { resolveFfmpegBinary } from './ffmpeg/ffmpeg-process'
 import { assertLocalServerAvailable, serverHost, serverPort } from './http-server'
 import { debug, error, log } from './logger'
 
@@ -26,21 +25,13 @@ function getStreamRoute(liveId: string) {
   return `/live/${encodeURIComponent(getSafeLiveId(liveId))}.flv`
 }
 
-// 播放和录制都复用用户配置的 FFmpeg，可避免在项目里额外捆绑二进制。
+/** 播放和录制都复用用户配置的 FFmpeg，可避免在项目里额外捆绑二进制。 */
 function getFfmpegPath() {
   const ffmpegDir = Database.instance().getConfig('ffmpegDirectory')
   if (!ffmpegDir)
     throw new Error('尚未设置 ffmpeg 目录')
 
-  const ffmpegPath = path.join(
-    ffmpegDir,
-    process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg',
-  )
-
-  if (!fs.existsSync(ffmpegPath))
-    throw new Error('ffmpeg 不存在')
-
-  return ffmpegPath
+  return resolveFfmpegBinary(ffmpegDir)
 }
 
 function registerActiveProcess(sessionId: string, process: ReturnType<typeof spawn>) {

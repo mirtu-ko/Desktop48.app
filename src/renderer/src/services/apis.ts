@@ -318,7 +318,6 @@ const Apis = {
   syncInfo,
   lives,
   playbackList,
-  list,
   live,
   openLive,
   barrage,

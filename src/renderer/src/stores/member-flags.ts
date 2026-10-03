@@ -46,7 +46,13 @@ function createMemberFlagStore(kind: MemberFlagKind) {
   }
 
   async function refresh() {
-    members.value = (await window.mainAPI.getMemberFlags(kind)) || []
+    try {
+      members.value = (await window.mainAPI.getMemberFlags(kind)) || []
+    }
+    catch (error) {
+      console.error(message.updateError, error)
+      ElMessage.error(message.failure)
+    }
   }
 
   function has(userId: number | string | undefined | null) {
@@ -93,10 +99,16 @@ function createMemberFlagStore(kind: MemberFlagKind) {
   }
 
   async function clear() {
-    await window.mainAPI.setMemberFlags(kind, [])
-    members.value = []
-    if (message.cleared)
-      ElMessage({ message: message.cleared, type: 'success' })
+    try {
+      await window.mainAPI.setMemberFlags(kind, [])
+      members.value = []
+      if (message.cleared)
+        ElMessage({ message: message.cleared, type: 'success' })
+    }
+    catch (error) {
+      console.error(message.updateError, error)
+      ElMessage.error(message.failure)
+    }
   }
 
   return { members, refresh, has, toggle, remove, clear }

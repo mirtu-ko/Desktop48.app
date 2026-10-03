@@ -8,9 +8,9 @@ import { usePlaybackEngine } from '@renderer/composables/use-playback-engine'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 
-import Apis from '@renderer/services/apis'
+import { loadLiveDetail } from '@renderer/services/live-detail'
 import { debugLog } from '@renderer/utils/debug'
-import { normalizeCarouselTime, pickPreferredVodStream } from '@renderer/utils/live-stream'
+import { resolveCarouselImages } from '@renderer/utils/live-stream'
 import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
 import dayjs from 'dayjs'
@@ -23,7 +23,6 @@ import RadioStage from './RadioStage.vue'
 import RotationControls from './RotationControls.vue'
 
 const props = defineProps({
-  liveTitle: { type: String, required: true },
   liveId: { type: String, required: true },
   startTime: { type: Number, required: true },
   /** 数据源：user=用户直播回放(getLiveOne)，open=开放公演回放(getOpenLiveOne) */
@@ -211,69 +210,57 @@ function onMiniSeek(value: number) {
 }
 
 /**
- * 获取回放详情
- * 返回回放详情数据，data.review 为 true 时有回放
+ * 获取回放详情。
+ * 拉取与归一交给 services/live-detail.ts（与直播链路共用），这里只处理回放特有的分支：
+ * 开放公演选流为空、录播尚未生成、弹幕源变化需重载。
  */
 async function getLiveOne() {
   try {
-    if (props.source === 'open') {
-      // 开放公演回放：getOpenLiveOne 返回 playStreams 数组（VOD m3u8），优先选超清（streamType 3），
-      // 详情里没有用户与在线人数信息，用公演标题与传入的队伍 logo 兜底
-      debugLog('playback', `②拉详情: source=open → getOpenLiveOne, props:`, props)
-      const data = await Apis.openLive(props.liveId)
-      debugLog('playback', `②拉详情: 公演回放详情 → data`, data)
-      const stream = pickPreferredVodStream(data.playStreams)
-      if (!stream?.streamPath) {
-        debugLog('playback', `②拉详情: 公演回放选流为空（playStreams=${data.playStreams?.length ?? 0} 条），无法播放`)
-        ElMessage({ message: '未获取到公演回放地址', type: 'error' })
-        return
-      }
-      debugLog('playback', `②拉详情: 公演回放选流 → streamType=${stream.streamType}`, stream)
-      isRadio.value = false
-      // 公演回放详情不含在线人数，面板头部固定显示 0
-      onlineNumber.value = 0
-      realName.value = data.subTitle || data.title || '开放公演'
-      userAvatar.value = Tools.sourceUrl(props.avatarUrl || '')
-      emit('avatar', userAvatar.value)
-      barrageUrl.value = data.msgFilePath || ''
-      playStreamPath.value = stream.streamPath
+    debugLog('playback', `②拉详情: source=${props.source} → ${props.source === 'open' ? 'getOpenLiveOne' : 'getLiveOne'}, props:`, props)
+    const view = await loadLiveDetail({
+      liveId: props.liveId,
+      source: props.source === 'open' ? 'open' : 'user',
+      stream: 'vod',
+      avatarUrl: props.avatarUrl,
+      startTime: props.startTime,
+    })
+    debugLog('playback', `②拉详情: 归一结果 streamType=${view.streamType ?? '单档'} cover=${view.coverUrl ? '有' : '无'}`, view)
+
+    // 开放公演回放选流为空：没有可播地址，停在空载
+    if (props.source === 'open' && !view.playStreamPath) {
+      debugLog('playback', '②拉详情: 公演回放选流为空，无法播放')
+      ElMessage({ message: '未获取到公演回放地址', type: 'error' })
       return
     }
 
-    debugLog('playback', `②拉详情: source=user → getLiveOne, props:`, props)
-    const data = await Apis.live(props.liveId)
-    debugLog('playback', `②拉详情: 录播详情 → data`, data)
-
-    const nextPlayStreamPath = Tools.streamPathHandle(data.playStreamPath, props.startTime)
-    const nextBarrageUrl = data.msgFilePath || ''
-
-    if (!data.review) {
+    // 录播尚未生成：不进播放引擎
+    if (!view.review) {
       debugLog('playback', `②拉详情: liveId=${props.liveId} 暂无回放（review=false）`)
-      ElMessage({
-        message: '录播回放尚未生成！',
-        type: 'warning',
-      })
+      ElMessage({ message: '录播回放尚未生成！', type: 'warning' })
       return
     }
 
-    isRadio.value = data.liveType === 2
-    onlineNumber.value = data.onlineNum ?? 0
-    realName.value = data.user.userName
-    userAvatar.value = Tools.sourceUrl(data.user.userAvatar)
+    isRadio.value = view.liveType === 2
+    // 公演回放详情不含在线人数，面板头部显示 0
+    onlineNumber.value = view.onlineNum ?? 0
+    realName.value = view.realName
+    userAvatar.value = view.userAvatar
     emit('avatar', userAvatar.value)
-    carousels.value = isRadio.value && data.carousels?.carousels?.length
-      ? data.carousels.carousels.map((carousel: string) => Tools.sourceUrl(carousel))
-      : []
-    carouselTime.value = isRadio.value
-      ? normalizeCarouselTime(data.carousels?.carouselTime)
-      : 5000
+    // 电台无轮播图时回退封面单张展示（与直播链路同一契约）
+    carousels.value = resolveCarouselImages(
+      isRadio.value,
+      view.carouselImages,
+      view.coverUrl,
+      url => Tools.sourceUrl(url),
+    )
+    carouselTime.value = view.carouselTime
 
-    const barrageSourceChanged = barrageUrl.value !== nextBarrageUrl
-    barrageUrl.value = nextBarrageUrl
-    playStreamPath.value = nextPlayStreamPath
+    const barrageSourceChanged = barrageUrl.value !== view.barrageUrl
+    barrageUrl.value = view.barrageUrl
+    playStreamPath.value = view.playStreamPath
 
     if (barrageSourceChanged) {
-      debugLog('playback', `②拉详情: 播放地址与弹幕源已更新（弹幕源变化 → 重新加载）`)
+      debugLog('playback', '②拉详情: 播放地址与弹幕源已更新（弹幕源变化 → 重新加载）')
       resetBarrageSource()
     }
   }
@@ -576,7 +563,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   padding: 4px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.08);
   color: rgba(255, 255, 255, 0.5);
 }

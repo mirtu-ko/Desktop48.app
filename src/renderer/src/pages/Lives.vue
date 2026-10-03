@@ -49,17 +49,10 @@ const {
 } = usePagedLiveList({
   scrollbarRef: liveScrollRef,
   loadPage: next => Apis.lives(next),
-  // 封面/队伍Logo/日期/成员信息补全：与回放页共用 enrichLiveItem，成员查询失败逐条容错
+  // 封面/日期/成员信息补全：与回放页共用 enrichLiveItem，成员查询失败逐条容错
   processItem: item => enrichLiveItem(item, 'fallback'),
   stopOnError: false,
 })
-
-/** enrichLiveItem 补全后的条目（cover/date/member 由 processItem 就地写入，渲染时必然就绪） */
-type EnrichedLiveItem = LiveListItem & {
-  cover: string[]
-  date: string
-  member: { teamName: string, teamColor: string } | null
-}
 
 // 首屏/刷新后列表为空时展示骨架屏；已有列表时刷新只反馈到刷新按钮，避免整页蒙层闪烁
 const showSkeleton = computed(() => loading.value && liveList.value.length === 0)
@@ -168,9 +161,9 @@ onUnmounted(() => {
             class="live-item"
             @click="play(item)"
           >
-            <!-- enrichLiveItem 在 processItem 阶段已就地补全 cover/date/member，渲染时必然就绪 -->
+            <!-- enrichLiveItem 在 processItem 阶段已补全 cover/date/member，渲染时必然就绪 -->
             <LiveItem
-              :item="item as EnrichedLiveItem"
+              :item="item"
               :image-version="imageVersion"
               :followed="isFollowed(item.userInfo.userId)"
               @select-member="openMemberDetail"

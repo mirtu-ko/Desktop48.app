@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { LiveListItemView } from '@renderer/services/api-types'
 import type { MemberTreeGroupPayload } from '../../../preload/ipc-contract'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
@@ -87,9 +88,9 @@ const {
       params.groupId = String(groupId)
     return Apis.playbackList(params)
   },
-  // 封面/队伍Logo/日期/成员信息补全：与直播页共用 enrichLiveItem；
+  // 封面/日期/成员信息补全：与直播页共用 enrichLiveItem；
   // 成员查询失败直接抛出，由 stopOnError 接管整批停止
-  processItem: (item: any) => enrichLiveItem(item),
+  processItem: item => enrichLiveItem(item),
   stopOnError: true,
 })
 
@@ -206,11 +207,12 @@ watch(memberOption, () => {
 })
 
 // 点击回放：以独立播放窗打开，可边看边继续浏览列表
-function onPlaybackClick(item: any) {
+function onPlaybackClick(item: LiveListItemView) {
   openPlayback({
     liveId: item.liveId,
     nickname: item.userInfo.nickname,
-    title: item.title,
+    // title 接口不保证下发，缺失时用主播名兜底（播放窗标题栏需要非空）
+    title: item.title || item.userInfo.nickname,
     startTime: Number.parseInt(item.ctime),
     // 列表项自带 liveType，建窗时即可判定电台（见 main/float-window.ts 的 openFloatWindow），
     // 不必等详情接口回来
@@ -304,8 +306,6 @@ watch(selectedFilter, () => {
 /* 页面骨架（相对定位 + 裁剪）见模板上的全局 .page-root */
 
 /* 筛选控件不压缩，避免窄窗口下按钮被挤掉文案 */
-:deep(.el-select),
-:deep(.filter-main),
 :deep(.el-button) {
   flex-shrink: 0;
 }

@@ -8,7 +8,7 @@ import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import BaseSkeleton from '@renderer/components/ui/skeleton/BaseSkeleton.vue'
 import Apis from '@renderer/services/apis'
 import useAudioPlayerStore from '@renderer/stores/audio-player'
-import Tools from '@renderer/utils/tools'
+import { formatMediaTime } from '@renderer/utils/time-format'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
@@ -55,7 +55,7 @@ function releaseDate(album: MusicAlbum): string {
   return ts > 0 ? dayjs(ts * 1000).format('YYYY-MM-DD') : album.year || '未知'
 }
 
-/** 专辑总时长（m:ss，忽略无时长的伴奏曲目） */
+/** 专辑总时长（不足 1 小时显示 mm:ss，超过显示 hh:mm:ss；忽略无时长的伴奏曲目） */
 function totalTime(album: MusicAlbum): string {
   const total = album.song.reduce((sum, song) => {
     if (!song.songs_time) {
@@ -67,7 +67,7 @@ function totalTime(album: MusicAlbum): string {
   if (!total) {
     return ''
   }
-  return Tools.formatDuration(total)
+  return formatMediaTime(total)
 }
 
 /** 拉取 CDN 音乐 JSON 并按发行时间倒序 */
@@ -402,6 +402,7 @@ onMounted(fetchAlbums)
               v-if="song.url"
               class="track-add"
               title="加入播放列表"
+              aria-label="加入播放列表"
               @click.stop="addSingle(currentAlbum, song)"
             >
               <el-icon><Plus /></el-icon>
@@ -566,7 +567,7 @@ onMounted(fetchAlbums)
     box-shadow: var(--shadow-glow);
 
     &:hover {
-      background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-secondary));
+      background: var(--gradient-brand-hover);
       color: #fff;
     }
   }

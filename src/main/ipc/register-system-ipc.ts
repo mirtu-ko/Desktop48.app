@@ -7,6 +7,7 @@
  * 通道清单与渲染端 preload/index.ts 的 mainAPI 契约一一对应，两边改动请同步。
  */
 import type { IpcMainInvokeEvent } from 'electron'
+import type { NetRequestOptions } from '../../preload/ipc-contract'
 import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -56,16 +57,18 @@ export function registerSystemIPC(): void {
 
   handleTraced('pathJoin', (_event: IpcMainInvokeEvent, ...paths: string[]) => path.join(...paths))
 
-  handleTraced('netRequest', async (_event: IpcMainInvokeEvent, options: any) => {
-    const url: string = typeof options === 'string' ? options : options?.url
+  handleTraced('netRequest', async (_event: IpcMainInvokeEvent, options: NetRequestOptions) => {
+    const { url, method, headers, body } = options
     if (!url || !isAllowedUrl(url)) {
       throw new Error(`请求被拒绝：域名不在白名单中 (${url})`)
     }
     return new Promise<string>((resolve, reject) => {
-      const request = net.request(options)
-      if (options.headers) {
-        for (const key in options.headers)
-          request.setHeader(key, options.headers[key])
+      // 逐字段构造而非整对象透传：net.request 会接受 ClientRequest 的全部选项，
+      // 整对象透传等于让渲染层塞入 session / credentials 等我们并未打算开放的字段
+      const request = net.request({ url, method: method || 'GET' })
+      if (headers) {
+        for (const key in headers)
+          request.setHeader(key, headers[key])
       }
 
       let settled = false
@@ -118,13 +121,11 @@ export function registerSystemIPC(): void {
       })
       request.on('abort', () => fail(new Error(`请求被中断: ${url}`)))
       request.on('error', fail)
-      if (options.body)
-        request.write(options.body)
+      if (body)
+        request.write(body)
       request.end()
     })
   })
-
-  handleTraced('getDesktopPath', () => app.getPath('desktop'))
 
   // ffmpeg 相关
   handleTraced('checkFfmpegBinaries', async (_event: IpcMainInvokeEvent, dir: string) => {

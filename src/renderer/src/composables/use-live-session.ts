@@ -1,19 +1,15 @@
-import type { LiveDetail } from '@renderer/services/api-types'
+import type { LiveDetailView } from '@renderer/services/live-detail'
 import type { Ref } from 'vue'
-import Apis from '@renderer/services/apis'
+import { loadLiveDetail } from '@renderer/services/live-detail'
 import { debugLog } from '@renderer/utils/debug'
 import {
   buildPlaybackUrl,
-  normalizeCarouselTime,
-  pickPreferredStream,
+  isUnavailableLiveMessage,
   resolveCarouselImages,
 } from '@renderer/utils/live-stream'
 import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
-
-/** 直播详情形状统一在 services/api-types.ts 建模 */
-export type { LiveDetail }
 
 /**
  * 直播会话：直播详情获取 + 本地 HTTP-FLV 会话生命周期（创建/停止/重启）。
@@ -22,7 +18,7 @@ export type { LiveDetail }
  * 播放器在 use-live-player，重试在 use-stream-retry，三者由 LivePlayer.vue 编排。
  *
  * 两个方向相反的「地址」不要搞混：
- * - 入参 / LiveDetail.playStreamPath = rtmp://...      远程源，喂给主进程的 FFmpeg
+ * - 入参 / LiveDetailView.playStreamPath = rtmp://...   远程源，喂给主进程的 FFmpeg
  * - 出参 localPlaybackUrl            = http://127.0.0.1 本地地址，喂给 mpegts 播放器
  *
  * 完整链路见 docs/live-playback-pipeline.md
@@ -64,45 +60,40 @@ export function useLiveSession(options: {
   let activeStreamRequestId = 0
 
   /** 直播详情与界面状态同步，不直接处理播放器 */
-  function applyLiveDetail(data: LiveDetail) {
-    coverImage.value = Tools.sourceUrl(data.coverPath)
+  function applyLiveDetail(view: LiveDetailView) {
+    coverImage.value = view.coverUrl
+    // 电台无轮播图时回退封面单张展示（live-stream.ts 内 resolveCarouselImages 的既定契约）
     carousels.value = resolveCarouselImages(
       options.isRadio(),
-      data.carousels?.carousels,
-      data.coverPath,
+      view.carouselImages,
+      view.coverUrl,
       url => Tools.sourceUrl(url),
     )
-    carouselTime.value = normalizeCarouselTime(data.carousels?.carouselTime)
-    realName.value = data.user.userName
-    // 头像：优先调用方传入（open 公演为封面），否则取详情的主播头像；open 模式无在线人数
-    userAvatar.value = Tools.sourceUrl(options.avatarUrl() || data.user.userAvatar || '')
+    carouselTime.value = view.carouselTime
+    realName.value = view.realName
+    userAvatar.value = view.userAvatar
     options.onAvatar(userAvatar.value)
-    if (typeof data.onlineNum === 'number')
-      options.onOnlineNum(data.onlineNum)
+    // 上游未带在线人数时不回调（open 公演接口恒不带）
+    if (view.onlineNum !== undefined)
+      options.onOnlineNum(view.onlineNum)
   }
 
   /**
-   * 取直播详情，把两个上游接口抹平成同一个 LiveDetail 形状，
-   * 后续代码不必再区分公演 / 个人直播。
+   * 取直播详情并归一成 LiveDetailView（open 走公演接口，user 走个人直播接口）。
    * 返回值里的 playStreamPath 是**远程 rtmp 地址**（不是本地播放地址）。
+   * 异常原样上抛：业务错误（直播已下架）由调用方判别后关窗。
    */
-  async function fetchLiveDetail(): Promise<LiveDetail> {
-    if (options.source() === 'open') {
-      // 开放公演：getOpenLiveOne 返回 playStreams 数组（多档清晰度），选高清（streamType 2）；
-      // 该接口没有主播信息，用副标题/标题兜底成 user.userName 以满足 LiveDetail 契约
-      debugLog('live', '②拉详情: source=open → 走 openLive 接口（公演详情为多档清晰度数组，需选流）')
-      const data = await Apis.openLive(options.liveId())
-      const stream = pickPreferredStream(data.playStreams)
-      debugLog('live', `②拉详情: 公演选流 → streamType=${stream?.streamType || '无'}（优先高清 2，回落任意有地址的流）`)
-      return {
-        playStreamPath: stream?.streamPath || '',
-        coverPath: data.coverPath || '',
-        user: { userName: data.subTitle || data.title || '开放公演', userAvatar: '' },
-        liveId: data.liveId,
-      }
-    }
-    debugLog('live', '②拉详情: source=user → 走 getLiveOne 接口（单档 rtmp 地址）', `liveId=${options.liveId()}`)
-    return await Apis.live(options.liveId())
+  async function fetchLiveDetail(): Promise<LiveDetailView> {
+    const source = options.source() === 'open' ? 'open' : 'user'
+    debugLog('live', `②拉详情: source=${source} → ${source === 'open' ? 'openLive 接口（多档清晰度数组，需选流）' : 'getLiveOne 接口（单档 rtmp 地址）'}`, `liveId=${options.liveId()}`)
+    const view = await loadLiveDetail({
+      liveId: options.liveId(),
+      source,
+      stream: 'live',
+      avatarUrl: options.avatarUrl(),
+    })
+    debugLog('live', `②拉详情: 归一结果 streamType=${view.streamType ?? '单档'} cover=${view.coverUrl ? '有' : '无'}`, view)
+    return view
   }
 
   /** 停掉当前会话并等待主进程确认（重建流之前调用，确保旧 FFmpeg 已退出） */
@@ -158,7 +149,7 @@ export function useLiveSession(options: {
 
   /**
    * 首次进入 / 重试恢复：按最新 RTMP 地址重建本地 HTTP-FLV 会话。
-   * @param rtmpUrl 远程源地址（来自 LiveDetail.playStreamPath）
+   * @param rtmpUrl 远程源地址（来自 LiveDetailView.playStreamPath）
    */
   async function restartLiveStream(rtmpUrl: string) {
     const requestId = ++activeStreamRequestId
@@ -187,9 +178,10 @@ export function useLiveSession(options: {
     }
     catch (error: any) {
       console.error('getLiveOne()', error)
-      // 详情失败的原因已由 apis.ts 的 request() 统一弹窗提示（不在这里重复弹）；
-      // 详情都取不到通常意味着直播已下架，走下架处理
-      options.onUnavailable()
+      // 详情失败的原因已由 apis.ts 的 request() 统一弹窗提示（不在这里重复弹）。
+      // 只有「直播已下架」才关窗：网络中断 / 重试耗尽等临时故障关窗等于把可恢复的抖动当成永久下架。
+      if (error instanceof Error && isUnavailableLiveMessage(error.message))
+        options.onUnavailable()
     }
   }
 
@@ -216,18 +208,14 @@ export function useLiveSession(options: {
 
   return {
     localPlaybackUrl,
-    activeSessionLiveId,
-    streamRestartToken,
     coverImage,
     realName,
-    userAvatar,
     carousels,
     carouselTime,
     fetchLiveDetail,
     applyLiveDetail,
     getLiveOne,
     restartLiveStream,
-    stopCurrentLiveStream,
     stopStreamNow,
     dispose,
   }

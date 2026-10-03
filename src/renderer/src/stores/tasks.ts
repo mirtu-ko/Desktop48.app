@@ -146,13 +146,22 @@ async function handleTask(payload: TaskPayload, kind: TaskKind) {
  * 移除任务卡片，并同步删除主进程快照（否则刷新后任务会再次出现）。
  * ⚠️ 删除不广播（TaskEventMap 无 Removed 通道）：目前只有主窗口能删除，故无可见影响；
  * 将来若在播放窗也加删除入口，必须先补 Removed 广播，否则两窗镜像会分叉。
+ *
+ * 先删主进程快照再改本地列表：反过来做的话，后端失败时卡片已消失、刷新后又会回来。
  */
 async function removeTask(task: TaskState, kind: TaskKind) {
   const config = taskConfigs[kind]
+  try {
+    await config.removeApi(task.liveId)
+  }
+  catch (error) {
+    console.error('[tasks] 删除任务失败', task.liveId, error)
+    ElMessage.error('删除任务失败，请稍后重试')
+    return
+  }
   const index = config.list.value.findIndex(item => item.liveId === task.liveId)
   if (index !== -1)
     config.list.value.splice(index, 1)
-  await config.removeApi(task.liveId)
 }
 
 /**
@@ -249,7 +258,10 @@ export function useTasksStore() {
     removeTask,
     isTaskRunning,
     stopTaskByLiveId,
-    openSaveDirectory,
+    /** 打开保存目录；task-runtime 保持无 UI 依赖，失败提示由这里注入 */
+    openSaveDirectory: (task: TaskState) => openSaveDirectory(task, () => {
+      ElMessage.error('无法打开保存目录，请检查目录是否存在')
+    }),
   }
 }
 

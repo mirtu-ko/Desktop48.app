@@ -1,34 +1,11 @@
 <script setup lang="ts">
+import type { LiveListItemView } from '@renderer/services/api-types'
 import { StarFilled, VideoCameraFilled } from '@element-plus/icons-vue'
-import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
 import { computed } from 'vue'
 
-interface Member {
-  teamName: string
-  teamColor: string
-}
-
-interface UserInfo {
-  /** 口袋 userId（列表接口给字符串）：点成员名开详情抽屉时按它反查 */
-  userId: string
-  nickname: string
-}
-
-interface Item {
-  title?: string
-  liveMode?: number
-  liveType?: number
-  cover: string[]
-  date: string
-  /** 录播时长（秒）：回放列表接口下发，直播卡片无此数据 */
-  duration?: number | string
-  userInfo: UserInfo
-  member: Member | null
-}
-
 const props = defineProps<{
-  item: Item
+  item: LiveListItemView
   /** 刷新版本号：变化时给封面 URL 追加 cache-busting 参数，强制失败图重试 */
   imageVersion?: number | string
   /** 是否被关注成员的直播：为 true 时整卡金色描边高亮，右上角标「已关注」胶囊 */
@@ -94,14 +71,17 @@ const liveBadge = computed(() => {
         {{ item.title }}
       </p>
       <div class="member-info">
-        <!-- 成员名可点开详情抽屉；点击不冒泡，否则连带触发卡片播放 -->
-        <span
+        <!-- 成员名可点开详情抽屉；点击不冒泡，否则连带触发卡片播放。
+             抽屉内的操作键盘可达，故入口本身必须是 button 而非裸 span。 -->
+        <button
+          type="button"
           class="nickname ellipsis"
+          :aria-label="`查看 ${item.userInfo.nickname} 的成员详情`"
           :title="`查看 ${item.userInfo.nickname} 的成员详情`"
           @click.stop="emit('selectMember', item.userInfo.userId)"
         >
           {{ item.userInfo.nickname }}
-        </span>
+        </button>
         <span
           v-if="item.member?.teamName"
           class="team-badge"
@@ -256,6 +236,9 @@ const liveBadge = computed(() => {
       /* 负外边距抵消内边距：悬浮片撑开但文字不位移 */
       margin: -2px -6px;
       padding: 2px 6px;
+      border: none;
+      background: none;
+      font: inherit;
       border-radius: var(--radius-xs);
       font-size: 12px;
       color: var(--el-text-color-regular);

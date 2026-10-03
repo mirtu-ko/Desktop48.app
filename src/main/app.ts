@@ -60,9 +60,20 @@ function createWindow(): void {
   })
   wireWindowMaximizeEvents(win)
 
-  win.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+  // 外链一律转系统浏览器：openExternal 会把 URL 交给操作系统的默认处理器，
+  // 因此必须限定协议——否则渲染层构造 file:// / smb:// 之类即可触发本地动作。
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url))
+      void shell.openExternal(url)
     return { action: 'deny' }
+  })
+
+  // setWindowOpenHandler 只管 window.open / target=_blank；同一窗口内的导航走 will-navigate。
+  // 应用内没有需要跟随的页面，任何导航都视为「离开应用」，拦下并转系统浏览器。
+  win.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault()
+    if (/^https?:/.test(url))
+      void shell.openExternal(url)
   })
 
   // 基于 electron-vite CLI 的渲染进程热重载 (HMR)。
@@ -76,7 +87,7 @@ function createWindow(): void {
 }
 
 // 取当前可用主窗口；窗口已销毁时返回 null。
-// 导出供 ipc/register-window-ipc.ts 接线窗口控制通道（窗口引用本身不跨模块共享）
+// 导出供 ipc/register-float-window-ipc.ts 接线播放窗相关通道（窗口引用本身不跨模块共享）
 export function activeWindow(): BrowserWindow | null {
   if (mainWindow && !mainWindow.isDestroyed())
     return mainWindow
