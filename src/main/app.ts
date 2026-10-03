@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, powerSaveBlocker, shell } from 'electron'
 import icon from '../../resources/icon.png?asset'
+import { cleanupDanmakuSessions } from './bilibili/danmaku-session'
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
 import { closeAllFloatWindows } from './float-window'
@@ -133,9 +134,10 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  // 应用退出前统一清理独立播放窗 / 直播会话 / 转流进程
+  // 应用退出前统一清理独立播放窗 / 直播会话 / 转流进程 / 弹幕长连接
   closeAllFloatWindows()
   cleanupStreamSessions()
+  cleanupDanmakuSessions()
   // 对仍在运行的所有 ffmpeg 任务写 'q' 优雅收尾，避免退出后残留孤儿进程
   stopAllFfmpegTasks()
   releaseAllSleepBlockers()

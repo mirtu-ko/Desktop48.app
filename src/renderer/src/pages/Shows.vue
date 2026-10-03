@@ -8,6 +8,7 @@ import useLoadMore from '@renderer/composables/use-load-more'
 import usePagedList from '@renderer/composables/use-paged-list'
 import Apis from '@renderer/services/apis'
 import useFloatPlayersStore from '@renderer/stores/float-players'
+import { resolveBilibiliRoomId } from '@renderer/utils/bilibili-room'
 import Constants from '@renderer/utils/constants'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
@@ -158,6 +159,12 @@ function openLiveStream(show: OpenLive) {
     avatar: show.coverPath,
     liveType: 1,
     liveMode: 0,
+    // 弹幕房间按团体映射（认 groupId；CGT48 等 teamList 为空时退回标题匹配），
+    // 映射不到就不带该字段，播放器据此不显示弹幕入口
+    bilibiliRoomId: resolveBilibiliRoomId({
+      groupId: show.teamList?.[0]?.groupId,
+      texts: [show.title, show.subTitle],
+    }),
   })
 }
 

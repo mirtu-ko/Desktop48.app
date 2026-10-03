@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { isAllowedStreamUrl, isAllowedUrl } from '../src/main/allowed-hosts'
+import {
+  isAllowedBilibiliApiUrl,
+  isAllowedBilibiliSocketUrl,
+  isAllowedStreamUrl,
+  isAllowedUrl,
+} from '../src/main/allowed-hosts'
 
 describe('isAllowedUrl', () => {
   it('放行白名单内的精确域名', () => {
@@ -56,5 +61,52 @@ describe('isAllowedStreamUrl（ffmpeg 输入地址校验）', () => {
   it('非法 URL 返回 false 而非抛错', () => {
     expect(isAllowedStreamUrl('not a url')).toBe(false)
     expect(isAllowedStreamUrl('')).toBe(false)
+  })
+})
+
+describe('isAllowedBilibiliApiUrl（弹幕握手接口）', () => {
+  it('放行 WBI / 房间信息 / 弹幕服务器列表 / 设备指纹这几个接口', () => {
+    expect(isAllowedBilibiliApiUrl('https://api.bilibili.com/x/web-interface/nav')).toBe(true)
+    expect(isAllowedBilibiliApiUrl('https://api.bilibili.com/x/frontend/finger/spi')).toBe(true)
+    expect(isAllowedBilibiliApiUrl('https://api.live.bilibili.com/room/v1/Room/get_info?room_id=48')).toBe(true)
+    expect(isAllowedBilibiliApiUrl('https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?id=63727')).toBe(true)
+  })
+
+  it('拒绝 B 站的其它域名（白名单只覆盖握手用到的三个）', () => {
+    expect(isAllowedBilibiliApiUrl('https://live.bilibili.com/48')).toBe(false)
+    expect(isAllowedBilibiliApiUrl('https://www.bilibili.com/video/BV1')).toBe(false)
+  })
+
+  it('不放行本项目的 48 系域名（两套白名单互相隔离）', () => {
+    expect(isAllowedBilibiliApiUrl('https://pocketapi.48.cn/api/getInfo')).toBe(false)
+  })
+
+  it('拒绝子域名仿冒与非 http(s) 协议', () => {
+    expect(isAllowedBilibiliApiUrl('https://api.bilibili.com.evil.com/x')).toBe(false)
+    expect(isAllowedBilibiliApiUrl('wss://api.bilibili.com/x')).toBe(false)
+    expect(isAllowedBilibiliApiUrl('not a url')).toBe(false)
+  })
+})
+
+describe('isAllowedBilibiliSocketUrl（弹幕长连接）', () => {
+  it('放行 .chat.bilibili.com 下的动态下发服务器', () => {
+    expect(isAllowedBilibiliSocketUrl('wss://broadcastlv.chat.bilibili.com:443/sub')).toBe(true)
+    expect(isAllowedBilibiliSocketUrl('wss://tx-bj-live-comet-02.chat.bilibili.com:443/sub')).toBe(true)
+  })
+
+  it('后缀必须带点边界，仿冒域名不放行', () => {
+    expect(isAllowedBilibiliSocketUrl('wss://evil-chat.bilibili.com/sub')).toBe(false)
+    expect(isAllowedBilibiliSocketUrl('wss://chat.bilibili.com.evil.com/sub')).toBe(false)
+    expect(isAllowedBilibiliSocketUrl('wss://evil.com/sub')).toBe(false)
+  })
+
+  it('不放行非弹幕域名，也不放行本项目域名（不并入 netRequest 的放行集合）', () => {
+    expect(isAllowedBilibiliSocketUrl('wss://api.live.bilibili.com/sub')).toBe(false)
+    expect(isAllowedBilibiliSocketUrl('wss://live.48.cn/sub')).toBe(false)
+  })
+
+  it('拒绝非 ws(s) 协议', () => {
+    expect(isAllowedBilibiliSocketUrl('https://broadcastlv.chat.bilibili.com/sub')).toBe(false)
+    expect(isAllowedBilibiliSocketUrl('not a url')).toBe(false)
   })
 })

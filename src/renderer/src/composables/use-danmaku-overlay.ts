@@ -22,7 +22,9 @@ interface UseDanmakuOverlayOptions {
 }
 
 // 每条弹幕在堆叠中的展示时长（秒），逾期自顶部挤出
-const DISPLAY_SECONDS = 6
+const PLAYBACK_DISPLAY_SECONDS = 6
+// 与录播分开：两边弹幕密度差一个数量级，要能各自调
+const LIVE_DISPLAY_SECONDS = 6
 // 堆叠条容量上限，超出后挤出最旧的
 const MAX_ITEMS = 30
 
@@ -41,7 +43,18 @@ export function findBarrageIndex(entries: Array<{ seconds: number }>, target: nu
 }
 
 /**
- * 弹幕叠加层引擎（左下角玻璃条）：数组即全部可见气泡，最新一条在 [0]（渲染于底部）。
+ * 掐掉数组尾部已过期的气泡（最新一条在 [0]）。只在宿主推进时调用，故暂停 / seek 期间不回收。
+ * 一条都没过期时原样返回同一个数组：引用不变，shallowRef 不触发重渲染。
+ */
+function dropExpired(items: DanmakuOverlayItem[], time: number): DanmakuOverlayItem[] {
+  let drop = 0
+  while (drop < items.length && items[items.length - 1 - drop].expireAt < time)
+    drop++
+  return drop > 0 ? items.slice(0, items.length - drop) : items
+}
+
+/**
+ * 录播弹幕叠加层引擎（左下角玻璃条）：数组即全部可见气泡，最新一条在 [0]（渲染于底部）。
  * 不自带渲染循环 —— 由宿主在 timeupdate 调 advanceTo 推进，seek/重播走 seekTo 重建。
  */
 export function useDanmakuOverlay(options: UseDanmakuOverlayOptions) {
@@ -61,7 +74,7 @@ export function useDanmakuOverlay(options: UseDanmakuOverlayOptions) {
       id: nextId++,
       content: entry.content,
       username: entry.username,
-      expireAt: entry.seconds + DISPLAY_SECONDS,
+      expireAt: entry.seconds + PLAYBACK_DISPLAY_SECONDS,
     }
     items.value = [item, ...items.value].slice(0, MAX_ITEMS)
   }
@@ -75,34 +88,88 @@ export function useDanmakuOverlay(options: UseDanmakuOverlayOptions) {
     }
   }
 
-  /** 逾期条目自尾部挤出；进度静止（暂停/seek）时不回收 */
-  function prune(time: number) {
-    const current = items.value
-    if (current.length === 0)
-      return
-    let drop = 0
-    while (drop < current.length && current[current.length - 1 - drop].expireAt < time)
-      drop++
-    if (drop > 0)
-      items.value = current.slice(0, current.length - drop)
-  }
-
   /** 推进进度（timeupdate 唯一入口）。反向跳转一律走 seekTo，此处无需判向 */
   function advanceTo(time: number) {
     processUpTo(time)
-    prune(time)
+    items.value = dropExpired(items.value, time)
   }
 
   /**
    * seek / 重播统一入口。游标定位到「展示窗口起点」而非目标时刻本身，再交给 advanceTo
-   * 把窗口内仍在展示期的弹幕填回 —— 否则拖到弹幕密集处会先空窗 DISPLAY_SECONDS 秒。
-   * 更早的历史由 prune 剔除，不会倒灌。
+   * 把窗口内仍在展示期的弹幕填回 —— 否则拖到弹幕密集处会先空窗 PLAYBACK_DISPLAY_SECONDS 秒。
    */
   function seekTo(time: number) {
     items.value = []
-    cursor = findBarrageIndex(getEntries(), time - DISPLAY_SECONDS)
+    cursor = findBarrageIndex(getEntries(), time - PLAYBACK_DISPLAY_SECONDS)
     advanceTo(time)
   }
 
   return { items, advanceTo, seekTo }
+}
+
+/** 待投放弹幕：showAt 为宿主时钟下的应显示时刻（秒），到点才进 items */
+interface PendingDanmaku {
+  content: string
+  username: string
+  showAt: number
+}
+
+// 延迟补偿把弹幕排到将来，积压上限兜住「高补偿 + 高密度房间」；超出时丢排队最久的那条
+const MAX_PENDING = 300
+
+/**
+ * 直播弹幕叠加层引擎。与录播引擎的关键差别：条目到达即排入待投放队列，不保留历史条目 ——
+ * 录播用游标索引数组，从头部裁剪会让游标错位，两者不能共用同一份状态。
+ * 时间轴由宿主提供，投放与回收都由宿主定时器驱动。
+ */
+export function useLiveDanmakuOverlay() {
+  // 可见气泡，[0] 为最新；旧的自数组尾部挤出
+  const items = shallowRef<DanmakuOverlayItem[]>([])
+  let pending: PendingDanmaku[] = []
+  let nextId = 0
+
+  /** 排入一条弹幕；showAt 到点后由 tick 投放（延迟补偿就落在 showAt 上） */
+  function push(content: string, username: string, showAt: number) {
+    if (!content)
+      return
+
+    pending.push({ content, username, showAt })
+    if (pending.length > MAX_PENDING)
+      pending.shift()
+  }
+
+  /**
+   * 宿主定时器唯一入口：先投放到点弹幕，再回收逾期气泡。
+   * 投放用整表扫描而非「遇到第一条未到点就停」—— 调小补偿后新排的 showAt 会更早，队列不再有序。
+   */
+  function tick(time: number) {
+    if (pending.length > 0) {
+      const due: PendingDanmaku[] = []
+      const waiting: PendingDanmaku[] = []
+      for (const item of pending)
+        (item.showAt <= time ? due : waiting).push(item)
+      pending = waiting
+
+      if (due.length > 0) {
+        // 后到的排在前（items[0] 渲染在底部），故 due 反转后整体前插
+        const spawned: DanmakuOverlayItem[] = due.reverse().map(item => ({
+          id: nextId++,
+          content: item.content,
+          username: item.username,
+          expireAt: time + LIVE_DISPLAY_SECONDS,
+        }))
+        items.value = [...spawned, ...items.value].slice(0, MAX_ITEMS)
+      }
+    }
+
+    items.value = dropExpired(items.value, time)
+  }
+
+  /** 会话切换时清空：时间轴原点会重置，遗留的待投放弹幕在新轴上全是错时刻 */
+  function reset() {
+    pending = []
+    items.value = []
+  }
+
+  return { items, push, tick, reset }
 }

@@ -1,13 +1,16 @@
 import type { DanmakuOverlayEntry } from '../src/renderer/src/composables/use-danmaku-overlay'
 import { describe, expect, it } from 'vitest'
-import { findBarrageIndex, useDanmakuOverlay } from '../src/renderer/src/composables/use-danmaku-overlay'
+import { findBarrageIndex, useDanmakuOverlay, useLiveDanmakuOverlay } from '../src/renderer/src/composables/use-danmaku-overlay'
 
 /**
  * 展示时长与堆叠上限是引擎的行为契约，按字面量独立表达：
  * 改动实现常量时这些用例应当失败，提醒契约已变。
  */
-const DISPLAY_SECONDS = 6
+const PLAYBACK_DISPLAY_SECONDS = 6
+const LIVE_DISPLAY_SECONDS = 6
 const MAX_ITEMS = 30
+/** 直播侧独有的待投放积压上限（延迟补偿会把弹幕排到将来） */
+const MAX_PENDING = 300
 
 /** 造升序弹幕源，content 按序编号便于断言 */
 function makeEntries(seconds: number[]): DanmakuOverlayEntry[] {
@@ -79,10 +82,10 @@ describe('useDanmakuOverlay / advanceTo', () => {
     advanceTo(0)
     expect(items.value).toHaveLength(1)
 
-    advanceTo(DISPLAY_SECONDS)
+    advanceTo(PLAYBACK_DISPLAY_SECONDS)
     expect(items.value).toHaveLength(1)
 
-    advanceTo(DISPLAY_SECONDS + 0.1)
+    advanceTo(PLAYBACK_DISPLAY_SECONDS + 0.1)
     expect(items.value).toHaveLength(0)
   })
 
@@ -200,5 +203,118 @@ describe('useDanmakuOverlay / seekTo', () => {
 
     advanceTo(3)
     expect(contents(items.value)).toEqual(['c2', 'c1', 'c0'])
+  })
+})
+
+describe('useLiveDanmakuOverlay / tick', () => {
+  it('push 只是排队，不到点不出现（延迟补偿的本质）', () => {
+    const { items, push } = useLiveDanmakuOverlay()
+
+    push('迟到', 'u', 5)
+
+    expect(items.value).toHaveLength(0)
+  })
+
+  it('tick 到 showAt 才投放，等于边界时投放', () => {
+    const { items, push, tick } = useLiveDanmakuOverlay()
+    push('a', 'u', 5)
+
+    tick(4.9)
+    expect(items.value).toHaveLength(0)
+
+    tick(5)
+    expect(contents(items.value)).toEqual(['a'])
+  })
+
+  it('同一时刻重复 tick 不重复投放', () => {
+    const { items, push, tick } = useLiveDanmakuOverlay()
+    push('a', 'u', 0)
+
+    tick(0)
+    tick(0)
+
+    expect(items.value).toHaveLength(1)
+  })
+
+  it('同一批内后到的排在前（items[0] 渲染在底部）', () => {
+    const { items, push, tick } = useLiveDanmakuOverlay()
+    push('先到', 'u', 3)
+    push('后到', 'u', 3)
+
+    tick(3)
+
+    expect(contents(items.value)).toEqual(['后到', '先到'])
+  })
+
+  it('逾期按「投放时刻 + 展示时长」挤出，等于边界时仍保留', () => {
+    const { items, push, tick } = useLiveDanmakuOverlay()
+    push('a', 'u', 0)
+
+    tick(0)
+    expect(items.value).toHaveLength(1)
+
+    tick(LIVE_DISPLAY_SECONDS)
+    expect(items.value).toHaveLength(1)
+
+    tick(LIVE_DISPLAY_SECONDS + 0.1)
+    expect(items.value).toHaveLength(0)
+  })
+
+  it('中途调小补偿后新排的弹幕不会被先前排的挡住（乱序容忍）', () => {
+    const { items, push, tick } = useLiveDanmakuOverlay()
+    // 先按大补偿排一条远的，再把补偿调小排一条近的 —— 队列不再按 showAt 有序
+    push('远', 'u', 20)
+    push('近', 'u', 5)
+
+    tick(5)
+    expect(contents(items.value)).toEqual(['近'])
+
+    tick(20)
+    expect(contents(items.value)).toEqual(['远'])
+  })
+
+  it('超过堆叠上限时只保留最新 MAX_ITEMS 条', () => {
+    const { items, push, tick } = useLiveDanmakuOverlay()
+    for (let index = 0; index < MAX_ITEMS + 5; index++)
+      push(`c${index}`, 'u', 0)
+
+    tick(0)
+
+    expect(items.value).toHaveLength(MAX_ITEMS)
+    expect(items.value[0].content).toBe(`c${MAX_ITEMS + 4}`)
+    expect(items.value[MAX_ITEMS - 1].content).toBe('c5')
+  })
+
+  it('待投放积压有上限：超出时丢排队最久的那条（保住最新）', () => {
+    const { items, push, tick } = useLiveDanmakuOverlay()
+    for (let index = 0; index <= MAX_PENDING; index++)
+      push(`c${index}`, 'u', 0)
+
+    tick(0)
+
+    expect(contents(items.value)).not.toContain('c0')
+    expect(items.value[0].content).toBe(`c${MAX_PENDING}`)
+  })
+
+  it('空内容不排入（引擎侧兜底，正常已在解析阶段过滤）', () => {
+    const { items, push, tick } = useLiveDanmakuOverlay()
+    push('', 'u', 0)
+
+    tick(0)
+
+    expect(items.value).toHaveLength(0)
+  })
+
+  it('reset 同时清空已投放与待投放（会话切换时时间轴原点会重置）', () => {
+    const { items, push, tick, reset } = useLiveDanmakuOverlay()
+    push('已投放', 'u', 0)
+    tick(0)
+    push('待投放', 'u', 100)
+
+    reset()
+
+    expect(items.value).toHaveLength(0)
+    tick(1000)
+    expect(items.value).toHaveLength(0)
   })
 })
