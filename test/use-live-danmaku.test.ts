@@ -258,7 +258,7 @@ describe('useLiveDanmaku / 延迟补偿', () => {
     expect(danmakuItems.value.map(item => item.content)).toEqual(['后到', '先到'])
   })
 
-  it('展示时长到期后回收（默认 12 秒）', async () => {
+  it('展示时长到期后回收（默认 6 秒）', async () => {
     const { api, danmakuItems } = setup({ roomId: 48, delaySeconds: 0 })
     api.finishHandshake(true)
     await flushMicrotasks()
@@ -267,8 +267,8 @@ describe('useLiveDanmaku / 延迟补偿', () => {
     vi.advanceTimersByTime(250)
     expect(danmakuItems.value).toHaveLength(1)
 
-    // 到期时刻（投放 + 12 秒）上仍保留，越过才回收
-    vi.advanceTimersByTime(12000)
+    // 到期时刻（投放 + 6 秒）上仍保留，越过才回收
+    vi.advanceTimersByTime(6000)
     expect(danmakuItems.value).toHaveLength(1)
 
     vi.advanceTimersByTime(250)

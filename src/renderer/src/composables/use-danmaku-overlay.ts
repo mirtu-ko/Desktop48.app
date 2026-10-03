@@ -23,8 +23,8 @@ interface UseDanmakuOverlayOptions {
 
 // 每条弹幕在堆叠中的展示时长（秒），逾期自顶部挤出
 const PLAYBACK_DISPLAY_SECONDS = 6
-// 直播弹幕比录播稀疏一个数量级，停留久一点才不至于让屏幕空荡
-const LIVE_DISPLAY_SECONDS = 12
+// 与录播分开：两边弹幕密度差一个数量级，要能各自调
+const LIVE_DISPLAY_SECONDS = 6
 // 堆叠条容量上限，超出后挤出最旧的
 const MAX_ITEMS = 30
 

@@ -7,7 +7,7 @@ import { findBarrageIndex, useDanmakuOverlay, useLiveDanmakuOverlay } from '../s
  * 改动实现常量时这些用例应当失败，提醒契约已变。
  */
 const PLAYBACK_DISPLAY_SECONDS = 6
-const LIVE_DISPLAY_SECONDS = 12
+const LIVE_DISPLAY_SECONDS = 6
 const MAX_ITEMS = 30
 /** 直播侧独有的待投放积压上限（延迟补偿会把弹幕排到将来） */
 const MAX_PENDING = 300
