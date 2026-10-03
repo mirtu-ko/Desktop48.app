@@ -100,21 +100,25 @@ async function fetchBilibiliJson(url: string): Promise<any> {
 
 /**
  * 取设备标识，取一次就够（接口每次返回值都不同）。失败回落本地随机值 ——
- * 服务端不校验内容，宁可用假值也不能空着。
+ * 留空会被降级到稀疏通道，宁可用假值也不能空着。
  */
 async function resolveBuvid(): Promise<string> {
   if (cachedBuvid)
     return cachedBuvid
 
+  let source = '指纹接口'
   try {
     cachedBuvid = pickBuvid(await fetchBilibiliJson(BUVID_SPI_URL)) ?? ''
   }
   catch (err) {
-    debug('[danmaku-session] 取 buvid 失败，改用本地随机值:', err)
+    debug('[danmaku-session] 取 buvid 失败:', err)
   }
 
-  if (!cachedBuvid)
+  if (!cachedBuvid) {
     cachedBuvid = createFallbackBuvid()
+    source = '本地随机值'
+  }
+  debug(`[danmaku-session] buvid 取自${source}: ${cachedBuvid}`)
   return cachedBuvid
 }
 

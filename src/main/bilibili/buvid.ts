@@ -1,6 +1,6 @@
 /**
- * 弹幕鉴权用的设备标识。指纹接口给的值与浏览器 cookie 里的 buvid3 同格式，
- * 但服务端只校验非空 —— 留空会被降级到稀疏通道，故取不到时必须回落，不能空着。
+ * 弹幕鉴权用的设备标识。留空会被服务端降级到稀疏通道 —— 同时段与 blivechat 对比，
+ * 空值时弹幕少一半以上。故必须有值：优先指纹接口签发的 b_3，取不到再回落。
  */
 import { randomUUID } from 'node:crypto'
 
@@ -13,7 +13,7 @@ export function pickBuvid(payload: unknown): string | null {
   return typeof buvid === 'string' && buvid ? buvid : null
 }
 
-/** 本地随机值：格式对齐 buvid3，服务端不校验内容 */
+/** 本地随机值：格式对齐 buvid3，仅作指纹接口不可用时的兜底 */
 export function createFallbackBuvid(): string {
   return randomUUID().toUpperCase()
 }

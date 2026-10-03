@@ -432,7 +432,7 @@ onUnmounted(() => {
             <span class="live-dot" />
             <span class="live-label">LIVE</span>
             <span class="live-elapsed">{{ liveElapsedText }}</span>
-            <span v-if="!compact && onlineNum > 0" class="live-online">在线 {{ onlineNum }}</span>
+            <span v-if="onlineNum > 0" class="live-online">在线 {{ onlineNum }}</span>
           </span>
           <button
             v-if="hasDanmakuRoom"
@@ -511,8 +511,8 @@ onUnmounted(() => {
 }
 
 /* LIVE 状态段：内嵌在 MiniControls 胶囊最左段的芯片（样式作用于插槽内容）。
-   可收缩：空间不足时从右往左裁掉在线人数/时长尾巴，保住圆点与 LIVE 标识，
-   绝不把右侧按钮挤出胶囊条 */
+   整条胶囊里唯一可收缩的就是它：放不下时先由在线人数自己让位（见 .live-online），
+   圆点、LIVE 标识与已播时长始终完整，右侧按钮也不会被挤出胶囊条 */
 .live-status {
   display: inline-flex;
   align-items: center;
@@ -530,10 +530,16 @@ onUnmounted(() => {
   user-select: none;
 }
 
+/* 在线人数是胶囊里优先级最低的一段：位置不够时只有它收缩并省略（空间真让出去，
+   不是「留着空档只是不画字」），宽度够就完整显示 */
 .live-online {
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: 1px;
   font-size: 11px;
   opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 弹幕开关：开启时图标转品牌色（按钮尺寸 / hover 白纱见全局 .player-capsule__btn） */
