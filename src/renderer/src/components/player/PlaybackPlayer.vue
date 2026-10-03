@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
+import { useDanmakuLayer } from '@renderer/composables/use-danmaku-layer'
 import useMediaDownload from '@renderer/composables/use-media-download'
 import { useMediaShortcuts } from '@renderer/composables/use-media-shortcuts'
 import { usePlaybackDanmaku } from '@renderer/composables/use-playback-danmaku'
@@ -15,6 +16,7 @@ import Tools from '@renderer/utils/tools'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import DanmakuBubbles from './DanmakuBubbles.vue'
 import MiniControls from './MiniControls.vue'
 import PlayerLoading from './PlayerLoading.vue'
 import RadioStage from './RadioStage.vue'
@@ -152,28 +154,9 @@ function onVideoPointerDown(event: PointerEvent) {
   danmakuMode.value = 'live'
 }
 
-// 弹幕字号随画面渲染高度等比缩放（写死 px 在大画面里偏小），上下限按窗口形态区分：
-// 窄浮窗 10~14px，主窗 / 全屏 12~20px
-const DANMAKU_FONT_RATIO = 0.027
-const danmakuFontSize = computed(() => {
-  const [min, max] = props.compact ? [10, 14] : [12, 20]
-  const height = videoRect.value?.height ?? 0
-  return Math.min(max, Math.max(min, Math.round(height * DANMAKU_FONT_RATIO)))
-})
-
-// 弹幕条定位：锚视频实际渲染区（去 letterbox 黑边）左下角而非容器左下角 ——
-// 全屏下竖屏视频左右是黑边，锚容器会离画面太远。bottom 不低于 46px 以避开底部控制条
-const danmakuPosition = computed(() => {
-  const rect = videoRect.value
-  const margin = 12
-  const minBottom = 46
-  if (!rect)
-    return { left: `${margin}px`, bottom: `${minBottom}px` }
-  // 黑边内再内缩一点，让气泡贴近视频画面左下角
-  return {
-    left: `${(rect.left + margin).toFixed(1)}px`,
-    bottom: `${Math.max(minBottom, rect.bottom + margin).toFixed(1)}px`,
-  }
+const { fontSize: danmakuFontSize, position: danmakuPosition } = useDanmakuLayer({
+  videoRect: () => videoRect.value,
+  compact: () => props.compact,
 })
 
 // 播放防休眠（use-sleep-blocker，与 LivePlayer 共用）
@@ -225,17 +208,6 @@ function onMiniSeek(value: number) {
     return
   mediaElement.currentTime = value
   currentTime.value = value
-}
-
-/**
- * 离场气泡钉位：`.danmaku-list__bubbles` 是 column-reverse 容器，主轴起点在底部，
- * 绝对定位子元素（leave-active）不写 top/left 会按「唯一 flex 子项」求解静态位置，
- * 于是脱流瞬间先坠到列表底部再淡出。before-leave 时元素仍在文档流内，写入内联 top/left 即可锚在原位。
- */
-function onDanmakuBeforeLeave(el: Element) {
-  const bubble = el as HTMLElement
-  bubble.style.top = `${bubble.offsetTop}px`
-  bubble.style.left = `${bubble.offsetLeft}px`
 }
 
 /**
@@ -380,26 +352,12 @@ onUnmounted(() => {
             :style="{ fontSize: `${danmakuFontSize}px`, ...danmakuPosition }"
           >
             <!-- 实时层必须常驻：v-if 会重建 TransitionGroup 导致整摞堆叠重播入场动画，
-                 v-show 的 display:none 又会让 CSS 动画停摆（详见 .is-hidden 处的说明） -->
-            <TransitionGroup
-              name="danmaku"
-              tag="div"
-              class="danmaku-list__bubbles"
-              :class="{ 'is-hidden': danmakuMode !== 'live' }"
-              @before-leave="onDanmakuBeforeLeave"
-            >
-              <div
-                v-for="item in danmakuOverlayItems"
-                :key="item.id"
-                class="danmaku-bubble"
-              >
-                <template v-if="item.username">
-                  <span class="danmaku-author">{{ item.username }}</span>
-                  <span class="danmaku-text">{{ item.content }}</span>
-                </template>
-                <span v-else class="danmaku-text">{{ item.content }}</span>
-              </div>
-            </TransitionGroup>
+                 v-show 的 display:none 又会让 CSS 动画停摆（详见 DanmakuBubbles 的 .is-hidden 说明） -->
+            <DanmakuBubbles
+              :items="danmakuOverlayItems"
+              :compact="compact"
+              :hidden="danmakuMode !== 'live'"
+            />
             <!-- 全部模式：外壳常驻（同上），内部行用 v-if 懒渲染，避免上千行长期挂在 DOM 上 -->
             <div
               v-show="danmakuMode === 'all'"
@@ -507,7 +465,7 @@ onUnmounted(() => {
             <!-- 弹幕模式切换（实时 ⇄ 全部）：最左端，有弹幕时显示 -->
             <template v-if="hasBarrage" #leading>
               <button
-                class="mini-btn player-capsule__btn danmaku-mode-btn"
+                class="player-capsule__btn danmaku-mode-btn"
                 :class="{ 'is-active': danmakuMode === 'all' }"
                 :title="danmakuMode === 'live' ? '切换为全部弹幕' : '切换为实时弹幕'"
                 :aria-label="danmakuMode === 'live' ? '切换为全部弹幕' : '切换为实时弹幕'"
@@ -561,115 +519,7 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* ===== 左下角玻璃条（抖音式弹幕）：最新一条在最下方，旧的上移淡出 =====
- * left / bottom 由脚本 danmakuPosition 注入；top 与 bottom 双约束把盒子拉伸为确定高度，
- * 面板的 max-height:100% 才有参照（迷你浮窗下绝对值会顶出容器被裁）。
- * width 须在此定死：百分比落在 shrink-to-fit 的绝对定位父上会解析成 auto，面板宽度随内容抖动 */
-.danmaku-list {
-  position: absolute;
-  top: 12px;
-  z-index: 10;
-  /* 盒子被拉伸到整个可用高度，必须显式声明，否则挡住视频的双击全屏 */
-  pointer-events: none;
-  /* 宽度上限用 em，跟随字号缩放 */
-  width: min(90%, 37em);
-  margin-bottom: 6px;
-  display: flex;
-  flex-direction: column-reverse;
-  align-items: flex-start;
-}
-
-/* 气泡容器：column-reverse 让最新一条贴底、旧的自上方挤出。
- * height:100% 取自父容器而非内容，使容器尺寸与弹幕条数解耦，离场气泡脱流不触发重排；
- * overflow:hidden 把溢出的旧气泡裁在弹幕区上边界 */
-.danmaku-list__bubbles {
-  position: relative;
-  display: flex;
-  flex-direction: column-reverse;
-  align-items: flex-start;
-  gap: 0.5em;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-}
-
-/* 实时层隐藏：不能用 display:none —— 无 box 则 CSS 动画不运行，面板期间新到的弹幕会带着
- * 未播放的 enter 类一直挂着，收起时集中补播一次。visibility:hidden 仍在渲染树中，动画照常计时收敛。
- * absolute 是连带项：退出 .danmaku-list 的 flex 主轴，避免与面板同时占位互相挤压 */
-.danmaku-list__bubbles.is-hidden {
-  position: absolute;
-  inset: 0;
-  visibility: hidden;
-}
-
-/* 弹幕气泡：磨砂玻璃底，不拦截点击（让鼠标穿过看到播放器）；内边距 / 圆角随字号缩放 */
-.danmaku-bubble {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5em;
-  max-width: 100%;
-  padding: 0.5em 1em;
-  border-radius: 1.33em;
-  background: var(--player-glass-bg);
-  box-shadow: inset 0 0 0 1px var(--player-glass-ring);
-  backdrop-filter: blur(8px);
-  color: rgba(255, 255, 255, 0.94);
-  font-size: 1em;
-  line-height: 1.35;
-  pointer-events: none;
-  user-select: none;
-}
-
-/* 入场：从下方轻浮入位；离场：继续向上飘出 + 淡出；被挤动：平滑上移 */
-.danmaku-enter-active {
-  animation: danmaku-rise 0.28s ease both;
-}
-
-/* 缺此类 Vue 不做 FLIP，余下气泡会瞬移补位 */
-.danmaku-move {
-  transition: transform 0.3s ease;
-}
-
-/* 离场元素脱离文档流，余下气泡立刻补位（否则先占位 0.3s 再突然消失）。
- * 不写 top/left：column-reverse 下 static position 落在容器底部，位置由 onDanmakuBeforeLeave 钉死 */
-.danmaku-leave-active {
-  position: absolute;
-  transition:
-    opacity 0.3s ease,
-    transform 0.3s ease;
-}
-
-/* 旧气泡自最上方被挤出，继续上飘才与列表方向一致 */
-.danmaku-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
-}
-
-/* 作者名 / 正文：气泡与「全部」面板共用同一套行内排版。
- * 上限只能写 100%：气泡宽度由内容撑出，百分比按气泡自身解析，减去预留额度会在短弹幕上截掉名字 */
-.danmaku-author {
-  flex-shrink: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--brand-secondary);
-  font-weight: 600;
-}
-
-/* 正文可压缩可换行：名字拿不下的宽度由正文让出，长弹幕靠换行而非截断姓名收场 */
-.danmaku-text {
-  min-width: 0;
-  overflow-wrap: break-word;
-}
-
-/* 全部弹幕模式激活态：仅换图标颜色，hover 白纱由全局 .player-capsule__btn:hover 统一提供 */
-.mini-btn {
-  /* 尺寸必须在此声明：插槽内容属于父组件作用域，拿不到 MiniControls 内部的 scoped 规则 */
-  width: 28px;
-  height: 28px;
-}
-
+/* 弹幕模式激活态：仅换图标颜色；按钮尺寸与 hover 白纱见全局 .player-capsule__btn */
 .danmaku-mode-btn.is-active {
   color: var(--brand-secondary);
 }
@@ -790,34 +640,8 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.5);
 }
 
-/* 新弹幕入场：从下方轻浮入位 */
-@keyframes danmaku-rise {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* 迷你窗：玻璃条更瘦，最多占八成宽 */
-.danmaku-list.is-compact {
-  width: min(80%, 44em);
-}
-
 .danmaku-list.is-compact .danmaku-all {
   font-size: 12px;
-}
-
-.danmaku-list.is-compact .danmaku-list__bubbles {
-  gap: 0.4em;
-}
-
-.danmaku-list.is-compact .danmaku-bubble {
-  padding: 0.4em 0.9em;
-  border-radius: 1.3em;
 }
 
 /* 迷你窗视频区只有百余像素，面板要收住就得压缩头部：meta 行让位给搜索框与列表 */

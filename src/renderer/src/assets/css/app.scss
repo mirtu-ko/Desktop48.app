@@ -519,12 +519,15 @@ body,
   backdrop-filter: blur(8px);
 }
 
-/* 胶囊内透明圆钮：hover 白纱、按下缩放 */
+/* 胶囊内透明圆钮：hover 白纱、按下缩放。尺寸写在这里而非各播放器的 scoped 样式 ——
+ * 插槽内容属于调用方作用域，拿不到 MiniControls 内部的 scoped 规则，各自复写一份迟早走样 */
 .player-capsule__btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -545,6 +548,45 @@ body,
   &:active {
     transform: scale(0.92);
   }
+}
+
+/* ===== 弹幕层（直播 / 回放共用） =====
+ * left / bottom 由组件脚本注入；top + bottom 双约束把盒子拉伸为确定高度，面板的 max-height:100% 才有参照。
+ * width 须定死：百分比落在 shrink-to-fit 的绝对定位父上会解析成 auto，面板宽度随内容抖动 */
+.danmaku-list {
+  position: absolute;
+  top: 12px;
+  z-index: 10;
+  /* 盒子被拉伸到整个可用高度，必须显式声明，否则挡住视频的双击全屏 */
+  pointer-events: none;
+  /* 宽度上限用 em，跟随字号缩放 */
+  width: min(90%, 37em);
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+}
+
+/* 迷你窗：玻璃条更瘦，最多占八成宽 */
+.danmaku-list.is-compact {
+  width: min(80%, 44em);
+}
+
+/* 作者名：上限只能写 100% —— 气泡宽度由内容撑出，减去预留额度会在短弹幕上截掉名字 */
+.danmaku-author {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--brand-secondary);
+  font-weight: 600;
+}
+
+/* 正文可压缩可换行：名字拿不下的宽度由正文让出，长弹幕靠换行而非截断姓名收场 */
+.danmaku-text {
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 /* 悬浮圆形操作按钮（录制 / 下载）：与 RotationControls 胶囊同一套视觉语言。

@@ -36,7 +36,7 @@ function onRangeInput(event: Event) {
   <div class="mini-controls player-capsule" :class="{ 'mini-controls--progress': showProgress }">
     <slot name="leading" />
 
-    <button class="mini-btn player-capsule__btn" :aria-label="playing ? '暂停' : '播放'" @click="emit('togglePlay')">
+    <button class="player-capsule__btn" :aria-label="playing ? '暂停' : '播放'" @click="emit('togglePlay')">
       <MediaIcon :name="playing ? 'pause' : 'play'" :size="16" />
     </button>
 
@@ -54,11 +54,11 @@ function onRangeInput(event: Event) {
       <span class="mini-time">{{ timeText() }}</span>
     </template>
 
-    <button class="mini-btn player-capsule__btn" :aria-label="muted ? '取消静音' : '静音'" @click="emit('toggleMute')">
+    <button class="player-capsule__btn" :aria-label="muted ? '取消静音' : '静音'" @click="emit('toggleMute')">
       <MediaIcon :name="muted ? 'volumeOff' : 'volumeOn'" :size="16" />
     </button>
     <button
-      class="mini-btn player-capsule__btn"
+      class="player-capsule__btn"
       :aria-label="isFullscreen ? '退出全屏' : '全屏'"
       @click="emit('toggleFullscreen')"
     >
@@ -89,11 +89,7 @@ function onRangeInput(event: Event) {
 }
 
 /* 按钮永不收缩：拥挤时让位给进度条 / 时间 / leading 插槽内容。
- * 透明圆钮（hover 白纱 / 按下缩放）见全局 .player-capsule__btn */
-.mini-btn {
-  width: 28px;
-  height: 28px;
-}
+ * 透明圆钮（尺寸 / hover 白纱 / 按下缩放）见全局 .player-capsule__btn */
 
 /* 迷你进度条：录播可 seek。grow 1 = 富余空间全归进度条（时间串推到右端）；
  * shrink 1000 = 空间不足时先收缩（可压到 0），让尽后才轮到时间串截断 */

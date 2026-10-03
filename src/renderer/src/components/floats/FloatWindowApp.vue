@@ -146,6 +146,7 @@ useEventListener(document, 'fullscreenchange', () => {
         :live-mode="payload.liveMode ?? 0"
         :source="payload.source || 'user'"
         :avatar-url="payload.avatar || ''"
+        :bilibili-room-id="payload.bilibiliRoomId ?? 0"
         :compact="compact"
         @avatar="onAvatar"
         @aspect="onAspect"

@@ -10,6 +10,7 @@
  * 成员树见 main/domain/member-tree.ts（buildMemberTree）。
  */
 import type { AppConfig, ConfigKey } from '../common/app-config'
+import type { LiveDanmaku } from '../common/live-danmaku'
 import type { MemberFlag, MemberFlagKind } from '../common/member-flags'
 import type { AllMemberItem, MemberDataContent, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
@@ -104,6 +105,13 @@ export interface LiveStreamSession {
   liveId: string
 }
 
+/** 一批弹幕（对端：main/bilibili/danmaku-session.ts，攒批后按订阅者下发） */
+export interface DanmakuBatch {
+  /** 渲染层传入的房间号，多房间订阅时据此过滤 */
+  roomId: number
+  items: LiveDanmaku[]
+}
+
 // ===== 独立播放窗口 =====
 
 /** 独立播放窗类型：live=直播，playback=回放（对端：main/float-window.ts） */
@@ -128,6 +136,8 @@ export interface FloatPlayerPayload {
   source?: string
   /** open 模式下的顶部头像（公演封面，完整 URL） */
   avatar?: string
+  /** 该公演在 B 站的直播间号（真实号；短号也接受）。渲染端按团体映射，个人直播缺省 */
+  bilibiliRoomId?: number
 }
 
 // ===== 类型化 IPC 通道映射 =====
@@ -167,6 +177,9 @@ interface StaticIpcInvokeMap {
   downloadFfmpeg: InvokeSpec<[], string>
   createLiveStream: InvokeSpec<[rtmpUrl: string, liveId: string], LiveStreamSession>
   stopLiveStream: InvokeSpec<[liveId: string], void>
+  /** 返回 false 表示握手失败（房间号取不到 / WBI 被拒 / 网络异常），渲染层据此提示一次 */
+  danmakuStart: InvokeSpec<[roomId: number], boolean>
+  danmakuStop: InvokeSpec<[roomId: number], void>
   openFloatWindow: InvokeSpec<[kind: FloatPlayerKind, payload: FloatPlayerPayload], void>
   floatPlayerGetPayload: InvokeSpec<[kind: FloatPlayerKind, liveId: string], FloatPlayerPayload | null>
   floatWindowFitAspect: InvokeSpec<[aspect: number], void>
@@ -225,6 +238,8 @@ export type IpcEventMap = {
   windowOnMaximizeChange: [isMaximized: boolean]
   /** 主进程转发：独立播放窗报告某直播已下架，主窗口据此刷新列表（对端：main/float-window.ts） */
   liveUnavailable: [liveId: string]
+  /** B 站弹幕攒批下发（对端：main/bilibili/danmaku-session.ts，仅发给订阅了该房间的窗口） */
+  danmakuBatch: [batch: DanmakuBatch]
 } & TaskEventMap
 
 export type IpcEventChannel = keyof IpcEventMap

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
+import { useDanmakuLayer } from '@renderer/composables/use-danmaku-layer'
+import { DANMAKU_DELAY_DEFAULT, DANMAKU_DELAY_LIMIT, useLiveDanmaku } from '@renderer/composables/use-live-danmaku'
 import { useLivePlayer } from '@renderer/composables/use-live-player'
 import { useLivePolling } from '@renderer/composables/use-live-polling'
 import { useLiveSession } from '@renderer/composables/use-live-session'
@@ -16,6 +18,7 @@ import { useEventListener } from '@vueuse/core'
 
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import DanmakuBubbles from './DanmakuBubbles.vue'
 import MiniControls from './MiniControls.vue'
 import PlayerLoading from './PlayerLoading.vue'
 import RadioStage from './RadioStage.vue'
@@ -35,6 +38,8 @@ const props = defineProps({
   avatarUrl: { type: String, default: '' },
   /** 紧凑模式：隐藏次要信息，适配小尺寸独立播放窗 */
   compact: { type: Boolean, default: false },
+  /** 该公演在 B 站的直播间号；0 = 没有对应房间（个人直播），不显示弹幕入口 */
+  bilibiliRoomId: { type: Number, default: 0 },
 })
 
 const emit = defineEmits(['close', 'avatar', 'aspect', 'playing'])
@@ -67,6 +72,7 @@ const { acquire: acquireSleepBlocker, release: releaseSleepBlocker } = useSleepB
 const {
   rotationAngle,
   isVerticalRotation,
+  videoRect,
   videoWrapperStyle,
   videoStyle,
   rotateHint,
@@ -94,6 +100,31 @@ const {
 // 只上报「变化」而不带上初值：窗口刚打开时还在加载，此刻保持创建时的置顶态，
 // 免得视频还没出画面就先掉到别的窗口后面。
 watch(playing, value => emit('playing', value))
+
+// ── B 站弹幕（公演专用）──────────────────────────────────────────
+// 房间号由 payload 携带（Shows.vue 按团体映射），个人直播没有对应房间故为空
+const danmakuRoomId = computed(() => (props.bilibiliRoomId > 0 ? props.bilibiliRoomId : undefined))
+const danmakuEnabled = ref(true)
+const danmakuDelay = ref(DANMAKU_DELAY_DEFAULT)
+/** 个人直播没有对应的 B 站房间：连开关都不给 */
+const hasDanmakuRoom = computed(() => danmakuRoomId.value !== undefined)
+const showDanmaku = computed(() => hasDanmakuRoom.value && danmakuEnabled.value)
+
+const { danmakuItems } = useLiveDanmaku({
+  roomId: () => danmakuRoomId.value,
+  enabled: () => danmakuEnabled.value,
+  delaySeconds: () => danmakuDelay.value,
+})
+
+const { fontSize: danmakuFontSize, position: danmakuPosition } = useDanmakuLayer({
+  videoRect: () => videoRect.value,
+  compact: () => props.compact,
+})
+
+/** 补偿只在「弹幕早于画面」这个方向上可修：弹幕到得比画面晚时无从提前，0 即最优 */
+function adjustDanmakuDelay(delta: number) {
+  danmakuDelay.value = Math.min(DANMAKU_DELAY_LIMIT, Math.max(0, danmakuDelay.value + delta))
+}
 
 // ── 直播轮询：已播时长 + 在线人数 ────────────────────────────────
 const polling = useLivePolling({
@@ -349,6 +380,16 @@ onUnmounted(() => {
           @volumechange="onVolumeChange"
         />
       </div>
+      <!-- B 站弹幕：与 video-wrapper 同级，故不参与画面旋转；left/bottom 由脚本锚画面左下角 -->
+      <div
+        v-show="showDanmaku"
+        class="danmaku-list"
+        :class="{ 'is-compact': compact }"
+        :style="{ fontSize: `${danmakuFontSize}px`, ...danmakuPosition }"
+      >
+        <DanmakuBubbles :items="danmakuItems" :compact="compact" />
+      </div>
+
       <PlayerLoading
         v-if="mediaLoading"
         :masked="isRadio"
@@ -392,6 +433,41 @@ onUnmounted(() => {
             <span class="live-label">LIVE</span>
             <span class="live-elapsed">{{ liveElapsedText }}</span>
             <span v-if="!compact && onlineNum > 0" class="live-online">在线 {{ onlineNum }}</span>
+          </span>
+          <button
+            v-if="hasDanmakuRoom"
+            class="player-capsule__btn danmaku-toggle"
+            :class="{ 'is-on': danmakuEnabled }"
+            :title="danmakuEnabled ? '关闭 B 站弹幕' : '开启 B 站弹幕'"
+            :aria-label="danmakuEnabled ? '关闭 B 站弹幕' : '开启 B 站弹幕'"
+            @click="danmakuEnabled = !danmakuEnabled"
+          >
+            <MediaIcon name="chat" :size="16" />
+          </button>
+          <!-- 延迟补偿：弹幕实时推送，画面要过 FFmpeg 转封装 + MSE 缓冲，默认落后数秒 -->
+          <span
+            v-if="showDanmaku"
+            class="danmaku-delay"
+            :class="{ 'is-compact': compact }"
+            title="弹幕延迟补偿：画面比弹幕慢几秒就调几秒"
+          >
+            <button
+              class="player-capsule__btn danmaku-delay__btn"
+              :class="{ 'is-bound': danmakuDelay <= 0 }"
+              aria-label="减少弹幕延迟补偿"
+              @click="adjustDanmakuDelay(-1)"
+            >
+              <MediaIcon name="minus" :size="14" />
+            </button>
+            <span class="danmaku-delay__value">{{ danmakuDelay }}s</span>
+            <button
+              class="player-capsule__btn danmaku-delay__btn"
+              :class="{ 'is-bound': danmakuDelay >= DANMAKU_DELAY_LIMIT }"
+              aria-label="增加弹幕延迟补偿"
+              @click="adjustDanmakuDelay(1)"
+            >
+              <MediaIcon name="plus" :size="14" />
+            </button>
           </span>
         </template>
       </MiniControls>
@@ -458,6 +534,49 @@ onUnmounted(() => {
   margin-left: 1px;
   font-size: 11px;
   opacity: 0.85;
+}
+
+/* 弹幕开关：开启时图标转品牌色（按钮尺寸 / hover 白纱见全局 .player-capsule__btn） */
+.danmaku-toggle.is-on {
+  color: var(--brand-secondary);
+}
+
+/* 延迟补偿步进器：弹幕开着才出现 */
+.danmaku-delay {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 1px;
+}
+
+/* 等宽数字 + 定宽：数值从 9s 跳到 10s 时两侧按钮不位移 */
+.danmaku-delay__value {
+  min-width: 2.4em;
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.9);
+  user-select: none;
+}
+
+/* 触到上下限的按钮压暗：值已调不动，用颜色说明而不禁用 */
+.danmaku-delay__btn.is-bound {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* 窄窗（240px）下控制条宽度是硬预算，步进器整组收紧，把宽度让给 LIVE 状态段 */
+.danmaku-delay.is-compact {
+  gap: 0;
+}
+
+.danmaku-delay.is-compact .danmaku-delay__btn {
+  width: 22px;
+  height: 22px;
+}
+
+.danmaku-delay.is-compact .danmaku-delay__value {
+  min-width: 1.7em;
+  font-size: 10px;
 }
 
 /* 悬浮按钮（录制）与右上角容器样式为全局 .player-actions / .action-btn，见 app.scss */

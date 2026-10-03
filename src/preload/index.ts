@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { electronAPI as ElectronAPI, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, TaskSnapshot } from './ipc-contract'
+import type { DanmakuBatch, electronAPI as ElectronAPI, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, TaskSnapshot } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 // 仅暴露渲染进程实际需要的最小 API
@@ -88,6 +88,14 @@ const api = {
   // 对端：main/ipc/register-stream-ipc.ts；业务实现在 main/stream.ts
   createLiveStream: (rtmpUrl: string, liveId: string) => invokeIpc('createLiveStream', rtmpUrl, liveId),
   stopLiveStream: (liveId: string) => invokeIpc('stopLiveStream', liveId),
+
+  // ===== B 站直播弹幕 =====
+  // 对端：main/ipc/register-danmaku-ipc.ts；连接与订阅状态在 main/bilibili/danmaku-session.ts
+  danmakuStart: (roomId: number) => invokeIpc('danmakuStart', roomId),
+  danmakuStop: (roomId: number) => invokeIpc('danmakuStop', roomId),
+  // danmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
+  danmakuBatch: (callback: (_batch: DanmakuBatch) => void) =>
+    onIpc('danmakuBatch', callback),
 
   // ===== 下载任务 =====
   // 对端：main/ipc/register-task-ipc.ts，通用任务机制在 main/ffmpeg/register-ffmpeg-task.ts
