@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { StarFilled, VideoCameraFilled } from '@element-plus/icons-vue'
+import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
 import { computed } from 'vue'
 
@@ -20,6 +21,8 @@ interface Item {
   liveType?: number
   cover: string[]
   date: string
+  /** 录播时长（秒）：回放列表接口下发，直播卡片无此数据 */
+  duration?: number | string
   userInfo: UserInfo
   member: Member | null
 }
@@ -76,6 +79,9 @@ const liveBadge = computed(() => {
         </template>
       </el-image>
       <span class="live-badge" :class="`live-badge--${liveBadge.type}`">{{ liveBadge.text }}</span>
+      <span v-if="item.duration" class="duration-badge" :title="`直播时长 ${item.duration}`">
+        {{ item.duration }}
+      </span>
       <!-- 关注标识：封面右上角「已关注」胶囊角标；卡片同时有金色描边与淡金底染（未关注无此标记） -->
       <span v-if="followed" class="follow-badge" title="已关注成员 · 优先展示">
         <el-icon :size="12"><StarFilled /></el-icon>
@@ -187,6 +193,21 @@ const liveBadge = computed(() => {
     &.live-badge--radio {
       background: var(--color-downloads);
     }
+  }
+
+  /* 时长角标：录播卡片封面右下角半透明黑底，避免遮挡左上角类型与右上角关注标 */
+  .duration-badge {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    z-index: 1;
+    padding: 3px 8px;
+    border-radius: var(--radius-xs);
+    background: rgba(0, 0, 0, 70%);
+    color: #fff;
+    font-size: 13px;
+    line-height: 1;
+    backdrop-filter: blur(4px);
   }
 
   /* 关注标识：封面右上角「已关注」胶囊，配合整卡金色描边/底染，扫一眼即可认出关注成员 */
