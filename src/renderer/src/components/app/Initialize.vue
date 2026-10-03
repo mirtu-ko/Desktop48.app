@@ -26,7 +26,7 @@ onUnmounted(() => {
  * 首屏环境自检：ffmpeg 目录未配置则引导用户选择或在线下载。
  *
  * ★ 跨进程：本文件的 getConfig / setConfig 对端是 main/ipc/register-database-ipc.ts，
- * selectDirectory / checkFfmpegBinaries / getPlatform 对端是 main/ipc/register-system-ipc.ts，
+ * selectDirectory / checkFfmpegBinaries 对端是 main/ipc/register-system-ipc.ts，
  * downloadFfmpeg 对端是 main/ffmpeg/ffmpeg-download.ts。
  */
 async function init() {

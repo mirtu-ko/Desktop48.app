@@ -2,7 +2,7 @@
 import CoverImage from '@renderer/components/ui/CoverImage.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import useAudioPlayerStore from '@renderer/stores/audio-player'
-import Tools from '@renderer/utils/tools'
+import { formatMediaTime } from '@renderer/utils/time-format'
 import { computed, ref } from 'vue'
 
 const {
@@ -109,7 +109,7 @@ function onClearAll() {
         </div>
       </div>
 
-      <span class="bar-time">{{ Tools.formatDuration(currentTime) }} / {{ Tools.formatDuration(duration) }}</span>
+      <span class="bar-time">{{ formatMediaTime(currentTime) }} / {{ formatMediaTime(duration) }}</span>
 
       <div class="bar-controls">
         <button class="ctrl-btn" title="上一首" :disabled="currentIndex <= 0" @click="prev">

@@ -31,6 +31,16 @@ function assertConfigKey(key: ConfigKey) {
     throw new Error(`Invalid config key: ${key}`)
 }
 
+/** 名单 kind → 持久化字段名；键名保持旧格式，避免迁移已有 database.json */
+function memberFlagKey(kind: MemberFlagKind): 'blockedMemberIds' | 'followedMemberIds' {
+  return kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
+}
+
+/** 名单字段兜成数组：旧库可能存了非数组值 */
+function normalizeFlagIds(value: Array<number | string> | undefined): Array<number | string> {
+  return Array.isArray(value) ? value : []
+}
+
 /**
  * database.json 的落库结构：成员相关原始数据（UPDATE_INFO_URL 的 9 个分节 + h5.48.cn 的 allmembers）+ 屏蔽名单 + 应用配置。
  * 分节字段定义见 ./data（依据 UPDATE_INFO_URL 真实返回逐字段建模）。
@@ -106,8 +116,11 @@ class Database {
     if (!existsSync(dirname(this.dbPath))) {
       mkdirSync(dirname(this.dbPath), { recursive: true })
     }
-    // 没有可读主文件/备份时使用独立的默认数据，避免多个 Database 实例共享可变对象。
-    this.db = this.storage.read() ?? structuredClone(data)
+    const raw = this.storage.read()
+    // 改动前先留一份快照：this.db 与 raw 是同一对象引用（下方就地规范化），
+    // 写回前比对快照才能判断内容是否真的变了
+    const beforeInit = JSON.stringify(raw)
+    this.db = raw ?? structuredClone(data)
     this.membersDB = this.db.starInfo
 
     // 迁移旧存储字段：hiddenMemberIds → blockedMemberIds（一次性，读到旧键即搬运并删除）
@@ -115,6 +128,11 @@ class Database {
       this.db.blockedMemberIds = this.db.hiddenMemberIds
       delete this.db.hiddenMemberIds
     }
+
+    // 名单字段兜成数组：旧库可能存了非数组值。放在 init 里一次性规范化，
+    // 读路径（memberFlagIds）才可能是纯读——它在旧库上被调用时会同步 fsync 全量数据，阻塞主进程。
+    this.db.blockedMemberIds = normalizeFlagIds(this.db.blockedMemberIds)
+    this.db.followedMemberIds = normalizeFlagIds(this.db.followedMemberIds)
 
     // memberTree 是内存派生数据，清理旧库中的持久化副本
     delete this.db.memberTree
@@ -134,7 +152,10 @@ class Database {
 
     // 建树（纯内存派生，不写回原始数据）
     this.rebuildMemberTree()
-    this.storage.write(this.db)
+
+    // 只在内容真的变了才落盘：成员库有数百条记录，每次启动无条件 fsync 会拖慢启动
+    if (JSON.stringify(this.db) !== beforeInit)
+      this.storage.write(this.db)
     log('[database.ts]数据库路径', this.dbPath)
   }
 
@@ -199,15 +220,18 @@ class Database {
     }
   }
 
-  /** 屏蔽 / 关注共用的名单字段；持久化键保持旧格式，避免迁移已有 database.json */
+  /**
+   * 屏蔽 / 关注共用的名单字段；持久化键保持旧格式，避免迁移已有 database.json。
+   * 纯读：字段规范化在 init() 完成，此处不再写盘。
+   */
   private memberFlagIds(kind: MemberFlagKind): Array<number | string> {
     assertMemberFlagKind(kind)
-    const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
-    if (!Array.isArray(this.db[key])) {
-      this.db[key] = []
-      this.storage.write(this.db)
-    }
-    return this.db[key] || []
+    return this.db[memberFlagKey(kind)] || []
+  }
+
+  /** 队伍色：队伍表优先，缺失时回落到成员记录自带的 teamColor */
+  private resolveTeamColor(member: StarInfoItem): string {
+    return teamColorOf(this.db.teamInfo, member.teamId) || (typeof member.teamColor === 'string' ? member.teamColor : '')
   }
 
   public getMemberFlags(kind: MemberFlagKind): MemberFlag[] {
@@ -216,20 +240,19 @@ class Database {
       ...member,
       userId: Number(member.userId),
       realName: member.realName || '',
-      teamColor: teamColorOf(this.db.teamInfo, member.teamId) || (typeof member.teamColor === 'string' ? member.teamColor : ''),
+      teamColor: this.resolveTeamColor(member),
     }))
   }
 
   public setMemberFlags(kind: MemberFlagKind, ids: Array<number | string>) {
     assertMemberFlagKind(kind)
-    const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
-    this.db[key] = ids
+    this.db[memberFlagKey(kind)] = ids
     this.storage.write(this.db)
   }
 
   public addMemberFlag(kind: MemberFlagKind, userId: number) {
     assertMemberFlagKind(kind)
-    const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
+    const key = memberFlagKey(kind)
     const changed = addMemberFlagId(this.db[key], userId)
     if (changed) {
       this.db[key] = changed
@@ -239,7 +262,7 @@ class Database {
 
   public removeMemberFlag(kind: MemberFlagKind, userId: number) {
     assertMemberFlagKind(kind)
-    const key = kind === 'blocked' ? 'blockedMemberIds' : 'followedMemberIds'
+    const key = memberFlagKey(kind)
     this.db[key] = removeMemberFlagId(this.db[key], userId)
     this.storage.write(this.db)
   }

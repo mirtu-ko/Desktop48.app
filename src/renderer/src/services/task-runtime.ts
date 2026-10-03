@@ -187,12 +187,18 @@ export function stopTask(task: TaskState, channels: TaskChannelAdapter, logTag: 
   debugLog('tasks', `[${logTag}] task stop`)
 }
 
-/** 在系统文件管理器中打开该任务的保存目录 */
-export function openSaveDirectory(task: TaskState): void {
+/**
+ * 在系统文件管理器中打开该任务的保存目录。
+ * 唤起失败（目录已被移动 / 无权限）时回调 onError——本模块不依赖 Vue 与 UI 组件库，提示交给调用方。
+ */
+export function openSaveDirectory(task: TaskState, onError?: (() => void) | undefined): void {
   if (!task.saveDirectory) {
     console.error('saveDirectory is not initialized')
     return
   }
   // ★ 跨进程：preload/index.ts → main/ipc/register-system-ipc.ts 的 'openPath'
-  window.mainAPI.openPath(task.saveDirectory)
+  window.mainAPI.openPath(task.saveDirectory).catch((error) => {
+    console.error('[task-runtime] 打开保存目录失败', task.saveDirectory, error)
+    onError?.()
+  })
 }

@@ -74,14 +74,18 @@ export class SafeJSONFileSync<T> {
       renameSync(this.tmpFile, this.filePath)
     }
     catch (error) {
-      // 写入失败时清理 tmp，主文件保持旧版本不受影响
+      // 写入失败时清理 tmp，主文件保持旧版本不受影响。
+      // 清理本身失败不阻断流程（原始错误更关键），但要留下痕迹：
+      // 否则 database.json.<pid>.tmp 会在磁盘上静默堆积。
       try {
         if (fd !== null)
           closeSync(fd)
         if (existsSync(this.tmpFile))
           unlinkSync(this.tmpFile)
       }
-      catch {}
+      catch (cleanupError) {
+        log('[safe-json-file-sync] 临时文件清理失败，可能残留:', this.tmpFile, cleanupError)
+      }
       throw error
     }
   }

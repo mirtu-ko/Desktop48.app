@@ -43,13 +43,13 @@ export function fitAspectInBox(aspect: number, boxW: number, boxH: number): Wind
    同一套比例在小屏 / 大屏上观感一致。 */
 
 /** 初始视频区宽度 = 工作区宽度 × 此比例（横屏视频的实际约束） */
-export const FLOAT_INITIAL_WIDTH_RATIO = 0.45
+const FLOAT_INITIAL_WIDTH_RATIO = 0.45
 
 /** 初始视频区高度上限 = 工作区高度 × 此比例（竖屏视频的实际约束） */
-export const FLOAT_INITIAL_HEIGHT_RATIO = 0.7
+const FLOAT_INITIAL_HEIGHT_RATIO = 0.7
 
 /** 显示器工作区（DIP，含原点），只取计算所需字段 */
-export interface WorkArea {
+interface WorkArea {
   x: number
   y: number
   width: number
@@ -117,7 +117,7 @@ export function decideAutoFit(
  * ------------------------------------------------------------------------- */
 
 /** 播放窗距工作区右上角的留白 */
-export const FLOAT_EDGE_MARGIN = 24
+const FLOAT_EDGE_MARGIN = 24
 
 /** 级联偏移步长（DIP）：约一行标题栏高，错开即可辨认 */
 export const FLOAT_CASCADE_STEP = 28

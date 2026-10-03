@@ -351,9 +351,15 @@ function subscribe(session: DanmakuSession, sender: WebContents): void {
  */
 export async function handleDanmakuStart(roomId: number, sender: WebContents): Promise<boolean> {
   const existing = sessions.get(roomId)
-  if (existing) {
+  // 已登记的会话可能正被销毁（最后一个订阅者退出 → disposeSession 置 closed，但条目还在表里）。
+  // 复用这种会话会让新窗口拿到一个再也不会推送弹幕的死会话，且本函数还返回 true 报成功。
+  if (existing && !existing.closed) {
     subscribe(existing, sender)
     return true
+  }
+  if (existing) {
+    debug('[danmaku-session] 复用到已关闭的会话，重建:', roomId)
+    sessions.delete(roomId)
   }
 
   const session: DanmakuSession = {

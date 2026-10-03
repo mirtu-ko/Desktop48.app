@@ -15,20 +15,6 @@ import type { MemberFlag, MemberFlagKind } from '../common/member-flags'
 import type { AllMemberItem, MemberDataContent, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
 
-// ===== 基础环境 =====
-
-// 渲染进程所需的最小运行环境信息
-export interface electronAPI {
-  process: {
-    platform: string
-    versions: {
-      electron: string
-      chrome: string
-      node: string
-    }
-  }
-}
-
 // 网络请求参数（对端：main/ipc/register-system-ipc.ts；body 为序列化后的字符串）
 export interface NetRequestOptions {
   url: string
@@ -170,7 +156,6 @@ interface StaticIpcInvokeMap {
   getConfig: InvokeSpec<[key: ConfigKey], string>
   setConfig: InvokeSpec<[key: ConfigKey, value: string], void>
   openPath: InvokeSpec<[filePath: string], void>
-  getDesktopPath: InvokeSpec<[], string>
   selectDirectory: InvokeSpec<[], string | null>
   pathJoin: InvokeSpec<[...paths: string[]], string>
   checkFfmpegBinaries: InvokeSpec<[dir: string], boolean>
@@ -260,7 +245,6 @@ export type mainAPI = Omit<IpcInvokeApi, 'getConfig' | 'setConfig'> & IpcEventSu
   setConfig: <K extends ConfigKey>(key: K, value: AppConfig[K]) => Promise<void>
 
   // ===== 非 invoke / 非标准命名的渲染层 API =====
-  getPlatform: () => string
   onFfmpegDownloadProgress: (callback: (progress: FfmpegDownloadProgress) => void) => () => void
   downloadTaskStop: (liveId: string) => void
   recordTaskStop: (liveId: string) => void
@@ -270,7 +254,6 @@ export type mainAPI = Omit<IpcInvokeApi, 'getConfig' | 'setConfig'> & IpcEventSu
 // 避免 index.ts（含 Electron 实现细节）进入渲染层类型程序。
 declare global {
   interface Window {
-    electron: electronAPI
     mainAPI: mainAPI
   }
 }

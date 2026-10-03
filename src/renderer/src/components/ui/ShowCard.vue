@@ -111,12 +111,15 @@ function formatTime(stime: string): string {
 
 .show-time {
   position: absolute;
-  bottom: 10px;
-  right: 10px;
-  background: rgba(0, 0, 0, 0.7);
-  color: white;
-  padding: 4px 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 1;
+  padding: 3px 8px;
   border-radius: var(--radius-xs);
+  background: rgba(0, 0, 0, 70%);
+  color: #fff;
   font-size: 14px;
+  line-height: 1;
+  backdrop-filter: blur(4px);
 }
 </style>

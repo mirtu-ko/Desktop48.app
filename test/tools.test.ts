@@ -102,29 +102,6 @@ describe('tools.streamPathHandle（一直播 HLS 路径日期重写）', () => {
   })
 })
 
-describe('tools.formatDuration（曲目时长 m:ss）', () => {
-  it('分钟不补零、秒补零', () => {
-    expect(Tools.formatDuration(0)).toBe('0:00')
-    expect(Tools.formatDuration(9)).toBe('0:09')
-    expect(Tools.formatDuration(65)).toBe('1:05')
-    expect(Tools.formatDuration(600)).toBe('10:00')
-  })
-
-  it('超过 1 小时继续按分钟累计（曲目不进位到时）', () => {
-    // 与 formatMediaTime 的分工：这里是曲目总时长，61 分钟就是 61:01
-    expect(Tools.formatDuration(3661)).toBe('61:01')
-  })
-
-  it('小数向下取整', () => {
-    expect(Tools.formatDuration(12.9)).toBe('0:12')
-  })
-
-  it('负数与非法值（NaN）按 0 处理', () => {
-    expect(Tools.formatDuration(-5)).toBe('0:00')
-    expect(Tools.formatDuration(Number.NaN)).toBe('0:00')
-  })
-})
-
 describe('tools.shortTeamName（队伍展示名）', () => {
   it('剥掉 TEAM 前缀', () => {
     expect(Tools.shortTeamName('TEAM SII')).toBe('SII')

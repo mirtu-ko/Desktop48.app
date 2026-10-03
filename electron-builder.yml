@@ -8,11 +8,12 @@ files:
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,tsconfig.web.tsbuildinfo,vitest.config.ts}'
+  - '!{test,docs,.vitest}/**'
 asarUnpack:
   - resources/**
 win:
-  executableName: Desktop48.app
+  executableName: Desktop48
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
@@ -31,8 +32,8 @@ mac:
         - x64
         - arm64
   extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
+    # 只声明实际会触发的权限：目录选择走 dialog.showOpenDialog，会用到这两个。
+    # 摄像头 / 麦克风全仓无 getUserMedia / mediaDevices 引用，故不声明。
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
@@ -43,7 +44,7 @@ linux:
   target:
     - AppImage
     - deb
-  maintainer: electronjs.org
+  maintainer: mirtu-ko
   category: Utility
 appImage:
   artifactName: ${name}-${version}.${ext}

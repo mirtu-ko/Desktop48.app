@@ -10,15 +10,18 @@ export interface PagedPage<T> {
   [key: string]: any
 }
 
-export interface UsePagedListOptions<T> {
+export interface UsePagedListOptions<TIn, TOut extends TIn = TIn> {
   /** 请求一页数据：返回 { next, items }；通过闭包可注入筛选参数 */
-  loadPage: (_next: string) => Promise<PagedPage<T>> | PagedPage<T>
-  /** 并行补全单个条目的展示信息（封面 / 成员 / 日期等）；在 filterItems 之后执行 */
-  processItem?: (_item: T, _index: number) => Promise<void> | void
+  loadPage: (_next: string) => Promise<PagedPage<TIn>> | PagedPage<TIn>
+  /**
+   * 并行补全单个条目的展示信息（封面 / 成员 / 日期等）；在 filterItems 之后执行。
+   * 返回新对象 → 用它替换列表中的条目；返回 undefined → 沿用原对象（就地修改的旧写法仍可用）
+   */
+  processItem?: (_item: TIn, _index: number) => Promise<TOut | void> | TOut | void
   /** 整页过滤钩子（如屏蔽成员过滤），在 processItem 之前执行 */
-  filterItems?: (_items: T[]) => Promise<T[]> | T[]
+  filterItems?: (_items: TIn[]) => Promise<TIn[]> | TIn[]
   /** 列表条目唯一键：用于翻页去重，默认取 (item as any).liveId */
-  itemKey?: (_item: T) => string
+  itemKey?: (_item: TIn) => string
   /** 请求失败时是否标记为"没有更多"，从而停止触底重试；Lives 默认 false，Playbacks 为 true */
   stopOnError?: boolean
   /** 绑定到 el-scrollbar 的 ref（列表滚动容器）：回顶与触底位置判定都读它；不传则内部自建（同 useLoadMore） */
@@ -32,15 +35,15 @@ export interface UsePagedListOptions<T> {
  * - 去重追加 + 触底加载（useLoadMore）
  * - 刷新重置（refresh）、回顶刷新（refreshFromTop）与仅重置（reset，供多列表联动场景使用）
  */
-export function usePagedList<T>({
+export function usePagedList<TIn, TOut extends TIn = TIn>({
   loadPage,
   processItem,
   filterItems,
   itemKey = item => (item as any).liveId,
   stopOnError = false,
   scrollbarRef = ref<any>(null),
-}: UsePagedListOptions<T>) {
-  const list = ref<T[]>([]) as Ref<T[]>
+}: UsePagedListOptions<TIn, TOut>) {
+  const list = ref<TOut[]>([]) as Ref<TOut[]>
   const listNext = ref('0')
   const loading = ref(false)
   const noMore = ref(false)
@@ -56,17 +59,21 @@ export function usePagedList<T>({
    * 整页过滤（如屏蔽成员）+ 并行补全展示信息：
    * 返回 null 表示期间已有更新请求发出，本次结果应整体丢弃
    */
-  async function transformItems(items: T[], requestId: number): Promise<T[] | null> {
-    let result = items
+  async function transformItems(items: TIn[], requestId: number): Promise<TOut[] | null> {
+    // 过滤与补全都在 TIn 上进行，末尾按「TOut 是补全后的 TIn」窄化一次
+    let result: TIn[] = items
     if (filterItems)
       result = await filterItems(result)
     if (requestId !== listRequestId)
       return null
-    if (processItem)
-      await Promise.all(result.map((item, index) => processItem(item, index)))
+    if (processItem) {
+      const enriched = await Promise.all(result.map((item, index) => processItem(item, index)))
+      // 返回新对象的条目用它替换自身；返回 undefined 的条目沿用原对象
+      result = result.map((item, index) => (enriched[index] ?? item) as TIn)
+    }
     if (requestId !== listRequestId)
       return null
-    return result
+    return result as TOut[]
   }
 
   /**
@@ -115,7 +122,10 @@ export function usePagedList<T>({
       return false
     }
     finally {
-      loading.value = false
+      // 只有最新一次请求才有权收 loading：过期请求落地时仍有新请求在飞，
+      // 此时置 false 会让触底守卫放行出第三次请求
+      if (requestId === listRequestId)
+        loading.value = false
     }
   }
 
@@ -152,8 +162,8 @@ export function usePagedList<T>({
     loading, // 加载状态
     noMore, // 是否没有更多数据
     disabled, // 是否禁用加载更多
-    /** 最近一次加载是否失败（供 useLoadMore 终止自动补拉；失败时 UI 也可据此显示重试入口） */
-    loadFailed, // 最近一次加载是否失败
+    /** 最近一次加载是否失败：供 useLoadMore 终止自动补拉，也供调用方判断是否展示重试入口 */
+    loadFailed,
     scrollbarRef, // 滚动条引用
     onInfiniteScroll, // 触底加载事件
     getList, // 分页加载函数

@@ -25,4 +25,14 @@ describe('formatMediaTime（媒体时长格式化）', () => {
     expect(formatMediaTime(-1)).toBe('00:00')
     expect(formatMediaTime(-90.5)).toBe('00:00')
   })
+
+  it('naN 与 Infinity 按 0 处理（脏时长不得渲染成 Invalid Date）', () => {
+    expect(formatMediaTime(Number.NaN)).toBe('00:00')
+    expect(formatMediaTime(Number.POSITIVE_INFINITY)).toBe('00:00')
+    expect(formatMediaTime(Number.NEGATIVE_INFINITY)).toBe('00:00')
+  })
+
+  it('专辑总时长场景：90 分钟显示 hh:mm:ss', () => {
+    expect(formatMediaTime(5400)).toBe('01:30:00')
+  })
 })

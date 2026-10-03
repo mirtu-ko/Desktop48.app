@@ -157,7 +157,6 @@ useEventListener(document, 'fullscreenchange', () => {
            将来若给它加 close，记得同步补上绑定 -->
       <PlaybackPlayer
         v-else-if="payload"
-        :live-title="payload.title"
         :live-id="payload.liveId"
         :start-time="payload.startTime"
         :source="payload.source || 'user'"

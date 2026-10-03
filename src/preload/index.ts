@@ -1,19 +1,6 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { DanmakuBatch, electronAPI as ElectronAPI, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, TaskSnapshot } from './ipc-contract'
+import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, TaskSnapshot } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
-
-// 仅暴露渲染进程实际需要的最小 API
-// sandbox 模式下 require 只能加载 electron 内置模块，无法 require 第三方包
-const electronAPI = {
-  process: {
-    platform: process.platform,
-    versions: {
-      electron: process.versions.electron,
-      chrome: process.versions.chrome,
-      node: process.versions.node,
-    },
-  },
-} satisfies ElectronAPI
 
 /**
  * 类型化 invoke：通道、参数与返回值全部由 ipc-contract 的 IpcInvokeMap 约束。
@@ -46,9 +33,6 @@ function onIpc<Channel extends IpcEventChannel>(
  * satisfies mainAPI：实现与契约在编译期强制一致，新增/改名通道漏改任何一侧都会 typecheck 报错。
  */
 const api = {
-  // ===== 运行环境 =====
-  getPlatform: () => process.platform,
-
   // ===== 网络请求 =====
   // 对端：main/ipc/register-system-ipc.ts，走 Electron net 模块 + 域名白名单
   netRequest: (options: NetRequestOptions) => invokeIpc('netRequest', options),
@@ -73,7 +57,6 @@ const api = {
   // ===== 文件系统与目录 =====
   // 对端：main/ipc/register-system-ipc.ts
   openPath: (filePath: string) => invokeIpc('openPath', filePath),
-  getDesktopPath: () => invokeIpc('getDesktopPath'),
   selectDirectory: () => invokeIpc('selectDirectory'),
   pathJoin: (...paths: string[]) => invokeIpc('pathJoin', ...paths),
 
@@ -153,5 +136,4 @@ const api = {
 } satisfies mainAPI
 
 // 经 contextBridge 暴露给渲染进程（上下文隔离已启用）
-contextBridge.exposeInMainWorld('electron', electronAPI)
 contextBridge.exposeInMainWorld('mainAPI', api)
