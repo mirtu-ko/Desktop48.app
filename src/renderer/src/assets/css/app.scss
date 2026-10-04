@@ -292,6 +292,70 @@ body,
   }
 }
 
+/* ===== 应用标题栏配方：主窗 AppTitleBar 与独立播放窗 .fw-bar 共用 =====
+ * 只定义「皮肤」（底色渐变 + 底边 + 落影 + 按钮外观）；
+ * 分区布局（justify-content / gap / padding）由各窗自持 —— 主窗是「品牌靠左 + 按钮靠右」，
+ * 视频窗是「标签 / 头像 / 标题 + 按钮」的连续流，二者无法共用一套排布。 */
+.app-title-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background:
+    radial-gradient(320px 90px at 12% -70%, rgba(var(--brand-rgb), 0.14), transparent 70%),
+    linear-gradient(90deg, #f1eefd, #eceefa);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  box-shadow: 0 1px 2px rgba(var(--shadow-rgb), 0.04);
+  color: var(--el-text-color-primary);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+/* 按钮组：撑满条高、按钮间无缝 */
+.app-title-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 100%;
+  flex-shrink: 0;
+  /* 按钮区不参与拖拽，否则点不中 */
+  -webkit-app-region: no-drag;
+}
+
+.app-title-bar-btn {
+  width: 44px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--el-text-color-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+
+  svg {
+    display: block;
+  }
+
+  &:hover,
+  &:focus {
+    background: rgba(var(--brand-rgb), 0.1);
+    color: var(--brand-primary);
+  }
+}
+
+/* 关闭键 hover 改走红色，与普通按钮的品牌紫区分破坏性操作 */
+.app-title-bar-btn--close:hover,
+.app-title-bar-btn--close:focus {
+  background: linear-gradient(135deg, #e5484d, #e03d52);
+  color: #fff;
+  box-shadow: 0 2px 8px -2px rgba(224, 61, 82, 0.5);
+}
+
 /* ===== 实底列表卡片皮肤（直播 / 回放 / 公演 / 成员列表卡共用） =====
  * 与 .glass-card（磨砂半透明）语义不同，二者并存；
  * hover 上浮仅在 .clickable 时启用，非可点击卡片保持静止 */
