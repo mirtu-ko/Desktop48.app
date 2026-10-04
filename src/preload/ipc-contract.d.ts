@@ -208,12 +208,10 @@ type TaskEventMap = {
    * 因此这类事件广播给全部窗口（见 main/ipc/send.ts 的 broadcastIpc）：
    * 在独立播放窗发起的录制 / 下载，主窗口据此把它补进下载页列表。
    *
-   * ⚠️ 与 Progress / End / Error 不同，**删除类操作没有对应事件、也不广播**
+   * ⚠️ 唯一的例外是**删除类操作没有对应事件、也不广播**
    * （`${prefix}Remove` 是 invoke 通道）。跨窗一致性的前提是「只有一个窗口能发起删除」——
    * 下载页只在主窗口挂载。若将来播放窗也加删除入口，必须先补一个 Removed 广播事件，
    * 否则各窗口的镜像列表会分叉。
-   *
-   * 另外注意 Progress 只发给发起方（高频心跳，仅用于调试日志），别误当成广播事件。
    */
   [K in TaskChannelPrefix as `${K}Started`]: [snapshot: TaskSnapshot]
 }
