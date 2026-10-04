@@ -3,6 +3,13 @@ import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'electron-vite'
 
 export default defineConfig({
+  // main / preload 必须显式声明：electron-vite 只构建「配置里出现过的」target
+  main: {
+    plugins: [],
+  },
+  preload: {
+    plugins: [],
+  },
   renderer: {
     resolve: {
       alias: {
