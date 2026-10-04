@@ -70,7 +70,6 @@ function getActiveMediaElement() {
 // 但其锚点取自 videoRect（已含 90/270° 的显示宽高交换），全屏下也贴住画面左下角。
 const {
   rotationAngle,
-  isVerticalRotation,
   videoRect,
   videoWrapperStyle,
   videoStyle,
@@ -308,7 +307,6 @@ onUnmounted(() => {
         <div
           ref="videoBoxRef"
           class="video-box-inner"
-          :class="{ 'vertical-rotation': !isRadio && isVerticalRotation }"
           @pointerdown="onVideoPointerDown"
           @dblclick="onBoxDblClick"
         >

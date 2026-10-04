@@ -70,7 +70,6 @@ const { acquire: acquireSleepBlocker, release: releaseSleepBlocker } = useSleepB
 // 旋转 / 容器全屏 / 迷你控制条状态：与 PlaybackPlayer 共用同一套实现（useVideoRotation）
 const {
   rotationAngle,
-  isVerticalRotation,
   videoRect,
   videoWrapperStyle,
   videoStyle,
@@ -349,7 +348,7 @@ onUnmounted(() => {
     <div
       ref="videoBoxRef"
       class="video-box"
-      :class="{ 'vertical-rotation': !isRadio && isVerticalRotation, 'video-box-background': !isRadio }"
+      :class="{ 'video-box-background': !isRadio }"
       @dblclick="onBoxDblClick"
       @mouseenter="hovered = true"
       @mouseleave="hovered = false"
