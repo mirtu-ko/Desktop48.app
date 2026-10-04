@@ -106,8 +106,7 @@
 
 html,
 body,
-#app,
-.el-container {
+#app {
   padding: 0;
   margin: 0;
   height: 100%;
@@ -116,12 +115,6 @@ body,
   color: var(--el-text-color-primary);
   font-family: 'PingFang SC', 'Helvetica Neue', Helvetica, 'Microsoft YaHei', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
-}
-
-/* 布局容器一律透明：整窗只有 .app-body 一层画布背景，
- * 侧边栏与内容区共享同一底色，缝隙两侧永远同色，不会出现色差 */
-.el-container {
-  background: transparent;
 }
 
 /* 键盘焦点框：桌面端以鼠标交互为主，隐藏方向键/Tab 触发的默认选中态。

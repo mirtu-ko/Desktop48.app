@@ -22,8 +22,6 @@ function toSourceUrl(path: string): string {
 
 /**
  * 将逗号分隔的图片路径转换为完整的URL数组
- * @param picturesStr 逗号分隔的图片路径字符串
- * @returns {string[]} 完整的图片URL数组
  */
 function pictureUrls(picturesStr: string) {
   // teamLogo 等字段为可选，数据缺失（undefined/null）时返回空数组，

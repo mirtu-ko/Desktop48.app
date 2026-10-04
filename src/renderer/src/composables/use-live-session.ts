@@ -149,7 +149,6 @@ export function useLiveSession(options: {
 
   /**
    * 首次进入 / 重试恢复：按最新 RTMP 地址重建本地 HTTP-FLV 会话。
-   * @param rtmpUrl 远程源地址（来自 LiveDetailView.playStreamPath）
    */
   async function restartLiveStream(rtmpUrl: string) {
     const requestId = ++activeStreamRequestId

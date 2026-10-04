@@ -5,7 +5,6 @@
  *    才能重启，避免两个 ffmpeg 同时写同一文件
  */
 
-/** 主进程侧任务状态（对应 renderer services/task-payload.ts 的同名接口） */
 export interface TaskSnapshot {
   liveId: string
   url: string

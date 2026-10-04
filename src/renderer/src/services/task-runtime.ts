@@ -1,4 +1,5 @@
-import type { TaskPayload, TaskSnapshot } from '@renderer/services/task-payload'
+import type { TaskPayload } from '@renderer/services/task-payload'
+import type { TaskSnapshot } from '../../../preload/ipc-contract'
 import { debugLog } from '@renderer/utils/debug'
 
 /**

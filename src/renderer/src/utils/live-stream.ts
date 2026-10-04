@@ -1,13 +1,10 @@
 /**
  * 直播播放纯函数集合。
  * 全部无副作用——不碰 DOM / IPC / ElMessage，只做纯计算。
+ * 类型 OpenLiveStream 来自 services/api-types，纯类型导入不产生运行时依赖。
  * 对应单测见 test/live-stream.test.ts（测试即用法文档）。
  */
-
-export interface OpenLiveStream {
-  streamPath?: string
-  streamType?: number
-}
+import type { OpenLiveStream } from '../services/api-types'
 
 /**
  * 开放公演流选择：优先高清（streamType 2），

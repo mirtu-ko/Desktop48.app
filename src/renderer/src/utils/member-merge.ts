@@ -308,10 +308,6 @@ export function mergeMembers(
  *
  * 被丢弃的两类档案：定位不到队伍（团队名查不到）；兼任队伍与本人主队相同
  * （不产生任何额外信息，留下只会让同一人在同一分区出现两张卡）。
- *
- * @param members  合并后的成员列表（兼任记录的详情来源）
- * @param tree     成员树：提供队伍名 / 队色 / 徽章，以及「成员 → 本人主队 id」
- * @param adjuncts starAdjunctInfo 原始数据，仅 status===1 的记录会被展示
  */
 export function buildAdjuncts(
   members: MemberDetail[],
