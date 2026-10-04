@@ -243,11 +243,6 @@ watch(selectedFilter, () => {
       <CardSkeletonGrid
         v-if="showSkeleton"
         class="playback-skeleton"
-        :count="12"
-        min-item-width="220px"
-        gap="16px"
-        aspect-ratio="1"
-        :line-widths="[82, 56, 38]"
       />
       <div v-else-if="playbackList.length === 0 && !loading" class="empty-block">
         暂无回放
