@@ -38,8 +38,27 @@ export function useAppConfig() {
     }
   }
 
+  /**
+   * 打开已配置目录：空值与主进程报错都要给出可见反馈。
+   * 主进程 openPath 以 reject 报失败（路径越界 / 目录已不存在），
+   * 直接 void 掉 Promise 会让点击毫无反应，故这里统一兜住。
+   */
+  async function openDirectory(dir: string, label: string) {
+    if (!dir) {
+      ElMessage.warning(`请先点击「选择」设置${label}`)
+      return
+    }
+    try {
+      await window.mainAPI.openPath(dir)
+    }
+    catch (e) {
+      console.error(`[useAppConfig] 打开${label}失败:`, e)
+      ElMessage.error(`打开${label}失败：${String(e instanceof Error ? e.message : e)}`)
+    }
+  }
+
   function openDownloadDirectory() {
-    void window.mainAPI.openPath(downloadDirectory.value)
+    return openDirectory(downloadDirectory.value, '下载目录')
   }
 
   /** 选择 ffmpeg 目录：校验 ffmpeg 可执行文件存在后保存，校验失败询问是否重选 */
@@ -71,7 +90,7 @@ export function useAppConfig() {
   }
 
   function openFfmpegDirectory() {
-    void window.mainAPI.openPath(ffmpegDirectory.value)
+    return openDirectory(ffmpegDirectory.value, 'FFmpeg 目录')
   }
 
   /** 保存 User-Agent（输入框内容由模板双向绑定） */

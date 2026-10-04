@@ -98,6 +98,8 @@ export interface LiveListItem {
   liveType?: number
   /** 0=直播 1=录屏 */
   liveMode?: number
+  /** 时长显示串（上游已格式化，如 '2:02:05'）：直接渲染，勿再经 formatMediaTime */
+  duration?: string
   [key: string]: unknown
 }
 

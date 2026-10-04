@@ -299,7 +299,7 @@ function badgeSrc(section: MemberSection) {
           v-if="!loading && memberCount === 0"
           class="page-empty"
           :image-size="120"
-          description="暂无成员信息，可在设置里同步成员数据"
+          description="暂无成员信息"
         />
       </div>
       <div v-if="memberCount > 0" class="list-end">

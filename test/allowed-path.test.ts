@@ -35,8 +35,10 @@ describe('isPathInAllowedRoots（openPath 路径白名单）', () => {
     expect(isPathInAllowedRoots('../outside.mp4', [process.cwd()])).toBe(false)
   })
 
-  it('默认大小写敏感（非 Windows）：大小写不一致不算命中', () => {
-    expect(isPathInAllowedRoots('/users/z/downloads/a.mp4', ROOTS)).toBe(false)
+  it('大小写敏感分支：大小写不一致不算命中', () => {
+    // 显式传 false，不依赖第三参默认值：默认值是 process.platform === 'win32'，
+    // 在 Windows 上会让本用例必然失败，且掩盖「大小写敏感」这一安全相关分支的真实覆盖
+    expect(isPathInAllowedRoots('/users/z/downloads/a.mp4', ROOTS, false)).toBe(false)
   })
 
   it('caseInsensitive 打开时转小写后比较（Windows 分支）', () => {

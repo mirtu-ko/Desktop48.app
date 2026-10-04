@@ -171,7 +171,10 @@ function hideLogo(event: Event) {
             @click="setDownloadDirectory"
           />
           <div class="row-actions">
-            <el-button @click="openDownloadDirectory">
+            <el-button
+              :disabled="!downloadDirectory"
+              @click="openDownloadDirectory"
+            >
               打开目录
             </el-button>
             <el-button
@@ -209,7 +212,10 @@ function hideLogo(event: Event) {
             @click="setFfmpegDirectory"
           />
           <div class="row-actions">
-            <el-button @click="openFfmpegDirectory">
+            <el-button
+              :disabled="!ffmpegDirectory"
+              @click="openFfmpegDirectory"
+            >
               打开目录
             </el-button>
             <el-button

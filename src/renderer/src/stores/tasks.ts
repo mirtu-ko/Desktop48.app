@@ -10,9 +10,10 @@
  * 纯普通对象操作，不依赖 Vue。
  */
 
-import type { TaskPayload, TaskSnapshot } from '@renderer/services/task-payload'
+import type { TaskPayload } from '@renderer/services/task-payload'
 import type { TaskChannelAdapter, TaskState } from '@renderer/services/task-runtime'
 import type { Ref } from 'vue'
+import type { TaskSnapshot } from '../../../preload/ipc-contract'
 import { createTaskState, decideTaskMerge, openSaveDirectory, restoreTask, startTask, stopTask } from '@renderer/services/task-runtime'
 import { debugLog } from '@renderer/utils/debug'
 import { ElMessage } from 'element-plus'

@@ -5,7 +5,7 @@ import path from 'node:path'
 import { ipcMain } from 'electron'
 import { isAllowedStreamUrl } from '../allowed-hosts'
 import { Database } from '../database'
-import { broadcastIpc, sendIpc } from '../ipc/send'
+import { broadcastIpc } from '../ipc/send'
 import { handleTraced } from '../ipc/trace'
 import { log, warn } from '../logger'
 import { FfmpegProcess, hasFfmpegSlot, MAX_CONCURRENT_FFMPEG_TASKS, resolveFfmpegBinary } from './ffmpeg-process'
@@ -39,7 +39,7 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
     registry.remove(liveId)
   })
 
-  handleTraced(`${channelPrefix}Start`, async (event, url: string, filename: string, liveId: string) => {
+  handleTraced(`${channelPrefix}Start`, async (_event, url: string, filename: string, liveId: string) => {
     // 输入地址白名单：url 直接交给 ffmpeg（-i），不经校验会形成 netRequest 之外的安全旁路
     if (!isAllowedStreamUrl(url))
       throw new Error(`任务源地址不在允许范围内: ${url}`)
@@ -72,13 +72,12 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
     // 同一 liveId 上一进程可能仍在优雅退出（写文件尾），等待其完全退出后再启动
     await registry.waitForClose(liveId)
 
-    // 任务状态事件分两类：
-    // - Started / End / Error 一律**广播**给全部窗口：任务列表的镜像在「每个窗口」里各有一份
-    //   （见 renderer 的 stores/tasks.ts），在独立播放窗发起的录制 / 下载，
-    //   主窗口的下载页也必须能同步状态。窗口销毁后的事件由 sendIpc 忽略。
-    // - Progress 只回**发起方**：它目前只喂 debugLog，没有任何窗口拿它渲染；
-    //   而它是 ffmpeg 心跳级的高频事件，广播等于白白遍历一遍所有窗口。
-    //   ⚠️ 将来若有窗口要显示进度条，必须改回 broadcastIpc。
+    // 任务状态事件一律**广播**给全部窗口：任务列表的镜像在「每个窗口」里各有一份
+    // （见 renderer 的 stores/tasks.ts）。在独立播放窗发起的录制 / 下载，
+    // 主窗口的下载页也必须能同步状态与进度 —— 录制全部由播放窗发起，
+    // Progress 若只回发起方，主窗口的时长会永远为空。窗口销毁后的事件由 sendIpc 忽略。
+    // Progress 是 ffmpeg 心跳级的高频事件（秒级），但并发上限 5 个任务、单条报文仅几十字节，
+    // 广播开销可接受，不做节流。
     // 外部 stop：向 ffmpeg stdin 写 'q' 优雅退出（once 监听器在 close 时显式移除，
     // 避免同 liveId 多次重启导致监听器无限累积）。
     // 先于 proc 声明：onClose 回调需要引用它们做监听器清理
@@ -99,7 +98,7 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
       ffmpegArgs,
       filePath,
       handlers: {
-        onProgress: time => sendIpc(event.sender, `${channelPrefix}Progress`, liveId, time),
+        onProgress: time => broadcastIpc(`${channelPrefix}Progress`, liveId, time),
         onStderr: message => log(`[${logTag}]ffmpeg stderr(no match):`, message.trim()),
         onError: (err) => {
           const errMsg = `[${logTag}]ffmpeg error: ${err.message}`

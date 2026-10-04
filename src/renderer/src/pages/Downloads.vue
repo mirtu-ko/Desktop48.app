@@ -72,6 +72,12 @@ const taskGroups = computed(() => [
                 {{ task.filename }}
               </div>
               <div
+                v-if="task.elapsed"
+                class="task-elapsed"
+              >
+                {{ group.kind === 'record' ? '已录制' : '已下载' }} {{ task.elapsed }}
+              </div>
+              <div
                 v-if="task.filePath"
                 class="task-path ellipsis"
                 :title="task.filePath"
@@ -286,6 +292,14 @@ const taskGroups = computed(() => [
       font-size: 14px;
       font-weight: 600;
       color: var(--el-text-color-primary);
+    }
+
+    .task-elapsed {
+      margin-top: 3px;
+      font-size: 12px;
+      /* 状态信息而非辅助信息：跟随分组主题色，与下方灰色的路径行拉开层级 */
+      color: var(--group-color);
+      font-variant-numeric: tabular-nums;
     }
 
     .task-path {

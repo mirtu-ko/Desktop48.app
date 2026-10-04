@@ -39,7 +39,7 @@ export function usePagedLiveList({
 }: UsePagedLiveListOptions) {
   // 屏蔽名单读 store（跨页共享的唯一一份），不另建本地副本：
   // 另建会在用户于成员页屏蔽后、回直播页要等下次翻页才生效，且每翻页多一次 IPC
-  const { isBlocked } = useBlockedMembersStore()
+  const { ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
 
   const options: UsePagedListOptions<LiveListItem, LiveListItemView> = {
     itemKey: item => item.liveId,
@@ -53,8 +53,13 @@ export function usePagedLiveList({
   }
 
   if (filterBlocked) {
-    options.filterItems = items =>
-      items.filter((item: any) => !isBlocked(item.userInfo?.userId))
+    // 过滤前确保名单已加载：不能假定调用方一定先访问过成员页 / 设置页 ——
+    // 启动后直奔直播页时 store 仍是空名单，直接过滤等于放行全部被屏蔽成员。
+    // ensureBlockedLoaded 幂等，仅首次真正请求，后续翻页不产生额外 IPC。
+    options.filterItems = async (items) => {
+      await ensureBlockedLoaded()
+      return items.filter((item: any) => !isBlocked(item.userInfo?.userId))
+    }
   }
 
   return usePagedList(options)

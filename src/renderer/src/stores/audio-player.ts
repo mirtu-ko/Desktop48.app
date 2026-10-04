@@ -158,8 +158,6 @@ function stop() {
 
 /**
  * 整单替换播放列表并从指定下标开始播放
- * @param tracks 已过滤无音源曲目的曲目数组
- * @param startIndex 起始下标
  */
 function playAlbum(tracks: AudioTrack[], startIndex = 0) {
   if (!tracks.length) {
@@ -190,7 +188,6 @@ function addAlbum(tracks: AudioTrack[]): number {
 
 /**
  * 追加单曲到播放列表（已存在时返回其下标，不自动播放）
- * @returns 曲目在播放列表中的下标
  */
 function addTrack(track: AudioTrack): number {
   const exists = playlist.value.findIndex(item => item.key === track.key)

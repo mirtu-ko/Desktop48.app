@@ -41,6 +41,11 @@ function createMemberFlagStore(kind: MemberFlagKind) {
   const members = ref<MemberFlag[]>([])
   const idSet = computed(() => new Set(members.value.map(member => Number(member.userId))))
 
+  /** 是否已成功加载过名单：空名单也是有效状态，不该被当成"未加载"反复重拉 */
+  let loaded = false
+  /** 进行中的首灌请求：并发调用方共用同一个 promise，只发一次 IPC */
+  let inflight: Promise<void> | null = null
+
   function createEntry(target: MemberFlagTarget, userId: number): MemberFlag {
     return { ...target, userId, teamColor: target.teamColor || '' }
   }
@@ -48,11 +53,28 @@ function createMemberFlagStore(kind: MemberFlagKind) {
   async function refresh() {
     try {
       members.value = (await window.mainAPI.getMemberFlags(kind)) || []
+      loaded = true
     }
     catch (error) {
       console.error(message.updateError, error)
       ElMessage.error(message.failure)
     }
+  }
+
+  /**
+   * 幂等首灌：保证名单至少加载过一次。
+   *
+   * store 是模块级单例，一旦有消费方直接读 `has`（如列表过滤）而不先 refresh，
+   * 拿到的就是初始空名单 —— 过滤会静默失效。把保证放在这里，消费方无需记得先拉一次。
+   * 失败的 refresh 不置位，下次调用仍会重试。
+   */
+  function ensureLoaded(): Promise<void> {
+    if (loaded)
+      return Promise.resolve()
+    inflight ??= refresh().finally(() => {
+      inflight = null
+    })
+    return inflight
   }
 
   function has(userId: number | string | undefined | null) {
@@ -111,7 +133,7 @@ function createMemberFlagStore(kind: MemberFlagKind) {
     }
   }
 
-  return { members, refresh, has, toggle, remove, clear }
+  return { members, refresh, ensureLoaded, has, toggle, remove, clear }
 }
 
 const blocked = createMemberFlagStore('blocked')
@@ -121,6 +143,8 @@ export function useBlockedMembersStore() {
   return {
     blockedMembers: blocked.members,
     refreshBlockedMembers: blocked.refresh,
+    /** 过滤前调用：保证名单已加载（幂等，之后翻页零额外 IPC） */
+    ensureBlockedLoaded: blocked.ensureLoaded,
     isBlocked: blocked.has,
     toggleBlock: blocked.toggle,
     unblockMember: blocked.remove,
@@ -132,6 +156,8 @@ export function useFollowedMembersStore() {
   return {
     followedMembers: followed.members,
     refreshFollowedMembers: followed.refresh,
+    /** 过滤前调用：同 blocked，保证名单已加载（幂等） */
+    ensureFollowedLoaded: followed.ensureLoaded,
     isFollowed: followed.has,
     toggleFollow: followed.toggle,
     unfollowMember: followed.remove,

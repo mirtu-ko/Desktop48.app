@@ -234,3 +234,49 @@ describe('enrichLiveItem（列表条目展示信息补全）', () => {
     expect(list.list.value[0]).not.toHaveProperty('cover')
   })
 })
+
+/**
+ * 首灌保证（回归）：名单 store 是模块级单例，启动后若直奔直播页、从未访问过
+ * 成员页 / 设置页，它仍是初始空名单 —— 此时直接过滤等于放行全部被屏蔽成员。
+ * 过滤链路必须自己保证名单已加载过。
+ *
+ * ⚠️ 用 resetModules 取全新单例来复现"刚启动"状态，会重置整个模块注册表，
+ * 故本 describe 必须留在文件末尾，否则会污染后续用例共享的 store 实例。
+ */
+describe('屏蔽名单首灌（启动后未预加载的场景）', () => {
+  it('列表从未预加载也能正确过滤，且首灌只请求一次名单', async () => {
+    vi.resetModules()
+    const getMemberFlags = vi.fn(async () => [blocked(10)])
+    stubMainApi({ getMemberFlags })
+
+    const { usePagedLiveList: useFreshPagedLiveList } = await import('../src/renderer/src/composables/use-paged-live-list')
+    const list = useFreshPagedLiveList({
+      loadPage: () => ({ next: '0', liveList: [liveItem('a', '10'), liveItem('b', '11')] }),
+    })
+
+    await list.getList()
+
+    expect(list.list.value.map(i => i.liveId)).toEqual(['b'])
+    expect(getMemberFlags).toHaveBeenCalledTimes(1)
+  })
+
+  it('ensureBlockedLoaded 幂等：并发调用合并成一次 IPC，已加载后不再请求', async () => {
+    vi.resetModules()
+    const getMemberFlags = vi.fn(async () => [blocked(10)])
+    stubMainApi({ getMemberFlags })
+
+    const { useBlockedMembersStore } = await import('../src/renderer/src/stores/member-flags')
+    const store = useBlockedMembersStore()
+
+    // 未加载时名单为空 —— 这正是原缺陷的根因：isBlocked 恒为 false
+    expect(store.isBlocked('10')).toBe(false)
+
+    await Promise.all([store.ensureBlockedLoaded(), store.ensureBlockedLoaded()])
+
+    expect(store.isBlocked('10')).toBe(true)
+    expect(getMemberFlags).toHaveBeenCalledTimes(1)
+
+    await store.ensureBlockedLoaded()
+    expect(getMemberFlags).toHaveBeenCalledTimes(1)
+  })
+})
