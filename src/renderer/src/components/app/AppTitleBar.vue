@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import appIcon from '@renderer/assets/icon.png'
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { useEventListener } from '@vueuse/core'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { FLOAT_BAR_HEIGHT } from '../../../../common/float-window'
@@ -21,9 +22,8 @@ onUnmounted(() => {
   disposeChange?.()
 })
 
-// HTML5 全屏（播放器容器 requestFullscreen）会把标题栏视觉盖住，但
-// -webkit-app-region: drag 仍在原生层拦截点击，顶部浮层会点不中；
-// 全屏期间标题栏本来就不可见也不可拖，直接停用拖拽区
+// HTML5 全屏时标题栏被 top layer 盖住，但 drag 区仍在原生层吞点击，
+// 会让落在标题栏带的浮层按钮点不中；全屏期间本就不可拖，故整条停用。
 const htmlFullscreen = ref(false)
 
 function onFullscreenChange() {
@@ -48,6 +48,7 @@ function close() {
 </script>
 
 <template>
+  <!-- 底色 / 边框 / 拖拽 / 按钮外观全部来自 app.scss 的 .app-title-bar 配方（与独立播放窗同源） -->
   <div
     class="app-title-bar"
     :class="{ 'is-html-fullscreen': htmlFullscreen }"
@@ -59,57 +60,35 @@ function close() {
       <span class="tb-name">Desktop48</span>
     </div>
 
-    <div class="title-bar-buttons">
+    <div class="app-title-bar-actions">
+      <!-- 图标与独立播放窗共用 MediaIcon（24 视口线性壳），不再各画一套 SVG -->
       <!-- 最小化 -->
-      <button class="tb-btn" title="最小化" @click="minimize()">
-        <svg viewBox="0 0 12 12" width="12" height="12">
-          <line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-        </svg>
+      <button class="app-title-bar-btn" title="最小化" @click="minimize()">
+        <MediaIcon name="minus" :size="15" />
       </button>
       <!-- 最大化 / 还原 -->
-      <button class="tb-btn" :title="isMaximized ? '还原' : '最大化'" @click="toggleMaximize()">
-        <svg v-if="!isMaximized" viewBox="0 0 12 12" width="12" height="12">
-          <rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.1" />
-        </svg>
-        <svg v-else viewBox="0 0 12 12" width="12" height="12">
-          <rect x="2" y="3.2" width="6.8" height="6.8" rx="1" fill="none" stroke="currentColor" stroke-width="1.1" />
-          <path d="M4 3.2V2.8A1 1 0 0 1 5 1.8h4.2A1 1 0 0 1 10.2 2.8V7a1 1 0 0 1-1 1h-.4" fill="none" stroke="currentColor" stroke-width="1.1" />
-        </svg>
+      <button class="app-title-bar-btn" :title="isMaximized ? '还原' : '最大化'" @click="toggleMaximize()">
+        <MediaIcon :name="isMaximized ? 'windowRestore' : 'windowMaximize'" :size="15" />
       </button>
       <!-- 关闭 -->
-      <button class="tb-btn tb-close" title="关闭" @click="close()">
-        <svg viewBox="0 0 12 12" width="12" height="12">
-          <line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-          <line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-        </svg>
+      <button class="app-title-bar-btn app-title-bar-btn--close" title="关闭" @click="close()">
+        <MediaIcon name="close" :size="15" />
       </button>
     </div>
   </div>
 </template>
 
 <style scoped lang="scss">
-/* 高度由 FLOAT_BAR_HEIGHT 经 :style 注入（与独立播放窗标题栏同源，不再靠注释人工同步）。
-   这里只留 flex 布局，height 见模板上的 :style 绑定 */
+/* 皮肤（底色 / 边框 / 拖拽 / 按钮）全在 app.scss 的 .app-title-bar 配方；
+   高度由 FLOAT_BAR_HEIGHT 经 :style 注入，与独立播放窗同源。
+   此处只留主窗独有部分：分区布局、品牌区、全屏态。 */
+
+/* 主窗是「品牌靠左 + 按钮靠右」，与视频窗的内容流排布不同，故布局不放进共享配方 */
 .app-title-bar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
   justify-content: space-between;
-  padding-left: 14px;
-  background:
-    radial-gradient(320px 90px at 12% -70%, rgba(var(--brand-rgb), 0.14), transparent 70%),
-    linear-gradient(90deg, #f1eefd, #eceefa);
-  border-bottom: 1px solid var(--el-border-color-lighter);
-  box-shadow: 0 1px 2px rgba(var(--shadow-rgb), 0.04);
-  color: var(--el-text-color-primary);
-  /* 整条背景区域可拖拽移动窗口 */
-  -webkit-app-region: drag;
-  user-select: none;
 }
 
-/* 全屏（top layer）盖住了标题栏，拖拽区却照常在原生层吞点击：
-   落进这条标题栏带的浮层按钮（如旋转胶囊最左侧）会点不中。
-   全屏期间标题栏不可见也无拖拽需求，整条转为 no-drag */
+/* 全屏时停用拖拽：原因为何见 script 里的 htmlFullscreen 声明 */
 .app-title-bar.is-html-fullscreen {
   -webkit-app-region: no-drag;
 }
@@ -120,6 +99,7 @@ function close() {
   gap: 9px;
   min-width: 0;
   overflow: hidden;
+  padding-left: 14px;
 
   .tb-logo {
     width: 18px;
@@ -134,44 +114,6 @@ function close() {
     letter-spacing: 0.3px;
     color: var(--brand-primary-dark);
     white-space: nowrap;
-  }
-}
-
-.title-bar-buttons {
-  /* 按钮区域不参与拖拽，保持可点击 */
-  -webkit-app-region: no-drag;
-  display: flex;
-  align-items: center;
-  height: 100%;
-
-  .tb-btn {
-    width: 44px;
-    height: 100%;
-    border: none;
-    background: transparent;
-    color: var(--el-text-color-secondary);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition:
-      background-color 0.15s ease,
-      color 0.15s ease;
-
-    svg {
-      display: block;
-    }
-
-    &:hover {
-      background: rgba(var(--brand-rgb), 0.1);
-      color: var(--brand-primary);
-    }
-  }
-
-  .tb-close:hover {
-    background: linear-gradient(135deg, #e5484d, #e03d52);
-    color: #fff;
-    box-shadow: 0 2px 8px -2px rgba(224, 61, 82, 0.5);
   }
 }
 </style>

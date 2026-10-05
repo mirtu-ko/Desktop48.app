@@ -3,6 +3,7 @@ import { Connection, Cpu, Document, Folder, Hide } from '@element-plus/icons-vue
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
 import Constants from '@renderer/utils/constants'
+import Tools from '@renderer/utils/tools'
 import { ElMessageBox } from 'element-plus'
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
@@ -268,7 +269,7 @@ function hideLogo(event: Event) {
               v-for="member in blockedMembers"
               :key="member.userId"
               closable
-              :color="`#${member.teamColor}`"
+              :color="Tools.toHex(member.teamColor)"
               effect="dark"
               @close="unblockMember(member.userId)"
             >

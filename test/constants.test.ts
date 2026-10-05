@@ -33,8 +33,9 @@ describe('app.scss 语义主题色', () => {
   const matches = [...source.matchAll(/--color-([a-z]+):\s*(#[0-9a-f]{6})\b/gi)]
   const themeColors = new Map(matches.map(match => [match[1].toLowerCase(), match[2]]))
 
-  it('覆盖每个 Menu 页面和 FOLLOW 语义色，且键不重复', () => {
-    const expectedKeys = [...Object.keys(Constants.Menu).map(key => key.toLowerCase()), 'follow'].sort()
+  it('覆盖每个 Menu 页面与非菜单语义色（downloads / follow），且键不重复', () => {
+    // downloads 已不是菜单页（入口是右下角常驻件），但仍需一份语义色给入口与任务中心卡片
+    const expectedKeys = [...Object.keys(Constants.Menu).map(key => key.toLowerCase()), 'downloads', 'follow'].sort()
     expect(themeColors.size).toBe(matches.length)
     expect([...themeColors.keys()].sort()).toEqual(expectedKeys)
   })

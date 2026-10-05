@@ -9,7 +9,7 @@ import { findBarrageIndex, useDanmakuOverlay, useLiveDanmakuOverlay } from '../s
 const PLAYBACK_DISPLAY_SECONDS = 6
 const LIVE_DISPLAY_SECONDS = 6
 const MAX_ITEMS = 30
-/** 直播侧独有的待投放积压上限（延迟补偿会把弹幕排到将来） */
+/** 直播侧独有的待投放积压上限（push 只排队，投放交给 tick） */
 const MAX_PENDING = 300
 
 /** 造升序弹幕源，content 按序编号便于断言 */
@@ -207,7 +207,7 @@ describe('useDanmakuOverlay / seekTo', () => {
 })
 
 describe('useLiveDanmakuOverlay / tick', () => {
-  it('push 只是排队，不到点不出现（延迟补偿的本质）', () => {
+  it('push 只是排队，不到点不出现', () => {
     const { items, push } = useLiveDanmakuOverlay()
 
     push('迟到', 'u', 5)

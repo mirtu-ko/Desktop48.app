@@ -1,6 +1,6 @@
 import type { RouteRecordRaw } from 'vue-router'
 import Albums from './pages/Albums.vue'
-import Downloads from './pages/Downloads.vue'
+import Elections from './pages/Elections.vue'
 import Lives from './pages/Lives.vue'
 import Members from './pages/Members.vue'
 import Playbacks from './pages/Playbacks.vue'
@@ -35,12 +35,12 @@ const routes: RouteRecordRaw[] = [
     component: Members,
   },
   {
-    path: '/setting',
-    component: Setting,
+    path: '/elections',
+    component: Elections,
   },
   {
-    path: '/downloads',
-    component: Downloads,
+    path: '/setting',
+    component: Setting,
   },
   {
     path: '/',

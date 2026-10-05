@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { DanmakuOverlayItem } from '@renderer/composables/use-danmaku-overlay'
 import type { PropType } from 'vue'
+import { debugLog } from '@renderer/utils/debug'
+import { ref } from 'vue'
 
 defineProps({
   items: { type: Array as PropType<DanmakuOverlayItem[]>, default: () => [] },
@@ -19,6 +21,20 @@ function onBeforeLeave(el: Element) {
   bubble.style.top = `${bubble.offsetTop}px`
   bubble.style.left = `${bubble.offsetLeft}px`
 }
+
+/** 加载失败的表情图：回退成原始占位符文本（alt 同字，记日志才分得清「没渲染」与「加载失败」） */
+const failedEmotes = ref(new Set<string>())
+
+function emoteKey(itemId: number, index: number) {
+  return `${itemId}-${index}`
+}
+
+function onEmoteError(item: DanmakuOverlayItem, index: number) {
+  const segment = item.segments[index]
+  failedEmotes.value.add(emoteKey(item.id, index))
+  if (segment && segment.type === 'emote')
+    debugLog('live', `B站弹幕: 表情图加载失败 ${segment.url}`)
+}
 </script>
 
 <template>
@@ -34,11 +50,22 @@ function onBeforeLeave(el: Element) {
       :key="item.id"
       class="danmaku-bubble"
     >
-      <template v-if="item.username">
-        <span class="danmaku-author">{{ item.username }}</span>
-        <span class="danmaku-text">{{ item.content }}</span>
-      </template>
-      <span v-else class="danmaku-text">{{ item.content }}</span>
+      <span v-if="item.username" class="danmaku-author">{{ item.username }}</span>
+      <span class="danmaku-text">
+        <template v-for="(segment, index) in item.segments" :key="index">
+          <img
+            v-if="segment.type === 'emote' && !failedEmotes.has(emoteKey(item.id, index))"
+            class="danmaku-emote"
+            :src="segment.url"
+            :alt="segment.text"
+            referrerpolicy="no-referrer"
+            :style="{ aspectRatio: `${segment.width} / ${segment.height}` }"
+            draggable="false"
+            @error="onEmoteError(item, index)"
+          >
+          <template v-else>{{ segment.text }}</template>
+        </template>
+      </span>
     </div>
   </TransitionGroup>
 </template>
@@ -81,6 +108,20 @@ function onBeforeLeave(el: Element) {
   line-height: 1.35;
   pointer-events: none;
   user-select: none;
+}
+
+/* 正文：表情图与文字在同一行流内混排，长文本按词换行 */
+.danmaku-text {
+  word-break: break-word;
+}
+
+/* 表情图：高度跟气泡字号走（紧凑档自动跟着缩）；负垂直对齐量让图底与文字基线齐平。
+ * 宽度由内联 aspect-ratio 算出，图片加载前就占好位，避免布局抖动 */
+.danmaku-emote {
+  height: 1.2em;
+  width: auto;
+  margin: 0 1px;
+  vertical-align: -0.25em;
 }
 
 /* 入场：从下方轻浮入位；离场：继续向上飘出 + 淡出；被挤动：平滑上移 */

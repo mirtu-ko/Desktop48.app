@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import type { ComponentInternalInstance, ComponentPublicInstance } from 'vue'
-import { Download, Headset, Microphone, Setting, User, VideoCamera } from '@element-plus/icons-vue'
+import { Headset, Microphone, Setting, Trophy, User, VideoCamera } from '@element-plus/icons-vue'
 import AppDock from '@renderer/components/app/AppDock.vue'
 import AppTitleBar from '@renderer/components/app/AppTitleBar.vue'
 import BackTopButton from '@renderer/components/app/BackTopButton.vue'
+import DownloadsEntry from '@renderer/components/app/DownloadsEntry.vue'
 import Initialize from '@renderer/components/app/Initialize.vue'
 import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
+import DownloadsCard from '@renderer/components/ui/DownloadsCard.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import EventBus from '@renderer/services/event-bus'
-import useTasksStore from '@renderer/stores/tasks'
 import Constants from '@renderer/utils/constants'
 import { scrollPageToTop } from '@renderer/utils/page-scroll'
 import { computed, KeepAlive, onErrorCaptured, ref, watch } from 'vue'
@@ -43,12 +44,6 @@ const activeIndex = ref(resolveActiveMenu(route.path))
 /** 直播子页路径；从其他 Dock 切回时恢复 */
 let lastLivePath = '/lives'
 
-// 任务状态由 useTasksStore 模块级单例持有，跨页面实时更新 Dock 角标
-const { recordTasks, downloadTasks } = useTasksStore()
-
-// Dock「下载」角标：正在下载中的任务数量
-const runningTaskCount = computed(() => downloadTasks.value.filter(task => task.status === 'running').length + recordTasks.value.filter(task => task.status === 'running').length)
-
 // 底部 Dock 菜单项（语义色引用 app.scss 的 --color-* 变量）。
 // index 就是路由 path（Constants.Menu 的值），同时充当激活态匹配标识
 const dockItems = computed(() => [
@@ -56,9 +51,12 @@ const dockItems = computed(() => [
   { index: Constants.Menu.SHOWS, label: '公演', icon: Microphone, color: 'var(--color-shows)' },
   { index: Constants.Menu.ALBUMS, label: '专辑', icon: Headset, color: 'var(--color-albums)' },
   { index: Constants.Menu.MEMBERS, label: '成员', icon: User, color: 'var(--color-members)' },
-  { index: Constants.Menu.DOWNLOADS, label: '下载', icon: Download, color: 'var(--color-downloads)', badge: runningTaskCount.value },
+  { index: Constants.Menu.ELECTIONS, label: '总选', icon: Trophy, color: 'var(--color-elections)' },
   { index: Constants.Menu.SETTING, label: '设置', icon: Setting, color: 'var(--color-setting)' },
 ])
+
+/** 任务中心卡片显隐：入口是右下角常驻的 DownloadsEntry */
+const downloadsOpen = ref(false)
 
 /** 导航 path 必须带前导斜杠，确保 vue-router 按绝对路径解析 */
 function changeMenu(path: string) {
@@ -175,6 +173,12 @@ onErrorCaptured((error, instance, info) => {
 
         <!-- 右下角全局回到顶部按钮：自动定位当前页面的主滚动容器 -->
         <BackTopButton />
+
+        <!-- 右下角常驻下载入口：打开任务中心卡片 -->
+        <DownloadsEntry @open="downloadsOpen = true" />
+
+        <!-- 任务中心卡片（录制 / 下载）：全屏蒙版 + 左类型切换 / 右任务列表 -->
+        <DownloadsCard :open="downloadsOpen" @close="downloadsOpen = false" />
 
         <!-- 全局音乐迷你播放条：跨页面持续播放专辑歌曲 -->
         <FloatAudioBar />

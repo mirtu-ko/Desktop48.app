@@ -56,8 +56,9 @@ const barTitle = computed(() => {
   return current.nickname ? `${current.nickname}: ${current.title}` : current.title
 })
 
-// 窄窗切紧凑布局（替代旧三态里的「迷你态」），由窗口宽度驱动
-const compact = computed(() => viewportWidth.value < 520)
+// 窄窗标记，仅供播放器内部使用（弹幕延迟控件 / 弹幕列表在窄窗下换排布）；
+// 标题栏不消费它 —— 标题栏窄窗由 flex 自然压缩处理。
+const compact = computed(() => viewportWidth.value < 600)
 
 /** 窗口控制通道按 event.sender 定位，作用于本窗而非主窗口 */
 function onClose() {
@@ -111,8 +112,10 @@ useEventListener(document, 'fullscreenchange', () => {
 
 <template>
   <div class="fw-root frosted-surface frosted-surface--deep">
+    <!-- 皮肤类 app-title-bar 提供底色 / 边框 / 拖拽 / 按钮外观（与主窗同源），
+         fw-bar 只补本窗特有的内容排布 -->
     <div
-      class="fw-bar"
+      class="fw-bar app-title-bar"
       :class="{ 'is-html-fullscreen': htmlFullscreen }"
       :style="{ height: `${FLOAT_BAR_HEIGHT}px` }"
       @dblclick="onToggleMaximize"
@@ -123,16 +126,16 @@ useEventListener(document, 'fullscreenchange', () => {
       <img v-if="avatarUrl" :src="avatarUrl" alt="avatar" class="fw-avatar" draggable="false">
       <span class="fw-title ellipsis" :title="barTitle">{{ barTitle }}</span>
       <!-- 双击标题栏同效；按钮区拦住冒泡，免得双击按钮时顺带切换最大化 -->
-      <div class="fw-actions" @dblclick.stop>
-        <el-button circle size="small" title="最小化" @click.stop="onMinimize">
-          <MediaIcon name="minus" :size="15" class="fw-icon" />
-        </el-button>
-        <el-button circle size="small" :title="isMaximized ? '还原' : '最大化'" @click.stop="onToggleMaximize">
-          <MediaIcon :name="isMaximized ? 'windowRestore' : 'windowMaximize'" :size="15" class="fw-icon" />
-        </el-button>
-        <el-button circle size="small" title="关闭" class="fw-icon--close" @click.stop="onClose">
-          <MediaIcon name="close" :size="15" class="fw-icon" />
-        </el-button>
+      <div class="app-title-bar-actions" @dblclick.stop>
+        <button class="app-title-bar-btn" title="最小化" @click.stop="onMinimize">
+          <MediaIcon name="minus" :size="15" />
+        </button>
+        <button class="app-title-bar-btn" :title="isMaximized ? '还原' : '最大化'" @click.stop="onToggleMaximize">
+          <MediaIcon :name="isMaximized ? 'windowRestore' : 'windowMaximize'" :size="15" />
+        </button>
+        <button class="app-title-bar-btn app-title-bar-btn--close" title="关闭" @click.stop="onClose">
+          <MediaIcon name="close" :size="15" />
+        </button>
       </div>
     </div>
 
@@ -184,24 +187,13 @@ useEventListener(document, 'fullscreenchange', () => {
   overflow: hidden;
 }
 
-/* 高度来自共享常量 FLOAT_BAR_HEIGHT，主进程算窗口尺寸用同一个值 */
+/* 皮肤全在共享配方 .app-title-bar，此处只留本窗的内容排布与自持的 padding。
+   高度由 FLOAT_BAR_HEIGHT 经 :style 注入，主进程算窗口尺寸用同一个值。 */
 .fw-bar {
-  display: flex;
-  align-items: center;
   gap: 8px;
-  padding: 0 8px 0 12px;
-  flex-shrink: 0;
-  user-select: none;
-  /* 整条标题栏即窗口拖动区：由系统接管，因此可以拖到应用窗口之外 */
-  -webkit-app-region: drag;
-  border-bottom: 1px solid color-mix(in srgb, var(--el-border-color) 35%, transparent);
-
-  :deep(.el-button) {
-    margin-left: 0;
-  }
+  padding: 0 0 0 12px;
 }
 
-/* 全屏时拖拽区不可见却仍吞点击：停用 drag */
 .fw-bar.is-html-fullscreen {
   -webkit-app-region: no-drag;
 }
@@ -226,35 +218,17 @@ useEventListener(document, 'fullscreenchange', () => {
   border-radius: 50%;
   flex-shrink: 0;
   object-fit: cover;
-  border: 1px solid color-mix(in srgb, var(--el-border-color) 40%, transparent);
+  /* 浅色标题栏底：边框收浅，避免深色描边显脏 */
+  border: 1px solid var(--el-border-color-lighter);
 }
 
+/* 标题占满剩余空间；min-width: 0 让窄窗时靠 ellipsis 截断而非撑破标题栏 */
 .fw-title {
   flex: 1;
   min-width: 0;
   font-size: 13px;
   font-weight: 500;
   color: var(--el-text-color-primary);
-}
-
-/* 按钮区不参与拖拽，保持可点击 */
-.fw-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  -webkit-app-region: no-drag;
-}
-
-.fw-icon {
-  stroke-width: 1;
-}
-
-.fw-icon--close:hover {
-  background: linear-gradient(135deg, #e5484d, #e03d52);
-  border-color: transparent;
-  color: #fff;
-  box-shadow: 0 2px 8px -2px rgba(224, 61, 82, 0.5);
 }
 
 .fw-body {

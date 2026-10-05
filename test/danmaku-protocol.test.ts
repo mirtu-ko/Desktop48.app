@@ -42,6 +42,15 @@ function danmakuMessage(text: string, username: string): Buffer {
   return packDanmakuPacket(JSON.stringify(payload), DANMAKU_OP_MESSAGE)
 }
 
+/** 造一条带表情的 DANMU_MSG：表情表在 info[0][15].extra（字符串化 JSON） */
+function danmakuWithEmotes(text: string, emots: unknown, username = '张三') {
+  const meta: unknown[] = []
+  meta[15] = { extra: JSON.stringify({ content: text, emots }), mode: 0, show_player_type: 0, user: {} }
+  return { cmd: 'DANMU_MSG:4:0:2:2:2:0', info: [meta, text, [0, username]] }
+}
+
+const EMOTE_HTTP_20 = { url: 'http://i0.hdslb.com/bfs/live/abc.png', width: 20, height: 20 }
+
 describe('packDanmakuPacket', () => {
   it('写出的包头字段与协议一致（总长 / 包头长 / 操作码 / 未压缩）', () => {
     const packet = packDanmakuPacket('{}', DANMAKU_OP_AUTH)
@@ -199,6 +208,128 @@ describe('extractDanmakuList', () => {
     expect(extractDanmakuList(null)).toEqual([])
     expect(extractDanmakuList('nope')).toEqual([])
     expect(extractDanmakuList([null, 1, 'x'])).toEqual([])
+  })
+})
+
+describe('extractDanmakuList / 表情（info[0][15].extra.emots）', () => {
+  it('取出表情图地址与尺寸，图片地址统一升级为 https', () => {
+    const payload = danmakuWithEmotes('白花300块[热]', { '[热]': EMOTE_HTTP_20 })
+
+    expect(extractDanmakuList(payload)).toEqual([{
+      text: '白花300块[热]',
+      username: '张三',
+      emots: { '[热]': { url: 'https://i0.hdslb.com/bfs/live/abc.png', width: 20, height: 20 } },
+    }])
+  })
+
+  it('尺寸缺失或非正 / 非有限时按 20×20 兜底', () => {
+    const missing = danmakuWithEmotes('x[热]', { '[热]': { url: 'http://a/b.png' } })
+    const invalid = danmakuWithEmotes('x[热]', {
+      '[热]': { url: 'http://a/b.png', width: Number.POSITIVE_INFINITY, height: -1 },
+    })
+
+    expect(extractDanmakuList(missing)[0].emots?.['[热]']).toEqual({
+      url: 'https://a/b.png',
+      width: 20,
+      height: 20,
+    })
+    expect(extractDanmakuList(invalid)[0].emots?.['[热]']).toMatchObject({ width: 20, height: 20 })
+  })
+
+  it('没有表情时不含 emots 键（渲染层据此保持纯文本）', () => {
+    expect(extractDanmakuList({ cmd: 'DANMU_MSG', info: [[], '晚上好', [0, '张三']] }))
+      .toEqual([{ text: '晚上好', username: '张三' }])
+  })
+
+  it('info[0][15] 不存在（老格式）时不抛，退回纯文本', () => {
+    const meta: unknown[] = []
+
+    expect(extractDanmakuList({ cmd: 'DANMU_MSG', info: [meta, 'x', [0, 'u']] }))
+      .toEqual([{ text: 'x', username: 'u' }])
+    expect(extractDanmakuList({ cmd: 'DANMU_MSG', info: [[undefined, 1, 2], 'x', [0, 'u']] }))
+      .toEqual([{ text: 'x', username: 'u' }])
+  })
+
+  it('extra 不是合法 JSON 时退回纯文本，弹幕本身仍保留', () => {
+    const meta: unknown[] = []
+    meta[15] = { extra: '{坏 JSON' }
+
+    expect(extractDanmakuList({ cmd: 'DANMU_MSG', info: [meta, 'x', [0, 'u']] }))
+      .toEqual([{ text: 'x', username: 'u' }])
+  })
+
+  it('emots 非对象 / 条目缺 url / 键为空时逐条跳过，全无效则退回纯文本', () => {
+    expect(extractDanmakuList(danmakuWithEmotes('x', 'nope'))).toEqual([{ text: 'x', username: '张三' }])
+    expect(extractDanmakuList(danmakuWithEmotes('x', { '[热]': { width: 20 } })))
+      .toEqual([{ text: 'x', username: '张三' }])
+    expect(extractDanmakuList(danmakuWithEmotes('x', { '': EMOTE_HTTP_20 })))
+      .toEqual([{ text: 'x', username: '张三' }])
+  })
+
+  it('部分条目无效时只保留有效的那些', () => {
+    const payload = danmakuWithEmotes('x[热]', { '[热]': EMOTE_HTTP_20, '[坏]': { width: 20 } })
+
+    expect(Object.keys(extractDanmakuList(payload)[0].emots ?? {})).toEqual(['[热]'])
+  })
+})
+
+describe('extractDanmakuList / 装扮表情（info[0][13]）', () => {
+  /** 真实抓包形态：大表情的 extra.emots 是 null，数据在 info[0][13] 这个对象里 */
+  function bulgePayload(text: string, unique: string) {
+    const meta: unknown[] = []
+    meta[13] = {
+      bulge_display: 1,
+      emoticon_unique: unique,
+      height: 20,
+      in_player_area: 1,
+      is_dynamic: 0,
+      url: 'https://i0.hdslb.com/bfs/garb/3c1f2a83bc427edfd5b9f1a586cffeac19165e9d.png',
+      width: 20,
+    }
+    meta[15] = { extra: JSON.stringify({ content: text, dm_type: 1, emots: null }) }
+    return { cmd: 'DANMU_MSG', info: [meta, text, [0, '鲮某']] }
+  }
+
+  it('名字从 emoticon_unique 的方括号里取，地址与尺寸照用', () => {
+    const text = '[四禧丸子·溯梦幻境_恬豆点赞]'
+
+    expect(extractDanmakuList(bulgePayload(text, `upower_${text}`))).toEqual([{
+      text,
+      username: '鲮某',
+      emots: {
+        [text]: {
+          url: 'https://i0.hdslb.com/bfs/garb/3c1f2a83bc427edfd5b9f1a586cffeac19165e9d.png',
+          width: 20,
+          height: 20,
+        },
+      },
+    }])
+  })
+
+  it('普通弹幕的 info[0][13] 是空 JSON 串，不产出表情', () => {
+    const meta: unknown[] = []
+    meta[13] = '{}'
+    meta[15] = { extra: JSON.stringify({ content: 'x', emots: null }) }
+
+    expect(extractDanmakuList({ cmd: 'DANMU_MSG', info: [meta, 'x', [0, 'u']] }))
+      .toEqual([{ text: 'x', username: 'u' }])
+  })
+
+  it('emoticon_unique 里没有方括号时退回用整条文本当键', () => {
+    const meta: unknown[] = []
+    meta[13] = { emoticon_unique: 'upower_no-bracket', url: 'https://a/b.png' }
+
+    const payload = { cmd: 'DANMU_MSG', info: [meta, '[怪表情]', [0, 'u']] }
+
+    expect(Object.keys(extractDanmakuList(payload)[0].emots ?? {})).toEqual(['[怪表情]'])
+  })
+
+  it('缺 url 时不产出（不猜）', () => {
+    const meta: unknown[] = []
+    meta[13] = { emoticon_unique: 'upower_[热]', width: 20 }
+
+    expect(extractDanmakuList({ cmd: 'DANMU_MSG', info: [meta, '[热]', [0, 'u']] }))
+      .toEqual([{ text: '[热]', username: 'u' }])
   })
 })
 

@@ -1,7 +1,7 @@
 import type { LiveDanmaku } from '../src/common/live-danmaku'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick, ref } from 'vue'
-import { DANMAKU_DELAY_DEFAULT, useLiveDanmaku } from '../src/renderer/src/composables/use-live-danmaku'
+import { useLiveDanmaku } from '../src/renderer/src/composables/use-live-danmaku'
 
 // ElMessage 在 Node 环境没有可挂载的 DOM，且用例只关心「有没有提示」
 const { warningMock } = vi.hoisted(() => ({ warningMock: vi.fn() }))
@@ -53,10 +53,9 @@ function createMainApi() {
   }
 }
 
-function setup(options: { roomId?: number, enabled?: boolean, delaySeconds?: number } = {}) {
+function setup(options: { roomId?: number, enabled?: boolean } = {}) {
   const roomId = ref(options.roomId)
   const enabled = ref(options.enabled ?? true)
-  const delaySeconds = ref(options.delaySeconds ?? DANMAKU_DELAY_DEFAULT)
 
   const api = createMainApi()
   vi.stubGlobal('window', { mainAPI: api.mainAPI })
@@ -65,10 +64,9 @@ function setup(options: { roomId?: number, enabled?: boolean, delaySeconds?: num
   const danmakuItems = scope.run(() => useLiveDanmaku({
     roomId: () => roomId.value,
     enabled: () => enabled.value,
-    delaySeconds: () => delaySeconds.value,
   }))!.danmakuItems
 
-  return { roomId, enabled, delaySeconds, danmakuItems, api, stop: () => scope.stop() }
+  return { roomId, enabled, danmakuItems, api, stop: () => scope.stop() }
 }
 
 /** 让已排队的 await 链跑完（不推进假时钟，避免顺手触发回收节拍） */
@@ -79,8 +77,8 @@ async function flushMicrotasks() {
 
 describe('useLiveDanmaku / 订阅生命周期', () => {
   beforeEach(() => {
-    // Date 一起 fake：延迟补偿靠 Date.now() 与回收节拍的相对关系；
-    // setInterval 也要 fake —— 回收节拍走的是 useIntervalFn
+    // Date 一起 fake：投放时刻与回收时刻都取自 Date.now()；
+    // setInterval 也要 fake —— 投放与回收节拍走的是 useIntervalFn
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
   })
 
@@ -162,7 +160,7 @@ describe('useLiveDanmaku / 订阅生命周期', () => {
   })
 
   it('非本房间的批次被丢弃（多窗口同订阅时靠它过滤）', async () => {
-    const { api, danmakuItems } = setup({ roomId: 48, delaySeconds: 0 })
+    const { api, danmakuItems } = setup({ roomId: 48 })
     api.finishHandshake(true)
     await flushMicrotasks()
 
@@ -205,7 +203,7 @@ describe('useLiveDanmaku / 订阅生命周期', () => {
   })
 })
 
-describe('useLiveDanmaku / 延迟补偿', () => {
+describe('useLiveDanmaku / 投放节拍与回收', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
   })
@@ -215,23 +213,8 @@ describe('useLiveDanmaku / 延迟补偿', () => {
     vi.unstubAllGlobals()
   })
 
-  it('弹幕按补偿秒数延后出现（画面比弹幕慢几秒就推后几秒）', async () => {
-    const { api, danmakuItems } = setup({ roomId: 48, delaySeconds: 5 })
-    api.finishHandshake(true)
-    await flushMicrotasks()
-
-    api.emit({ roomId: 48, items: [{ text: 'hi', username: 'u' }] })
-
-    vi.advanceTimersByTime(4000)
-    expect(danmakuItems.value).toHaveLength(0)
-
-    vi.advanceTimersByTime(1400)
-    expect(danmakuItems.value).toHaveLength(1)
-    expect(danmakuItems.value[0].content).toBe('hi')
-  })
-
-  it('补偿为 0 时立即投放', async () => {
-    const { api, danmakuItems } = setup({ roomId: 48, delaySeconds: 0 })
+  it('弹幕到手即投放：不额外延后，下一个节拍就出现', async () => {
+    const { api, danmakuItems } = setup({ roomId: 48 })
     api.finishHandshake(true)
     await flushMicrotasks()
 
@@ -239,10 +222,11 @@ describe('useLiveDanmaku / 延迟补偿', () => {
     vi.advanceTimersByTime(250)
 
     expect(danmakuItems.value).toHaveLength(1)
+    expect(danmakuItems.value[0].content).toBe('hi')
   })
 
   it('同一批弹幕共用同一投放时刻，批内后到的排在前', async () => {
-    const { api, danmakuItems } = setup({ roomId: 48, delaySeconds: 0 })
+    const { api, danmakuItems } = setup({ roomId: 48 })
     api.finishHandshake(true)
     await flushMicrotasks()
 
@@ -259,7 +243,7 @@ describe('useLiveDanmaku / 延迟补偿', () => {
   })
 
   it('展示时长到期后回收（默认 6 秒）', async () => {
-    const { api, danmakuItems } = setup({ roomId: 48, delaySeconds: 0 })
+    const { api, danmakuItems } = setup({ roomId: 48 })
     api.finishHandshake(true)
     await flushMicrotasks()
 
@@ -276,7 +260,7 @@ describe('useLiveDanmaku / 延迟补偿', () => {
   })
 
   it('关掉再打开会清空堆叠（时间轴原点已重置，旧时刻全是错的）', async () => {
-    const { enabled, api, danmakuItems } = setup({ roomId: 48, delaySeconds: 0 })
+    const { enabled, api, danmakuItems } = setup({ roomId: 48 })
     api.finishHandshake(true)
     await flushMicrotasks()
 
@@ -288,5 +272,54 @@ describe('useLiveDanmaku / 延迟补偿', () => {
     await nextTick()
 
     expect(danmakuItems.value).toHaveLength(0)
+  })
+})
+
+describe('useLiveDanmaku / 表情片段', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('带表情的弹幕在主进程下发后切成文本 + 表情片段（端到端）', async () => {
+    const { api, danmakuItems } = setup({ roomId: 48 })
+    api.finishHandshake(true)
+    await flushMicrotasks()
+
+    api.emit({
+      roomId: 48,
+      items: [{
+        text: 'TEAM Hii[喝彩][喝彩][喝彩]',
+        username: '小思念VENUS',
+        emots: { '[喝彩]': { url: 'https://i0.hdslb.com/bfs/live/x.png', width: 20, height: 20 } },
+      }],
+    })
+    vi.advanceTimersByTime(250)
+
+    const segments = danmakuItems.value[0].segments
+    expect(segments.map(segment => segment.type)).toEqual(['text', 'emote', 'emote', 'emote'])
+    expect(segments[0]).toEqual({ type: 'text', text: 'TEAM Hii' })
+    expect(segments[1]).toEqual({
+      type: 'emote',
+      text: '[喝彩]',
+      url: 'https://i0.hdslb.com/bfs/live/x.png',
+      width: 20,
+      height: 20,
+    })
+  })
+
+  it('没带 emots 的弹幕保持纯文本片段', async () => {
+    const { api, danmakuItems } = setup({ roomId: 48 })
+    api.finishHandshake(true)
+    await flushMicrotasks()
+
+    api.emit({ roomId: 48, items: [{ text: 'TEAM Hii[喝彩]', username: 'u' }] })
+    vi.advanceTimersByTime(250)
+
+    expect(danmakuItems.value[0].segments).toEqual([{ type: 'text', text: 'TEAM Hii[喝彩]' }])
   })
 })

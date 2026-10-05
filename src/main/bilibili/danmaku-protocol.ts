@@ -2,7 +2,7 @@
  * B 站直播弹幕的二进制包协议（web 端 /sub 长连接）。全部纯函数，不碰网络 / IPC / 日志。
  * 协议未公开且变过版，故拆包与字段提取单独隔离，变更时只改这里。
  */
-import type { LiveDanmaku } from '../../common/live-danmaku'
+import type { DanmakuEmote, DanmakuEmoteMap, LiveDanmaku } from '../../common/live-danmaku'
 import { Buffer } from 'node:buffer'
 import { brotliDecompressSync, inflateSync } from 'node:zlib'
 
@@ -145,7 +145,74 @@ function extractDanmaku(item: unknown): LiveDanmaku | null {
   // info[2] = [uid, 用户名, ...]
   const sender = info[2]
   const username = Array.isArray(sender) && typeof sender[1] === 'string' ? sender[1] : ''
-  return { text, username }
+  const emots = extractEmotes(info[0], text)
+  return emots ? { text, username, emots } : { text, username }
+}
+
+/** 表情尺寸缺省值：协议里恒为 20×20，字段缺失时按正方形兜底 */
+const EMOTE_FALLBACK_SIZE = 20
+
+/**
+ * 取本条弹幕用到的表情。两个来源：普通表情在 info[0][15].extra 的 emots（键即占位符），
+ * 粉丝装扮 / 大表情在 info[0][13]（单条，名字藏在 emoticon_unique 的方括号里）。
+ * 取不到一律返回 undefined —— 渲染层据此保持纯文本，不做任何猜测。
+ */
+function extractEmotes(meta: unknown, content: string): DanmakuEmoteMap | undefined {
+  if (!Array.isArray(meta))
+    return undefined
+
+  const emots: DanmakuEmoteMap = {}
+
+  const extra = parseJsonObject((meta[15] as { extra?: unknown } | undefined)?.extra)
+  const rawEmots = extra?.emots
+  if (rawEmots && typeof rawEmots === 'object') {
+    for (const [name, value] of Object.entries(rawEmots as Record<string, unknown>)) {
+      const emote = toEmote(value)
+      if (name && emote)
+        emots[name] = emote
+    }
+  }
+
+  const bulge = parseJsonObject(meta[13])
+  const bulgeEmote = toEmote(bulge)
+  if (bulgeEmote) {
+    const unique = bulge?.emoticon_unique
+    const key = (typeof unique === 'string' ? /\[[^\]]+\]/.exec(unique)?.[0] : undefined) ?? content
+    if (key)
+      emots[key] = bulgeEmote
+  }
+
+  return Object.keys(emots).length > 0 ? emots : undefined
+}
+
+/** 字段可能是对象，也可能是字符串化 JSON（B 站两种都下发过）；解析不出对象返回 null */
+function parseJsonObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(value)
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+    }
+    catch {
+      return null
+    }
+  }
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null
+}
+
+function toEmote(value: unknown): DanmakuEmote | undefined {
+  const raw = value as { url?: unknown, width?: unknown, height?: unknown } | null | undefined
+  if (typeof raw?.url !== 'string' || !raw.url)
+    return undefined
+  // 协议下发的是 http，统一升级：渲染层在 file:// 下加载 http 图片会被混合内容拦
+  return {
+    url: raw.url.replace(/^http:\/\//, 'https://'),
+    width: emoteSize(raw.width),
+    height: emoteSize(raw.height),
+  }
+}
+
+function emoteSize(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : EMOTE_FALLBACK_SIZE
 }
 
 /** 取正文里各条消息的主指令名（诊断用）：弹幕数对不上网页时，靠它分清「没发」与「没认」 */

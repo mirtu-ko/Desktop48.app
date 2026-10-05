@@ -39,6 +39,12 @@ describe('tools.taskFilename', () => {
     expect(Tools.taskFilename('陈观逸', minuteTs, 'mp4')).toBe('陈观逸202609050203.mp4')
     expect(Tools.taskFilename('陈观逸', minuteTs, 'flv', ' ')).toBe('陈观逸 202609050203.flv')
   })
+
+  it('标题里的文件名非法字符替换成下划线（主进程按路径穿越防御会拒绝斜杠等）', () => {
+    const minuteTs = new Date(2026, 8, 5, 2, 3).getTime()
+    expect(Tools.taskFilename('4/8班联合公演', minuteTs, 'flv', ' ')).toBe('4_8班联合公演 202609050203.flv')
+    expect(Tools.taskFilename('a\\b:c*d?e"f<g>h|i', minuteTs, 'mp4')).toBe('a_b_c_d_e_f_g_h_i202609050203.mp4')
+  })
 })
 
 describe('tools.pictureUrls / sourceUrl（图片路径归一化）', () => {
@@ -129,5 +135,30 @@ describe('tools.normalizeUserId（成员键归一化）', () => {
     expect(Tools.normalizeUserId('   ')).toBeNaN()
     expect(Tools.normalizeUserId(undefined)).toBeNaN()
     expect(Tools.normalizeUserId(null)).toBeNaN()
+  })
+})
+
+describe('tools.toHex（队色归一化）', () => {
+  it('裸 HEX 补上 #，已是 # 开头的原样返回', () => {
+    expect(Tools.toHex('8FD3F6')).toBe('#8FD3F6')
+    expect(Tools.toHex('#8FD3F6')).toBe('#8FD3F6')
+    expect(Tools.toHex(' 8FD3F6 ')).toBe('#8FD3F6')
+  })
+
+  it('空值返回空串而不是 "#"（"#" 是非法颜色，会把兜底色一并吃掉）', () => {
+    expect(Tools.toHex('')).toBe('')
+    expect(Tools.toHex('   ')).toBe('')
+    expect(Tools.toHex(undefined)).toBe('')
+  })
+})
+
+describe('tools.colorVarStyle（队色 → 内联 CSS 变量）', () => {
+  it('有队色时产出变量对象', () => {
+    expect(Tools.colorVarStyle('--tb-color', '8FD3F6')).toEqual({ '--tb-color': '#8FD3F6' })
+  })
+
+  it('无队色时返回 undefined，不注入变量（交给 CSS 兜底）', () => {
+    expect(Tools.colorVarStyle('--tb-color', '')).toBeUndefined()
+    expect(Tools.colorVarStyle('--tb-color', undefined)).toBeUndefined()
   })
 })

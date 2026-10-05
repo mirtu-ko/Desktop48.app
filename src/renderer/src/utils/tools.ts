@@ -81,10 +81,13 @@ function streamPathHandle(streamPath: string, timestamp: number) {
  * 下载/录制任务文件名：成员名 + 任务开始时间（yyyyMMddhhmm）+ 扩展名。
  * separator 为成员名与时间戳之间的分隔符（录制为空格、回放下载紧连，保持既有命名）；
  * 同场直播同一时刻只允许一个任务，文件名保持分钟精度即可，
- * 跨任务的同名冲突由主进程 Start 前的冲突检测兜底（自动加序号）
+ * 跨任务的同名冲突由主进程 Start 前的冲突检测兜底（自动加序号）。
+ * 录制名取自直播标题，可能含文件名非法字符（如「4/8班联合公演」的斜杠，
+ * 主进程按路径穿越防御会拒绝），这里统一替换成下划线
  */
 function taskFilename(realName: string, startTime: number, ext: string, separator = ''): string {
-  return `${realName}${separator}${dayjs(startTime).format('YYYYMMDDHHmm')}.${ext}`
+  const safeName = realName.replace(/[/\\:*?"<>|]/g, '_')
+  return `${safeName}${separator}${dayjs(startTime).format('YYYYMMDDHHmm')}.${ext}`
 }
 
 /**
@@ -106,6 +109,20 @@ function normalizeUserId(userId: number | string | undefined | null): number {
   return text ? Number(text) : Number.NaN
 }
 
+/** 队色归一化：接口下发的是裸 HEX，交给 CSS 前补 #；已带 # 的原样返回。空值返回空串，不能返回 '#'（会产出非法颜色并吃掉调用方的兜底） */
+function toHex(color: string | undefined): string {
+  const value = (color || '').trim()
+  if (!value)
+    return ''
+  return value.startsWith('#') ? value : `#${value}`
+}
+
+/** 队色 → 内联 CSS 变量的样式对象：无队色时返回 undefined（不注入变量，交给 CSS 兜底）。变量名由调用方传入 */
+function colorVarStyle(name: string, color: string | undefined): Record<string, string> | undefined {
+  const hex = toHex(color)
+  return hex ? { [name]: hex } : undefined
+}
+
 /**
  * 纯函数工具集：不依赖 DOM、IPC 或响应式状态。
  */
@@ -118,6 +135,8 @@ const Tools = {
   taskFilename,
   shortTeamName,
   normalizeUserId,
+  toHex,
+  colorVarStyle,
 }
 
 export default Tools

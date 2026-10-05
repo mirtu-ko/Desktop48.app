@@ -4,9 +4,9 @@ import type { MemberTreeGroupPayload } from '../../../preload/ipc-contract'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
 import LiveTabBar from '@renderer/components/ui/LiveTabBar.vue'
-import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
+import MemberDetailCard from '@renderer/components/ui/MemberDetailCard.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
-import { useMemberDetailDrawer } from '@renderer/composables/use-member-detail-drawer'
+import { useMemberDetail } from '@renderer/composables/use-member-detail'
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
 import Apis from '@renderer/services/apis'
 import EventBus from '@renderer/services/event-bus'
@@ -36,16 +36,16 @@ const { memberTree, loadTree } = useMemberTreeStore()
 // 回放是历史归档、且列表常带成员筛选，故只做标识不重排（重排会打乱时间倒序与筛选语义）
 const { refreshFollowedMembers, isFollowed } = useFollowedMembersStore()
 
-// 成员详情抽屉：点卡片上的成员名打开，详情按 userId 反查（数据源见 stores/member-directory）
+// 成员详情卡片：点卡片上的成员名打开，详情按 userId 反查（数据源见 stores/member-directory）
 const {
   selectedMember,
-  drawerFollowed,
-  drawerBlocked,
+  detailFollowed,
+  detailBlocked,
   openMemberDetail,
   closeMemberDetail,
   toggleFollowMember,
   toggleBlockMember,
-} = useMemberDetailDrawer()
+} = useMemberDetail()
 
 /** 级联筛选器选项：由共享成员树派生（在团成员排前），树更新后自动重算 */
 const memberOption = computed(() => sortMembersByStatus(memberTree.value))
@@ -285,11 +285,11 @@ watch(selectedFilter, () => {
       />
     </FloatingRefreshDock>
 
-    <!-- 成员详情抽屉：与成员页共用同一份合并详情（点成员名打开） -->
-    <MemberDetailDrawer
+    <!-- 成员详情卡片：与成员页共用同一份合并详情（点成员名打开） -->
+    <MemberDetailCard
       :member="selectedMember"
-      :blocked="drawerBlocked"
-      :followed="drawerFollowed"
+      :blocked="detailBlocked"
+      :followed="detailFollowed"
       @close="closeMemberDetail"
       @toggle-block="toggleBlockMember"
       @toggle-follow="toggleFollowMember"

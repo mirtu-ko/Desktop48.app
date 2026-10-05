@@ -85,7 +85,7 @@ const liveBadge = computed(() => {
         <span
           v-if="item.member?.teamName"
           class="team-badge"
-          :style="item.member.teamColor ? { '--tb-color': `#${item.member.teamColor}` } : undefined"
+          :style="Tools.colorVarStyle('--tb-color', item.member.teamColor)"
         >
           {{ Tools.shortTeamName(item.member.teamName) }}
         </span>

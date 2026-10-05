@@ -11,7 +11,7 @@ import type { LiveDanmaku } from '../../common/live-danmaku'
 import WebSocket from 'ws'
 import { isAllowedBilibiliApiUrl, isAllowedBilibiliSocketUrl } from '../allowed-hosts'
 import { sendIpc } from '../ipc/send'
-import { debug, error } from '../logger'
+import { debug, error, isVerboseEnabled } from '../logger'
 import { BUVID_SPI_URL, createFallbackBuvid, pickBuvid } from './buvid'
 import {
   buildDanmakuAuthBody,
@@ -248,11 +248,26 @@ function handleSocketMessage(session: DanmakuSession, data: Buffer): void {
   if (items.length > 0) {
     session.receivedDanmaku += items.length
     queueDanmaku(session, items)
-    // 逐条打印内容：弹幕密度对不上网页时，靠这行判断服务端到底发了多少
-    debug(
-      `[danmaku-session] 房间 ${session.roomId} 收到 ${items.length} 条弹幕（累计 ${session.receivedDanmaku}）:`,
-      items.map(item => `${item.username}: ${item.text}`).join(' | '),
-    )
+    // 逐条打印内容：弹幕密度对不上网页时，靠这行判断服务端到底发了多少；带表情的标出数量，
+    // 排查「表情不显示」时一眼分清是没解析到还是没渲染。热路径，先看门控再拼字符串
+    if (isVerboseEnabled()) {
+      debug(
+        `[danmaku-session] 房间 ${session.roomId} 收到 ${items.length} 条弹幕（累计 ${session.receivedDanmaku}）:`,
+        items.map((item) => {
+          const emoteCount = item.emots ? Object.keys(item.emots).length : 0
+          return `${item.username}: ${item.text}${emoteCount > 0 ? ` [emots×${emoteCount}]` : ''}`
+        }).join(' | '),
+      )
+
+      // 表情解析诊断：单独一行，免得混在长列表里被忽略
+      const withEmotes = items.filter(item => item.emots)
+      if (withEmotes.length > 0) {
+        debug(
+          `[danmaku-session] ★ 其中 ${withEmotes.length} 条带表情:`,
+          withEmotes.map(item => `${item.text} → ${Object.entries(item.emots ?? {}).map(([name, emote]) => `${name}=${emote.url}`).join(' ')}`).join(' | '),
+        )
+      }
+    }
   }
 
   if (ignored.size > 0) {
@@ -395,6 +410,7 @@ export async function handleDanmakuStart(roomId: number, sender: WebContents): P
   connectSocket(session)
   debug(
     `[danmaku-session] 房间 ${roomId} → ${session.realRoomId} 会话已启动（${session.hosts.length} 台服务器可选）`,
+    '表情解析：已启用',
   )
   return true
 }

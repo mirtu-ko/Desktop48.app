@@ -4,16 +4,12 @@ import { useIntervalFn } from '@vueuse/core'
 import { ElMessage } from 'element-plus'
 import { onScopeDispose, watch } from 'vue'
 
-/** 延迟补偿上限（秒）：画面比弹幕慢多少就把弹幕推后多少；反向（弹幕晚于画面）无从提前 */
-export const DANMAKU_DELAY_LIMIT = 30
-/** 默认补偿：48 的流要过 FFmpeg 转封装 + MSE 缓冲，通常落后 B 站弹幕数秒 */
-export const DANMAKU_DELAY_DEFAULT = 5
 /** 气泡回收节拍：展示时长是秒级，250ms 足够跟手 */
 const OVERLAY_TICK_MS = 250
 
 /**
- * 直播弹幕：订阅主进程下发的 B 站弹幕，按延迟补偿投放到左下角气泡层。
- * 延迟补偿是必需项 —— 画面过 FFmpeg 转封装 + MSE 缓冲会稳定落后，不补偿就「弹幕抢在画面之前」。
+ * 直播弹幕：订阅主进程下发的 B 站弹幕，投放到左下角气泡层。
+ * 不做延迟补偿 —— 48 官方源的画面比 B 站的弹幕推送更早，弹幕到手即投放才是对齐的。
  * 失败一律静默降级：连不上只提示一次，不干扰直播播放。
  */
 export function useLiveDanmaku(options: {
@@ -21,8 +17,6 @@ export function useLiveDanmaku(options: {
   roomId: () => number | undefined
   /** 是否开启弹幕 */
   enabled: () => boolean
-  /** 延迟补偿秒数 */
-  delaySeconds: () => number
 }) {
   const { items: danmakuItems, push, tick, reset } = useLiveDanmakuOverlay()
 
@@ -62,16 +56,19 @@ export function useLiveDanmaku(options: {
       if (batch.roomId !== activeRoomId)
         return
       receivedCount += batch.items.length
-      // 可见数取自上一次节拍：push 只入队，所以它反映的是「实际挂在层上的条数」
-      debugLog(
-        'live',
-        `B站弹幕: 收到 ${batch.items.length} 条（累计 ${receivedCount}，可见 ${danmakuItems.value.length}）`,
-        batch.items.map(item => `${item.username}: ${item.text}`),
-      )
-      // 整批共用同一投放时刻（批内先后由 push 顺序保证）；补偿加在这里：画面慢几秒就推后几秒
-      const showAt = nowSeconds() + options.delaySeconds()
+      // 可见数取自上一次节拍：push 只入队，所以它反映的是「实际挂在层上的条数」。
+      // 热路径，先看门控再拼字符串
+      if (import.meta.env.DEV) {
+        debugLog(
+          'live',
+          `B站弹幕: 收到 ${batch.items.length} 条（累计 ${receivedCount}，可见 ${danmakuItems.value.length}）`,
+          batch.items.map(item => `${item.username}: ${item.text}${item.emots ? ` [emots×${Object.keys(item.emots).length}]` : ''}`),
+        )
+      }
+      // 整批共用同一投放时刻（批内先后由 push 顺序保证），下一个节拍一起投放
+      const showAt = nowSeconds()
       for (const item of batch.items)
-        push(item.text, item.username, showAt)
+        push(item.text, item.username, showAt, item.emots)
     })
     resumeOverlay()
 
