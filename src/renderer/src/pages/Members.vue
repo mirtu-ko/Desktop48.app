@@ -635,11 +635,16 @@ useEventListener(window, 'keydown', onKeydown)
     }
   }
 
-  /* 复用全局分区标题（队色药丸 + 渐隐细线），撑满剩余宽度 */
+  /* 复用全局分区标题（队色药丸），撑满剩余宽度；
+     头部条自带底色与描边，尾部渐隐线与其重复，隐藏 */
   .section-title {
     flex: 1;
     min-width: 0;
     margin: 0;
+
+    &::after {
+      display: none;
+    }
   }
 }
 

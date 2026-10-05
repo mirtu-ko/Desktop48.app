@@ -666,12 +666,17 @@ function openPlaybacks() {
   }
 }
 
-/* 复用全局 .section-title（队色药丸 + 渐隐细线），只改字号与间距：卡片里 16px/700 过重 */
+/* 复用全局 .section-title（队色药丸），只改字号与间距：全局 15px/600 在卡片里仍偏重；
+   卡片自带描边分区，尾部渐隐线与其重复，隐藏 */
 .sec .section-title {
   --st-accent: var(--accent);
 
   margin: 0 0 10px;
   font-size: 14px;
+
+  &::after {
+    display: none;
+  }
 }
 
 .profile-grid {

@@ -215,35 +215,38 @@ body,
 
 /* ===== 列表分区标题（公演 / 成员页共用） =====
  * 结构：主题色小药丸 + 标题文字 + 右侧渐隐细线；
- * 主题色由 --st-accent 注入，默认品牌紫 */
+ * 主题色由 --st-accent 注入，默认品牌紫；
+ * 在自带描边/底色的容器（队伍头部条、详情卡片）里，
+ * 尾线与容器描边重复，由使用方隐藏 ::after */
 .section-title {
   --st-accent: var(--brand-primary);
 
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 18px 4px 14px;
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
+  gap: 8px;
+  margin: 20px 2px 12px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
   color: var(--el-text-color-primary);
 
   &::before {
     content: '';
     flex: none;
-    width: 4px;
-    height: 16px;
+    width: 3px;
+    height: 14px;
     border-radius: var(--radius-pill);
-    background: linear-gradient(180deg, color-mix(in srgb, var(--st-accent) 55%, white), var(--st-accent));
-    box-shadow: 0 0 10px color-mix(in srgb, var(--st-accent) 45%, transparent);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--st-accent) 60%, white), var(--st-accent));
+    box-shadow: 0 0 8px color-mix(in srgb, var(--st-accent) 35%, transparent);
   }
 
   &::after {
     content: '';
     flex: 1;
     height: 1px;
+    margin-left: 4px;
     border-radius: var(--radius-pill);
-    background: linear-gradient(90deg, color-mix(in srgb, var(--st-accent) 35%, transparent), transparent);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--st-accent) 20%, transparent), transparent 75%);
   }
 }
 
