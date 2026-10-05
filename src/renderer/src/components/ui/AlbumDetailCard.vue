@@ -131,6 +131,7 @@ function onVisibilityChange(value: boolean) {
               </template>
             </div>
 
+            <!-- 顺序刻意是「外链在上、播放在下」，别按主次重排 -->
             <div v-if="album.link || album.href" class="side-links">
               <el-button v-if="album.link" :icon="Link" @click="openAlbumConcept(album)">
                 专辑概念
@@ -367,10 +368,8 @@ function onVisibilityChange(value: boolean) {
   font-variant-numeric: tabular-nums;
 }
 
-/* 播放全部 / 加入队列（主操作），下一行是专辑概念 / 购买专辑。
- * 四个按钮统一基础圆角 —— round 是 20px 胶囊，和下一行并排就不齐了 */
-.side-actions,
-.side-links {
+/* 播放全部 / 加入队列：左栏唯一的两个按钮，同一基础圆角（round 是 20px 胶囊，与上一行并排不齐） */
+.side-actions {
   display: flex;
   gap: 10px;
   width: 100%;
@@ -379,6 +378,34 @@ function onVisibilityChange(value: boolean) {
     flex: 1;
     margin-left: 0;
     border-radius: var(--el-border-radius-base);
+  }
+}
+
+/* 专辑概念 / 购买专辑是外链（交给系统浏览器），不是播放操作，降为文字链接。
+ * 四个等宽按钮并排会读成「一个实心 + 三个一样的白框」，收成链接后两行才有主次 */
+.side-links {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+  width: 100%;
+
+  :deep(.el-button) {
+    flex: none;
+    height: auto;
+    margin-left: 0;
+    padding: 2px 0;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--el-text-color-regular);
+
+    &:hover {
+      background: transparent;
+      color: var(--brand-primary);
+      text-decoration: underline;
+    }
   }
 }
 
