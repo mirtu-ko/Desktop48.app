@@ -636,7 +636,9 @@ function openPlaybacks() {
     box-shadow: 0 0 0 3px var(--el-bg-color);
   }
 
-  /* 已关注：换鎏金环（与成员卡片一致） */
+  /* 已关注：换鎏金环。
+   * 成员卡片那边不用这招了（队色与关注金会撞车，卡片改由头像外圈的金色虚线环表达），
+   * 但抽屉里有「关注 / 取消关注」文字标签兜底，环只是锦上添花，留着无妨。 */
   &.is-followed {
     --ring: var(--color-follow);
   }

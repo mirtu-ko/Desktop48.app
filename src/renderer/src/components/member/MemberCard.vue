@@ -105,7 +105,10 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
         </span>
       </div>
 
-      <!-- 关注 / 屏蔽：挂在头像下沿，悬浮时自下浮出，不挡脸也不挤动名字 -->
+      <!-- 关注 / 屏蔽：一对按钮，始终同处头像下沿，悬浮时自下浮出，不挡脸也不挤动名字。
+           「已关注」的状态不在这里表达 —— 它由头像外圈的金色虚线环常驻承担（见样式里
+           的 .is-followed），所以按钮不需要常驻，也不会出现「一个孤零零的实心圆钮
+           挂在头像下巴上」。 -->
       <div v-if="actionable" class="quick-actions">
         <button
           class="quick-btn quick-btn--follow"
@@ -335,7 +338,9 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
   }
 }
 
-/* 快捷关注 / 屏蔽：挂在头像下沿，悬浮自下浮出 */
+/* 关注 / 屏蔽：一对按钮，始终同处头像下沿，悬浮时自下浮出，不挡脸也不挤动名字。
+ * 「已关注」的状态不在这里表达 —— 由头像外圈的金色虚线环常驻承担（见 .is-followed），
+ * 所以按钮不必常驻，也就不会出现「一个孤零零的实心圆钮挂在头像下巴上」。 */
 .quick-actions {
   position: absolute;
   bottom: -3px;
@@ -378,10 +383,11 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
     transform: scale(1.1);
   }
 
-  /* 已启用：实心常驻（不悬浮也看得见），图标转白压在语义色实底上 */
+  /* 已启用：图标转白压在语义色实底上，且不随悬浮放大。
+   * 这里不能写 opacity —— 父级 .quick-actions 是 opacity: 0 门控，
+   * 子级的 opacity 与 0 相乘仍然是 0，写了也是死的。 */
   &.is-on {
     color: #fff;
-    opacity: 1;
     transform: scale(1);
   }
 
@@ -444,14 +450,19 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
   }
 }
 
-/* 已关注：头像使用单层金色光环，配合右上角金星钮识别状态 */
-.member-card.is-followed .avatar-wrap::before {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--color-follow) 75%, #fff),
-    var(--color-follow) 55%,
-    color-mix(in srgb, var(--color-follow) 85%, #ffd257)
-  );
+/* ===== 已关注：头像外圈加一道金色虚线环 =====
+ * 为什么是「虚线」而不是「换色」：原来的做法是把队色环整个换成关注金，
+ * 但队色是任意色，迟早有队伍撞上 —— CKG48 的 #FFBA07 与关注金 #ffc53d
+ * 在 OKLab 下 ΔE 只有 0.0275（肉眼判定为同一色），那几个成员的「已关注」
+ * 等于完全没有信号。
+ * 虚线是纹理差异、与颜色无关，所以同色也分得开：队色实线环完整保留，
+ * 两个信息同时在场，而不是用一个顶掉另一个。
+ * 用 outline 而不是 border/新元素：outline 不参与布局（不会把头像撑大、
+ * 不会挤动旁边的卡片），且会跟随 border-radius，所以圆头像是圆环。
+ * 挂在 .avatar-wrap 上是为了让它跟着悬浮时的 scale(1.08) 一起缩放。 */
+.member-card.is-followed .avatar-wrap {
+  outline: 2px dashed var(--color-follow);
+  outline-offset: 3px;
 }
 
 /* ===== 紧凑档：头像与文案同步收小 =====
