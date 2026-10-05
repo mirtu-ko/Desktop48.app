@@ -131,3 +131,28 @@ describe('tools.normalizeUserId（成员键归一化）', () => {
     expect(Tools.normalizeUserId(null)).toBeNaN()
   })
 })
+
+describe('tools.toHex（队色归一化）', () => {
+  it('裸 HEX 补上 #，已是 # 开头的原样返回', () => {
+    expect(Tools.toHex('8FD3F6')).toBe('#8FD3F6')
+    expect(Tools.toHex('#8FD3F6')).toBe('#8FD3F6')
+    expect(Tools.toHex(' 8FD3F6 ')).toBe('#8FD3F6')
+  })
+
+  it('空值返回空串而不是 "#"（"#" 是非法颜色，会把兜底色一并吃掉）', () => {
+    expect(Tools.toHex('')).toBe('')
+    expect(Tools.toHex('   ')).toBe('')
+    expect(Tools.toHex(undefined)).toBe('')
+  })
+})
+
+describe('tools.colorVarStyle（队色 → 内联 CSS 变量）', () => {
+  it('有队色时产出变量对象', () => {
+    expect(Tools.colorVarStyle('--tb-color', '8FD3F6')).toEqual({ '--tb-color': '#8FD3F6' })
+  })
+
+  it('无队色时返回 undefined，不注入变量（交给 CSS 兜底）', () => {
+    expect(Tools.colorVarStyle('--tb-color', '')).toBeUndefined()
+    expect(Tools.colorVarStyle('--tb-color', undefined)).toBeUndefined()
+  })
+})

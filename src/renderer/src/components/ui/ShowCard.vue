@@ -26,7 +26,7 @@ function formatTime(stime: string): string {
           v-for="team in show.teamList"
           :key="team.teamId"
           class="team-badge"
-          :style="team.teamColor ? { '--tb-color': `#${team.teamColor}` } : undefined"
+          :style="Tools.colorVarStyle('--tb-color', team.teamColor)"
         >
           {{ Tools.shortTeamName(team.teamName) }}
         </span>

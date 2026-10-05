@@ -107,6 +107,30 @@ function normalizeUserId(userId: number | string | undefined | null): number {
 }
 
 /**
+ * 队色归一化：接口下发的队色是裸 HEX（无 #，见 member-merge 的 teamColor / ringColor 注释），
+ * 交给 CSS 前要补上 #。已经是 # 开头的原样返回 —— 无脑拼前缀会得到 `##abc123` 这种废值。
+ *
+ * 空值返回空串而不是 '#'：调用方普遍写成 `toHex(x) || 兜底色` 或直接塞进
+ * `--accent`，返回 '#' 会产出非法颜色、把兜底也一并吃掉。
+ */
+function toHex(color: string | undefined): string {
+  const value = (color || '').trim()
+  if (!value)
+    return ''
+  return value.startsWith('#') ? value : `#${value}`
+}
+
+/**
+ * 队色 → 内联 CSS 变量的样式对象：无队色时返回 undefined（不注入变量，交给 CSS 兜底）。
+ * 调用点原本一律写成 `:style="x.teamColor ? { '--tb-color': `#${x.teamColor}` } : undefined"`，
+ * 空值会拼出非法的 `'#'`；变量名各有不同（--tb-color / --avatar-accent），故由调用方传入。
+ */
+function colorVarStyle(name: string, color: string | undefined): Record<string, string> | undefined {
+  const hex = toHex(color)
+  return hex ? { [name]: hex } : undefined
+}
+
+/**
  * 纯函数工具集：不依赖 DOM、IPC 或响应式状态。
  */
 const Tools = {
@@ -118,6 +142,8 @@ const Tools = {
   taskFilename,
   shortTeamName,
   normalizeUserId,
+  toHex,
+  colorVarStyle,
 }
 
 export default Tools

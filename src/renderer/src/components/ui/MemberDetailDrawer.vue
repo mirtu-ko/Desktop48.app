@@ -3,6 +3,7 @@ import type { MemberDetail } from '@renderer/utils/member-merge'
 import { ArrowLeft, ArrowRight, Close, Film, Hide, Link, Star, StarFilled, User, View } from '@element-plus/icons-vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import Constants from '@renderer/utils/constants'
+import { toExperienceLines, toTags } from '@renderer/utils/member-text'
 import Tools from '@renderer/utils/tools'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -27,19 +28,11 @@ const statusMeta = computed(() =>
   STATUS_META[props.member?.status ?? 1] || STATUS_META[1],
 )
 
-/** 队色可能是裸 HEX（接口口径），统一补上 # 再交给 CSS */
-function toHex(color: string | undefined): string {
-  const value = (color || '').trim()
-  if (!value)
-    return ''
-  return value.startsWith('#') ? value : `#${value}`
-}
-
-/** 分区强调色：成员展示在哪个队伍下就用哪个队伍色 */
-const accentColor = computed(() => toHex(props.member?.teamColor) || toHex(props.member?.ringColor))
+/** 队色可能是裸 HEX（接口口径），统一补上 # 再交给 CSS；口径见 utils/tools.ts 的 toHex */
+const accentColor = computed(() => Tools.toHex(props.member?.teamColor) || Tools.toHex(props.member?.ringColor))
 
 /** 头像环色：兼任记录取主队色（与成员卡片同口径），其余取队色 */
-const ringColor = computed(() => toHex(props.member?.ringColor) || toHex(props.member?.teamColor))
+const ringColor = computed(() => Tools.toHex(props.member?.ringColor) || Tools.toHex(props.member?.teamColor))
 
 const themeStyle = computed(() => {
   const style: Record<string, string> = {}
@@ -49,6 +42,9 @@ const themeStyle = computed(() => {
     style['--ring'] = ringColor.value
   return style
 })
+
+/** 头部队伍药丸的队色变量（无队色时不注入，交给 CSS 兜底） */
+const teamBadgeStyle = computed(() => Tools.colorVarStyle('--tb-color', props.member?.teamColor))
 
 /** 成员切换键：兼任记录与本人记录共用 userId，靠 adjunctId 区分，用于重放入场动画 */
 const memberKey = computed(() =>
@@ -85,20 +81,12 @@ const profileItems = computed(() => {
   ].filter(item => item.value)
 })
 
-/** 特长 / 兴趣爱好是自由文本，按常见分隔符拆成药丸标签 */
-const TAG_SPLIT_REGEX = /[,，、;；/|]+/
-
-function toTags(value: string | undefined): string[] {
-  return (value || '').split(TAG_SPLIT_REGEX).map(tag => tag.trim()).filter(Boolean)
-}
-
+/** 特长 / 兴趣爱好是自由文本，按常见分隔符拆成药丸标签；解析口径见 utils/member-text.ts */
 const specialtyTags = computed(() => toTags(props.member?.specialty))
 const hobbyTags = computed(() => toTags(props.member?.hobbies))
 
-/** 经历：接口用 <br> 分行，按 <br>/<br/> 拆成行数组渲染（避免 v-html 引入 XSS） */
-const experienceLines = computed(() =>
-  (props.member?.experience || '').split(/<br\s*\/?>/i).map(line => line.trim()).filter(Boolean),
-)
+/** 经历：接口用 <br> 分行，拆成行数组渲染（避免 v-html 引入 XSS） */
+const experienceLines = computed(() => toExperienceLines(props.member?.experience))
 
 /** 官网独有的补充成员没有口袋 userId：屏蔽与回放入口都不可用 */
 const actionable = computed(() => typeof props.member?.userId === 'number')
@@ -305,7 +293,7 @@ function openPlaybacks() {
                 <span
                   v-if="member.teamName"
                   class="team-badge"
-                  :style="member.teamColor ? { '--tb-color': `#${member.teamColor}` } : undefined"
+                  :style="teamBadgeStyle"
                 >
                   {{ Tools.shortTeamName(member.teamName) }}
                 </span>

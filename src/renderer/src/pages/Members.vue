@@ -1,20 +1,37 @@
 <script setup lang="ts">
+import type { MemberSection } from '@renderer/utils/member-list'
 import type { MemberDetail } from '@renderer/utils/member-merge'
-import { Hide, Star, StarFilled, User, View } from '@element-plus/icons-vue'
+import type { SortKey } from '@renderer/utils/member-sort'
+import { Close, Grid, Menu } from '@element-plus/icons-vue'
+import MemberCard from '@renderer/components/member/MemberCard.vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
 import { useMemberActions } from '@renderer/composables/use-member-actions'
+import { useMemberSections } from '@renderer/composables/use-member-sections'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
-
 import { useMemberTreeStore } from '@renderer/stores/member-tree'
 import Constants from '@renderer/utils/constants'
+import { memberCardKey } from '@renderer/utils/member-list'
 import { buildAdjuncts, mergeMembers } from '@renderer/utils/member-merge'
+import { SORT_OPTIONS } from '@renderer/utils/member-sort'
+import { useEventListener } from '@vueuse/core'
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, ref } from 'vue'
+
+/**
+ * 成员库页面：分团 tab + 搜索 / 排序 / 密度工具条 + 按队伍分区的卡片网格 + 成员详情抽屉。
+ *
+ * 本文件只留「布局与交互」。可复用的部分都已外移：
+ * - 排序规则        → utils/member-sort.ts（纯函数，有单测）
+ * - 命中判定 / 分组  → utils/member-list.ts（纯函数，有单测）
+ * - 分区派生 + 计数  → composables/use-member-sections.ts
+ * - 单个成员卡片     → components/member/MemberCard.vue
+ * - 详情抽屉         → components/ui/MemberDetailDrawer.vue
+ */
 
 /**
  * 顶部 tab：5 个分团 + 末尾「成员库」（全部团体）。
@@ -51,80 +68,70 @@ const { isBlocked, isFollowed, toggleBlockMember, toggleFollowMember } = useMemb
 /** 成员树：全局单例（与回放页筛选器共用同一份，同步完成后由 store 统一作废重拉） */
 const { loadTree } = useMemberTreeStore()
 
-/** 成员状态（starInfo.status）取值见 Constants.MemberStatus（与详情抽屉 / 回放页共用） */
-const { Active: STATUS_ACTIVE, Hiatus: STATUS_HIATUS, Left: STATUS_LEFT } = Constants.MemberStatus
+// ===== 搜索 =====
 
-interface MemberSection {
-  /** 分区标识（团体 + 队伍 / 状态分区名） */
-  key: string
-  title: string
-  /** 队伍徽章（合并时已归一化） */
-  teamBadge: string
-  /** 分区标题主题色：跟随队伍 teamColor；暂休/退团走弱化灰变体 */
-  accent?: string
-  /** 分团官方 logo（snh48.com 的 about-logo-*.png）：队伍徽章缺失时充当标题左侧图标；
-   * 查不到所属团体 logo 的团体（IDFT / 燃烧吧团魂 等）走 `Constants.GroupLogoFallback`，故必有值 */
-  groupLogo: string
-  muted?: boolean
-  members: MemberDetail[]
+const keyword = ref('')
+const searchInputRef = ref<HTMLInputElement>()
+const searchFocused = ref(false)
+
+function clearKeyword() {
+  keyword.value = ''
+  searchInputRef.value?.focus()
 }
 
-/** 按队伍分区：入参已按树的顺序（团体 → teamSort）排好，用 Map 保住首现顺序 */
-function groupByTeam(list: MemberDetail[], withGroup: boolean): MemberSection[] {
-  const sections = new Map<string, MemberSection>()
-  // 队伍徽章缺失时用分团 logo 兜底（表里没有的团体与暂休 / 退团分区一律退 GroupLogoFallback）
-  const groupLogoOf = (member: MemberDetail) =>
-    Constants.GroupTabs.find(item => item.key === String(member.groupId))?.logoPng
-    || Constants.GroupLogoFallback
-  for (const member of list) {
-    const key = `${member.groupName}/${member.teamName}`
-    const existing = sections.get(key)
-    if (existing) {
-      existing.members.push(member)
-      continue
-    }
-    sections.set(key, {
-      key,
-      title: withGroup ? `${member.groupName} · ${member.teamName}` : member.teamName,
-      teamBadge: member.teamBadge,
-      accent: member.teamColor ? `#${member.teamColor}` : '',
-      groupLogo: groupLogoOf(member),
-      members: [member],
-    })
-  }
-  return [...sections.values()]
-}
+// ===== 排序 / 密度 =====
+
+const sortKey = ref<SortKey>('default')
 
 /**
- * 展示分区：
- * - 分团 tab：只列在团成员，按队伍分区
- * - 成员库：全部分团汇总，按「团体 · 队伍」列在团，末尾追加 暂休 / 退团
+ * 卡片密度偏好：纯展示偏好，落在 localStorage 而不是 app-config。
+ * app-config 走主进程 IPC，存的是下载目录 / ffmpeg 这类应用配置；
+ * 为了一个网格列宽多跑一趟 IPC、还要动 common/app-config 的键集合，不划算。
  */
-const sections = computed<MemberSection[]>(() => {
-  const scope = isLibrary.value
-    ? members.value
-    : members.value.filter(member => String(member.groupId) === activeKey.value)
-  const active = groupByTeam(scope.filter(member => member.status === STATUS_ACTIVE), isLibrary.value)
-  if (!isLibrary.value)
-    return active
+const DENSITY_STORAGE_KEY = 'members:density'
+const compact = ref(readDensity())
 
-  const inactiveSections = (status: number, title: string): MemberSection[] => {
-    const list = scope.filter(member => member.status === status)
-    return list.length
-      ? [{ key: title, title, teamBadge: '', groupLogo: Constants.GroupLogoFallback, muted: true, members: list }]
-      : []
+function readDensity(): boolean {
+  try {
+    return localStorage.getItem(DENSITY_STORAGE_KEY) === 'compact'
   }
-  return [...active, ...inactiveSections(STATUS_HIATUS, '暂休'), ...inactiveSections(STATUS_LEFT, '退团')]
+  catch {
+    // 存储不可用（隐私模式等）时按默认密度走
+    return false
+  }
+}
+
+function setCompact(value: boolean) {
+  compact.value = value
+  try {
+    localStorage.setItem(DENSITY_STORAGE_KEY, value ? 'compact' : 'comfortable')
+  }
+  catch {
+    // 写不进去就退化成「本次会话内生效」，不影响功能
+  }
+}
+
+// ===== 分区派生 =====
+
+/** 过滤 → 分组 → 分区内排序 → 计数，规则见 composables/use-member-sections.ts */
+const { normalizedKeyword, sections, activeCount, inactiveCount, memberCount } = useMemberSections({
+  members,
+  activeKey,
+  isLibrary,
+  keyword,
+  sortKey,
 })
 
-/** 在团 / 暂休退团人数（分团 tab 只有前者的值，后者为 0） */
-const activeCount = computed(() =>
-  sections.value.filter(section => !section.muted).reduce((sum, section) => sum + section.members.length, 0),
-)
-const inactiveCount = computed(() =>
-  sections.value.filter(section => section.muted).reduce((sum, section) => sum + section.members.length, 0),
-)
-const memberCount = computed(() => activeCount.value + inactiveCount.value)
+/** 工具条 / 列表末尾共用的计数文案：搜索中改说「命中」，避免和总人数混淆 */
+const countText = computed(() => {
+  if (normalizedKeyword.value)
+    return `命中 ${memberCount.value} 人`
+  return isLibrary.value
+    ? `在团 ${activeCount.value} 人 · 离团 ${inactiveCount.value} 人`
+    : `在团 ${activeCount.value} 人`
+})
+
+const emptyText = computed(() => normalizedKeyword.value ? '没有匹配的成员' : '暂无成员信息')
 
 // 首次/切换后无成员数据时展示骨架；已有数据刷新不整页遮罩
 const showSkeleton = computed(() => loading.value && members.value.length === 0)
@@ -137,7 +144,7 @@ onMounted(() => {
 
 /** 拉取两个数据源并合并（挂载初始化 / 双击 tab / 更新数据库后共用）。
  * 成员树取自 stores/member-tree（同步完成后会自行失效重拉，故这里按缓存优先读取即可）；
- * 兼任成员（starAdjunctInfo，status===1）由 buildAdjuncts 以本人档案为底就地并入其兼任队伍 */
+ * 兼任成员（starAdjunctInfo，status===1）由 buildAdjuncts 以本人档案为底座并入其兼任队伍 */
 async function fetchMembers() {
   loading.value = true
   try {
@@ -174,29 +181,125 @@ async function updateMembers() {
     await fetchMembers()
 }
 
-/** 头像圆环强调色：兼任成员取主队色 ringColor，其余成员取所属队伍色 teamColor；都没有时不注入变量，走 CSS 默认渐变 */
-function avatarAccentStyle(member: MemberDetail) {
-  const color = member.ringColor || member.teamColor
-  return color ? { '--avatar-accent': `#${color}` } : undefined
-}
+// ===== 分区展示派生 =====
 
-/** 卡片 key：兼任记录用兼职档案主键（加前缀，避免数值上与别的 userId 相撞），其余成员用 userId / sid 兜底 */
-function cardKey(member: MemberDetail) {
-  if (member.adjunctId !== undefined)
-    return `adjunct-${member.adjunctId}`
-  return member.userId ?? member.sid
+/** 分区内联变量：队色贯穿分区底、标题药丸、人数徽章 */
+function sectionStyle(section: MemberSection) {
+  return section.accent ? { '--sec-accent': section.accent } : undefined
 }
 
 /** 分区标题左侧图标：优先队伍徽章，退分团官方 logoPng（groupLogo 有 GroupLogoFallback 兜底，恒非空） */
 function badgeSrc(section: MemberSection) {
   return section.teamBadge || section.groupLogo
 }
+
+// ===== 快捷键：/ 聚焦搜索，Esc 清空并失焦 =====
+// 页面被 keep-alive 缓存，失活实例不应再响应按键（同 FloatingTabBar 的处理）
+const keyboardEnabled = ref(true)
+
+onActivated(() => {
+  keyboardEnabled.value = true
+})
+onDeactivated(() => {
+  keyboardEnabled.value = false
+})
+
+function onKeydown(event: KeyboardEvent) {
+  if (!keyboardEnabled.value)
+    return
+  // 抽屉 / 对话框打开时不抢按键（Esc 归弹层）
+  if (document.querySelector('.el-overlay:not([style*="display: none"])'))
+    return
+
+  const target = event.target as HTMLElement | null
+  const typing = !!target && (target.tagName === 'INPUT' || target.isContentEditable)
+
+  if (event.key === '/' && !typing) {
+    event.preventDefault()
+    searchInputRef.value?.focus()
+  }
+  else if (event.key === 'Escape' && typing && keyword.value) {
+    keyword.value = ''
+    searchInputRef.value?.blur()
+  }
+}
+
+useEventListener(window, 'keydown', onKeydown)
 </script>
 
 <template>
   <div class="page-root">
     <!-- 左上角浮动分团切换：5 个分团 + 成员库；双击当前 tab 刷新列表 -->
     <FloatingTabBar :tabs="MEMBER_TABS" :active="activeKey" @change="changeTab" @refresh="fetchMembers" />
+
+    <!-- 工具条：搜索 / 排序 / 密度 / 计数。放在滚动区之外，滚列表时不会把搜索框滚走 -->
+    <div class="member-toolbar">
+      <label class="search-box" :class="{ 'is-focused': searchFocused }">
+        <MediaIcon name="search" :size="14" />
+        <input
+          ref="searchInputRef"
+          v-model="keyword"
+          class="search-input"
+          type="text"
+          placeholder="搜索姓名 / 昵称 / 拼音缩写"
+          @focus="searchFocused = true"
+          @blur="searchFocused = false"
+        >
+        <button
+          v-if="keyword"
+          class="search-clear"
+          type="button"
+          title="清空搜索（Esc）"
+          @click="clearKeyword"
+        >
+          <el-icon :size="13">
+            <Close />
+          </el-icon>
+        </button>
+      </label>
+
+      <div class="segmented">
+        <button
+          v-for="option in SORT_OPTIONS"
+          :key="option.key"
+          class="segmented__item"
+          :class="{ 'is-active': sortKey === option.key }"
+          :title="option.title"
+          type="button"
+          @click="sortKey = option.key"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+
+      <div class="segmented segmented--icon">
+        <button
+          class="segmented__item"
+          :class="{ 'is-active': !compact }"
+          type="button"
+          title="大卡"
+          @click="setCompact(false)"
+        >
+          <el-icon :size="14">
+            <Grid />
+          </el-icon>
+        </button>
+        <button
+          class="segmented__item"
+          :class="{ 'is-active': compact }"
+          type="button"
+          title="紧凑"
+          @click="setCompact(true)"
+        >
+          <el-icon :size="14">
+            <Menu />
+          </el-icon>
+        </button>
+      </div>
+
+      <span class="toolbar-count">{{ countText }}</span>
+    </div>
+
     <el-scrollbar class="scrollbar-wrapper">
       <CardSkeletonGrid
         v-if="showSkeleton"
@@ -206,10 +309,17 @@ function badgeSrc(section: MemberSection) {
         gap="6px"
         aspect-ratio="1"
         media-radius="50%"
-        :line-widths="[68]"
+        :line-widths="[68, 44]"
       />
       <div v-else class="members-container">
-        <section v-for="section in sections" :key="section.key" class="group-section">
+        <!-- 分区：一层极淡的队色底 + 同色描边，让每支队伍自成一块，整页不再是一片白 -->
+        <section
+          v-for="section in sections"
+          :key="section.key"
+          class="group-section"
+          :class="{ 'is-muted': section.muted }"
+          :style="sectionStyle(section)"
+        >
           <h2 class="team-title">
             <!-- 徽章盒子固定尺寸，保证各分区标题列起点一致 -->
             <span class="team-badge-box">
@@ -223,87 +333,46 @@ function badgeSrc(section: MemberSection) {
             <span
               class="section-title"
               :class="{ 'section-title--muted': section.muted }"
-              :style="section.accent ? { '--st-accent': section.accent } : undefined"
             >
-              {{ `${section.title} (${section.members.length})` }}
+              {{ section.title }}
+              <span class="team-count">{{ section.members.length }}</span>
             </span>
           </h2>
-          <div class="member-list">
-            <!-- key 见 cardKey：兼任记录走档案主键，官网独有的补充成员走 sid 兜底 -->
-            <div
-              v-for="member in section.members"
-              :key="cardKey(member)"
-              class="member-card"
-              :class="{ 'is-blocked': !!member.userId && isBlocked(member.userId), 'is-followed': !!member.userId && isFollowed(member.userId) }"
-              @click="selectedMember = member"
-            >
-              <div
-                class="avatar-wrap"
-                :style="avatarAccentStyle(member)"
-              >
-                <el-image class="avatar" :src="member.avatar" fit="cover" lazy>
-                  <template #placeholder>
-                    <div class="media-ph" />
-                  </template>
-                  <template #error>
-                    <div class="media-ph">
-                      <el-icon :size="30">
-                        <User />
-                      </el-icon>
-                    </div>
-                  </template>
-                </el-image>
 
-                <!-- 排名徽章：总选排名非 0 的成员在头像左上角显示皇冠，数字内嵌皇冠中 -->
-                <span v-if="member.ranking" class="rank-crown">
-                  <MediaIcon name="crownFilled" :size="30" />
-                  <span class="rank-crown__num">{{ member.ranking }}</span>
-                </span>
-              </div>
-
-              <div class="member-meta">
-                <p class="member-name ellipsis" :title="member.realName">
-                  {{ member.realName }}
-                </p>
-              </div>
-              <!-- 图标即状态：空心 = 未启用（悬浮才出现），实心 = 已启用（语义色实底、常驻）；两者互斥 -->
-              <template v-if="member.userId">
-                <button
-                  class="quick-follow"
-                  :class="{ 'is-on': isFollowed(member.userId) }"
-                  :title="isFollowed(member.userId) ? '取消关注' : '关注 TA，直播列表优先展示'"
-                  @click.stop="toggleFollowMember(member)"
-                >
-                  <el-icon :size="14">
-                    <StarFilled v-if="isFollowed(member.userId)" />
-                    <Star v-else />
-                  </el-icon>
-                </button>
-                <button
-                  class="quick-block"
-                  :class="{ 'is-on': isBlocked(member.userId) }"
-                  :title="isBlocked(member.userId) ? '解除屏蔽' : '屏蔽 TA 的直播与回放'"
-                  @click.stop="toggleBlockMember(member)"
-                >
-                  <el-icon :size="14">
-                    <Hide v-if="isBlocked(member.userId)" />
-                    <View v-else />
-                  </el-icon>
-                </button>
-              </template>
-            </div>
-          </div>
+          <!-- 卡片列表：TransitionGroup 负责排序 / 密度 / 搜索变化时的 FLIP 位移与错峰入场。
+               过渡类（.card-*）留在本文件的 scoped 样式里 —— 子组件的根节点会同时带上
+               父级的 scope 属性，所以这些类能落到 MemberCard 的根元素上 -->
+          <TransitionGroup name="card" tag="div" class="member-list" :class="{ 'is-compact': compact }">
+            <!-- key 见 memberCardKey：兼任记录走档案主键，官网独有的补充成员走 sid 兜底 -->
+            <MemberCard
+              v-for="(member, index) in section.members"
+              :key="memberCardKey(member)"
+              :member="member"
+              :index="index"
+              :compact="compact"
+              :keyword="keyword"
+              :blocked="!!member.userId && isBlocked(member.userId)"
+              :followed="!!member.userId && isFollowed(member.userId)"
+              @select="selectedMember = member"
+              @toggle-follow="toggleFollowMember"
+              @toggle-block="toggleBlockMember"
+            />
+          </TransitionGroup>
         </section>
 
         <el-empty
           v-if="!loading && memberCount === 0"
           class="page-empty"
           :image-size="120"
-          description="暂无成员信息"
-        />
+          :description="emptyText"
+        >
+          <el-button v-if="normalizedKeyword" type="primary" @click="clearKeyword">
+            清空搜索
+          </el-button>
+        </el-empty>
       </div>
       <div v-if="memberCount > 0" class="list-end">
-        {{ isLibrary ? `在团共 ${activeCount} 人，离团 ${inactiveCount} 人` : `在团共 ${activeCount} 人` }}
+        {{ countText }}
       </div>
     </el-scrollbar>
 
@@ -329,50 +398,159 @@ function badgeSrc(section: MemberSection) {
 </template>
 
 <style scoped lang="scss">
-/* 页面骨架（相对定位 + 裁剪）见全局 .page-root；
- * 滚动区给 Dock 的底部预留同样由全局 .page-root .el-scrollbar__view 统一提供 */
-
-.members-container {
-  /* 顶部留出左上角浮动切换器的空间（--tabbar-offset-top）；底留卡片悬停上浮与阴影的空间 */
-  padding: var(--page-pad);
+/* 页面骨架：全局 .page-root 给了相对定位 + 裁剪，这里改成纵向两段
+ * （常驻工具条 + 滚动区），浮动 tab 栏 / 工具条仍是绝对定位，不参与这两段 */
+.page-root {
+  display: flex;
+  flex-direction: column;
 }
 
-/* 分区标题：队伍徽章图标居左、标题居右的水平布局；
- * 徽章盒子固定尺寸、始终占位（无徽章分区标题列起点保持一致） */
-.team-title {
+/* ===== 工具条 ===== */
+.member-toolbar {
+  flex: none;
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 10px;
   align-items: center;
-  margin: 18px 4px 6px;
+  /* 顶部让开左上角浮动切换器（--tabbar-offset-top） */
+  margin-top: var(--tabbar-offset-top);
+  padding: 0 16px 10px;
+}
 
-  /* 统一尺寸的徽章盒子：图标等比缩放入内（图标恒有值，见 badgeSrc / GroupLogoFallback） */
-  .team-badge-box {
-    flex: none;
-    display: flex;
+.search-box {
+  flex: 1 1 200px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  max-width: 320px;
+  height: 34px;
+  padding: 0 10px 0 12px;
+  border-radius: var(--radius-pill);
+  color: var(--el-text-color-placeholder);
+  background: var(--el-bg-color);
+  box-shadow: inset 0 0 0 1px var(--el-border-color-light);
+  cursor: text;
+  transition:
+    box-shadow 0.2s ease,
+    background-color 0.2s ease;
+
+  /* 聚焦反馈走自绘描边（全局已隐藏 outline） */
+  &.is-focused {
+    color: var(--brand-primary);
+    box-shadow:
+      inset 0 0 0 1px rgba(var(--brand-rgb), 0.55),
+      0 0 0 3px rgba(var(--brand-rgb), 0.12);
+  }
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+  background: transparent;
+
+  &::placeholder {
+    color: var(--el-text-color-placeholder);
+  }
+}
+
+.search-clear {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+
+  &:hover {
+    color: #fff;
+    background: var(--el-color-danger);
+  }
+}
+
+/* 分段控件：排序 / 密度共用 */
+.segmented {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--el-bg-color);
+  box-shadow: inset 0 0 0 1px var(--el-border-color-light);
+
+  &--icon .segmented__item {
+    width: 30px;
+    padding: 0;
+  }
+
+  &__item {
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 54px;
-    height: 54px;
+    height: 26px;
+    padding: 0 12px;
+    border: none;
+    border-radius: var(--radius-pill);
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--el-text-color-regular);
+    background: transparent;
+    cursor: pointer;
+    transition:
+      color 0.18s ease,
+      background-color 0.18s ease,
+      box-shadow 0.18s ease;
 
-    .team-badge-img {
-      max-width: 100%;
-      max-height: 100%;
-      width: auto;
-      height: auto;
-      object-fit: contain;
+    &:hover {
+      color: var(--brand-primary-dark);
+      background: rgba(var(--brand-rgb), 0.1);
+    }
+
+    &.is-active {
+      color: #fff;
+      font-weight: 600;
+      background: var(--gradient-brand);
+      box-shadow: var(--shadow-glow);
     }
   }
+}
 
-  /* 复用全局分区标题：撑满剩余宽度以展示右侧渐隐细线 */
-  .section-title {
-    flex: 1;
-    min-width: 0;
-    margin: 0;
-  }
+.toolbar-count {
+  flex: none;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 滚动区 ===== */
+.scrollbar-wrapper {
+  flex: 1;
+  min-height: 0;
+  /* 全局 .scrollbar-wrapper 是 height:100%，在纵向 flex 里会溢出，改由 flex 决定高度 */
+  height: auto;
+}
+
+.members-container {
+  /* 顶部留白由工具条承担，这里只留内容间距；底部留卡片悬停上浮与阴影 */
+  padding: 6px 16px 8px;
 }
 
 .members-skeleton {
-  padding: var(--page-pad);
+  padding: 6px 16px 8px;
 
   /* 骨架与卡片同构（透明底、92px 圆头像、文案行居中），加载完成时不跳版 */
   :deep(.skeleton-card) {
@@ -393,225 +571,134 @@ function badgeSrc(section: MemberSection) {
   }
 }
 
+/* ===== 分区：队色底 + 同色描边 =====
+ * 底色平铺：标题条比它深一档当分区头，平铺时两者的分界最干净 */
+.group-section {
+  --sec-accent: var(--brand-primary);
+
+  padding: 10px 14px 14px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--sec-accent) 5%, var(--el-bg-color));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sec-accent) 14%, transparent);
+
+  & + .group-section {
+    margin-top: 14px;
+  }
+
+  /* 暂休 / 退团：没有队伍色，退成中性灰底，不与在团队伍抢注意力 */
+  &.is-muted {
+    --sec-accent: var(--el-text-color-secondary);
+
+    background: var(--el-fill-color-lighter);
+    box-shadow: inset 0 0 0 1px var(--el-border-color-lighter);
+  }
+}
+
+/* 分区标题：队伍徽章 + 队名 + 人数徽章 + 队色渐隐线，兼作分区的头部色带 */
+.team-title {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  /* 负外边距抵消分区的内边距：标题条铺满分区整宽 */
+  margin: -10px -14px 10px;
+  padding: 10px 16px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  /* 比分区底色深一档，形成分区头 */
+  background: color-mix(in srgb, var(--sec-accent) 11%, var(--el-bg-color));
+  /* 描边跟着标题走一圈，否则分区外框的顶边会被标题条盖掉、只余下三边 */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sec-accent) 14%, transparent);
+
+  /* 统一尺寸的徽章盒子：图标等比缩放入内（图标恒有值，见 badgeSrc / GroupLogoFallback） */
+  .team-badge-box {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+
+    .team-badge-img {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+    }
+  }
+
+  /* 复用全局分区标题（队色药丸 + 渐隐细线），撑满剩余宽度 */
+  .section-title {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+  }
+}
+
+/* 暂休 / 退团分区：标题条跟随分区退成中性灰 */
+.group-section.is-muted .team-title {
+  background: var(--el-fill-color-light);
+  box-shadow: inset 0 0 0 1px var(--el-border-color-lighter);
+}
+
+.team-count {
+  flex: none;
+  padding: 1px 9px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--sec-accent) 62%, #24223a);
+  background: color-mix(in srgb, var(--sec-accent) 16%, var(--el-bg-color));
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 卡片列表网格（卡片自身的样式见 components/member/MemberCard.vue） ===== */
 .member-list {
   display: grid;
   gap: 6px;
   grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+
+  /* 紧凑档：列更窄；头像与文案的收小由 MemberCard 的 compact prop 负责 */
+  &.is-compact {
+    gap: 4px;
+    grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  }
 }
 
-.member-card {
-  /* 无实底卡片皮肤：透明底，仅保留功能性布局与 hover 动效；可点击 */
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 10px 7px 8px;
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  cursor: pointer;
+/* ===== 列表过渡：排序 / 密度 / 搜索变化时卡片平滑归位 =====
+ * 这些类由 TransitionGroup 打到 MemberCard 的根节点上；子组件根节点会同时带上
+ * 父级的 scope 属性，所以放在本文件的 scoped 样式里依然命中 */
+.card-enter-active {
+  transition:
+    opacity 0.32s ease,
+    transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  /* 错峰入场：--i 由卡片内联注入，封顶 16 免得长列表要等太久 */
+  transition-delay: calc(var(--i, 0) * 14ms);
+}
 
-  /* 头像圆形容器：渐变光环 + 顶部高光；hover 轻微放大 */
-  .avatar-wrap {
-    position: relative;
-    width: 92px;
-    aspect-ratio: 1;
-    border-radius: 50%;
-    padding: 3px;
-    background: radial-gradient(circle at 30% 20%, #fff, rgba(255, 255, 255, 0));
-    transition: transform 0.25s ease;
-    transform-origin: center;
+.card-enter-from {
+  opacity: 0;
+  transform: translateY(10px) scale(0.96);
+}
 
-    /* hover：头像略微放大 */
-    &:hover {
-      transform: scale(1.16);
-    }
+/* FLIP：位置变化的卡片滑到新位置，而不是瞬移 */
+.card-move {
+  transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+}
 
-    &::before {
-      /* 主题色渐变光环（跟随队伍强调色；无强调色时回退为蓝紫渐变） */
-      content: '';
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      padding: 2px;
-      background: linear-gradient(
-        135deg,
-        var(--avatar-accent, #4f6ef7),
-        var(--avatar-accent, #a94ff7) 60%,
-        var(--avatar-accent, #50c8ff)
-      );
-      -webkit-mask:
-        linear-gradient(#000 0 0) content-box,
-        linear-gradient(#000 0 0);
-      mask:
-        linear-gradient(#000 0 0) content-box,
-        linear-gradient(#000 0 0);
-      -webkit-mask-composite: xor;
-      mask-composite: exclude;
-      opacity: 0.85;
-    }
-
-    &::after {
-      /* 顶部高光：营造玻璃质感 */
-      content: '';
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      background: linear-gradient(160deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 45%);
-      pointer-events: none;
-    }
-
-    /* 圆形头像本身 */
-    .avatar {
-      display: block;
-      width: 100%;
-      aspect-ratio: 1;
-      border-radius: 50%;
-      overflow: hidden;
-      background: var(--el-fill-color-light);
-    }
-  }
-
-  /* 排名皇冠徽章：头像左上角，队色皇冠（MediaIcon 实心壳）+ 内嵌数字；屏蔽后隐藏 */
-  .rank-crown {
-    position: absolute;
-    top: 0px;
-    left: 0px;
-    z-index: 3;
-    display: inline-flex;
-    pointer-events: none;
-    transition: opacity 0.15s ease;
-
-    /* 队色皇冠：沿用 avatar-wrap 注入的 --avatar-accent；无队色回退金色 */
-    .media-icon {
-      color: var(--avatar-accent, var(--color-follow));
-      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
-    }
-
-    /* 排名数字：叠加在皇冠图形内部偏下的位置 */
-    &__num {
-      position: absolute;
-      left: 50%;
-      bottom: 8px;
-      transform: translateX(-50%);
-      padding: 0 1px;
-      border-radius: var(--radius-xs);
-      font-size: 11px;
-      font-weight: 800;
-      line-height: 1.3;
-      text-align: center;
-      color: #fff;
-      text-shadow: 0 0 2px color-mix(in srgb, var(--avatar-accent, var(--color-follow)) 70%, transparent);
-    }
-  }
-
-  .member-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    align-items: center;
-    margin-top: 14px;
-    padding: 0 4px;
-    text-align: center;
-
-    p {
-      margin: 0;
-    }
-  }
-
-  .member-name {
-    width: 100%;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--el-text-color-primary);
-  }
-
-  /* 关注 / 屏蔽钮：空心 = 未启用（悬浮出现），实心 = 已启用（语义色实底 + 白图标，常驻） */
-  .quick-follow,
-  .quick-block {
-    position: absolute;
-    right: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    border: none;
-    border-radius: 50%;
-    font-family: inherit;
-    color: var(--el-text-color-regular);
-    background: rgba(255, 255, 255, 0.88);
-    box-shadow: var(--shadow-sm);
-    cursor: pointer;
-    opacity: 0;
-    transform: scale(0.9);
-    transition:
-      opacity 0.15s ease,
-      transform 0.15s ease,
-      color 0.15s ease,
-      background-color 0.15s ease;
-  }
-
-  /* 关注在上、屏蔽在下：两枚钮错开 32px，互不遮挡 */
-  .quick-follow {
-    top: 12px;
-  }
-
-  .quick-block {
-    top: 44px;
-  }
-
-  &:hover .quick-follow,
-  &:hover .quick-block {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  /* 已启用：实心常驻（不悬浮也看得见），图标转白压在语义色实底上 */
-  .quick-follow.is-on,
-  .quick-block.is-on {
-    color: #fff;
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  .quick-follow.is-on {
-    background: var(--color-follow);
-  }
-
-  .quick-block.is-on {
-    background: var(--el-color-danger);
-  }
-
-  /* 单钮悬浮：再放大一档，提示可点（未启用时图标保持灰色空心，避免与已启用混淆） */
-  .quick-follow:hover,
-  .quick-block:hover {
-    transform: scale(1.08);
-  }
-
-  /* 已屏蔽：头像去色弱化，排名装饰隐藏 */
-  &.is-blocked {
-    .avatar {
-      filter: grayscale(1);
-      opacity: 0.55;
-    }
-
-    .rank-crown {
-      display: none;
-    }
-  }
-
-  /* 已关注：头像使用单层金色光环，配合右上角金星钮识别状态 */
-  &.is-followed .avatar-wrap::before {
-    background: linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--color-follow) 75%, #fff),
-      var(--color-follow) 55%,
-      color-mix(in srgb, var(--color-follow) 85%, #ffd257)
-    );
-  }
+/* 离场不做过场：搜索过滤时可能整屏一起消失，留在网格里会拖出一片幽灵 */
+.card-leave-active {
+  transition: none;
 }
 
 /* 空态：样式见全局 .page-empty（竖直留白，视觉上与浮动切换器保持对称） */
+
+/* 系统「减少动态效果」下关掉本页的装饰性动画（卡片自身的见 MemberCard.vue） */
+@media (prefers-reduced-motion: reduce) {
+  .card-enter-active,
+  .card-move,
+  .segmented__item {
+    transition: none;
+  }
+}
 </style>
