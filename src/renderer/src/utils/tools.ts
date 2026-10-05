@@ -81,10 +81,13 @@ function streamPathHandle(streamPath: string, timestamp: number) {
  * 下载/录制任务文件名：成员名 + 任务开始时间（yyyyMMddhhmm）+ 扩展名。
  * separator 为成员名与时间戳之间的分隔符（录制为空格、回放下载紧连，保持既有命名）；
  * 同场直播同一时刻只允许一个任务，文件名保持分钟精度即可，
- * 跨任务的同名冲突由主进程 Start 前的冲突检测兜底（自动加序号）
+ * 跨任务的同名冲突由主进程 Start 前的冲突检测兜底（自动加序号）。
+ * 录制名取自直播标题，可能含文件名非法字符（如「4/8班联合公演」的斜杠，
+ * 主进程按路径穿越防御会拒绝），这里统一替换成下划线
  */
 function taskFilename(realName: string, startTime: number, ext: string, separator = ''): string {
-  return `${realName}${separator}${dayjs(startTime).format('YYYYMMDDHHmm')}.${ext}`
+  const safeName = realName.replace(/[/\\:*?"<>|]/g, '_')
+  return `${safeName}${separator}${dayjs(startTime).format('YYYYMMDDHHmm')}.${ext}`
 }
 
 /**

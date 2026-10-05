@@ -39,6 +39,12 @@ describe('tools.taskFilename', () => {
     expect(Tools.taskFilename('陈观逸', minuteTs, 'mp4')).toBe('陈观逸202609050203.mp4')
     expect(Tools.taskFilename('陈观逸', minuteTs, 'flv', ' ')).toBe('陈观逸 202609050203.flv')
   })
+
+  it('标题里的文件名非法字符替换成下划线（主进程按路径穿越防御会拒绝斜杠等）', () => {
+    const minuteTs = new Date(2026, 8, 5, 2, 3).getTime()
+    expect(Tools.taskFilename('4/8班联合公演', minuteTs, 'flv', ' ')).toBe('4_8班联合公演 202609050203.flv')
+    expect(Tools.taskFilename('a\\b:c*d?e"f<g>h|i', minuteTs, 'mp4')).toBe('a_b_c_d_e_f_g_h_i202609050203.mp4')
+  })
 })
 
 describe('tools.pictureUrls / sourceUrl（图片路径归一化）', () => {
