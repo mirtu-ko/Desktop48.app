@@ -46,7 +46,8 @@
    * 10-29  播放器浮层（相对 video-box 定位）：loading/封面层(10) < 旋转提示(25)
    *        < MiniControls 控制条(20) ≈ player-actions 悬浮按钮(30)
    * 30-89  页内浮动件：弹幕侧栏开关(30)、页内磨砂浮动 Dock/TabBar(6 属容器内微层)
-   * 90-99  全局固定浮层：FloatAudioBar 迷你播放条(99)、BackTopButton 回顶按钮(95)
+   * 90-99  全局固定浮层：FloatAudioBar 迷你播放条(99)、BackTopButton 回顶按钮(95)、
+   *        DownloadsEntry 下载入口(96)
    * 0-2    AppDock 内部微层（局部堆叠，不出 Dock）：后仰的玻璃板 .dock-board(0)，
    *        含板内氛围光 < 激活指示条(1) < 导航项(2)
    * 100    AppDock 底部导航（最高固定层）
@@ -281,7 +282,7 @@ body,
   );
 }
 
-/* 磨砂玻璃卡片（设置 / 下载等页面的内容卡片统一外观） */
+/* 磨砂玻璃卡片（设置页等内容卡片统一外观） */
 .glass-card {
   border: 1px solid color-mix(in srgb, var(--el-border-color) 55%, #ffffff);
   background: color-mix(in srgb, var(--el-bg-color) 88%, transparent);
@@ -393,7 +394,7 @@ body,
 }
 
 /* 列表页滚动区统一给底部 Dock 留出空间。
- * 用 `.page-root` 后代限定而非全局：非列表页（下载 / 设置）直接以 el-scrollbar 为根、
+ * 用 `.page-root` 后代限定而非全局：非列表页（设置）直接以 el-scrollbar 为根、
  * 内容区自带 --dock-reserve 内边距，重复给会变成双份留白 */
 .page-root .el-scrollbar__view {
   padding-bottom: var(--dock-reserve);
@@ -537,8 +538,8 @@ body,
   }
 }
 
-/* ===== 详情卡片共用（MemberDetailCard / AlbumDetailCard） =====
- * 两张卡只在「左栏放什么」上不同：外壳、卡面、关闭钮、滚动列一律用这里的定义。
+/* ===== 详情卡片共用（MemberDetailCard / AlbumDetailCard / DownloadsCard） =====
+ * 三张卡只在「左右栏放什么」上不同：外壳、卡面、关闭钮、滚动列一律用这里的定义。
  * 差异化走变量注入 —— --accent 是卡面主题色（投影跟着它走），
  * --detail-close-bg / --detail-close-ink 是关闭钮的底色与图标色（按所在底色的深浅给） */
 
@@ -667,7 +668,7 @@ body,
   white-space: nowrap;
 }
 
-/* ===== 主题色渐变图标磁贴（设置行 / 下载分组头等共用） =====
+/* ===== 主题色渐变图标磁贴（设置行 / 下载中心等共用） =====
  * 深色底白字款：颜色由 --tile-color 注入，尺寸/圆角/图标字号按需覆写 */
 .icon-tile {
   flex: none;

@@ -42,7 +42,6 @@ const Constants = {
     SHOWS: '/shows',
     ALBUMS: '/albums',
     MEMBERS: '/members',
-    DOWNLOADS: '/downloads',
     SETTING: '/setting',
   } as const,
 

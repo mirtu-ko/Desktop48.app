@@ -59,11 +59,12 @@ watch(() => route.path, () => nextTick(syncFromContainer))
 </template>
 
 <style scoped lang="scss">
-/* 右下角空闲（FloatAudioBar 左下、AppDock 居中），直接 fixed 定位 */
+/* 右下角常驻件自上而下排：回顶在上、下载入口在下（见 DownloadsEntry）。
+ * right 取 24px 让 32px 的回顶钮与 44px 的下载入口圆心对齐 */
 .back-top {
   position: fixed;
-  right: 18px;
-  bottom: 26px;
+  right: 24px;
+  bottom: 80px;
   z-index: 95;
 }
 
