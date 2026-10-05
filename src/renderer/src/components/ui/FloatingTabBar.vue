@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { useEventListener } from '@vueuse/core'
-import { computed, nextTick, onActivated, onDeactivated, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 export interface FloatingTabItem {
   label: string
@@ -112,47 +111,6 @@ function dblClick(tab: FloatingTabItem) {
   if (tab.key === props.active)
     emit('refresh')
 }
-
-// ===== 键盘左右方向键切换 tab =====
-// 页面被 keep-alive 缓存，失活实例不应再响应按键
-const keyboardEnabled = ref(true)
-
-/** 焦点在输入控件、浮窗播放器内，或有弹层（对话框/抽屉）打开时，让位于原生/弹层交互 */
-function shouldIgnoreKey(event: KeyboardEvent) {
-  if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey)
-    return true
-  const target = event.target as HTMLElement | null
-  if (target?.isContentEditable)
-    return true
-  if (target && /^(?:INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
-    return true
-  // 迷你窗播放器自身用左右键调进度，焦点在窗内时不抢按键
-  if (target?.closest('.fp-window'))
-    return true
-  return !!document.querySelector('.el-overlay:not([style*="display: none"])')
-}
-
-function onKeydown(event: KeyboardEvent) {
-  if (!keyboardEnabled.value)
-    return
-  const step = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0
-  if (!step || shouldIgnoreKey(event))
-    return
-  const index = props.tabs.findIndex(tab => tab.key === props.active)
-  const next = props.tabs[index + step]
-  if (index < 0 || !next)
-    return
-  event.preventDefault()
-  emit('change', next.key)
-}
-
-useEventListener(window, 'keydown', onKeydown)
-onActivated(() => {
-  keyboardEnabled.value = true
-})
-onDeactivated(() => {
-  keyboardEnabled.value = false
-})
 </script>
 
 <template>

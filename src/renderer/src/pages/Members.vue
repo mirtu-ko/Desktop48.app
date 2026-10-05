@@ -7,7 +7,7 @@ import MemberCard from '@renderer/components/member/MemberCard.vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
-import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
+import MemberDetailCard from '@renderer/components/ui/MemberDetailCard.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
 import { useMemberActions } from '@renderer/composables/use-member-actions'
 import { useMemberSections } from '@renderer/composables/use-member-sections'
@@ -119,6 +119,31 @@ const emptyText = computed(() => normalizedKeyword.value ? '没有匹配的成�
 // 首次/切换后无成员数据时展示骨架；已有数据刷新不整页遮罩
 const showSkeleton = computed(() => loading.value && members.value.length === 0)
 
+// ===== 详情卡片的 ↑ / ↓ 切换 =====
+
+/** 按当前可见顺序（分区顺序 + 分区内排序）铺平成一条链，切成员不跳出当前 tab / 搜索结果 */
+const visibleMembers = computed(() => sections.value.flatMap(section => section.members))
+
+/** 用 memberCardKey 而非 userId 定位：兼任记录与本人共用 userId，只有它能区分两张卡 */
+const selectedIndex = computed(() => {
+  const current = selectedMember.value
+  if (!current)
+    return -1
+  const key = memberCardKey(current)
+  return visibleMembers.value.findIndex(member => memberCardKey(member) === key)
+})
+
+const hasPrevMember = computed(() => selectedIndex.value > 0)
+const hasNextMember = computed(() =>
+  selectedIndex.value >= 0 && selectedIndex.value < visibleMembers.value.length - 1,
+)
+
+function stepMember(delta: number) {
+  const next = visibleMembers.value[selectedIndex.value + delta]
+  if (next)
+    selectedMember.value = next
+}
+
 onMounted(() => {
   fetchMembers()
   refreshBlockedMembers()
@@ -176,7 +201,7 @@ function badgeSrc(section: MemberSection) {
 }
 
 // ===== 快捷键：/ 聚焦搜索，Esc 清空并失焦 =====
-// 页面被 keep-alive 缓存，失活实例不应再响应按键（同 FloatingTabBar 的处理）
+// 页面被 keep-alive 缓存，失活实例不应再响应按键
 const keyboardEnabled = ref(true)
 
 onActivated(() => {
@@ -365,12 +390,16 @@ useEventListener(window, 'keydown', onKeydown)
       <span class="dock-note">更新成员数据库</span>
     </FloatingRefreshDock>
 
-    <!-- 成员详情抽屉：两个数据源合并后的同一个详情页 -->
-    <MemberDetailDrawer
+    <!-- 成员详情卡片：两个数据源合并后的同一个详情页 -->
+    <MemberDetailCard
       :member="selectedMember"
       :blocked="!!selectedMember?.userId && isBlocked(selectedMember.userId)"
       :followed="!!selectedMember?.userId && isFollowed(selectedMember.userId)"
+      :has-prev="hasPrevMember"
+      :has-next="hasNextMember"
       @close="selectedMember = null"
+      @prev="stepMember(-1)"
+      @next="stepMember(1)"
       @toggle-block="toggleBlockMember"
       @toggle-follow="toggleFollowMember"
     />

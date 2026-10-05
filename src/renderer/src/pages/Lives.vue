@@ -3,9 +3,9 @@ import type { LiveListItem } from '@renderer/services/api-types'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
 import LiveTabBar from '@renderer/components/ui/LiveTabBar.vue'
-import MemberDetailDrawer from '@renderer/components/ui/MemberDetailDrawer.vue'
+import MemberDetailCard from '@renderer/components/ui/MemberDetailCard.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
-import { useMemberDetailDrawer } from '@renderer/composables/use-member-detail-drawer'
+import { useMemberDetail } from '@renderer/composables/use-member-detail'
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
 import Apis from '@renderer/services/apis'
 import EventBus from '@renderer/services/event-bus'
@@ -24,16 +24,16 @@ const { openLive } = useFloatPlayersStore()
 // 页面被 keep-alive 缓存（只挂载一次），跨页同步靠这份共享状态而不是重新挂载
 const { followedMembers, refreshFollowedMembers, isFollowed } = useFollowedMembersStore()
 
-// 成员详情抽屉：点卡片上的成员名打开，详情按 userId 反查（数据源见 stores/member-directory）
+// 成员详情卡片：点卡片上的成员名打开，详情按 userId 反查（数据源见 stores/member-directory）
 const {
   selectedMember,
-  drawerFollowed,
-  drawerBlocked,
+  detailFollowed,
+  detailBlocked,
   openMemberDetail,
   closeMemberDetail,
   toggleFollowMember,
   toggleBlockMember,
-} = useMemberDetailDrawer()
+} = useMemberDetail()
 
 // 列表滚动容器：绑给模板，并交给 usePagedLiveList 做回顶与触底判定
 const liveScrollRef = ref<any>(null)
@@ -183,11 +183,11 @@ onUnmounted(() => {
       </FloatingRefreshDock>
     </div>
 
-    <!-- 成员详情抽屉：与成员页共用同一份合并详情（点卡片上的成员名打开） -->
-    <MemberDetailDrawer
+    <!-- 成员详情卡片：与成员页共用同一份合并详情（点卡片上的成员名打开） -->
+    <MemberDetailCard
       :member="selectedMember"
-      :blocked="drawerBlocked"
-      :followed="drawerFollowed"
+      :blocked="detailBlocked"
+      :followed="detailFollowed"
       @close="closeMemberDetail"
       @toggle-block="toggleBlockMember"
       @toggle-follow="toggleFollowMember"
