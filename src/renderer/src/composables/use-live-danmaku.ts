@@ -66,12 +66,12 @@ export function useLiveDanmaku(options: {
       debugLog(
         'live',
         `B站弹幕: 收到 ${batch.items.length} 条（累计 ${receivedCount}，可见 ${danmakuItems.value.length}）`,
-        batch.items.map(item => `${item.username}: ${item.text}`),
+        batch.items.map(item => `${item.username}: ${item.text}${item.emots ? ` [emots×${Object.keys(item.emots).length}]` : ''}`),
       )
       // 整批共用同一投放时刻（批内先后由 push 顺序保证）；补偿加在这里：画面慢几秒就推后几秒
       const showAt = nowSeconds() + options.delaySeconds()
       for (const item of batch.items)
-        push(item.text, item.username, showAt)
+        push(item.text, item.username, showAt, item.emots)
     })
     resumeOverlay()
 

@@ -290,3 +290,52 @@ describe('useLiveDanmaku / 延迟补偿', () => {
     expect(danmakuItems.value).toHaveLength(0)
   })
 })
+
+describe('useLiveDanmaku / 表情片段', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('带表情的弹幕在主进程下发后切成文本 + 表情片段（端到端）', async () => {
+    const { api, danmakuItems } = setup({ roomId: 48, delaySeconds: 0 })
+    api.finishHandshake(true)
+    await flushMicrotasks()
+
+    api.emit({
+      roomId: 48,
+      items: [{
+        text: 'TEAM Hii[喝彩][喝彩][喝彩]',
+        username: '小思念VENUS',
+        emots: { '[喝彩]': { url: 'https://i0.hdslb.com/bfs/live/x.png', width: 20, height: 20 } },
+      }],
+    })
+    vi.advanceTimersByTime(250)
+
+    const segments = danmakuItems.value[0].segments
+    expect(segments.map(segment => segment.type)).toEqual(['text', 'emote', 'emote', 'emote'])
+    expect(segments[0]).toEqual({ type: 'text', text: 'TEAM Hii' })
+    expect(segments[1]).toEqual({
+      type: 'emote',
+      text: '[喝彩]',
+      url: 'https://i0.hdslb.com/bfs/live/x.png',
+      width: 20,
+      height: 20,
+    })
+  })
+
+  it('没带 emots 的弹幕保持纯文本片段', async () => {
+    const { api, danmakuItems } = setup({ roomId: 48, delaySeconds: 0 })
+    api.finishHandshake(true)
+    await flushMicrotasks()
+
+    api.emit({ roomId: 48, items: [{ text: 'TEAM Hii[喝彩]', username: 'u' }] })
+    vi.advanceTimersByTime(250)
+
+    expect(danmakuItems.value[0].segments).toEqual([{ type: 'text', text: 'TEAM Hii[喝彩]' }])
+  })
+})

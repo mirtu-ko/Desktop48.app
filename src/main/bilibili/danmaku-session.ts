@@ -251,8 +251,21 @@ function handleSocketMessage(session: DanmakuSession, data: Buffer): void {
     // 逐条打印内容：弹幕密度对不上网页时，靠这行判断服务端到底发了多少
     debug(
       `[danmaku-session] 房间 ${session.roomId} 收到 ${items.length} 条弹幕（累计 ${session.receivedDanmaku}）:`,
-      items.map(item => `${item.username}: ${item.text}`).join(' | '),
+      items.map((item) => {
+        // 带表情的标出来：排查「表情不显示」时，一眼分清是没解析到还是没渲染
+        const emoteCount = item.emots ? Object.keys(item.emots).length : 0
+        return `${item.username}: ${item.text}${emoteCount > 0 ? ` [emots×${emoteCount}]` : ''}`
+      }).join(' | '),
     )
+
+    // 表情解析诊断：单独一行，免得混在长列表里被忽略
+    const withEmotes = items.filter(item => item.emots)
+    if (withEmotes.length > 0) {
+      debug(
+        `[danmaku-session] ★ 其中 ${withEmotes.length} 条带表情:`,
+        withEmotes.map(item => `${item.text} → ${Object.keys(item.emots ?? {}).join(' ')}`).join(' | '),
+      )
+    }
   }
 
   if (ignored.size > 0) {
@@ -395,6 +408,7 @@ export async function handleDanmakuStart(roomId: number, sender: WebContents): P
   connectSocket(session)
   debug(
     `[danmaku-session] 房间 ${roomId} → ${session.realRoomId} 会话已启动（${session.hosts.length} 台服务器可选）`,
+    '表情解析：已启用',
   )
   return true
 }
