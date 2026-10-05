@@ -6,17 +6,7 @@ import { segments } from '@renderer/utils/text-highlight'
 import Tools from '@renderer/utils/tools'
 import { computed } from 'vue'
 
-/**
- * 成员卡片：成员库网格里的单个成员。
- *
- * 从 Members.vue 抽出来的原因不是「页面太长」，而是这张卡是页面里唯一
- * 自成一体的单元 —— 它需要 6 个入参、3 个事件，内部有一整套头像光环 /
- * 皇冠徽章 / 快捷操作 / 搜索高亮的样式，和分区分组逻辑没有半点关系。
- *
- * 注意 compact 由 prop 传入、而不是让父级用 `.member-list.is-compact .avatar-wrap`
- * 这种后代选择器穿透进来：scoped CSS 的作用域属性只打在组件根节点上，
- * 父级的选择器匹配不到子组件内部的元素，那种写法在拆分后会静默失效。
- */
+/** 成员卡片：成员库网格里的单个成员。compact 走 prop，父级 CSS 穿透不进来。 */
 const props = defineProps<{
   member: MemberDetail
   /** 网格内序号：驱动入场错峰（--i），封顶 16 */
@@ -58,11 +48,7 @@ const topRank = computed(() => {
   return rank > 0 && rank <= 3
 })
 
-/**
- * 皇冠边长：紧凑档同步收小（头像缩到 60px 后，30px 的皇冠会占到一半，比例失衡）。
- * 只能用 prop 传，不能在 CSS 里写 `.is-compact .media-icon { width: 22px }` ——
- * MediaIcon 的 size 落在内联 style 上，特异性高于任何选择器，那种写法是死规则。
- */
+/** 皇冠边长：紧凑档同步收小（MediaIcon 的 size 走内联 style，CSS 覆盖不了） */
 const crownSize = computed(() => (props.compact ? 22 : 30))
 
 const nameSegments = computed(() => segments(props.member.realName, props.keyword || ''))
@@ -74,7 +60,6 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
     class="member-card"
     :class="{
       'is-blocked': blocked,
-      'is-followed': followed,
       'is-top-rank': topRank,
       'is-compact': compact,
     }"
@@ -103,37 +88,34 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
           <MediaIcon name="crownFilled" :size="crownSize" />
           <span class="rank-crown__num">{{ member.ranking }}</span>
         </span>
-      </div>
 
-      <!-- 关注 / 屏蔽：一对按钮，始终同处头像下沿，悬浮时自下浮出，不挡脸也不挤动名字。
-           「已关注」的状态不在这里表达 —— 它由头像外圈的金色虚线环常驻承担（见样式里
-           的 .is-followed），所以按钮不需要常驻，也不会出现「一个孤零零的实心圆钮
-           挂在头像下巴上」。 -->
-      <div v-if="actionable" class="quick-actions">
-        <button
-          class="quick-btn quick-btn--follow"
-          :class="{ 'is-on': followed }"
-          :title="followed ? '取消关注' : '关注 TA，直播列表优先展示'"
-          type="button"
-          @click.stop="emit('toggleFollow', member)"
-        >
-          <el-icon :size="13">
-            <StarFilled v-if="followed" />
-            <Star v-else />
-          </el-icon>
-        </button>
-        <button
-          class="quick-btn quick-btn--block"
-          :class="{ 'is-on': blocked }"
-          :title="blocked ? '解除屏蔽' : '屏蔽 TA 的直播与回放'"
-          type="button"
-          @click.stop="emit('toggleBlock', member)"
-        >
-          <el-icon :size="13">
-            <Hide v-if="blocked" />
-            <View v-else />
-          </el-icon>
-        </button>
+        <!-- 关注 / 屏蔽：头像右上角竖排。图标尺寸由 .quick-btn 的 font-size 控制，不写 :size -->
+        <div v-if="actionable" class="quick-actions">
+          <button
+            class="quick-btn quick-btn--follow"
+            :class="{ 'is-on': followed }"
+            :title="followed ? '取消关注' : '关注 TA，直播列表优先展示'"
+            type="button"
+            @click.stop="emit('toggleFollow', member)"
+          >
+            <el-icon>
+              <StarFilled v-if="followed" />
+              <Star v-else />
+            </el-icon>
+          </button>
+          <button
+            class="quick-btn quick-btn--block"
+            :class="{ 'is-on': blocked }"
+            :title="blocked ? '解除屏蔽' : '屏蔽 TA 的直播与回放'"
+            type="button"
+            @click.stop="emit('toggleBlock', member)"
+          >
+            <el-icon>
+              <Hide v-if="blocked" />
+              <View v-else />
+            </el-icon>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -188,7 +170,7 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
   }
 }
 
-/* 头像槽：缩放只作用在内层 .avatar-wrap，快捷操作挂在这一层，不跟着一起放大 */
+/* 头像槽：不参与伸缩；缩放作用在内层 .avatar-wrap 上 */
 .avatar-slot {
   position: relative;
   flex: none;
@@ -338,29 +320,19 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
   }
 }
 
-/* 关注 / 屏蔽：一对按钮，始终同处头像下沿，悬浮时自下浮出，不挡脸也不挤动名字。
- * 「已关注」的状态不在这里表达 —— 由头像外圈的金色虚线环常驻承担（见 .is-followed），
- * 所以按钮不必常驻，也就不会出现「一个孤零零的实心圆钮挂在头像下巴上」。 */
+/* 关注 / 屏蔽：头像右上角竖排。关注钮恒为第一个，位置不随屏蔽钮显隐而变 */
 .quick-actions {
   position: absolute;
-  bottom: -3px;
-  left: 50%;
+  top: 0;
+  right: 0;
   z-index: 4;
   display: flex;
+  flex-direction: column;
   gap: 4px;
-  opacity: 0;
-  transform: translateX(-50%) translateY(6px);
-  transition:
-    opacity 0.18s ease,
-    transform 0.18s ease;
-
-  .member-card:hover & {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
 }
 
 .quick-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -370,25 +342,44 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
   border: none;
   border-radius: 50%;
   font-family: inherit;
+  /* 图标尺寸：el-icon 是 font-size: inherit，改这里即可连按钮带图标一起收放 */
+  font-size: 13px;
   color: var(--el-text-color-regular);
   background: rgba(255, 255, 255, 0.94);
   box-shadow: var(--shadow-sm);
   cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
   transition:
+    opacity 0.18s ease,
+    visibility 0s linear 0.18s,
     color 0.15s ease,
     background-color 0.15s ease,
     transform 0.15s ease;
+
+  /* 命中区外扩 2px（视觉 22px，手感 26px）。不超过 gap 的一半，避免与相邻按钮重叠 */
+  &::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+  }
+
+  /* 悬浮整卡时显示；已启用时常驻。用 visibility 而非只靠 opacity：
+   * 不可见时同时屏蔽命中与焦点，否则会留下一个点得到的隐形按钮 */
+  .member-card:hover &,
+  &.is-on {
+    opacity: 1;
+    visibility: visible;
+    transition-delay: 0s;
+  }
 
   &:hover {
     transform: scale(1.1);
   }
 
-  /* 已启用：图标转白压在语义色实底上，且不随悬浮放大。
-   * 这里不能写 opacity —— 父级 .quick-actions 是 opacity: 0 门控，
-   * 子级的 opacity 与 0 相乘仍然是 0，写了也是死的。 */
+  /* 已启用：图标转白压在语义色实底上 */
   &.is-on {
     color: #fff;
-    transform: scale(1);
   }
 
   &--follow.is-on {
@@ -450,24 +441,9 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
   }
 }
 
-/* ===== 已关注：头像外圈加一道金色虚线环 =====
- * 为什么是「虚线」而不是「换色」：原来的做法是把队色环整个换成关注金，
- * 但队色是任意色，迟早有队伍撞上 —— CKG48 的 #FFBA07 与关注金 #ffc53d
- * 在 OKLab 下 ΔE 只有 0.0275（肉眼判定为同一色），那几个成员的「已关注」
- * 等于完全没有信号。
- * 虚线是纹理差异、与颜色无关，所以同色也分得开：队色实线环完整保留，
- * 两个信息同时在场，而不是用一个顶掉另一个。
- * 用 outline 而不是 border/新元素：outline 不参与布局（不会把头像撑大、
- * 不会挤动旁边的卡片），且会跟随 border-radius，所以圆头像是圆环。
- * 挂在 .avatar-wrap 上是为了让它跟着悬浮时的 scale(1.08) 一起缩放。 */
-.member-card.is-followed .avatar-wrap {
-  outline: 2px dashed var(--color-follow);
-  outline-offset: 3px;
-}
+/* 头像环始终是队色，不承担「已关注」—— 该状态由右上角常驻的金星表达 */
 
-/* ===== 紧凑档：头像与文案同步收小 =====
- * 皇冠尺寸不在这里 —— MediaIcon 的 size 走内联 style，CSS 覆盖不了，
- * 由 crownSize computed 传 prop，见 script。 */
+/* ===== 紧凑档：头像与文案同步收小 ===== */
 .member-card.is-compact {
   .avatar-wrap {
     width: 60px;
@@ -476,6 +452,13 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
   .rank-crown__num {
     bottom: 5px;
     font-size: 10px;
+  }
+
+  /* 皇冠尺寸不在这里，走 crownSize prop，见 script */
+  .quick-btn {
+    width: 18px;
+    height: 18px;
+    font-size: 11px;
   }
 
   .member-meta {

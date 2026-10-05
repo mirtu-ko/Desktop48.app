@@ -8,14 +8,7 @@ import Tools from '@renderer/utils/tools'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-/**
- * 成员详情抽屉（两个数据源合并后的唯一详情页）：
- * starInfo 提供头像/写真/微博/状态，allmembers 补齐排名/经历/口头禅/所属公司。
- *
- * 视觉主线是「队色主题」：队伍色以 --accent / --ring 注入抽屉根，
- * 头部氛围、分区标题药丸、指标卡、标签、时间轴节点、画廊选中态全部取这两个变量，
- * 于是同一个组件在不同成员身上呈现不同气质，而不是一张通用信息表。
- */
+/** 成员详情抽屉（两个数据源合并后的唯一详情页）：starInfo 出头像 / 写真 / 微博 / 状态，allmembers 补排名 / 经历 / 口头禅 / 公司。队色以 --accent / --ring 注入抽屉根，头部氛围、分区标题、指标卡、标签、时间轴节点、画廊选中态全部取这两个变量 */
 const props = defineProps<{ member: MemberDetail | null, blocked?: boolean, followed?: boolean }>()
 const emit = defineEmits<{ close: [], toggleBlock: [member: MemberDetail], toggleFollow: [member: MemberDetail] }>()
 
@@ -51,10 +44,7 @@ const memberKey = computed(() =>
   `${props.member?.userId ?? props.member?.sid ?? ''}-${props.member?.adjunctId ?? ''}`,
 )
 
-/**
- * 指标卡：只保留「一眼抓重点」的三项，空值不占位。
- * 排名用皇冠图标（与成员卡片头像上的皇冠同一枚 MediaIcon）。
- */
+/** 指标卡：总选排名 / 期数 / 身高三项，空值不占位。排名用皇冠图标（与成员卡片同一枚 MediaIcon） */
 const stats = computed(() => {
   const member = props.member
   if (!member)
@@ -123,9 +113,7 @@ watch(() => props.member, () => {
   scrollRef.value?.scrollTo({ top: 0 })
 }, { flush: 'post' })
 
-/** ===== 关注 / 屏蔽：点击时图标回弹 + 光圈扩散 =====
- * 用自增计数驱动 :key 重挂图标节点，动画才能在同一个人身上反复播放；
- * 计数从 0 起，首次挂载时 is-pulse 不生效，不会在打开抽屉时无端弹一下 */
+/** ===== 关注 / 屏蔽：点击时图标回弹 + 光圈扩散 ===== 自增计数驱动 :key 重挂图标节点，动画才能反复播放；计数从 0 起，首次挂载不弹 */
 const followPulse = ref(0)
 const blockPulse = ref(0)
 
@@ -147,11 +135,7 @@ function onBlock() {
 const MIN_DRAWER_WIDTH = 360
 const drawerSize = ref('420px')
 
-/**
- * 拖拽结束把实际宽度回写到 size：一是记住用户拖到的宽度，
- * 二是让 el-drawer 重置内部拖拽基准 —— 它只在 size 变化时重置，
- * 否则被 CSS min-width 截断后，下一次拖动会从截断前的值算起，出现一段拖不动的死区。
- */
+/** 拖拽结束回写 size：记住用户拖到的宽度，并让 el-drawer 重置拖拽基准（它只在 size 变化时重置，否则被 min-width 截断后会出现一段拖不动的死区） */
 function onResizeEnd(_event: MouseEvent, size: number) {
   drawerSize.value = `${Math.max(Math.round(size), MIN_DRAWER_WIDTH)}px`
 }
@@ -493,12 +477,10 @@ function openPlaybacks() {
   </el-drawer>
 </template>
 
-<!-- el-drawer 挂载到 body，scoped 选择器够不到抽屉自身的节点，
-     故抽屉外壳与 body 的覆写单独放在这个非 scoped 块里，用命名空间类收敛影响面 -->
+<!-- el-drawer 挂到 body，scoped 够不到抽屉自身的节点，外壳与 body 的覆写放这个非 scoped 块，用命名空间类收敛影响面 -->
 <style lang="scss">
 .member-drawer.el-drawer {
-  /* 抽屉可拖拽调宽：给一个下限，避免拖到极限把版式压垮。
-   * 下限值须与组件里的 MIN_DRAWER_WIDTH 保持一致 */
+  /* 拖拽调宽的下限，须与组件里的 MIN_DRAWER_WIDTH 保持一致 */
   min-width: 360px;
   max-width: 96vw;
 }
@@ -636,9 +618,7 @@ function openPlaybacks() {
     box-shadow: 0 0 0 3px var(--el-bg-color);
   }
 
-  /* 已关注：换鎏金环。
-   * 成员卡片那边不用这招了（队色与关注金会撞车，卡片改由头像外圈的金色虚线环表达），
-   * 但抽屉里有「关注 / 取消关注」文字标签兜底，环只是锦上添花，留着无妨。 */
+  /* 已关注：换鎏金环（抽屉里有文字标签兜底，环只是锦上添花） */
   &.is-followed {
     --ring: var(--color-follow);
   }
@@ -797,8 +777,7 @@ function openPlaybacks() {
   min-width: 0;
 }
 
-/* 分区标题复用全局 .section-title（队色药丸 + 渐隐细线），
- * 只改字号与间距：抽屉里 16px/700 的分区标题过重 */
+/* 复用全局 .section-title（队色药丸 + 渐隐细线），只改字号与间距：抽屉里 16px/700 过重 */
 .sec .section-title {
   --st-accent: var(--accent);
 

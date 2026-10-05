@@ -9,15 +9,8 @@ import { normalizeKeyword } from '@renderer/utils/text-highlight'
 import { computed } from 'vue'
 
 /**
- * 成员页的「分区派生」：按 tab 过滤 → 按关键词过滤 → 分组 → 分区内排序 → 计数。
- *
- * 规则全部来自 utils/member-list.ts 与 utils/member-sort.ts 的纯函数，
- * 这里只负责把它们串成响应式链路。页面因此只剩布局与交互。
- *
- * 展示分区：
- * - 分团 tab：只列在团成员，按队伍分区
- * - 成员库：全部分团汇总，按「团体 · 队伍」列在团，末尾追加 暂休 / 退团
- * 搜索与排序都在这一层生效：过滤掉未命中的成员后，空掉的分区自然消失。
+ * 成员页的分区派生：按 tab 过滤 → 按关键词过滤 → 分组 → 分区内排序 → 计数。
+ * 规则全部来自 utils/member-list.ts 与 utils/member-sort.ts，这里只把它们串成响应式链路。
  */
 
 export interface UseMemberSectionsOptions {

@@ -22,22 +22,9 @@ import { useEventListener } from '@vueuse/core'
 import { ElMessage } from 'element-plus'
 import { computed, onActivated, onDeactivated, onMounted, ref } from 'vue'
 
-/**
- * 成员库页面：分团 tab + 搜索 / 排序 / 密度工具条 + 按队伍分区的卡片网格 + 成员详情抽屉。
- *
- * 本文件只留「布局与交互」。可复用的部分都已外移：
- * - 排序规则        → utils/member-sort.ts（纯函数，有单测）
- * - 命中判定 / 分组  → utils/member-list.ts（纯函数，有单测）
- * - 分区派生 + 计数  → composables/use-member-sections.ts
- * - 单个成员卡片     → components/member/MemberCard.vue
- * - 详情抽屉         → components/ui/MemberDetailDrawer.vue
- */
+/** 成员库页面：分团 tab + 工具条 + 分区卡片网格 + 详情抽屉。本文件只留布局与交互 */
 
-/**
- * 顶部 tab：5 个分团 + 末尾「成员库」（全部团体）。
- * key 一律是 groupId —— 与公演页 Constants.GroupTabs 共用同一套分团配置（含主题色），
- * 展示顺序按需求固定为 SNH48 / GNZ48 / BEJ48 / CKG48 / CGT48 / 成员库。
- */
+/** 顶部 tab：5 个分团 + 末尾「成员库」。key 一律是 groupId，与公演页共用 Constants.GroupTabs */
 const LIBRARY_KEY = 'library'
 const GROUP_TAB_KEYS = ['10', '12', '11', '14', '21']
 
@@ -83,11 +70,7 @@ function clearKeyword() {
 
 const sortKey = ref<SortKey>('default')
 
-/**
- * 卡片密度偏好：纯展示偏好，落在 localStorage 而不是 app-config。
- * app-config 走主进程 IPC，存的是下载目录 / ffmpeg 这类应用配置；
- * 为了一个网格列宽多跑一趟 IPC、还要动 common/app-config 的键集合，不划算。
- */
+/** 卡片密度偏好：纯展示偏好，落 localStorage 而非 app-config（不值得为此走 IPC） */
 const DENSITY_STORAGE_KEY = 'members:density'
 const compact = ref(readDensity())
 
@@ -142,9 +125,8 @@ onMounted(() => {
   refreshFollowedMembers()
 })
 
-/** 拉取两个数据源并合并（挂载初始化 / 双击 tab / 更新数据库后共用）。
- * 成员树取自 stores/member-tree（同步完成后会自行失效重拉，故这里按缓存优先读取即可）；
- * 兼任成员（starAdjunctInfo，status===1）由 buildAdjuncts 以本人档案为底座并入其兼任队伍 */
+/** 拉取两个数据源并合并（挂载初始化 / 双击 tab / 更新数据库后共用）。成员树走 stores/member-tree 的缓存；
+ * 兼任成员由 buildAdjuncts 以本人档案为底座并入其兼任队伍 */
 async function fetchMembers() {
   loading.value = true
   try {
@@ -339,9 +321,7 @@ useEventListener(window, 'keydown', onKeydown)
             </span>
           </h2>
 
-          <!-- 卡片列表：TransitionGroup 负责排序 / 密度 / 搜索变化时的 FLIP 位移与错峰入场。
-               过渡类（.card-*）留在本文件的 scoped 样式里 —— 子组件的根节点会同时带上
-               父级的 scope 属性，所以这些类能落到 MemberCard 的根元素上 -->
+          <!-- 卡片列表：TransitionGroup 负责排序 / 密度 / 搜索变化时的 FLIP 位移与错峰入场 -->
           <TransitionGroup name="card" tag="div" class="member-list" :class="{ 'is-compact': compact }">
             <!-- key 见 memberCardKey：兼任记录走档案主键，官网独有的补充成员走 sid 兜底 -->
             <MemberCard
@@ -665,9 +645,7 @@ useEventListener(window, 'keydown', onKeydown)
   }
 }
 
-/* ===== 列表过渡：排序 / 密度 / 搜索变化时卡片平滑归位 =====
- * 这些类由 TransitionGroup 打到 MemberCard 的根节点上；子组件根节点会同时带上
- * 父级的 scope 属性，所以放在本文件的 scoped 样式里依然命中 */
+/* ===== 列表过渡：卡片平滑归位（TransitionGroup 打在子组件根节点上，父级 scope 照样命中） ===== */
 .card-enter-active {
   transition:
     opacity 0.32s ease,
