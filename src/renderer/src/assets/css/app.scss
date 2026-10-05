@@ -27,6 +27,8 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
+  /* 全屏详情卡片的卡面圆角（比 lg 再大一档，卡感来自圆角与留白） */
+  --radius-card: 20px;
   --radius-pill: 999px;
 
   /* ===== 语义主题色 =====
@@ -423,11 +425,235 @@ body,
   object-fit: cover;
 }
 
-/* 详情抽屉内容列：成员详情 / 专辑详情共用 */
-.detail-stack {
+/* 专辑类型徽章：专辑网格卡片与专辑详情卡片共用。EP 玫粉 / 专辑 品牌紫 / 单曲 青绿，
+ * 未知 tag 走中性灰兜底（语义色见本文件的 --color-* 变量） */
+.album-tag {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  line-height: 1.6;
+  color: #fff;
+  background: linear-gradient(135deg, #909399, color-mix(in srgb, #909399 70%, #fff));
+  box-shadow: 0 3px 8px -3px rgba(144, 147, 153, 0.55);
+
+  &.album-tag--ep {
+    background: linear-gradient(135deg, var(--color-lives), #ff8fb0);
+    box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--color-lives) 55%, transparent);
+  }
+
+  &.album-tag--zj {
+    background: var(--gradient-brand);
+    box-shadow: 0 3px 8px -3px var(--shadow-glow);
+  }
+
+  &.album-tag--sg {
+    /* 亮端由语义色白化派生 */
+    background: linear-gradient(135deg, var(--color-downloads), color-mix(in srgb, var(--color-downloads) 70%, #fff));
+    box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--color-downloads) 55%, transparent);
+  }
+}
+
+/* 专辑封面：解码完成才淡入，铺满容器见 .media-fill */
+.cover-src {
+  animation: cover-fade 0.25s ease;
+}
+
+@keyframes cover-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* 封面加载失败时的品牌色兜底（图标由调用方放在默认插槽里） */
+.cover-fallback {
   display: flex;
-  flex-direction: column;
-  gap: 18px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: color-mix(in srgb, var(--brand-primary) 12%, var(--el-bg-color));
+  color: var(--brand-primary);
+
+  .el-icon {
+    font-size: 26px;
+  }
+}
+
+/* 黑胶唱片：同心圆纹 + 品牌色环境反光 + 玻璃高光。尺寸与落点由调用方给 */
+.vinyl {
+  position: absolute;
+  z-index: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(var(--brand-rgb), 0.18) 0 26%, transparent 27%),
+    repeating-radial-gradient(circle at 50% 50%, #191920 0 2px, #23232c 2px 3px);
+  box-shadow:
+    0 8px 16px -6px rgba(var(--shadow-rgb), 0.4),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* 玻璃高光 */
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 45%);
+  }
+}
+
+/* 唱片中心盘标：用封面图充当，默认自旋（@keyframes spin 见本文件）。
+ * 尺寸由调用方给；「悬停才转」的列表卡片覆写 animation-play-state 即可 */
+.vinyl-label {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+  animation: spin 7s linear infinite;
+  overflow: hidden;
+
+  /* 中心孔 */
+  &::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    margin: -3px 0 0 -3px;
+    border-radius: 50%;
+    background: var(--el-bg-color);
+  }
+}
+
+/* ===== 详情卡片共用（MemberDetailCard / AlbumDetailCard） =====
+ * 两张卡只在「左栏放什么」上不同：外壳、卡面、关闭钮、滚动列一律用这里的定义。
+ * 差异化走变量注入 —— --accent 是卡面主题色（投影跟着它走），
+ * --detail-close-bg / --detail-close-ink 是关闭钮的底色与图标色（按所在底色的深浅给） */
+
+/* 蒙版：让背景虚化退场，而不是被纯黑盖住 */
+.detail-card-overlay.el-overlay {
+  background: rgba(20, 18, 32, 0.5);
+  backdrop-filter: blur(6px);
+}
+
+/* 对话框外壳：卡面自带圆角与内边距，清掉默认 header 与 padding。
+ * 定高而不是内容撑高，否则不同条目的资料长短会让卡片高度跳 */
+.detail-card-dialog.el-dialog {
+  --el-dialog-padding-primary: 0;
+
+  width: min(92vw, 980px);
+  height: min(86vh, 660px);
+  padding: 0;
+  border-radius: var(--radius-card);
+  background: transparent;
+  box-shadow: none;
+  overflow: hidden;
+
+  .el-dialog__header {
+    display: none;
+  }
+
+  .el-dialog__body {
+    height: 100%;
+    padding: 0;
+    overflow: hidden;
+  }
+}
+
+/* 卡面：左右怎么分栏由调用方定（成员卡是上立绘下操作条，专辑卡是左专辑栏右曲目） */
+.detail-card {
+  --accent: var(--brand-primary);
+
+  position: relative;
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--el-bg-color);
+  box-shadow:
+    0 28px 70px -18px color-mix(in srgb, var(--accent) 42%, transparent),
+    var(--shadow-lg);
+}
+
+/* 关闭钮：浮在卡面右上角，悬停转 90° 并转成危险色 */
+.detail-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: var(--detail-close-ink, #fff);
+  background: var(--detail-close-bg, rgba(20, 18, 32, 0.42));
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.25s ease;
+
+  &:hover {
+    background: var(--el-color-danger);
+    color: #fff;
+    transform: rotate(90deg);
+  }
+}
+
+/* 卡内滚动列：细滚动条 + 键盘焦点环。
+ * ↑ / ↓ 已被卡片占用切上一条 / 下一条，键盘滚动靠聚焦后的 PgUp / PgDn */
+.detail-scroll {
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* 卡片内的滚动条收细，避免打断卡面 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--el-border-color) transparent;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 4px;
+    background-clip: content-box;
+    background-color: var(--el-border-color);
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--brand-primary) 45%, transparent);
+    outline-offset: -2px;
+  }
+}
+
+/* 卡片内容的入场：外壳不动，内部元素错峰上浮。
+ * 两卡共用同一条曲线与时长，延迟各排各的（成员卡右栏 / 专辑卡左栏 + 曲目） */
+@keyframes detail-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* 浮动工具条（FloatingRefreshDock）插槽里的说明文字 */

@@ -192,15 +192,15 @@ function openPlaybacks() {
 
 <template>
   <el-dialog
-    class="member-card-dialog"
-    modal-class="member-card-overlay"
+    class="detail-card-dialog"
+    modal-class="detail-card-overlay"
     :model-value="!!member"
     :show-close="false"
     align-center
     append-to-body
     @update:model-value="onVisibilityChange"
   >
-    <div v-if="member" :key="memberKey" class="card" :style="themeStyle">
+    <div v-if="member" :key="memberKey" class="detail-card" :style="themeStyle">
       <div class="card-main">
         <!-- 左栏立绘：写真通铺到卡片边缘，信息浮在图上 -->
         <div class="portrait">
@@ -224,7 +224,7 @@ function openPlaybacks() {
             已屏蔽
           </span>
 
-          <button class="card-close" title="关闭" @click="emit('close')">
+          <button class="detail-close" title="关闭" @click="emit('close')">
             <el-icon :size="15">
               <Close />
             </el-icon>
@@ -283,7 +283,7 @@ function openPlaybacks() {
         </div>
 
         <!-- 右栏信息：卡片定高，只有这一栏滚动 -->
-        <div ref="infoRef" class="info">
+        <div ref="infoRef" class="info detail-scroll">
           <div v-if="stats.length" class="stats">
             <div
               v-for="stat in stats"
@@ -415,56 +415,16 @@ function openPlaybacks() {
   </el-dialog>
 </template>
 
-<!-- el-dialog 挂到 body，scoped 够不到对话框自身的节点，外壳与蒙版的覆写放这个非 scoped 块，用命名空间类收敛影响面 -->
-<style lang="scss">
-.member-card-overlay.el-overlay {
-  background: rgba(20, 18, 32, 0.5);
-  backdrop-filter: blur(6px);
-}
-
-.member-card-dialog.el-dialog {
-  /* 卡面自带圆角与内边距，清掉对话框默认的 header 与 padding */
-  --el-dialog-padding-primary: 0;
-
-  width: min(92vw, 980px);
-  height: min(86vh, 660px);
-  padding: 0;
-  border-radius: 20px;
-  background: transparent;
-  box-shadow: none;
-  overflow: hidden;
-
-  .el-dialog__header {
-    display: none;
-  }
-
-  .el-dialog__body {
-    height: 100%;
-    padding: 0;
-    overflow: hidden;
-  }
-}
-</style>
-
+<!-- 外壳 / 卡面 / 关闭钮 / 滚动列的样式见全局 app.scss 的「详情卡片共用」，这里只留本卡独有的部分 -->
 <style scoped lang="scss">
-/* ===== 卡片骨架：左立绘 + 右信息 + 底操作条 ===== */
-.card {
+/* ===== 卡片骨架：左立绘 + 右信息 + 底操作条（.detail-card 的基础样式在全局） ===== */
+.detail-card {
   /* 队色兜底：没有队伍色时退回品牌紫，后续所有强调色都读这两个变量 */
-  --accent: var(--brand-primary);
   --ring: var(--brand-primary);
   /* 亮色队色（如 SNH48 的浅蓝）直接当文字色对比度不够，混深后再用于文字 */
   --accent-ink: color-mix(in srgb, var(--accent) 62%, #24223a);
 
-  display: flex;
   flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-  border-radius: 20px;
-  background: var(--el-bg-color);
-  /* 投影带队色：每张卡的光都跟本人队色走 */
-  box-shadow:
-    0 28px 70px -18px color-mix(in srgb, var(--accent) 42%, transparent),
-    var(--shadow-lg);
 }
 
 .card-main {
@@ -529,33 +489,6 @@ function openPlaybacks() {
 
   &--block {
     background: var(--el-color-danger);
-  }
-}
-
-.card-close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  color: #fff;
-  background: rgba(20, 18, 32, 0.42);
-  backdrop-filter: blur(6px);
-  cursor: pointer;
-  transition:
-    background-color 0.2s ease,
-    transform 0.25s ease;
-
-  &:hover {
-    background: var(--el-color-danger);
-    transform: rotate(90deg);
   }
 }
 
@@ -666,31 +599,13 @@ function openPlaybacks() {
   font-variant-numeric: tabular-nums;
 }
 
-/* ===== 右栏信息 ===== */
+/* ===== 右栏信息（滚动相关见全局 .detail-scroll） ===== */
 .info {
   flex: 1;
-  min-width: 0;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
   padding: 18px 20px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  /* 卡片内的滚动条收细，避免打断卡面 */
-  scrollbar-width: thin;
-  scrollbar-color: var(--el-border-color) transparent;
-
-  &::-webkit-scrollbar {
-    width: 8px;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
-    border-radius: 4px;
-    background-clip: content-box;
-    background-color: var(--el-border-color);
-  }
 }
 
 /* ===== 指标卡 ===== */
@@ -1028,45 +943,23 @@ function openPlaybacks() {
 /* ===== 入场：立绘文案与信息栏错峰上浮。卡片按 memberKey 重挂，切成员时重放 ===== */
 .portrait-foot,
 .info > * {
-  animation: enter-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: detail-enter 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .portrait-foot {
   animation-delay: 0.04s;
 }
 
-.info > *:nth-child(1) {
-  animation-delay: 0.08s;
-}
-
-.info > *:nth-child(2) {
-  animation-delay: 0.12s;
-}
-
-.info > *:nth-child(3) {
-  animation-delay: 0.16s;
-}
-
-.info > *:nth-child(4) {
-  animation-delay: 0.2s;
-}
-
-.info > *:nth-child(5) {
-  animation-delay: 0.24s;
-}
-
-@keyframes enter-up {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: none;
+/* 信息栏逐块上浮，步长与专辑卡一致。
+ * 上限 6：stats / 微博 / 基础资料 / 特长·爱好 / 口头禅 / 经历 最多六块，
+ * 少写一块的话最后那块会退回 delay 0，反而排在前面先出现 */
+.info {
+  @for $i from 1 through 6 {
+    > *:nth-child(#{$i}) {
+      animation-delay: 0.04s * $i;
+    }
   }
 }
-
 /* 系统「减少动态效果」下关掉全部装饰性动画 */
 @media (prefers-reduced-motion: reduce) {
   .portrait-foot,
@@ -1078,7 +971,7 @@ function openPlaybacks() {
   .thumb,
   .act,
   .photo-nav,
-  .card-close {
+  .detail-close {
     transition: none;
   }
 }

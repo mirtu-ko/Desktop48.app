@@ -32,6 +32,9 @@ function createWindow(): void {
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
+    // 详情卡片是定宽双栏（左栏 clamp 下限 + 右栏），窄于这个尺寸卡片就压不成形了
+    minWidth: 900,
+    minHeight: 620,
     show: false,
     frame: false, // 纯自定义标题栏：去掉系统边框与默认按钮
     autoHideMenuBar: true,

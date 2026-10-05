@@ -1,16 +1,14 @@
 <script setup lang="ts">
-import type { AlbumSong, MusicAlbum } from '@renderer/services/api-types'
-import type { AudioTrack } from '@renderer/stores/audio-player'
-import { Headset, Link, Plus, ShoppingCart, VideoPlay } from '@element-plus/icons-vue'
+import type { MusicAlbum } from '@renderer/services/api-types'
+import { Headset, Link, ShoppingCart, VideoPlay } from '@element-plus/icons-vue'
+import AlbumDetailCard from '@renderer/components/ui/AlbumDetailCard.vue'
 import CoverImage from '@renderer/components/ui/CoverImage.vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import BaseSkeleton from '@renderer/components/ui/skeleton/BaseSkeleton.vue'
+import { useAlbumPlayer } from '@renderer/composables/use-album-player'
 import Apis from '@renderer/services/apis'
-import useAudioPlayerStore from '@renderer/stores/audio-player'
-import { formatMediaTime } from '@renderer/utils/time-format'
-import dayjs from 'dayjs'
-import { ElMessage } from 'element-plus'
+import { tagClass, tagLabel, totalTime } from '@renderer/utils/album'
 import { computed, onMounted, ref } from 'vue'
 
 const albumList = ref<MusicAlbum[]>([])
@@ -32,43 +30,6 @@ const filteredAlbums = computed(() =>
     ? albumList.value
     : albumList.value.filter(album => album.year === yearFilter.value),
 )
-
-/** tag 字段 → 展示名 */
-function tagLabel(tag: string): string {
-  const map: Record<string, string> = { ep: 'EP', zj: '专辑', sg: '单曲' }
-  return map[tag] || tag.toUpperCase()
-}
-
-/** tag 字段 → 徽章配色 class（EP 玫粉 / 专辑 品牌紫 / 单曲 青绿） */
-function tagClass(tag: string): string {
-  const map: Record<string, string> = {
-    ep: 'album-tag--ep',
-    zj: 'album-tag--zj',
-    sg: 'album-tag--sg',
-  }
-  return map[tag] || ''
-}
-
-/** 发行日期：优先 start_time，缺失时回退 year */
-function releaseDate(album: MusicAlbum): string {
-  const ts = Number(album.start_time)
-  return ts > 0 ? dayjs(ts * 1000).format('YYYY-MM-DD') : album.year || '未知'
-}
-
-/** 专辑总时长（不足 1 小时显示 mm:ss，超过显示 hh:mm:ss；忽略无时长的伴奏曲目） */
-function totalTime(album: MusicAlbum): string {
-  const total = album.song.reduce((sum, song) => {
-    if (!song.songs_time) {
-      return sum
-    }
-    const [m, s] = song.songs_time.split(':').map(Number)
-    return sum + m * 60 + (s || 0)
-  }, 0)
-  if (!total) {
-    return ''
-  }
-  return formatMediaTime(total)
-}
 
 /** 拉取 CDN 音乐 JSON 并按发行时间倒序 */
 async function fetchAlbums() {
@@ -100,108 +61,33 @@ const refresh = refreshAlbums
 // 首次加载或刷新后无专辑时展示骨架；已有数据刷新不整页遮罩
 const showSkeleton = computed(() => loading.value && albumList.value.length === 0)
 
-/** 专辑详情抽屉 */
-const detailVisible = ref(false)
+// ===== 歌曲播放：全局迷你播放条（use-album-player） =====
+const { playWholeAlbum, openAlbumConcept, openAlbumShop } = useAlbumPlayer()
+
+/** 专辑详情卡片（null = 卡片关闭） */
 const currentAlbum = ref<MusicAlbum | null>(null)
 
 function openDetail(album: MusicAlbum) {
   currentAlbum.value = album
-  detailVisible.value = true
 }
 
-// ===== 歌曲播放：全局迷你播放条（use-audio-player） =====
-const { playlist, currentIndex, playing, playAt, playAlbum, addAlbum, addTrack, isCurrent, isBroken } = useAudioPlayerStore()
+/** 按当前可见顺序（年份筛选后）铺平，切专辑不跳出当前年份 tab */
+const selectedIndex = computed(() =>
+  currentAlbum.value
+    ? filteredAlbums.value.findIndex(album => album.sid === currentAlbum.value?.sid)
+    : -1,
+)
 
-/** 曲目唯一键：专辑 sid + 歌曲 id */
-function trackKey(album: MusicAlbum, song: AlbumSong): string {
-  return `${album.sid}:${song.songs_id}`
-}
+const hasPrevAlbum = computed(() => selectedIndex.value > 0)
+const hasNextAlbum = computed(() =>
+  selectedIndex.value >= 0 && selectedIndex.value < filteredAlbums.value.length - 1,
+)
 
-/** 单曲 → 播放列表条目 */
-function toTrack(album: MusicAlbum, song: AlbumSong): AudioTrack {
-  return {
-    key: trackKey(album, song),
-    songsId: song.songs_id,
-    sid: album.sid,
-    name: song.songs_name,
-    url: song.url || '',
-    cover: album.image,
-    albumTitle: album.title,
-    singer: album.singer,
+function stepAlbum(delta: number) {
+  const next = filteredAlbums.value[selectedIndex.value + delta]
+  if (next) {
+    currentAlbum.value = next
   }
-}
-
-/** 专辑 → 可播放曲目（过滤无音源的伴奏） */
-function toTracks(album: MusicAlbum): AudioTrack[] {
-  return album.song.filter(song => song.url).map(song => toTrack(album, song))
-}
-
-/** 播放整张专辑（替换当前队列，从第一首开始） */
-function playWholeAlbum(album: MusicAlbum) {
-  const tracks = toTracks(album)
-  if (!tracks.length) {
-    ElMessage.info('这张专辑暂无可播放的音源')
-    return
-  }
-  playAlbum(tracks)
-}
-
-/** 专辑概念/详情页（event 页） */
-function openAlbumConcept(album: MusicAlbum) {
-  if (album.link) {
-    openExternal(album.link)
-  }
-}
-
-/** 购买页（shop 商品页） */
-function openAlbumShop(album: MusicAlbum) {
-  if (album.href) {
-    openExternal(album.href)
-  }
-}
-
-/** 整张专辑追加进播放列表；队列原本为空时自动开始播放 */
-function queueWholeAlbum(album: MusicAlbum) {
-  const firstAdded = addAlbum(toTracks(album))
-  if (firstAdded === -1) {
-    ElMessage.info('这张专辑的曲目已在播放列表中')
-    return
-  }
-  if (currentIndex.value === -1) {
-    playAt(firstAdded)
-  }
-  ElMessage.success(`已把《${album.title}》加入播放列表`)
-}
-
-/** 点击曲目：已在队列中直接播放，否则加入播放列表 */
-function playFromAlbum(album: MusicAlbum, song: AlbumSong) {
-  if (!song.url) {
-    return
-  }
-  const existing = playlist.value.findIndex(track => track.key === trackKey(album, song))
-  if (existing >= 0) {
-    playAt(existing)
-    return
-  }
-  const idx = addTrack(toTrack(album, song))
-  playAt(idx)
-}
-
-/** 单曲加入播放列表；队列原本为空时自动播放该曲 */
-function addSingle(album: MusicAlbum, song: AlbumSong) {
-  if (!song.url) {
-    return
-  }
-  const idx = addTrack(toTrack(album, song))
-  if (currentIndex.value === -1) {
-    playAt(idx)
-  }
-  ElMessage.success(`已把《${song.songs_name}》加入播放列表`)
-}
-
-/** 外链跳转：window.open 触发主进程 setWindowOpenHandler，转交系统浏览器打开 */
-function openExternal(url: string) {
-  window.open(url, '_blank', 'noopener')
 }
 
 onMounted(fetchAlbums)
@@ -336,101 +222,16 @@ onMounted(fetchAlbums)
       @refresh="refresh"
     />
 
-    <!-- 专辑详情抽屉：氛围底 + 旋转黑胶 + 曲目列表 -->
-    <el-drawer v-model="detailVisible" size="440px" :with-header="false" destroy-on-close>
-      <div v-if="currentAlbum" class="detail-stack">
-        <div class="detail-hero">
-          <img class="hero-bg" :src="currentAlbum.image" alt="">
-          <div class="hero-cover">
-            <div class="vinyl vinyl--big">
-              <span
-                class="vinyl-label"
-                :style="{ backgroundImage: `url(${currentAlbum.image})` }"
-              />
-            </div>
-            <el-image class="cover-img" :src="currentAlbum.image" fit="cover">
-              <template #error>
-                <div class="cover-fallback">
-                  <el-icon><Headset /></el-icon>
-                </div>
-              </template>
-            </el-image>
-          </div>
-          <h3 class="detail-title">
-            {{ currentAlbum.title }}
-          </h3>
-          <div class="detail-meta">
-            <span class="album-tag" :class="tagClass(currentAlbum.tag)">{{ tagLabel(currentAlbum.tag) }}</span>
-            <span>{{ currentAlbum.singer }}</span>
-            <span class="meta-dot">·</span>
-            <span>{{ releaseDate(currentAlbum) }}</span>
-            <span class="meta-dot">·</span>
-            <span>{{ currentAlbum.song.length }} 首</span>
-          </div>
-          <div class="detail-actions">
-            <el-button type="primary" round :icon="VideoPlay" @click="playWholeAlbum(currentAlbum)">
-              播放全部
-            </el-button>
-            <el-button round :icon="Plus" @click="queueWholeAlbum(currentAlbum)">
-              加入队列
-            </el-button>
-          </div>
-        </div>
-
-        <div class="track-list">
-          <div
-            v-for="(song, index) in currentAlbum.song"
-            :key="song.songs_id"
-            class="track-row"
-            :class="{
-              'is-current': isCurrent(trackKey(currentAlbum, song)),
-              'is-broken': !song.url || isBroken(song.url),
-            }"
-            @click="playFromAlbum(currentAlbum, song)"
-          >
-            <span class="track-index">
-              <!-- 当前播放：均衡器跳动 -->
-              <span
-                v-if="isCurrent(trackKey(currentAlbum, song))"
-                class="eq"
-                :class="{ paused: !playing }"
-              ><i /><i /><i /></span>
-              <template v-else>{{ String(index + 1).padStart(2, '0') }}</template>
-            </span>
-            <span class="track-name ellipsis">{{ song.songs_name }}</span>
-            <button
-              v-if="song.url"
-              class="track-add"
-              title="加入播放列表"
-              aria-label="加入播放列表"
-              @click.stop="addSingle(currentAlbum, song)"
-            >
-              <el-icon><Plus /></el-icon>
-            </button>
-            <span class="track-time">{{ song.songs_time || '--:--' }}</span>
-          </div>
-        </div>
-
-        <!-- 底部操作区：专辑概念 / 购买入口（与成员详情抽屉底部按钮行同构） -->
-        <div v-if="currentAlbum.link || currentAlbum.href" class="detail-footer">
-          <el-button
-            v-if="currentAlbum.link"
-            :icon="Link"
-            @click="openExternal(currentAlbum.link)"
-          >
-            专辑概念
-          </el-button>
-          <el-button
-            v-if="currentAlbum.href"
-            type="primary"
-            :icon="ShoppingCart"
-            @click="openExternal(currentAlbum.href)"
-          >
-            购买专辑
-          </el-button>
-        </div>
-      </div>
-    </el-drawer>
+    <!-- 专辑详情卡片：全屏蒙版 + 左专辑栏 / 右曲目列表，↑ / ↓ 切专辑 -->
+    <AlbumDetailCard
+      :album="currentAlbum"
+      :version="imageVersion"
+      :has-prev="hasPrevAlbum"
+      :has-next="hasNextAlbum"
+      @close="currentAlbum = null"
+      @prev="stepAlbum(-1)"
+      @next="stepAlbum(1)"
+    />
   </div>
 </template>
 
@@ -592,62 +393,20 @@ onMounted(fetchAlbums)
   flex: none;
 }
 
-/* 黑胶唱片：藏在封面右侧，同心圆纹 + 品牌色环境反光 */
+/* 黑胶唱片：藏在封面右侧（纹理见全局 .vinyl），列表里悬停才滑出并起转 */
 .vinyl {
-  position: absolute;
   top: 7px;
   left: 36px;
-  z-index: 0;
   width: 82px;
   height: 82px;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(var(--brand-rgb), 0.18) 0 26%, transparent 27%),
-    repeating-radial-gradient(circle at 50% 50%, #191920 0 2px, #23232c 2px 3px);
-  box-shadow:
-    0 8px 16px -6px rgba(var(--shadow-rgb), 0.4),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-
-  /* 玻璃高光 */
-  &::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 45%);
-  }
 }
 
-/* 唱片中心盘标：用封面图充当，悬浮时旋转 */
+/* 唱片中心盘标：用封面图充当 */
 .vinyl-label {
-  position: absolute;
-  left: 50%;
-  top: 50%;
   width: 34px;
   height: 34px;
   margin: -17px 0 0 -17px;
-  border-radius: 50%;
-  background-size: cover;
-  background-position: center;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
-  /* 旋转动画见全局 @keyframes spin */
-  animation: spin 7s linear infinite;
   animation-play-state: paused;
-  overflow: hidden;
-
-  /* 中心孔 */
-  &::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 6px;
-    height: 6px;
-    margin: -3px 0 0 -3px;
-    border-radius: 50%;
-    background: var(--el-bg-color);
-  }
 }
 
 .cover-img {
@@ -661,25 +420,6 @@ onMounted(fetchAlbums)
   box-shadow: var(--shadow-sm);
   /* 骨架底色：图片在途时占位，避免快速滚动出现透明空洞 */
   background: var(--el-fill-color-light);
-}
-
-/* 卡片封面：解码完成才淡入，填满容器见全局 .media-fill */
-.cover-src {
-  animation: cover-fade 0.25s ease;
-}
-
-.cover-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  background: color-mix(in srgb, var(--brand-primary) 12%, var(--el-bg-color));
-  color: var(--brand-primary);
-
-  .el-icon {
-    font-size: 26px;
-  }
 }
 
 .album-info {
@@ -705,37 +445,6 @@ onMounted(fetchAlbums)
   color: var(--el-text-color-secondary);
 }
 
-/* EP / 专辑 / 单曲 小徽章：不同类型不同配色（语义色见 app.scss 的 --color-* 变量） */
-.album-tag {
-  flex: none;
-  padding: 1px 8px;
-  border-radius: var(--radius-pill);
-  font-size: 11px;
-  line-height: 1.6;
-  color: #fff;
-  /* 默认（未知 tag）：中性灰 */
-  background: linear-gradient(135deg, #909399, color-mix(in srgb, #909399 70%, #fff));
-  box-shadow: 0 3px 8px -3px rgba(144, 147, 153, 0.55);
-
-  &.album-tag--ep {
-    /* EP：玫粉（与直播语义色同源） */
-    background: linear-gradient(135deg, var(--color-lives), #ff8fb0);
-    box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--color-lives) 55%, transparent);
-  }
-
-  &.album-tag--zj {
-    /* 专辑：品牌紫 */
-    background: var(--gradient-brand);
-    box-shadow: 0 3px 8px -3px var(--shadow-glow);
-  }
-
-  &.album-tag--sg {
-    /* 单曲：青绿（与下载语义色同源），亮端由语义色白化派生 */
-    background: linear-gradient(135deg, var(--color-downloads), color-mix(in srgb, var(--color-downloads) 70%, #fff));
-    box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--color-downloads) 55%, transparent);
-  }
-}
-
 .album-singer {
   min-width: 0;
 }
@@ -745,228 +454,5 @@ onMounted(fetchAlbums)
   font-size: 12px;
   color: var(--el-text-color-placeholder);
   font-variant-numeric: tabular-nums;
-}
-
-/* ===== 详情抽屉 ===== */
-
-/* 头部：封面模糊放大的氛围底，内容浮于其上 */
-.detail-hero {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 28px 20px 22px;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  background: color-mix(in srgb, var(--el-bg-color) 60%, transparent);
-
-  .hero-bg {
-    position: absolute;
-    inset: -40px;
-    width: calc(100% + 80px);
-    height: calc(100% + 80px);
-    object-fit: cover;
-    filter: blur(46px) saturate(160%);
-    opacity: 0.45;
-    pointer-events: none;
-  }
-
-  /* 蒙一层浅色渐变保证文字可读 */
-  &::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.05),
-      color-mix(in srgb, var(--el-bg-color) 55%, transparent)
-    );
-    pointer-events: none;
-  }
-
-  > * {
-    position: relative;
-    z-index: 1;
-  }
-}
-
-.hero-cover {
-  position: relative;
-  width: 148px;
-  height: 148px;
-}
-
-.vinyl--big {
-  top: 11px;
-  left: 56px;
-  width: 126px;
-  height: 126px;
-  transform: none;
-
-  .vinyl-label {
-    width: 52px;
-    height: 52px;
-    margin: -26px 0 0 -26px;
-    /* 详情页唱片持续旋转 */
-    animation-play-state: running;
-  }
-}
-
-.hero-cover .cover-img {
-  width: 148px;
-  height: 148px;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-}
-
-.detail-title {
-  margin: 18px 0 0;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-  text-align: center;
-  text-shadow: 0 1px 8px rgba(255, 255, 255, 0.6);
-}
-
-.detail-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-
-  .meta-dot {
-    color: var(--el-text-color-placeholder);
-  }
-}
-
-/* 播放全部 / 加入队列 */
-.detail-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 16px;
-}
-
-/* 底部操作区：专辑概念 / 购买入口，按钮平分一行（与成员详情抽屉底部同构） */
-.detail-footer {
-  display: flex;
-  gap: 10px;
-
-  :deep(.el-button) {
-    flex: 1;
-    margin-left: 0;
-  }
-}
-
-/* 曲目列表 */
-.track-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.track-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 11px 8px;
-  border-radius: var(--radius-sm);
-  transition: background-color 0.2s ease;
-
-  &:hover {
-    background: color-mix(in srgb, var(--brand-primary) 6%, transparent);
-
-    .track-index {
-      color: var(--brand-primary);
-    }
-
-    .track-add {
-      opacity: 1;
-    }
-  }
-
-  &.is-current {
-    background: color-mix(in srgb, var(--brand-primary) 9%, transparent);
-
-    .track-name {
-      color: var(--brand-primary);
-      font-weight: 600;
-    }
-  }
-
-  /* 无音源/加载失效：置灰不可点 */
-  &.is-broken {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-
-  & + .track-row {
-    border-top: 1px solid var(--el-border-color-extra-light);
-  }
-}
-
-/* 单曲加入队列按钮：悬浮行时出现 */
-.track-add {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--el-text-color-secondary);
-  cursor: pointer;
-  opacity: 0;
-  transition:
-    opacity 0.15s ease,
-    background-color 0.15s ease,
-    color 0.15s ease;
-
-  .el-icon {
-    font-size: 14px;
-  }
-
-  &:hover {
-    background: color-mix(in srgb, var(--brand-primary) 14%, transparent);
-    color: var(--brand-primary);
-  }
-}
-
-/* 均衡器动效 .eq 见全局 app.scss */
-
-.track-index {
-  flex: none;
-  width: 24px;
-  font-size: 12px;
-  font-style: italic;
-  font-weight: 700;
-  color: var(--el-text-color-placeholder);
-  font-variant-numeric: tabular-nums;
-  transition: color 0.2s ease;
-}
-
-.track-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 14px;
-  color: var(--el-text-color-primary);
-}
-
-.track-time {
-  flex: none;
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
-  font-variant-numeric: tabular-nums;
-}
-
-@keyframes cover-fade {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
 }
 </style>
