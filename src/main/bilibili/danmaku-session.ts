@@ -263,7 +263,10 @@ function handleSocketMessage(session: DanmakuSession, data: Buffer): void {
     if (withEmotes.length > 0) {
       debug(
         `[danmaku-session] ★ 其中 ${withEmotes.length} 条带表情:`,
-        withEmotes.map(item => `${item.text} → ${Object.keys(item.emots ?? {}).join(' ')}`).join(' | '),
+        withEmotes.map((item) => {
+          const pairs = Object.entries(item.emots ?? {}).map(([name, emote]) => `${name}=${emote.url}`)
+          return `${item.text} → ${pairs.join(' ')}`
+        }).join(' | '),
       )
     }
   }

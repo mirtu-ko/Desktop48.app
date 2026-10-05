@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DanmakuOverlayItem } from '@renderer/composables/use-danmaku-overlay'
 import type { PropType } from 'vue'
+import { debugLog } from '@renderer/utils/debug'
 import { ref } from 'vue'
 
 defineProps({
@@ -27,6 +28,14 @@ const failedEmotes = ref(new Set<string>())
 function emoteKey(itemId: number, index: number) {
   return `${itemId}-${index}`
 }
+
+/** 加载失败时回退成占位符文本。alt 也是同一串字，故记一条日志才分得清「没渲染」与「加载失败」 */
+function onEmoteError(item: DanmakuOverlayItem, index: number) {
+  const segment = item.segments[index]
+  failedEmotes.value.add(emoteKey(item.id, index))
+  if (segment && segment.type === 'emote')
+    debugLog('live', `B站弹幕: 表情图加载失败 ${segment.url}`)
+}
 </script>
 
 <template>
@@ -50,9 +59,10 @@ function emoteKey(itemId: number, index: number) {
             class="danmaku-emote"
             :src="segment.url"
             :alt="segment.text"
+            referrerpolicy="no-referrer"
             :style="{ aspectRatio: `${segment.width} / ${segment.height}` }"
             draggable="false"
-            @error="failedEmotes.add(emoteKey(item.id, index))"
+            @error="onEmoteError(item, index)"
           >
           <template v-else>{{ segment.text }}</template>
         </template>

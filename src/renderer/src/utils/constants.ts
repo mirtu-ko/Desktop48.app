@@ -42,6 +42,7 @@ const Constants = {
     SHOWS: '/shows',
     ALBUMS: '/albums',
     MEMBERS: '/members',
+    ELECTIONS: '/elections',
     SETTING: '/setting',
   } as const,
 

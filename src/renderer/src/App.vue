@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ComponentInternalInstance, ComponentPublicInstance } from 'vue'
-import { Headset, Microphone, Setting, User, VideoCamera } from '@element-plus/icons-vue'
+import { Headset, Microphone, Setting, Trophy, User, VideoCamera } from '@element-plus/icons-vue'
 import AppDock from '@renderer/components/app/AppDock.vue'
 import AppTitleBar from '@renderer/components/app/AppTitleBar.vue'
 import BackTopButton from '@renderer/components/app/BackTopButton.vue'
@@ -51,6 +51,7 @@ const dockItems = computed(() => [
   { index: Constants.Menu.SHOWS, label: '公演', icon: Microphone, color: 'var(--color-shows)' },
   { index: Constants.Menu.ALBUMS, label: '专辑', icon: Headset, color: 'var(--color-albums)' },
   { index: Constants.Menu.MEMBERS, label: '成员', icon: User, color: 'var(--color-members)' },
+  { index: Constants.Menu.ELECTIONS, label: '总选', icon: Trophy, color: 'var(--color-elections)' },
   { index: Constants.Menu.SETTING, label: '设置', icon: Setting, color: 'var(--color-setting)' },
 ])
 

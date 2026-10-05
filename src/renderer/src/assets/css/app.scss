@@ -37,9 +37,15 @@
   --color-shows: #f59e0b; // 公演：琥珀
   --color-albums: #d946ef; // 专辑：品红
   --color-members: #3b82f6; // 成员：蓝
+  --color-elections: #d92b3f; // 总选：庆典红（冠军 / 名次分区的强调色）
   --color-downloads: #10b981; // 下载：绿
   --color-setting: #6d5ae0; // 设置：品牌紫
   --color-follow: #ffc53d; // 关注 / 已关注：鎏金（与 Element Plus warning 状态色语义解耦）
+
+  /* ===== 总选奖牌色：名次卡前三名与冠军皇冠共用，TS 侧只传 var() 引用 ===== */
+  --medal-gold: #f7b500;
+  --medal-silver: #bfc8d4;
+  --medal-bronze: #d6924d;
 
   /* ===== z-index 分层表：全项目堆叠层级一览，新增层先在此登记 =====
    * 1-9    组件内微层：卡片徽章/标签、播放器内 loading 与占位（局部堆叠，互不越界）
@@ -214,7 +220,7 @@ body,
   color: var(--el-text-color-placeholder);
 }
 
-/* ===== 列表分区标题（公演 / 成员页共用） =====
+/* ===== 列表分区标题（公演 / 成员 / 总选页共用） =====
  * 结构：主题色小药丸 + 标题文字 + 右侧渐隐细线；
  * 主题色由 --st-accent 注入，默认品牌紫；
  * 在自带描边/底色的容器（队伍头部条、详情卡片）里，
@@ -247,7 +253,7 @@ body,
     height: 1px;
     margin-left: 4px;
     border-radius: var(--radius-pill);
-    background: linear-gradient(90deg, color-mix(in srgb, var(--st-accent) 20%, transparent), transparent 75%);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--st-accent) 35%, transparent), transparent 75%);
   }
 }
 
@@ -259,6 +265,24 @@ body,
 /* 标题变体：弱化灰（历史公演 / 成员页暂休退团） */
 .section-title--muted {
   --st-accent: var(--el-text-color-secondary);
+}
+
+/* 标题变体：总选庆典红（星光 / 高飞 / 梦想 / 未来组） */
+.section-title--elections {
+  --st-accent: var(--color-elections);
+}
+
+/* 分区计数徽章：成员页人数 / 总选页名次段（TOP16 等）共用，色随所在标题的 --st-accent */
+.section-count {
+  flex: none;
+  padding: 1px 9px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--st-accent) 62%, #24223a);
+  background: color-mix(in srgb, var(--st-accent) 16%, var(--el-bg-color));
+  font-variant-numeric: tabular-nums;
 }
 
 /* 玻璃浮层面板：左右上角 tab 栏 / 工具条、左下播放条等共用的表层。
@@ -427,6 +451,153 @@ body,
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* ===== 圆环头像卡：成员卡（MemberCard）与总选名次卡（ElectionRankCard）共用 =====
+ * 无实底卡片皮肤：透明底，悬浮时才浮出「强调色柔光卡」；头像带主题色渐变环与
+ * 顶部高光，悬浮时头像放大并亮起旋转流光环。强调色由卡片根节点内联注入
+ * --avatar-accent（成员页是队色，总选页前三名是奖牌色）；头像尺寸走
+ * --avatar-size（默认 92px，总选页网格注入 112px）。 */
+
+.card-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  transition:
+    background-color 0.22s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease,
+    transform 0.22s ease;
+
+  &:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(in srgb, var(--avatar-accent, var(--brand-primary)) 45%, transparent);
+    background: var(--el-bg-color);
+    box-shadow:
+      0 6px 16px -6px color-mix(in srgb, var(--avatar-accent, var(--brand-primary)) 45%, transparent),
+      var(--shadow-sm);
+  }
+}
+
+/* 头像槽：不参与伸缩；缩放作用在内层 .avatar-wrap 上 */
+.avatar-slot {
+  position: relative;
+  flex: none;
+}
+
+/* 头像圆形容器：渐变光环 + 顶部高光 */
+.avatar-wrap {
+  position: relative;
+  width: var(--avatar-size, 92px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  padding: 3px;
+  background: radial-gradient(circle at 30% 20%, #fff, rgba(255, 255, 255, 0));
+  transition: transform 0.25s ease;
+  transform-origin: center;
+
+  .card-item:hover & {
+    transform: scale(1.08);
+  }
+
+  &::before {
+    /* 主题色渐变光环（跟随卡片强调色；无强调色时回退为蓝紫渐变） */
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 2px;
+    background: linear-gradient(
+      135deg,
+      var(--avatar-accent, #4f6ef7),
+      var(--avatar-accent, #a94ff7) 60%,
+      var(--avatar-accent, #50c8ff)
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0.85;
+  }
+
+  &::after {
+    /* 顶部高光：营造玻璃质感 */
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(160deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 45%);
+    pointer-events: none;
+  }
+
+  /* 圆形头像本身 */
+  .avatar {
+    position: relative;
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--el-fill-color-light);
+  }
+}
+
+/* 悬浮流光环：锥形渐变沿环转动，只靠 opacity 淡入淡出，避免动 background（不可过渡） */
+.avatar-flow {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0%,
+    var(--avatar-accent, #4f6ef7) 16%,
+    transparent 38%,
+    var(--avatar-accent, #a94ff7) 62%,
+    transparent 86%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+
+  .card-item:hover & {
+    opacity: 1;
+    animation: spin 2.4s linear infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-item,
+  .avatar-wrap,
+  .avatar-flow {
+    transition: none;
+  }
+
+  .card-item:hover {
+    transform: none;
+  }
+
+  .avatar-flow {
+    animation: none;
+  }
 }
 
 /* 专辑类型徽章：专辑网格卡片与专辑详情卡片共用。EP 玫粉 / 专辑 品牌紫 / 单曲 青绿，

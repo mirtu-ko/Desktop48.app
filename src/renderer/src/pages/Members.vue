@@ -342,7 +342,7 @@ useEventListener(window, 'keydown', onKeydown)
               :class="{ 'section-title--muted': section.muted }"
             >
               {{ section.title }}
-              <span class="team-count">{{ section.members.length }}</span>
+              <span class="section-count">{{ section.members.length }}</span>
             </span>
           </h2>
 
@@ -635,12 +635,13 @@ useEventListener(window, 'keydown', onKeydown)
     }
   }
 
-  /* 复用全局分区标题（队色药丸），撑满剩余宽度；
+  /* 复用全局分区标题，撑满剩余宽度；强调色接到分区队色上（药丸与人数徽章同色）；
      头部条自带底色与描边，尾部渐隐线与其重复，隐藏 */
   .section-title {
     flex: 1;
     min-width: 0;
     margin: 0;
+    --st-accent: var(--sec-accent);
 
     &::after {
       display: none;
@@ -652,18 +653,6 @@ useEventListener(window, 'keydown', onKeydown)
 .group-section.is-muted .team-title {
   background: var(--el-fill-color-light);
   box-shadow: inset 0 0 0 1px var(--el-border-color-lighter);
-}
-
-.team-count {
-  flex: none;
-  padding: 1px 9px;
-  border-radius: var(--radius-pill);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.7;
-  color: color-mix(in srgb, var(--sec-accent) 62%, #24223a);
-  background: color-mix(in srgb, var(--sec-accent) 16%, var(--el-bg-color));
-  font-variant-numeric: tabular-nums;
 }
 
 /* ===== 卡片列表网格（卡片自身的样式见 components/member/MemberCard.vue） ===== */

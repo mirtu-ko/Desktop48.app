@@ -57,7 +57,7 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
 
 <template>
   <div
-    class="member-card"
+    class="member-card card-item"
     :class="{
       'is-blocked': blocked,
       'is-top-rank': topRank,
@@ -144,130 +144,8 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
 
 <style scoped lang="scss">
 .member-card {
-  /* 无实底卡片皮肤：透明底，悬浮时才浮出「队色柔光卡」；可点击 */
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 10px 7px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
+  /* 卡片皮肤与头像环在全局 .card-item / .avatar-wrap（见 app.scss），这里只补可点击 */
   cursor: pointer;
-  transition:
-    background-color 0.22s ease,
-    border-color 0.22s ease,
-    box-shadow 0.22s ease,
-    transform 0.22s ease;
-
-  &:hover {
-    transform: translateY(-3px);
-    border-color: color-mix(in srgb, var(--avatar-accent, var(--brand-primary)) 45%, transparent);
-    background: var(--el-bg-color);
-    box-shadow:
-      0 6px 16px -6px color-mix(in srgb, var(--avatar-accent, var(--brand-primary)) 45%, transparent),
-      var(--shadow-sm);
-  }
-}
-
-/* 头像槽：不参与伸缩；缩放作用在内层 .avatar-wrap 上 */
-.avatar-slot {
-  position: relative;
-  flex: none;
-}
-
-/* 头像圆形容器：渐变光环 + 顶部高光 */
-.avatar-wrap {
-  position: relative;
-  width: 92px;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  padding: 3px;
-  background: radial-gradient(circle at 30% 20%, #fff, rgba(255, 255, 255, 0));
-  transition: transform 0.25s ease;
-  transform-origin: center;
-
-  .member-card:hover & {
-    transform: scale(1.08);
-  }
-
-  &::before {
-    /* 主题色渐变光环（跟随队伍强调色；无强调色时回退为蓝紫渐变） */
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    padding: 2px;
-    background: linear-gradient(
-      135deg,
-      var(--avatar-accent, #4f6ef7),
-      var(--avatar-accent, #a94ff7) 60%,
-      var(--avatar-accent, #50c8ff)
-    );
-    -webkit-mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
-    mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    opacity: 0.85;
-  }
-
-  &::after {
-    /* 顶部高光：营造玻璃质感 */
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    background: linear-gradient(160deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 45%);
-    pointer-events: none;
-  }
-
-  /* 圆形头像本身 */
-  .avatar {
-    position: relative;
-    display: block;
-    width: 100%;
-    aspect-ratio: 1;
-    border-radius: 50%;
-    overflow: hidden;
-    background: var(--el-fill-color-light);
-  }
-}
-
-/* 悬浮流光环：锥形渐变沿环转动，只靠 opacity 淡入淡出，避免动 background（不可过渡） */
-.avatar-flow {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  border-radius: inherit;
-  padding: 2px;
-  background: conic-gradient(
-    from 0deg,
-    transparent 0%,
-    var(--avatar-accent, #4f6ef7) 16%,
-    transparent 38%,
-    var(--avatar-accent, #a94ff7) 62%,
-    transparent 86%
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.25s ease;
-
-  .member-card:hover & {
-    opacity: 1;
-    animation: spin 2.4s linear infinite;
-  }
 }
 
 /* 排名皇冠徽章：头像左上角，队色皇冠（MediaIcon 实心壳）+ 内嵌数字；屏蔽后隐藏 */
@@ -475,22 +353,15 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
   }
 }
 
-/* 系统「减少动态效果」下关掉卡片自身的装饰性动画 */
+/* 系统「减少动态效果」下关掉卡片自身的装饰性动画（卡片皮肤与头像环的见 app.scss） */
 @media (prefers-reduced-motion: reduce) {
-  .avatar-flow,
   .member-card.is-top-rank .rank-crown .media-icon {
     animation: none;
   }
 
-  .member-card,
-  .avatar-wrap,
   .quick-actions,
   .quick-btn {
     transition: none;
-  }
-
-  .member-card:hover {
-    transform: none;
   }
 }
 </style>
