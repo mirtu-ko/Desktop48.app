@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ElectionMember } from '@renderer/data/elections'
-import { avatarUrl, formatVotes, groupColor } from '@renderer/utils/election'
+import { avatarUrl, formatVotes, groupColor, medalColor } from '@renderer/utils/election'
 import { computed } from 'vue'
 
 /**
@@ -13,12 +13,8 @@ const props = defineProps<{
   index: number
 }>()
 
-/** 前三名的名次徽章与头像环走金银铜；色值只留变量引用，具体色在 app.scss 的 --medal-* */
-const MEDAL_COLORS: Record<number, string> = {
-  1: 'var(--medal-gold)',
-  2: 'var(--medal-silver)',
-  3: 'var(--medal-bronze)',
-}
+/** 前三名走奖牌色（名次徽章与头像环），其余走团色 */
+const medal = computed(() => medalColor(props.member.rank))
 
 /** 卡片内联变量：--avatar-accent 供头像环取色（前三名是奖牌色，其余是团色），--gc 供团体药丸 */
 const cardStyle = computed(() => {
@@ -26,10 +22,9 @@ const cardStyle = computed(() => {
   const color = groupColor(props.member.group)
   if (color)
     style['--gc'] = color
-  const medal = MEDAL_COLORS[props.member.rank]
-  if (medal) {
-    style['--medal'] = medal
-    style['--avatar-accent'] = medal
+  if (medal.value) {
+    style['--medal'] = medal.value
+    style['--avatar-accent'] = medal.value
   }
   else if (color) {
     style['--avatar-accent'] = color
@@ -39,7 +34,7 @@ const cardStyle = computed(() => {
 </script>
 
 <template>
-  <div class="rank-card card-item" :class="{ 'is-medal': !!MEDAL_COLORS[member.rank] }" :style="cardStyle">
+  <div class="rank-card card-item" :style="cardStyle">
     <div class="avatar-slot">
       <div class="avatar-wrap">
         <span class="avatar-flow" />
@@ -49,7 +44,7 @@ const cardStyle = computed(() => {
           </template>
         </el-image>
 
-        <span class="rank-no">{{ member.rank }}</span>
+        <span class="rank-badge" :class="{ 'is-medal': !!medal }">{{ member.rank }}</span>
       </div>
     </div>
 
@@ -126,48 +121,9 @@ const cardStyle = computed(() => {
   white-space: nowrap;
 }
 
-/* 名次徽章：吊在头像右下角 */
-.rank-no {
-  position: absolute;
-  right: -3px;
-  bottom: 1px;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 7px;
-  border-radius: var(--radius-pill);
-  font-size: 13px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  color: var(--el-text-color-regular);
-  background: var(--el-bg-color);
-  box-shadow:
-    0 0 0 2px var(--el-bg-color),
-    0 2px 6px -2px rgb(0 0 0 / 0.25);
-}
-
-.is-medal .rank-no {
-  color: color-mix(in srgb, var(--medal) 25%, #000);
-  background: linear-gradient(160deg, color-mix(in srgb, var(--medal) 78%, #fff), var(--medal));
-  box-shadow:
-    0 0 0 2px var(--el-bg-color),
-    0 2px 6px -1px color-mix(in srgb, var(--medal) 55%, transparent);
-}
-
-/* 头像加载失败时用姓氏占位 */
+/* 名次徽章与头像兜底走共享样式（app.scss 的 .rank-badge / .avatar-fallback） */
 .avatar-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
   font-size: 30px;
-  font-weight: 600;
-  color: var(--gc-ink);
-  background: color-mix(in srgb, var(--gc, var(--brand-primary)) 14%, transparent);
 }
 
 @keyframes rank-in {

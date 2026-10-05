@@ -86,13 +86,13 @@ function onVisibilityChange(value: boolean) {
     @update:model-value="onVisibilityChange"
   >
     <div v-if="album" :key="album.sid" class="detail-card">
-      <!-- 左栏：专辑自身的身份与全部操作入口 -->
-      <div class="side">
+      <!-- 左栏：专辑自身的身份与全部操作入口（骨架的布局见全局 .detail-side*） -->
+      <div class="detail-side">
         <div class="side-bg" :style="{ backgroundImage: `url(${album.image})` }" />
         <div class="side-scrim" />
 
-        <div class="side-body detail-scroll">
-          <div class="side-inner">
+        <div class="detail-side-body detail-scroll">
+          <div class="detail-side-inner">
             <div class="hero-cover">
               <div class="vinyl">
                 <span class="vinyl-label" :style="{ backgroundImage: `url(${album.image})` }" />
@@ -111,7 +111,7 @@ function onVisibilityChange(value: boolean) {
               </div>
             </div>
 
-            <h3 class="side-title" :title="album.title">
+            <h3 class="detail-side-title" :title="album.title">
               {{ album.title }}
             </h3>
 
@@ -122,7 +122,7 @@ function onVisibilityChange(value: boolean) {
               <span>{{ releaseDate(album) }}</span>
             </div>
 
-            <div class="side-count">
+            <div class="detail-side-count">
               {{ playable }} 首可播放<template v-if="playable !== album.song.length">
                 （共 {{ album.song.length }} 首）
               </template>
@@ -154,10 +154,10 @@ function onVisibilityChange(value: boolean) {
       </div>
 
       <!-- 右栏：曲目列表，独立滚动（左栏不跟着一起滚走） -->
-      <div class="tracks">
-        <div class="tracks-head">
-          <span class="tracks-title">曲目</span>
-          <span class="tracks-sub">{{ album.song.length }} 首</span>
+      <div class="detail-pane">
+        <div class="detail-pane-head">
+          <span class="detail-pane-title">曲目</span>
+          <span class="detail-pane-sub">{{ album.song.length }} 首</span>
           <span v-if="hasPrev || hasNext" class="tracks-hint">↑ ↓ 切换专辑</span>
         </div>
 
@@ -166,7 +166,7 @@ function onVisibilityChange(value: boolean) {
           <div
             v-for="(song, index) in album.song"
             :key="song.songs_id"
-            class="track-row"
+            class="track-row detail-pane-row"
             :class="{
               'is-current': isCurrentTrack(album, song),
               'is-broken': isBrokenTrack(song),
@@ -207,44 +207,19 @@ function onVisibilityChange(value: boolean) {
   </el-dialog>
 </template>
 
-<!-- 外壳 / 卡面 / 关闭钮 / 滚动列的样式见全局 app.scss 的「详情卡片共用」，这里只留本卡独有的部分 -->
+<!-- 外壳 / 卡面 / 关闭钮 / 滚动列 / 左右栏骨架与入场错峰见全局 app.scss 的「详情卡片共用」，
+     这里只留本卡独有的样式与骨架变量 -->
 <style scoped lang="scss">
-/* ===== 入场：外壳不动，左栏元素与右栏曲目错峰上浮（曲线与时长与成员卡一致） =====
+/* 入场：外壳不动，左栏元素与右栏曲目错峰上浮（规则见全局 .detail-side-inner / .detail-pane-row）。
  * 别给 .detail-card 整体加淡入：卡片按 album.sid 重挂，切专辑时整卡会从 opacity: 0 重放一遍，
  * 看着就是「消失再出现」的闪烁 */
-.side-inner > *,
-.tracks-head,
-.track-row {
-  animation: detail-enter 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
 
-/* 左栏元素依次上浮，步长与成员卡一致 */
-.side-inner {
-  @for $i from 1 through 6 {
-    > *:nth-child(#{$i}) {
-      animation-delay: 0.04s * $i;
-    }
-  }
-}
-
-.tracks-head {
-  animation-delay: 0.06s;
-}
-
-/* 曲目逐行上浮。只错峰前 8 行（序号由模板给到 --i），再长的专辑后面几行一起进来 */
-.track-row {
-  animation-delay: calc(0.08s + min(var(--i, 0), 8) * 0.03s);
+/* 栏宽注入给全局 .detail-side：窄窗口时收到 300px 为止，不再继续压，剩余宽度全给曲目列表 */
+.detail-card {
+  --side-basis: clamp(300px, 40%, 420px);
 }
 
 /* ===== 左栏：封面 / 黑胶 / 元信息 / 操作 ===== */
-.side {
-  position: relative;
-  /* 窄窗口时收到 300px 为止，不再继续压，剩余宽度全给曲目列表 */
-  flex: 0 0 clamp(300px, 40%, 420px);
-  display: flex;
-  overflow: hidden;
-  background: var(--el-fill-color-light);
-}
 
 /* 封面模糊放大的氛围底 */
 .side-bg {
@@ -269,32 +244,10 @@ function onVisibilityChange(value: boolean) {
   pointer-events: none;
 }
 
-.side-body {
-  position: relative;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-/* box-sizing 必须显式声明：项目没有全局 border-box 重置，content-box 下 width:100% + 左右 padding
- * 会把这一栏撑出 44px，操作行被 .side 的 overflow:hidden 切掉右半边。
- * 排布用 space-evenly 而非「贴顶 + 按钮钉底」：定高 660px 装 ~570px 内容，
- * 钉底会把差额全堆成标题区与按钮之间的一块空白 */
-.side-inner {
-  box-sizing: border-box;
-  flex: 1 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: space-evenly;
-  gap: 10px;
-  width: 100%;
-  padding: 26px 22px 22px;
-  text-align: center;
-}
-
 /* 封面尺寸跟着卡片高度走（卡片高 min(86vh, 660px)）：矮窗口时自己缩回，左栏不撑出滚动条。
- * 250px 是封面之外要占的高度；右端留 16px 给黑胶探出，否则被 .side 的 overflow:hidden 切平 */
+ * 250px 是封面之外要占的高度；右端留 16px 给黑胶探出，否则被 .detail-side 的 overflow:hidden 切平。
+ * 内容列用 space-evenly 而非「贴顶 + 按钮钉底」：定高 660px 装 ~570px 内容，
+ * 钉底会把差额全堆成标题区与按钮之间的一块空白（这是全局 .detail-side-inner 的默认值） */
 .hero-cover {
   position: relative;
   flex: none;
@@ -333,14 +286,11 @@ function onVisibilityChange(value: boolean) {
   font-size: 44px;
 }
 
-/* 长标题最多两行 */
-.side-title {
+/* 长标题最多两行（字号等基础样式见全局 .detail-side-title） */
+.detail-side-title {
   max-width: 100%;
   margin: 2px 0 0;
-  font-size: 19px;
-  font-weight: 700;
   line-height: 1.32;
-  color: var(--el-text-color-primary);
   overflow: hidden;
   display: -webkit-box;
   line-clamp: 2;
@@ -360,12 +310,6 @@ function onVisibilityChange(value: boolean) {
   .meta-dot {
     color: var(--el-text-color-placeholder);
   }
-}
-
-.side-count {
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
-  font-variant-numeric: tabular-nums;
 }
 
 /* 播放全部 / 加入队列：左栏唯一的两个按钮，同一基础圆角（round 是 20px 胶囊，与上一行并排不齐） */
@@ -409,36 +353,7 @@ function onVisibilityChange(value: boolean) {
   }
 }
 
-/* ===== 右栏：曲目列表 ===== */
-.tracks {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.tracks-head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  /* 右侧给关闭钮留位 */
-  padding: 17px 50px 12px 22px;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
-}
-
-.tracks-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-.tracks-sub {
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
-}
-
+/* ===== 右栏：曲目列表（容器与标题头骨架见全局 .detail-pane*） ===== */
 .tracks-hint {
   margin-left: auto;
   font-size: 11px;
@@ -553,11 +468,8 @@ function onVisibilityChange(value: boolean) {
   --detail-close-ink: var(--el-text-color-secondary);
 }
 
-/* 系统「减少动态效果」下关掉装饰性动画：入场、黑胶自旋、封面淡入 */
+/* 系统「减少动态效果」下关掉装饰性动画（入场三条规则见全局 .detail-* 的对应媒体查询） */
 @media (prefers-reduced-motion: reduce) {
-  .side-inner > *,
-  .tracks-head,
-  .track-row,
   .vinyl-label,
   .cover-src {
     animation: none;

@@ -22,14 +22,13 @@ function onBeforeLeave(el: Element) {
   bubble.style.left = `${bubble.offsetLeft}px`
 }
 
-/** 加载失败的表情图：回退成原始占位符文本。键为 `${itemId}-${片段下标}` */
+/** 加载失败的表情图：回退成原始占位符文本（alt 同字，记日志才分得清「没渲染」与「加载失败」） */
 const failedEmotes = ref(new Set<string>())
 
 function emoteKey(itemId: number, index: number) {
   return `${itemId}-${index}`
 }
 
-/** 加载失败时回退成占位符文本。alt 也是同一串字，故记一条日志才分得清「没渲染」与「加载失败」 */
 function onEmoteError(item: DanmakuOverlayItem, index: number) {
   const segment = item.segments[index]
   failedEmotes.value.add(emoteKey(item.id, index))

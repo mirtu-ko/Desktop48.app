@@ -7,7 +7,6 @@ import {
   formatElectionDate,
   formatVotes,
   groupColor,
-  ordinalLabel,
 } from '../src/renderer/src/utils/election'
 
 /** 造 n 个连续名次的假成员，用于分段测试 */
@@ -18,27 +17,6 @@ function makeMembers(count: number) {
     group: 'SNH48',
   }))
 }
-
-describe('ordinalLabel（届数的中文写法）', () => {
-  it('个位、整十、十几、二十以上各自的读法', () => {
-    expect(ordinalLabel(1)).toBe('第一届')
-    expect(ordinalLabel(9)).toBe('第九届')
-    expect(ordinalLabel(10)).toBe('第十届')
-    expect(ordinalLabel(11)).toBe('第十一届')
-    expect(ordinalLabel(12)).toBe('第十二届')
-    expect(ordinalLabel(13)).toBe('第十三届')
-    expect(ordinalLabel(20)).toBe('第二十届')
-    expect(ordinalLabel(99)).toBe('第九十九届')
-  })
-
-  it('超出 1-99 或非整数返回空串', () => {
-    expect(ordinalLabel(0)).toBe('')
-    expect(ordinalLabel(-1)).toBe('')
-    expect(ordinalLabel(100)).toBe('')
-    expect(ordinalLabel(1.5)).toBe('')
-    expect(ordinalLabel(Number.NaN)).toBe('')
-  })
-})
 
 describe('formatVotes（票数千分位）', () => {
   it('整数按三位一组加逗号', () => {

@@ -43,20 +43,20 @@ function onVisibilityChange(value: boolean) {
       class="detail-card downloads-card"
       :style="{ '--accent': activeGroup.color }"
     >
-      <!-- 左栏：任务类型切换 -->
-      <div class="side">
+      <!-- 左栏：任务类型切换（骨架的布局见全局 .detail-side*） -->
+      <div class="detail-side">
         <div class="side-bg" />
-        <div class="side-body detail-scroll">
-          <div class="side-inner">
+        <div class="detail-side-body detail-scroll">
+          <div class="detail-side-inner">
             <span class="hero-icon icon-tile" :style="{ '--tile-color': activeGroup.color }">
               <el-icon><component :is="activeGroup.icon" /></el-icon>
             </span>
 
-            <h3 class="side-title">
+            <h3 class="detail-side-title">
               任务中心
             </h3>
 
-            <div class="side-count">
+            <div class="detail-side-count">
               进行中 {{ runningCount }} · 已完成 {{ finishedCount }}
             </div>
 
@@ -80,10 +80,10 @@ function onVisibilityChange(value: boolean) {
       </div>
 
       <!-- 右栏：任务列表 -->
-      <div class="tasks">
-        <div class="tasks-head">
-          <span class="tasks-title">{{ activeGroup.title }}</span>
-          <span class="tasks-sub">{{ activeGroup.tasks.length }} 个任务</span>
+      <div class="detail-pane">
+        <div class="detail-pane-head">
+          <span class="detail-pane-title">{{ activeGroup.title }}</span>
+          <span class="detail-pane-sub">{{ activeGroup.tasks.length }} 个任务</span>
         </div>
 
         <div :key="activeKind" class="task-list detail-scroll">
@@ -98,7 +98,7 @@ function onVisibilityChange(value: boolean) {
             <article
               v-for="(task, index) in activeGroup.tasks"
               :key="task.liveId"
-              class="task-card"
+              class="task-card detail-pane-row"
               :style="{ '--i': index }"
             >
               <span
@@ -195,21 +195,22 @@ function onVisibilityChange(value: boolean) {
   </el-dialog>
 </template>
 
-<!-- 外壳 / 卡面 / 关闭钮 / 滚动列的样式见全局 app.scss 的「详情卡片共用」，这里只留本卡独有的部分 -->
+<!-- 外壳 / 卡面 / 关闭钮 / 滚动列 / 左右栏骨架与入场错峰见全局 app.scss 的「详情卡片共用」，
+     这里只留本卡独有的样式与骨架变量 -->
 <style scoped lang="scss">
 .downloads-card {
   /* 亮色主题色（如录制玫红）直接当文字色对比度不够，混深后再用于文字 */
   --accent-ink: color-mix(in srgb, var(--accent) 62%, #24223a);
+  /* 骨架变量：栏宽比专辑卡窄；左栏内容不足时居中、超出时退回顶端（不会像裸 center 那样裁掉顶部），
+   * 间距略大；右栏标题头左侧缩进比专辑卡少 2px */
+  --side-basis: clamp(200px, 26%, 260px);
+  --side-gap: 14px;
+  --side-justify: safe center;
+  --side-pad: 26px 18px 22px;
+  --pane-head-pad: 20px;
 }
 
 /* ===== 左栏：任务类型切换 ===== */
-.side {
-  position: relative;
-  flex: 0 0 clamp(200px, 26%, 260px);
-  display: flex;
-  overflow: hidden;
-  background: var(--el-fill-color-light);
-}
 
 /* 主题色氛围底：跟随当前任务类型换色 */
 .side-bg {
@@ -221,28 +222,6 @@ function onVisibilityChange(value: boolean) {
   pointer-events: none;
 }
 
-.side-body {
-  position: relative;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-/* box-sizing 必须显式声明：项目没有全局 border-box 重置，content-box 下 width:100% + 左右 padding 会被切掉。
- * safe center：内容不足时居中，超过时退回 flex-start，不会像裸 center 那样把顶部裁掉 */
-.side-inner {
-  box-sizing: border-box;
-  flex: 1 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: safe center;
-  gap: 14px;
-  width: 100%;
-  padding: 26px 18px 22px;
-  text-align: center;
-}
-
 .hero-icon {
   width: 84px;
   height: 84px;
@@ -251,19 +230,6 @@ function onVisibilityChange(value: boolean) {
   .el-icon {
     font-size: 38px;
   }
-}
-
-.side-title {
-  margin: 0;
-  font-size: 19px;
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-}
-
-.side-count {
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
-  font-variant-numeric: tabular-nums;
 }
 
 .kind-list {
@@ -331,36 +297,7 @@ function onVisibilityChange(value: boolean) {
   }
 }
 
-/* ===== 右栏：任务列表 ===== */
-.tasks {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.tasks-head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  /* 右侧给关闭钮留位 */
-  padding: 17px 50px 12px 20px;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
-}
-
-.tasks-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-}
-
-.tasks-sub {
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
-}
-
+/* ===== 右栏：任务列表（容器与标题头骨架见全局 .detail-pane*） ===== */
 .task-list {
   flex: 1;
   display: flex;
@@ -493,38 +430,10 @@ function onVisibilityChange(value: boolean) {
   }
 }
 
-/* ===== 入场：外壳静止，左栏元素与任务行错峰上浮 ===== */
-.side-inner > *,
-.tasks-head,
-.task-card {
-  animation: detail-enter 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
+/* 入场：外壳静止，左栏元素与任务行错峰上浮，规则见全局 .detail-side-inner / .detail-pane-row */
 
-.side-inner {
-  @for $i from 1 through 4 {
-    > *:nth-child(#{$i}) {
-      animation-delay: 0.04s * $i;
-    }
-  }
-}
-
-.tasks-head {
-  animation-delay: 0.06s;
-}
-
-/* 任务行逐行上浮，只错峰前 8 行 */
-.task-card {
-  animation-delay: calc(0.08s + min(var(--i, 0), 8) * 0.03s);
-}
-
-/* 系统「减少动态效果」下关掉装饰性动画 */
+/* 系统「减少动态效果」下关掉剩下的过渡（入场动画见全局 .detail-* 的对应媒体查询） */
 @media (prefers-reduced-motion: reduce) {
-  .side-inner > *,
-  .tasks-head,
-  .task-card {
-    animation: none;
-  }
-
   .kind-item,
   .task-card {
     transition: none;

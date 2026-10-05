@@ -123,7 +123,7 @@ interface PendingDanmaku {
   showAt: number
 }
 
-// 延迟补偿把弹幕排到将来，积压上限兜住「高补偿 + 高密度房间」；超出时丢排队最久的那条
+// 待投放队列上限：正常一个节拍就清空，兜住宿主定时器停摆或瞬时爆发；超出时丢排队最久的那条
 const MAX_PENDING = 300
 
 /**
@@ -137,7 +137,7 @@ export function useLiveDanmakuOverlay() {
   let pending: PendingDanmaku[] = []
   let nextId = 0
 
-  /** 排入一条弹幕；showAt 到点后由 tick 投放（延迟补偿就落在 showAt 上） */
+  /** 排入一条弹幕；showAt 到点后由 tick 投放（同一批共用同一时刻，批内先后由 push 顺序保证） */
   function push(content: string, username: string, showAt: number, emots?: DanmakuEmoteMap) {
     if (!content)
       return
@@ -150,7 +150,7 @@ export function useLiveDanmakuOverlay() {
 
   /**
    * 宿主定时器唯一入口：先投放到点弹幕，再回收逾期气泡。
-   * 投放用整表扫描而非「遇到第一条未到点就停」—— 调小补偿后新排的 showAt 会更早，队列不再有序。
+   * 投放用整表扫描而非「遇到第一条未到点就停」—— showAt 由调用方给，后入队的可以更早，队列不保证有序。
    */
   function tick(time: number) {
     if (pending.length > 0) {

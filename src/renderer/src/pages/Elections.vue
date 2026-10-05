@@ -10,6 +10,7 @@ import {
   formatElectionDate,
   formatVotes,
   groupColor,
+  medalColor,
 } from '@renderer/utils/election'
 import { computed, ref } from 'vue'
 
@@ -62,20 +63,13 @@ const champion = computed(() => election.value.members[0])
 /** 御三家已在领奖台展示，分区从第四名开始 */
 const sections = computed(() => buildSections(election.value.members.slice(3)))
 
-/** 领奖台名次色：冠军金、其余走金银铜的对应位 */
-const MEDAL_COLORS: Record<number, string> = {
-  1: 'var(--medal-gold)',
-  2: 'var(--medal-silver)',
-  3: 'var(--medal-bronze)',
-}
-
-/** 团体色与名次色注入：--gc 供团体文字 / 头像兜底，--medal 供名次徽章与头像戒圈 */
+/** 团体色与名次色注入：--gc 供团体文字 / 头像兜底，--medal 供名次徽章与头像戒圈（默认冠军金） */
 function spotStyle(member: ElectionMember): Record<string, string> {
   const style: Record<string, string> = {}
   const color = groupColor(member.group)
   if (color)
     style['--gc'] = color
-  style['--medal'] = MEDAL_COLORS[member.rank] ?? 'var(--medal-gold)'
+  style['--medal'] = medalColor(member.rank) ?? 'var(--medal-gold)'
   return style
 }
 
@@ -84,11 +78,6 @@ const championStyle = computed(() => {
   const color = champion.value ? groupColor(champion.value.group) : ''
   return color ? { '--gc': color } : undefined
 })
-
-/** 头像加载失败时用姓氏占位（领奖台头像的兜底，名次卡的兜底在卡片组件内） */
-function initialOf(member: ElectionMember) {
-  return member.name.slice(0, 1)
-}
 </script>
 
 <template>
@@ -129,10 +118,10 @@ function initialOf(member: ElectionMember) {
                 <span class="spot-halo" aria-hidden="true" />
                 <el-image class="spot-avatar" :src="avatarUrl(spot.member.sid)" fit="cover">
                   <template #error>
-                    <span class="avatar-fallback">{{ initialOf(spot.member) }}</span>
+                    <span class="avatar-fallback">{{ spot.member.name.slice(0, 1) }}</span>
                   </template>
                 </el-image>
-                <span v-if="spot.role === 'runner'" class="spot-no">{{ spot.member.rank }}</span>
+                <span v-if="spot.role === 'runner'" class="rank-badge spot-no is-medal">{{ spot.member.rank }}</span>
               </div>
 
               <p class="spot-name ellipsis" :title="spot.member.name">
@@ -381,39 +370,18 @@ function initialOf(member: ElectionMember) {
     0 10px 26px -10px color-mix(in srgb, var(--medal-gold) 65%, transparent);
 }
 
-/* 亚军 / 季军的名次徽章：吊在头像右下角 */
+/* 亚军 / 季军的名次徽章：走共享 .rank-badge 的金银铜款，按领奖台比例放大一号 */
 .spot-no {
-  position: absolute;
-  right: -3px;
-  bottom: -1px;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   min-width: 26px;
   height: 26px;
   padding: 0 8px;
-  border-radius: var(--radius-pill);
+  bottom: -1px;
   font-size: 14px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  color: color-mix(in srgb, var(--medal) 25%, #000);
-  background: linear-gradient(160deg, color-mix(in srgb, var(--medal) 78%, #fff), var(--medal));
-  box-shadow:
-    0 0 0 2px var(--el-bg-color),
-    0 2px 6px -1px color-mix(in srgb, var(--medal) 55%, transparent);
 }
 
+/* 头像加载失败时用姓氏占位（共享兜底样式见 app.scss 的 .avatar-fallback） */
 .avatar-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
   font-size: 48px;
-  font-weight: 600;
-  color: var(--gc-ink);
-  background: color-mix(in srgb, var(--gc, var(--brand-primary)) 14%, transparent);
 }
 
 .spot-name {

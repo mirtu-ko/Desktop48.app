@@ -8,8 +8,10 @@ const emit = defineEmits<{ open: [] }>()
 
 const { downloadTasks, recordTasks } = useTasksStore()
 
-const runningCount = computed(() =>
-  [...downloadTasks.value, ...recordTasks.value].filter(task => task.status === 'running').length,
+const runningCount = computed(
+  () =>
+    downloadTasks.value.filter(task => task.status === 'running').length
+    + recordTasks.value.filter(task => task.status === 'running').length,
 )
 </script>
 

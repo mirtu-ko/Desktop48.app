@@ -584,6 +584,50 @@ body,
   }
 }
 
+/* 名次徽章：吊在头像右下角（总选名次卡与领奖台共用）。默认中性色，
+ * 加 is-medal 并注入 --medal 后转金银铜渐变 */
+.rank-badge {
+  position: absolute;
+  right: -3px;
+  bottom: 1px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--el-text-color-regular);
+  background: var(--el-bg-color);
+  box-shadow:
+    0 0 0 2px var(--el-bg-color),
+    0 2px 6px -2px rgb(0 0 0 / 0.25);
+
+  &.is-medal {
+    color: color-mix(in srgb, var(--medal) 25%, #000);
+    background: linear-gradient(160deg, color-mix(in srgb, var(--medal) 78%, #fff), var(--medal));
+    box-shadow:
+      0 0 0 2px var(--el-bg-color),
+      0 2px 6px -1px color-mix(in srgb, var(--medal) 55%, transparent);
+  }
+}
+
+/* 头像加载失败兜底：姓氏占位，色随注入的 --gc / --gc-ink（字号由各组件按头像大小覆盖） */
+.avatar-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-weight: 600;
+  color: var(--gc-ink, var(--el-text-color-secondary));
+  background: color-mix(in srgb, var(--gc, var(--brand-primary)) 14%, transparent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .card-item,
   .avatar-wrap,
@@ -818,7 +862,7 @@ body,
 }
 
 /* 卡片内容的入场：外壳不动，内部元素错峰上浮。
- * 两卡共用同一条曲线与时长，延迟各排各的（成员卡右栏 / 专辑卡左栏 + 曲目） */
+ * 三卡共用同一条曲线与时长，延迟各排各的（成员卡右栏 / 专辑卡左栏 + 曲目） */
 @keyframes detail-enter {
   from {
     opacity: 0;
@@ -828,6 +872,122 @@ body,
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* ===== 详情卡片共用 · 左右栏骨架 =====
+ * 左右分栏的两张卡（专辑 / 下载）结构一致：左栏是「氛围底 + 可滚动列 + 居中内容列」，
+ * 右栏是「标题头 + 可滚动内容区」，只有栏宽 / 间距 / 放什么不同 —— 故骨架收在这里，
+ * 差异由各卡注成变量：--side-basis 栏宽，--side-pad / --side-gap / --side-justify 内容列排布，
+ * --pane-head-pad 标题头左内距。氛围层（专辑卡模糊封面、下载卡主题色底）差异太大，各卡自画。
+ * 成员卡是「上立绘 + 下操作条」的纵向分栏，不用这一层。 */
+
+/* 左栏：定宽不伸缩 + 裁剪（氛围层的出血由它兜住）。栏宽由各卡注入，缺省值只是兜底 */
+.detail-side {
+  position: relative;
+  flex: 0 0 var(--side-basis, 320px);
+  display: flex;
+  overflow: hidden;
+  background: var(--el-fill-color-light);
+}
+
+.detail-side-body {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 左栏内容列。box-sizing 必须显式声明：项目没有全局 border-box 重置，
+ * content-box 下 width:100% + 左右 padding 会把这一栏撑出容器、被 .detail-side 的 overflow 切掉 */
+.detail-side-inner {
+  box-sizing: border-box;
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: var(--side-justify, space-evenly);
+  gap: var(--side-gap, 10px);
+  width: 100%;
+  padding: var(--side-pad, 26px 22px 22px);
+  text-align: center;
+}
+
+/* 左栏标题与计数行；限行等差异由各卡覆写（scoped 规则特异度更高） */
+.detail-side-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.detail-side-count {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 右栏：标题头 + 可滚动内容区 */
+.detail-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* 右侧给关闭钮留位 */
+  padding: 17px 50px 12px var(--pane-head-pad, 22px);
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+}
+
+.detail-pane-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.detail-pane-sub {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+/* 错峰上浮：左栏内容列逐块、右栏标题头、右栏列表行逐行。
+ * 步长与上界只在这里写一份，免得每张卡各写一个 @for、上界还要跟着子块数量改。
+ * 上界 6：左栏内容列最多 6 块，少写一块的话最后那块会退回 delay 0，反而排在前面先出现 */
+.detail-side-inner > *,
+.detail-pane-head,
+.detail-pane-row {
+  animation: detail-enter 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.detail-side-inner {
+  @for $i from 1 through 6 {
+    > *:nth-child(#{$i}) {
+      animation-delay: 0.04s * $i;
+    }
+  }
+}
+
+.detail-pane-head {
+  animation-delay: 0.06s;
+}
+
+/* 列表行只错峰前 8 行，序号由模板的行内 --i 给（列表再长，后面几行一起进来） */
+.detail-pane-row {
+  animation-delay: calc(0.08s + min(var(--i, 0), 8) * 0.03s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detail-side-inner > *,
+  .detail-pane-head,
+  .detail-pane-row {
+    animation: none;
   }
 }
 

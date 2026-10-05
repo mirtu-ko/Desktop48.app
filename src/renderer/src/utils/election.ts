@@ -33,8 +33,6 @@ const HISTORIC_GROUP_COLORS: Record<string, string> = {
 /** 官网头像地址前缀：与成员库同一条命名规则（zp_<sid>.jpg） */
 const AVATAR_PREFIX = 'https://www.snh48.com/images/member/zp_'
 
-const CN_DIGITS = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九']
-
 /** 按名次段切分入选名单，空段不产出 */
 export function buildSections(members: ElectionMember[]): ElectionSection[] {
   const sections: ElectionSection[] = []
@@ -60,16 +58,16 @@ export function avatarUrl(sid?: string): string {
   return sid ? `${AVATAR_PREFIX}${sid}.jpg` : ''
 }
 
-/** 届数的中文写法：1 → 第一届，10 → 第十届，11 → 第十一届；超出 1-99 返回空串 */
-export function ordinalLabel(ordinal: number): string {
-  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 99)
-    return ''
-  const tens = Math.floor(ordinal / 10)
-  const ones = ordinal % 10
-  const text = ordinal < 10
-    ? CN_DIGITS[ordinal]
-    : `${tens > 1 ? CN_DIGITS[tens] : ''}十${ones ? CN_DIGITS[ones] : ''}`
-  return `第${text}届`
+/** 前三名的奖牌色：色值只留变量引用，具体色在 app.scss 的 --medal 变量组 */
+const MEDAL_COLORS: Record<number, string> = {
+  1: 'var(--medal-gold)',
+  2: 'var(--medal-silver)',
+  3: 'var(--medal-bronze)',
+}
+
+/** 名次的奖牌色；前三名之外返回 undefined，由调用方兜底 */
+export function medalColor(rank: number): string | undefined {
+  return MEDAL_COLORS[rank]
 }
 
 /** 票数千分位展示，保留官方公布的小数位（如 230752.7） */
