@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { ElectionMember } from '@renderer/data/elections'
+import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { avatarUrl, formatVotes, groupColor, medalColor } from '@renderer/utils/election'
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 /**
  * 总选名次卡：复用成员卡的头像环与卡片皮肤（card-item / avatar-wrap，见 app.scss）。
@@ -15,6 +16,35 @@ const props = defineProps<{
 
 /** 前三名走奖牌色（名次徽章与头像环），其余走团色 */
 const medal = computed(() => medalColor(props.member.rank))
+
+/** 成员名录：userId 反查合并后的成员记录，avatar 已在 member-merge 中归一化 */
+const { findMemberByUserId } = useMemberDirectoryStore()
+const directoryAvatar = ref('')
+
+/** 当前成员无 sid 时补一次头像；有 sid 仍直接走官网 zp_<sid>.jpg 地址 */
+let avatarRequestId = 0
+watch(
+  () => props.member,
+  async (member) => {
+    const requestId = ++avatarRequestId
+    directoryAvatar.value = ''
+    if (member.sid || !member.userId)
+      return
+
+    try {
+      const info = await findMemberByUserId(member.userId)
+      if (requestId === avatarRequestId)
+        directoryAvatar.value = info?.avatar ?? ''
+    }
+    catch (error) {
+      console.error('[ElectionRankCard]按 userId 获取成员头像失败:', error)
+    }
+  },
+  { immediate: true },
+)
+
+/** 头像地址：优先 sid 拼官网地址，缺失时回落成员名录头像（都没有则由 image error 兜底） */
+const avatarSrc = computed(() => avatarUrl(props.member.sid) || directoryAvatar.value)
 
 /** 卡片内联变量：--avatar-accent 供头像环取色（前三名是奖牌色，其余是团色），--gc 供团体药丸 */
 const cardStyle = computed(() => {
@@ -38,7 +68,7 @@ const cardStyle = computed(() => {
     <div class="avatar-slot">
       <div class="avatar-wrap">
         <span class="avatar-flow" />
-        <el-image class="avatar" :src="avatarUrl(member.sid)" fit="cover" lazy>
+        <el-image class="avatar" :src="avatarSrc" fit="cover" lazy>
           <template #error>
             <span class="avatar-fallback">{{ member.name.slice(0, 1) }}</span>
           </template>
