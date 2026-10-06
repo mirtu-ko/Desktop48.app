@@ -1,8 +1,8 @@
 /**
- * 总选页的纯函数：名次分段、团体徽章色、头像地址、票数与日期的展示格式。
+ * 总选页的纯函数：名次分段、团体徽章色、头像地址、票数与日期的展示格式、名次变动与成员历届履历。
  * 不引 Vue / Element Plus，可脱离 Electron 直接单测。
  */
-import type { ElectionMember } from '@renderer/data/elections'
+import type { Election, ElectionMember } from '@renderer/data/elections'
 import Constants from '@renderer/utils/constants'
 import dayjs from 'dayjs'
 
@@ -83,4 +83,101 @@ export function formatVotes(votes: number): string {
 export function formatElectionDate(date: string): string {
   const parsed = dayjs(date)
   return parsed.isValid() ? parsed.format('YYYY.MM.DD') : date
+}
+
+/** 名次所属分组名（星光 / 高飞 / 梦想 / 未来组）；超出分段规则返回空串 */
+export function sectionTitleOf(rank: number): string {
+  return SECTION_RULES.find(rule => rank <= rule.upTo)?.title ?? ''
+}
+
+/**
+ * 与上一届总选排名相比的名次变动：
+ * - up / down：上届也入选，delta 为上升 / 下降的名次数（正数）
+ * - same：名次持平
+ * - new：此前从未入选（首次入选）
+ * - return：曾经入选，但上一届落选
+ */
+export type RankChange
+  = | { kind: 'up' | 'down', delta: number }
+    | { kind: 'same' | 'new' | 'return' }
+
+/**
+ * 计算某成员在某届的名次变动。
+ * elections 须按届数升序；首届没有可比较的上一届，返回 undefined（避免整页都是 NEW 的噪音）。
+ */
+export function rankChange(
+  userId: number,
+  rank: number,
+  ordinal: number,
+  elections: Election[],
+): RankChange | undefined {
+  const index = elections.findIndex(item => item.ordinal === ordinal)
+  if (index <= 0)
+    return undefined
+
+  const previous = elections[index - 1].members.find(member => member.userId === userId)
+  if (previous) {
+    const delta = previous.rank - rank
+    if (delta > 0)
+      return { kind: 'up', delta }
+    if (delta < 0)
+      return { kind: 'down', delta: -delta }
+    return { kind: 'same' }
+  }
+
+  const everRanked = elections
+    .slice(0, index - 1)
+    .some(item => item.members.some(member => member.userId === userId))
+  return { kind: everRanked ? 'return' : 'new' }
+}
+
+/** 名次变动的短文案：▲5 / ▼3 / — / NEW / 回归 */
+export function formatRankChange(change: RankChange): string {
+  switch (change.kind) {
+    case 'up':
+      return `▲${change.delta}`
+    case 'down':
+      return `▼${change.delta}`
+    case 'same':
+      return '—'
+    case 'new':
+      return 'NEW'
+    case 'return':
+      return '回归'
+  }
+}
+
+/** 成员在某一届的总选履历；未入选的届次 rank 为空，供走势图断线 */
+export interface ElectionHistoryEntry {
+  ordinal: number
+  year: number
+  theme: string
+  /** 总选名次（未入选为 undefined） */
+  rank?: number
+  /** 当届票数（未公布或未入选为 undefined） */
+  votes?: number
+  /** 当届所属团体（未入选时取新人榜里的团体，都没有则 undefined） */
+  group?: string
+  /** 新人榜名次（未上新人榜为 undefined） */
+  newcomerRank?: number
+  /** 与上一届相比的名次变动（仅入选的届次） */
+  change?: RankChange
+}
+
+/** 某成员（按 userId）在全部届次的履历，按届数升序，每届一条 */
+export function memberHistory(userId: number, elections: Election[]): ElectionHistoryEntry[] {
+  return elections.map((election) => {
+    const member = election.members.find(item => item.userId === userId)
+    const newcomer = election.newcomers.find(item => item.userId === userId)
+    return {
+      ordinal: election.ordinal,
+      year: election.year,
+      theme: election.theme,
+      rank: member?.rank,
+      votes: member?.votes,
+      group: member?.group ?? newcomer?.group,
+      newcomerRank: newcomer?.rank,
+      change: member ? rankChange(userId, member.rank, election.ordinal, elections) : undefined,
+    }
+  })
 }

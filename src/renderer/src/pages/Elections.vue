@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import type { ElectionMember } from '@renderer/data/elections'
+import type { RankChange } from '@renderer/utils/election'
+import ElectionHistoryDialog from '@renderer/components/election/ElectionHistoryDialog.vue'
 import ElectionRankCard from '@renderer/components/election/ElectionRankCard.vue'
+import RankChangeChip from '@renderer/components/election/RankChangeChip.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { ELECTIONS } from '@renderer/data/elections'
@@ -11,6 +14,7 @@ import {
   formatVotes,
   groupColor,
   medalColor,
+  rankChange,
 } from '@renderer/utils/election'
 import { computed, ref } from 'vue'
 
@@ -18,6 +22,7 @@ import { computed, ref } from 'vue'
  * 总选页：按年份查看 SNH48 GROUP 历届年度总选的最终名次。
  * 御三家（前三名）在页顶做成加冕领奖台，其余名次按官网口径切成星光 / 高飞 / 梦想 / 未来组；
  * 总选排名与新人榜是并列的两份榜单，用页内 tab 切换查看。
+ * 总选排名的每个名次标出较上届的变动；点任一成员打开她的历届总选履历。
  */
 
 /** 年份切换 tab：倒序，最新一届在最左，首屏不必横向滚动 */
@@ -78,6 +83,31 @@ const championStyle = computed(() => {
   const color = champion.value ? groupColor(champion.value.group) : ''
   return color ? { '--gc': color } : undefined
 })
+
+/** 本届总选排名每位成员较上届的名次变动（userId → 变动）；首届没有上一届，整张表为空 */
+const changes = computed(() => {
+  const map = new Map<number, RankChange>()
+  const { ordinal, members } = election.value
+  for (const member of members) {
+    const change = rankChange(member.userId, member.rank, ordinal, ELECTIONS)
+    if (change)
+      map.set(member.userId, change)
+  }
+  return map
+})
+
+/** 历届履历弹窗：当前查看的成员，null 为关闭 */
+const historyMember = ref<ElectionMember | null>(null)
+
+function openHistory(member: ElectionMember) {
+  historyMember.value = member
+}
+
+/** 在履历里点某一届：切到那一届并关掉弹窗 */
+function jumpToYear(target: number) {
+  year.value = String(target)
+  historyMember.value = null
+}
 </script>
 
 <template>
@@ -106,6 +136,12 @@ const championStyle = computed(() => {
               class="podium-spot"
               :class="`is-${spot.role}`"
               :style="spotStyle(spot.member)"
+              role="button"
+              tabindex="0"
+              :aria-label="`${spot.member.name}，第 ${spot.member.rank} 名，查看总选履历`"
+              @click="openHistory(spot.member)"
+              @keydown.enter.prevent="openHistory(spot.member)"
+              @keydown.space.prevent="openHistory(spot.member)"
             >
               <span v-if="spot.role === 'champion'" class="spot-tag">
                 <MediaIcon name="crownFilled" :size="14" />
@@ -130,6 +166,7 @@ const championStyle = computed(() => {
               <p class="spot-sub">
                 <span class="spot-group">{{ spot.member.group }}</span>
                 <span v-if="spot.member.votes" class="spot-votes">{{ formatVotes(spot.member.votes) }} 票</span>
+                <RankChangeChip v-if="changes.get(spot.member.userId)" :change="changes.get(spot.member.userId)!" />
               </p>
             </div>
           </div>
@@ -175,11 +212,14 @@ const championStyle = computed(() => {
                 :key="member.rank"
                 :member="member"
                 :index="index"
+                :change="changes.get(member.userId)"
+                @open="openHistory"
               />
             </div>
           </template>
         </template>
 
+        <!-- 新人榜不标名次变动：新人没有可比的上一届 -->
         <template v-else>
           <div class="rank-grid">
             <ElectionRankCard
@@ -187,11 +227,19 @@ const championStyle = computed(() => {
               :key="`newcomer-${member.rank}`"
               :member="member"
               :index="index"
+              @open="openHistory"
             />
           </div>
         </template>
       </div>
     </el-scrollbar>
+
+    <ElectionHistoryDialog
+      :member="historyMember"
+      :current-year="election.year"
+      @close="historyMember = null"
+      @select-year="jumpToYear"
+    />
   </div>
 </template>
 
@@ -255,6 +303,28 @@ const championStyle = computed(() => {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: transform 0.22s ease;
+
+  &:hover {
+    transform: translateY(-3px);
+  }
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--medal) 70%, transparent);
+    outline-offset: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .podium-spot {
+    transition: none;
+
+    &:hover {
+      transform: none;
+    }
+  }
 }
 
 /* 领奖台基座：一截名次色的台面，冠军的最宽最高 */

@@ -5,8 +5,12 @@ import {
   avatarUrl,
   buildSections,
   formatElectionDate,
+  formatRankChange,
   formatVotes,
   groupColor,
+  memberHistory,
+  rankChange,
+  sectionTitleOf,
 } from '../src/renderer/src/utils/election'
 
 /** 造 n 个连续名次的假成员，用于分段测试 */
@@ -156,5 +160,83 @@ describe('elections 数据集自检', () => {
       for (const member of election.newcomers)
         expect(member.votes).toBeUndefined()
     }
+  })
+})
+
+/** 造一届只含给定 (userId, rank) 的假总选，用于名次变动测试 */
+function makeElection(ordinal: number, ranks: Array<[number, number]>, newcomers: Array<[number, number]> = []) {
+  const toMember = ([userId, rank]: [number, number]) => ({ rank, name: `成员${userId}`, group: 'SNH48', userId })
+  return {
+    ordinal,
+    year: 2013 + ordinal,
+    theme: `主题${ordinal}`,
+    date: `${2013 + ordinal}-07-01`,
+    members: ranks.map(toMember),
+    newcomers: newcomers.map(toMember),
+  }
+}
+
+describe('rankChange（较上届名次变动）', () => {
+  const elections = [
+    makeElection(1, [[1, 1], [2, 2], [3, 3]]),
+    makeElection(2, [[2, 1], [1, 2], [4, 3]]),
+    makeElection(3, [[3, 1], [2, 2], [1, 5]]),
+  ]
+
+  it('首届没有上一届，返回 undefined', () => {
+    expect(rankChange(1, 1, 1, elections)).toBeUndefined()
+  })
+
+  it('上升 / 下降 / 持平', () => {
+    expect(rankChange(2, 1, 2, elections)).toEqual({ kind: 'up', delta: 1 })
+    expect(rankChange(1, 2, 2, elections)).toEqual({ kind: 'down', delta: 1 })
+    expect(rankChange(2, 2, 3, elections)).toEqual({ kind: 'down', delta: 1 })
+    expect(rankChange(1, 5, 3, elections)).toEqual({ kind: 'down', delta: 3 })
+  })
+
+  it('从未入选为 new，曾入选但上届落选为 return', () => {
+    expect(rankChange(4, 3, 2, elections)).toEqual({ kind: 'new' })
+    expect(rankChange(3, 1, 3, elections)).toEqual({ kind: 'return' })
+  })
+
+  it('formatRankChange 文案', () => {
+    expect(formatRankChange({ kind: 'up', delta: 5 })).toBe('▲5')
+    expect(formatRankChange({ kind: 'down', delta: 3 })).toBe('▼3')
+    expect(formatRankChange({ kind: 'same' })).toBe('—')
+    expect(formatRankChange({ kind: 'new' })).toBe('NEW')
+    expect(formatRankChange({ kind: 'return' })).toBe('回归')
+  })
+})
+
+describe('memberHistory（成员历届履历）', () => {
+  const elections = [
+    makeElection(1, [[1, 1]]),
+    makeElection(2, [[2, 1]], [[1, 4]]),
+    makeElection(3, [[1, 7]]),
+  ]
+
+  it('每届一条，未入选的届次 rank 为空，新人榜名次单独记录', () => {
+    const history = memberHistory(1, elections)
+    expect(history.map(entry => entry.rank)).toEqual([1, undefined, 7])
+    expect(history[1].newcomerRank).toBe(4)
+    expect(history[1].group).toBe('SNH48')
+    expect(history[2].change).toEqual({ kind: 'return' })
+    expect(history[0].change).toBeUndefined()
+  })
+
+  it('真实数据：吴哲晗首届第 1 名', () => {
+    const first = ELECTIONS[0].members[0]
+    expect(memberHistory(first.userId, ELECTIONS)[0].rank).toBe(1)
+  })
+})
+
+describe('sectionTitleOf（名次所属分组）', () => {
+  it('按分组上界归类', () => {
+    expect(sectionTitleOf(1)).toBe('星光组')
+    expect(sectionTitleOf(16)).toBe('星光组')
+    expect(sectionTitleOf(17)).toBe('高飞组')
+    expect(sectionTitleOf(48)).toBe('梦想组')
+    expect(sectionTitleOf(66)).toBe('未来组')
+    expect(sectionTitleOf(67)).toBe('')
   })
 })

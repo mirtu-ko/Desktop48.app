@@ -1,17 +1,26 @@
 <script setup lang="ts">
 import type { ElectionMember } from '@renderer/data/elections'
+import type { RankChange } from '@renderer/utils/election'
+import RankChangeChip from '@renderer/components/election/RankChangeChip.vue'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { avatarUrl, formatVotes, groupColor, medalColor } from '@renderer/utils/election'
 import { computed, ref, watch } from 'vue'
 
 /**
  * 总选名次卡：复用成员卡的头像环与卡片皮肤（card-item / avatar-wrap，见 app.scss）。
- * 御三家在页顶领奖台单独展示，卡片从第四名起渲染；这里只补名次徽章与票数。
+ * 御三家在页顶领奖台单独展示，卡片从第四名起渲染；这里只补名次徽章、票数与较上届的名次变动。
+ * 点击（或聚焦后回车 / 空格）抛出 open，由页面打开该成员的总选履历。
  */
 const props = defineProps<{
   member: ElectionMember
   /** 网格内序号：驱动入场错峰（--i），封顶 20 */
   index: number
+  /** 较上届的名次变动；不传则不显示（首届、新人榜） */
+  change?: RankChange
+}>()
+
+const emit = defineEmits<{
+  open: [member: ElectionMember]
 }>()
 
 /** 前三名走奖牌色（名次徽章与头像环），其余走团色 */
@@ -64,7 +73,17 @@ const cardStyle = computed(() => {
 </script>
 
 <template>
-  <div class="rank-card card-item" :style="cardStyle">
+  <div
+    class="rank-card card-item"
+    :style="cardStyle"
+    role="button"
+    tabindex="0"
+    :aria-label="`${member.name}，第 ${member.rank} 名，查看总选履历`"
+    @click="emit('open', member)"
+    @keydown.enter.prevent="emit('open', member)"
+    @keydown.space.prevent="emit('open', member)"
+  >
+    <RankChangeChip v-if="change" :change="change" class="rank-change-corner" />
     <div class="avatar-slot">
       <div class="avatar-wrap">
         <span class="avatar-flow" />
@@ -100,6 +119,20 @@ const cardStyle = computed(() => {
   /* backwards 而非 both：both 会让动画收尾值常驻，压掉 hover 的 transform */
   animation: rank-in 0.34s ease backwards;
   animation-delay: calc(var(--i, 0) * 0.022s);
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--avatar-accent, var(--brand-primary)) 70%, transparent);
+    outline-offset: 2px;
+  }
+}
+
+/* 名次变动挂在卡片右上角，不挤占名字与票数那一行 */
+.rank-change-corner {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
 }
 
 .rank-meta {
