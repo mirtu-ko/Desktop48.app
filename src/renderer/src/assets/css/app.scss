@@ -788,6 +788,12 @@ body,
   }
 }
 
+/* 总选履历卡：内容是一张走势图 + 一列明细，比成员 / 专辑卡窄一档 */
+.detail-card-dialog.election-history-dialog.el-dialog {
+  width: min(92vw, 660px);
+  height: min(86vh, 640px);
+}
+
 /* 卡面：左右怎么分栏由调用方定（成员卡是上立绘下操作条，专辑卡是左专辑栏右曲目） */
 .detail-card {
   --accent: var(--brand-primary);
