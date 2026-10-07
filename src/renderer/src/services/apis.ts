@@ -86,8 +86,10 @@ async function syncInfo(): Promise<SyncInfoContent> {
 
 /**
  * 直播列表
+ * @param next 翻页游标，首页传 '0'
+ * @param options 空态轮询这类后台调用传 `{ silent: true }`，失败不弹全局提示
  */
-function lives(next: string = '0'): Promise<LiveListContent> {
+function lives(next: string = '0', options?: RequestOptions): Promise<LiveListContent> {
   const data = {
     next,
     loadMore: 'true',
@@ -97,11 +99,11 @@ function lives(next: string = '0'): Promise<LiveListContent> {
     record: 'false',
   }
 
-  return list(data)
+  return list(data, options)
 }
 
 /**
- * 回放列表
+ * 回放列表：requestOptions 传 `{ silent: true }` 时失败不弹全局提示（空态预告这类后台调用用）
  */
 function playbackList({
   next = '0',
@@ -113,7 +115,7 @@ function playbackList({
   userId: string
   teamId: string
   groupId: string
-}): Promise<LiveListContent> {
+}, requestOptions?: RequestOptions): Promise<LiveListContent> {
   const data = {
     next,
     loadMore: 'true',
@@ -123,12 +125,12 @@ function playbackList({
     record: 'true',
   }
 
-  return list(data)
+  return list(data, requestOptions)
 }
 
 /** 直播列表通用请求：参数原样透传（next 游标翻页 + 筛选） */
-function list(data: object): Promise<LiveListContent> {
-  return request<LiveListContent>(ApiUrls.LIVE_LIST_URL, data, {})
+function list(data: object, options?: RequestOptions): Promise<LiveListContent> {
+  return request<LiveListContent>(ApiUrls.LIVE_LIST_URL, data, {}, options)
 }
 
 /**
@@ -196,15 +198,16 @@ async function musicAlbums(): Promise<MusicAlbum[]> {
  * @param groupId 团体 id，取值见 Constants.GroupTabs，0=全部
  * @param next 翻页游标，首页传 '0'
  * @param record true=可回放的已结束公演，false=排期/进行中
+ * @param options 空态预告这类后台调用传 `{ silent: true }`，失败不弹全局提示
  */
-function openLives(groupId: number = 0, next: string = '0', record: boolean = false): Promise<LiveListContent<OpenLive>> {
+function openLives(groupId: number = 0, next: string = '0', record: boolean = false, options?: RequestOptions): Promise<LiveListContent<OpenLive>> {
   const data = {
     groupId,
     next,
     debug: false,
     record,
   }
-  return request<LiveListContent<OpenLive>>(ApiUrls.OPEN_LIVE_LIST_URL, data, {})
+  return request<LiveListContent<OpenLive>>(ApiUrls.OPEN_LIVE_LIST_URL, data, {}, options)
 }
 
 /**
