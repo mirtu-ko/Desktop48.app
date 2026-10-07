@@ -8,6 +8,9 @@ import type { MemberDetail } from '../../src/renderer/src/utils/member-merge'
 export function makeMember(overrides: Partial<MemberDetail> & { realName: string }): MemberDetail {
   return {
     sid: '0',
+    userId: undefined,
+    groupId: undefined,
+    adjunctId: undefined,
     nickname: '',
     abbr: '',
     avatar: '',

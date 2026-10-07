@@ -123,6 +123,28 @@ function colorVarStyle(name: string, color: string | undefined): Record<string, 
   return hex ? { [name]: hex } : undefined
 }
 
+/** 亮底上用的深墨（带一点品牌紫，比纯黑柔和） */
+const DARK_INK = '#2b2440'
+
+/**
+ * 依据背景亮度挑可读的前景色：亮底给深墨，暗底给纯白。
+ *
+ * 分团 tab 的激活态用它 —— 各团体色的明度跨度极大（SNH48 #8FD3F6 的浅蓝 ↔ CGT48 #D21217 的深红），
+ * 一律用白字会让浅色底上的文字糊成一片，激活与未激活就分不出来了。
+ * 认不出颜色（如 `var(--color-members)` 这类 CSS 变量）时按白字兜底：现有的变量色都是中深色。
+ */
+function readableInk(background: string | undefined): string {
+  const matched = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(toHex(background))
+  if (!matched)
+    return '#fff'
+  const raw = matched[1]
+  const full = raw.length === 3 ? raw.replace(/./g, char => char + char) : raw
+  const [r, g, b] = [0, 2, 4].map(offset => Number.parseInt(full.slice(offset, offset + 2), 16))
+  // sRGB 加权亮度，够用即可，不必上 gamma 校正
+  const luma = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return luma > 0.62 ? DARK_INK : '#fff'
+}
+
 /**
  * 纯函数工具集：不依赖 DOM、IPC 或响应式状态。
  */
@@ -137,6 +159,7 @@ const Tools = {
   normalizeUserId,
   toHex,
   colorVarStyle,
+  readableInk,
 }
 
 export default Tools

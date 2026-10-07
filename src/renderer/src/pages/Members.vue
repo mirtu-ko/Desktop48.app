@@ -2,8 +2,11 @@
 import type { MemberSection } from '@renderer/utils/member-list'
 import type { MemberDetail } from '@renderer/utils/member-merge'
 import type { SortKey } from '@renderer/utils/member-sort'
+import type { StatsScope } from '@renderer/utils/member-stats'
 import { Close, Grid, Menu } from '@element-plus/icons-vue'
+import MemberBirthdayBanner from '@renderer/components/member/MemberBirthdayBanner.vue'
 import MemberCard from '@renderer/components/member/MemberCard.vue'
+import MemberStatsBoard from '@renderer/components/member/MemberStatsBoard.vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
@@ -15,26 +18,47 @@ import { useMemberSync } from '@renderer/composables/use-member-sync'
 import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { useMemberTreeStore } from '@renderer/stores/member-tree'
 import Constants from '@renderer/utils/constants'
+import { monthBirthdays } from '@renderer/utils/member-birthday'
+import { excludeMembers } from '@renderer/utils/member-exclude'
 import { memberCardKey } from '@renderer/utils/member-list'
 import { buildAdjuncts, mergeMembers } from '@renderer/utils/member-merge'
 import { SORT_OPTIONS } from '@renderer/utils/member-sort'
+import { STATS_ALL_SCOPE } from '@renderer/utils/member-stats'
 import { useEventListener } from '@vueuse/core'
 import { ElMessage } from 'element-plus'
 import { computed, onActivated, onDeactivated, onMounted, ref } from 'vue'
 
 /** 成员库页面：分团 tab + 工具条 + 分区卡片网格 + 详情抽屉。本文件只留布局与交互 */
 
-/** 顶部 tab：5 个分团 + 末尾「成员库」。key 一律是 groupId，与公演页共用 Constants.GroupTabs */
+/** 顶部 tab：5 个分团 + 末尾「成员库」与「数据」。key 一律是 groupId，与公演页共用 Constants.GroupTabs */
 const LIBRARY_KEY = 'library'
+/** 数据看板 tab：与其它 tab 不同，它不筛人，而是把成员库全量摊成图表（见 components/member/MemberStatsBoard.vue） */
+const STATS_KEY = 'stats'
 const GROUP_TAB_KEYS = ['10', '12', '11', '14', '21']
 
 const MEMBER_TABS: Array<{ label: string, key: string, color: string }> = [
   ...GROUP_TAB_KEYS.map(key => Constants.GroupTabs.find(tab => tab.key === key) ?? { label: key, key, color: '' }),
   { label: '成员库', key: LIBRARY_KEY, color: 'var(--color-members)' },
+  { label: '数据看板', key: STATS_KEY, color: 'var(--color-albums)' },
 ]
 
 const activeKey = ref('10')
 const isLibrary = computed(() => activeKey.value === LIBRARY_KEY)
+const isStats = computed(() => activeKey.value === STATS_KEY)
+
+/**
+ * 数据看板的统计范围：**不复用左上角的 tab**。
+ * 左上角 tab 管的是成员列表（切 tab 就换一批卡），看板要的是「全库一眼看全」，
+ * 且分团范围在「数据」tab 里也能随时切 —— 两套状态绑在一起会让用户切进来先看到 40 人而不是 200 人。
+ * GroupTabs 第一项就是「全部」（key '0'），直接拿它当选项表。
+ */
+const STATS_SCOPES: StatsScope[] = Constants.GroupTabs.map(tab => ({
+  label: tab.label,
+  key: tab.key,
+  color: tab.color || undefined,
+}))
+
+const statsScope = ref(STATS_ALL_SCOPE)
 
 /** 合并后的成员列表：成员树（starInfo）为骨架，allmembers 补官网字段，见 utils/member-merge.ts */
 const members = ref<MemberDetail[]>([])
@@ -119,6 +143,21 @@ const emptyText = computed(() => normalizedKeyword.value ? '没有匹配的成�
 // 首次/切换后无成员数据时展示骨架；已有数据刷新不整页遮罩
 const showSkeleton = computed(() => loading.value && members.value.length === 0)
 
+// ===== 生日墙 =====
+
+/** 「今天」的基准时刻：页面被 keep-alive 常驻，重新激活时刷新一次，跨零点后倒计时才不会算错 */
+const today = ref(new Date())
+
+/** 当前 tab 范围内的成员（不接搜索词）：生日墙跟着分团 tab 走，与下方列表同一批人 */
+const tabMembers = computed(() =>
+  isStats.value
+    ? []
+    : members.value.filter(member => isLibrary.value || String(member.groupId) === activeKey.value),
+)
+
+/** 本月寿星（含本月已过完的），按日期升序；为空时整块生日墙不渲染 */
+const monthEntries = computed(() => monthBirthdays(tabMembers.value, today.value))
+
 // ===== 详情卡片的 ↑ / ↓ 切换 =====
 
 /** 按当前可见顺序（分区顺序 + 分区内排序）铺平成一条链，切成员不跳出当前 tab / 搜索结果 */
@@ -145,6 +184,7 @@ function stepMember(delta: number) {
 }
 
 onMounted(() => {
+  today.value = new Date()
   fetchMembers()
   refreshBlockedMembers()
   refreshFollowedMembers()
@@ -161,7 +201,9 @@ async function fetchMembers() {
       window.mainAPI.getAllMembers(),
     ])
     const merged = mergeMembers(tree, payload?.allmembers)
-    members.value = [...merged, ...buildAdjuncts(merged, tree, payload?.adjuncts)]
+    // 在取数出口一次性屏蔽非 48 系衍生团体（丝芭影视 / 燃烧吧团魂 / Error404Girls / 新星闪耀计划）：
+    // 列表分区、人数文案、生日墙、数据看板全部读 members，在这里滤掉就不必每处消费点各滤一遍
+    members.value = excludeMembers([...merged, ...buildAdjuncts(merged, tree, payload?.adjuncts)])
   }
   catch (error) {
     console.error('获取成员信息失败:', error)
@@ -206,13 +248,15 @@ const keyboardEnabled = ref(true)
 
 onActivated(() => {
   keyboardEnabled.value = true
+  // 页面长期驻留内存：每次重新进入都重取「今天」，生日倒计时不会停在旧日期
+  today.value = new Date()
 })
 onDeactivated(() => {
   keyboardEnabled.value = false
 })
 
 function onKeydown(event: KeyboardEvent) {
-  if (!keyboardEnabled.value)
+  if (!keyboardEnabled.value || isStats.value)
     return
   // 抽屉 / 对话框打开时不抢按键（Esc 归弹层）
   if (document.querySelector('.el-overlay:not([style*="display: none"])'))
@@ -239,8 +283,9 @@ useEventListener(window, 'keydown', onKeydown)
     <!-- 左上角浮动分团切换：5 个分团 + 成员库；双击当前 tab 刷新列表 -->
     <FloatingTabBar :tabs="MEMBER_TABS" :active="activeKey" @change="changeTab" @refresh="fetchMembers" />
 
-    <!-- 工具条：搜索 / 排序 / 密度 / 计数。放在滚动区之外，滚列表时不会把搜索框滚走 -->
-    <div class="member-toolbar">
+    <!-- 工具条：搜索 / 排序 / 密度 / 计数。放在滚动区之外，滚列表时不会把搜索框滚走。
+         数据看板不吃这些控件，整条隐藏（顶部让位改由看板自身的 --page-pad 承担） -->
+    <div v-if="!isStats" class="member-toolbar">
       <label class="search-box" :class="{ 'is-focused': searchFocused }">
         <MediaIcon name="search" :size="14" />
         <input
@@ -308,77 +353,97 @@ useEventListener(window, 'keydown', onKeydown)
     </div>
 
     <el-scrollbar class="scrollbar-wrapper">
-      <CardSkeletonGrid
-        v-if="showSkeleton"
-        class="members-skeleton"
-        :count="12"
-        min-item-width="118px"
-        gap="6px"
-        aspect-ratio="1"
-        media-radius="50%"
-        :line-widths="[68, 44]"
+      <!-- 数据看板：与成员列表互斥的整屏视图，不吃搜索 / 排序 / 密度 -->
+      <MemberStatsBoard
+        v-if="isStats"
+        v-model:scope="statsScope"
+        class="members-stats"
+        :members="members"
+        :scopes="STATS_SCOPES"
+        @select="selectedMember = $event"
       />
-      <div v-else class="members-container">
-        <!-- 分区：一层极淡的队色底 + 同色描边，让每支队伍自成一块，整页不再是一片白 -->
-        <section
-          v-for="section in sections"
-          :key="section.key"
-          class="group-section"
-          :class="{ 'is-muted': section.muted }"
-          :style="sectionStyle(section)"
-        >
-          <h2 class="team-title">
-            <!-- 徽章盒子固定尺寸，保证各分区标题列起点一致 -->
-            <span class="team-badge-box">
-              <img
-                v-if="badgeSrc(section)"
-                class="team-badge-img"
-                :src="badgeSrc(section)"
-                alt=""
+
+      <template v-else>
+        <CardSkeletonGrid
+          v-if="showSkeleton"
+          class="members-skeleton"
+          :count="12"
+          min-item-width="118px"
+          gap="6px"
+          aspect-ratio="1"
+          media-radius="50%"
+          :line-widths="[68, 44]"
+        />
+        <div v-else class="members-container">
+          <!-- 生日墙：本月寿星横幅，跟着当前分团 tab 走；本月无人过生日时整块不渲染 -->
+          <MemberBirthdayBanner
+            v-if="monthEntries.length"
+            :entries="monthEntries"
+            @select="selectedMember = $event"
+          />
+
+          <!-- 分区：一层极淡的队色底 + 同色描边，让每支队伍自成一块，整页不再是一片白 -->
+          <section
+            v-for="section in sections"
+            :key="section.key"
+            class="group-section"
+            :class="{ 'is-muted': section.muted }"
+            :style="sectionStyle(section)"
+          >
+            <h2 class="team-title">
+              <!-- 徽章盒子固定尺寸，保证各分区标题列起点一致 -->
+              <span class="team-badge-box">
+                <img
+                  v-if="badgeSrc(section)"
+                  class="team-badge-img"
+                  :src="badgeSrc(section)"
+                  alt=""
+                >
+              </span>
+              <span
+                class="section-title"
+                :class="{ 'section-title--muted': section.muted }"
               >
-            </span>
-            <span
-              class="section-title"
-              :class="{ 'section-title--muted': section.muted }"
-            >
-              {{ section.title }}
-              <span class="section-count">{{ section.members.length }}</span>
-            </span>
-          </h2>
+                {{ section.title }}
+                <span class="section-count">{{ section.members.length }}</span>
+              </span>
+            </h2>
 
-          <!-- 卡片列表：TransitionGroup 负责排序 / 密度 / 搜索变化时的 FLIP 位移与错峰入场 -->
-          <TransitionGroup name="card" tag="div" class="member-list" :class="{ 'is-compact': compact }">
-            <!-- key 见 memberCardKey：兼任记录走档案主键，官网独有的补充成员走 sid 兜底 -->
-            <MemberCard
-              v-for="(member, index) in section.members"
-              :key="memberCardKey(member)"
-              :member="member"
-              :index="index"
-              :compact="compact"
-              :keyword="keyword"
-              :blocked="!!member.userId && isBlocked(member.userId)"
-              :followed="!!member.userId && isFollowed(member.userId)"
-              @select="selectedMember = member"
-              @toggle-follow="toggleFollowMember"
-              @toggle-block="toggleBlockMember"
-            />
-          </TransitionGroup>
-        </section>
+            <!-- 卡片列表：TransitionGroup 负责排序 / 密度 / 搜索变化时的 FLIP 位移与错峰入场 -->
+            <TransitionGroup name="card" tag="div" class="member-list" :class="{ 'is-compact': compact }">
+              <!-- key 见 memberCardKey：兼任记录走档案主键，官网独有的补充成员走 sid 兜底 -->
+              <MemberCard
+                v-for="(member, index) in section.members"
+                :key="memberCardKey(member)"
+                :member="member"
+                :index="index"
+                :compact="compact"
+                :keyword="keyword"
+                :blocked="!!member.userId && isBlocked(member.userId)"
+                :followed="!!member.userId && isFollowed(member.userId)"
+                @select="selectedMember = member"
+                @toggle-follow="toggleFollowMember"
+                @toggle-block="toggleBlockMember"
+              />
+            </TransitionGroup>
+          </section>
 
-        <el-empty
-          v-if="!loading && memberCount === 0"
-          class="page-empty"
-          :image-size="120"
-          :description="emptyText"
-        >
-          <el-button v-if="normalizedKeyword" type="primary" @click="clearKeyword">
-            清空搜索
-          </el-button>
-        </el-empty>
-      </div>
-      <div v-if="memberCount > 0" class="list-end">
-        {{ countText }}
-      </div>
+          <el-empty
+            v-if="!loading && memberCount === 0"
+            class="page-empty"
+            :image-size="120"
+            :description="emptyText"
+          >
+            <el-button v-if="normalizedKeyword" type="primary" @click="clearKeyword">
+              清空搜索
+            </el-button>
+          </el-empty>
+        </div>
+
+        <div v-if="memberCount > 0" class="list-end">
+          {{ countText }}
+        </div>
+      </template>
     </el-scrollbar>
 
     <!-- 右上角浮动操作条：更新成员数据库 -->
@@ -556,6 +621,11 @@ useEventListener(window, 'keydown', onKeydown)
 .members-container {
   /* 顶部留白由工具条承担，这里只留内容间距；底部留卡片悬停上浮与阴影 */
   padding: 6px 16px 8px;
+}
+
+/* 数据看板：工具条整条隐藏后，顶部让位改由这里的 --page-pad 承担（已含浮动 tab 栏高度） */
+.members-stats {
+  padding: var(--page-pad);
 }
 
 .members-skeleton {

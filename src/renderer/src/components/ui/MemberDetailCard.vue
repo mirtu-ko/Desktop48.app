@@ -3,6 +3,7 @@ import type { MemberDetail } from '@renderer/utils/member-merge'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Close, Film, Hide, Link, Star, StarFilled, View } from '@element-plus/icons-vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import Constants from '@renderer/utils/constants'
+import { formatBirthdayCountdown, memberDaysUntilBirthday } from '@renderer/utils/member-birthday'
 import { toExperienceLines, toTags } from '@renderer/utils/member-text'
 import Tools from '@renderer/utils/tools'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -57,8 +58,23 @@ const memberKey = computed(() =>
   `${props.member?.userId ?? props.member?.sid ?? ''}-${props.member?.adjunctId ?? ''}`,
 )
 
-/** 指标卡：总选排名 / 期数 / 身高三项，空值不占位。排名用皇冠图标（与成员卡片同一枚 MediaIcon） */
-const stats = computed(() => {
+/** 指标卡：总选排名 / 期数 / 身高 / 下次生日，空值不占位。排名用皇冠图标（与成员卡片同一枚 MediaIcon） */
+interface StatCell {
+  key: string
+  label: string
+  value: string
+  /** 排名项：整块走队色并配皇冠 */
+  crown: boolean
+  /** 生日恰好在今天：整块点亮 */
+  highlight?: boolean
+}
+
+/** 距下次生日的天数：生日缺失 / 解析不出时为 null（该项不展示）。恒 >= 0，故「已过」不会出现 */
+const birthdayDays = computed(() =>
+  props.member ? memberDaysUntilBirthday(props.member, new Date()) : null,
+)
+
+const stats = computed<StatCell[]>(() => {
   const member = props.member
   if (!member)
     return []
@@ -66,6 +82,13 @@ const stats = computed(() => {
     { key: 'rank', label: '总选排名', value: member.ranking ? `第 ${member.ranking} 名` : '', crown: true },
     { key: 'period', label: '期数', value: member.periodName, crown: false },
     { key: 'height', label: '身高', value: member.height ? `${member.height}cm` : '', crown: false },
+    {
+      key: 'birthday',
+      label: '下次生日',
+      value: birthdayDays.value === null ? '' : formatBirthdayCountdown(birthdayDays.value),
+      crown: false,
+      highlight: birthdayDays.value === 0,
+    },
   ].filter(item => item.value)
 })
 
@@ -258,6 +281,11 @@ function openPlaybacks() {
               <el-tag :type="statusMeta.tag" size="small" effect="light">
                 {{ statusMeta.label }}
               </el-tag>
+              <!-- 今天生日：立绘上直接点亮一枚蛋糕徽章，比右栏的「下次生日」更早被看到 -->
+              <span v-if="birthdayDays === 0" class="bday-pill">
+                <MediaIcon name="cake" :size="12" />
+                今天生日
+              </span>
             </div>
             <p class="p-sub">
               <span v-if="member.nickname">{{ member.nickname }}</span>
@@ -289,7 +317,7 @@ function openPlaybacks() {
               v-for="stat in stats"
               :key="stat.key"
               class="stat"
-              :class="{ 'stat--rank': stat.crown }"
+              :class="{ 'stat--rank': stat.crown, 'stat--birthday': stat.highlight }"
             >
               <p class="stat-label">
                 {{ stat.label }}
@@ -549,6 +577,21 @@ function openPlaybacks() {
   flex-wrap: wrap;
 }
 
+/* 今天生日徽章：立绘底部的鎏金药丸，与「已关注」的荣誉金同一套语言 */
+.bday-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--color-follow) 35%, #000);
+  background: linear-gradient(160deg, #ffe08a, var(--color-follow));
+  box-shadow: 0 3px 10px -3px color-mix(in srgb, var(--color-follow) 75%, transparent);
+}
+
 .p-sub {
   margin: 8px 0 0;
   font-size: 12px;
@@ -645,6 +688,16 @@ function openPlaybacks() {
 
   &--rank .stat-crown {
     color: var(--ring);
+  }
+
+  /* 今天生日：整块转鎏金，与走队色的排名块区分开 */
+  &--birthday {
+    background: color-mix(in srgb, var(--color-follow) 14%, var(--el-bg-color));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-follow) 42%, transparent);
+
+    .stat-value {
+      color: color-mix(in srgb, var(--color-follow) 45%, #3d2c00);
+    }
   }
 }
 

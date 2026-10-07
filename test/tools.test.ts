@@ -162,3 +162,34 @@ describe('tools.colorVarStyle（队色 → 内联 CSS 变量）', () => {
     expect(Tools.colorVarStyle('--tb-color', undefined)).toBeUndefined()
   })
 })
+
+describe('tools.readableInk（按底色亮度挑前景色）', () => {
+  const DARK = '#2b2440'
+
+  it('浅色团体色给深墨：实心药丸上白字会糊成一片', () => {
+    expect(Tools.readableInk('#8FD3F6')).toBe(DARK) // SNH48 浅蓝
+    expect(Tools.readableInk('#FFBA07')).toBe(DARK) // CKG48 琥珀
+    expect(Tools.readableInk('#ABCA14')).toBe(DARK) // GNZ48 黄绿
+    expect(Tools.readableInk('#ffffff')).toBe(DARK)
+  })
+
+  it('深色团体色给白字', () => {
+    expect(Tools.readableInk('#D21217')).toBe('#fff') // CGT48 深红
+    expect(Tools.readableInk('#FE2472')).toBe('#fff') // BEJ48 玫红
+    expect(Tools.readableInk('#6d5ae0')).toBe('#fff') // 品牌紫
+    expect(Tools.readableInk('#000000')).toBe('#fff')
+  })
+
+  it('三位简写与裸 HEX 都认（内部先过 toHex）', () => {
+    expect(Tools.readableInk('#fff')).toBe(DARK)
+    expect(Tools.readableInk('8FD3F6')).toBe(DARK)
+    expect(Tools.readableInk('D21217')).toBe('#fff')
+  })
+
+  it('认不出颜色时按白字兜底：CSS 变量（如 var(--color-members)）解析不了，而现有变量色都是中深色', () => {
+    expect(Tools.readableInk('var(--color-members)')).toBe('#fff')
+    expect(Tools.readableInk('')).toBe('#fff')
+    expect(Tools.readableInk(undefined)).toBe('#fff')
+    expect(Tools.readableInk('rebeccapurple')).toBe('#fff')
+  })
+})
