@@ -27,15 +27,7 @@ import {
 import Tools from '@renderer/utils/tools'
 import { computed, ref } from 'vue'
 
-/**
- * 成员数据看板：把成员库的全量档案摊成几张趣味图表。
- *
- * 统计口径全在 utils/member-stats.ts，本组件只负责取数与铺版。
- * 入参是成员库原始列表（含兼任镜像卡），去重由 canonicalMembers 在内部完成 —— 调用方不必预处理。
- *
- * 范围（scope）由外部 v-model 控制而不是组件内部 state：范围切换会牵动页面级的东西
- * （后续可能要让生日墙 / 列表跟着走），单一数据源放在页面里更稳。
- */
+/** 成员数据看板：统计口径在 utils/member-stats.ts，这里只取数与铺版；范围由页面 v-model。 */
 const props = defineProps<{
   members: MemberDetail[]
   /** 范围选项：全库 + 各分团，由页面按 Constants.GroupTabs 生成 */
@@ -49,17 +41,10 @@ const emit = defineEmits<{
   'update:scope': [key: string]
 }>()
 
-/**
- * 状态口径（全部 / 在团）。它是本组件的内部状态，不走 v-model ——
- * 看板独占「数据」tab 这一整屏，切这个筛选不影响页面上的任何其它东西，
- * 没必要为此把状态提到页面层（范围 scope 不同，见文件头的说明）。
- */
+/** 状态口径：看板内部状态，不影响页面其它区域。 */
 const status = ref<StatsStatus>(STATS_STATUS_ALL)
 
-/**
- * 一人一条的规范列表。**先全库去重，再按范围筛、按状态筛**（scopeMembers / statusMembers 的入参契约）：
- * 反过来的话，兼任镜像卡会被并进它兼任的分团，同一个人在 A / B 两团各算一次。
- */
+/** 先全库去重，再按范围 / 状态筛，避免兼任镜像卡重复计数。 */
 const canonical = computed(() => canonicalMembers(props.members))
 const scoped = computed(() =>
   statusMembers(scopeMembers(canonical.value, props.scope), status.value),
@@ -80,10 +65,7 @@ const birthplaces = computed(() => birthplaceStats(scoped.value))
 const heights = computed(() => heightRanking(scoped.value))
 const heightBuckets = computed(() => heightBucketStats(scoped.value))
 
-/**
- * 四个分区的主题色。分区是「把同类图表圈在一起」的视觉手段，一区一色才能一眼分清；
- * 分区内的图表沿用本区颜色（而不是各给一色）—— 十几张图各色反而更乱。
- */
+/** 分区主题色：同区图表共用一色。 */
 const ACCENT_STRUCTURE = 'var(--color-members)'
 const ACCENT_PROFILE = 'var(--color-albums)'
 const ACCENT_BODY = 'var(--color-follow)'
@@ -94,16 +76,11 @@ interface OverviewTile {
   value: number
   suffix: string
   accent: string
-  /** 悬停说明：磁贴本身的数字口径需要解释时才给（目前只有「荣誉毕业」用到） */
+  /** 悬停说明 */
   title?: string
 }
 
-/**
- * 概览磁贴：每块自带主题色，避免一排一样的数字糊成一片。
- *
- * 状态口径为「在团」时收起「暂休 / 退团」两块 —— 它们恒为 0，同时「成员总数」也会
- * 与「在团」重合成同一个数，于是两者并成一块「在团成员」。留下的都是真有信息量的数字。
- */
+/** 概览磁贴：按状态收起恒为 0 / 重复的数字。 */
 const tiles = computed<OverviewTile[]>(() => {
   const data = overview.value
   const isAllStatus = status.value === STATS_STATUS_ALL
@@ -114,9 +91,7 @@ const tiles = computed<OverviewTile[]>(() => {
       { label: '暂休', value: data.hiatus, suffix: '人', accent: 'var(--color-shows)' },
       { label: '退团', value: data.left, suffix: '人', accent: 'var(--el-text-color-secondary)' },
     )
-    // 荣誉毕业生 / 明星殿堂单列一块：它们在上游也是 status = 1，但不算「在团」（见 statusMembers）。
-    // 不单列的话「在团」缩水 42 人而总数没变，四块相加会少 42，磁贴看起来像算错了。
-    // 鎏金是荣誉语义（与身高榜首同一套语言），位置离「平均身高」那块远，不会撞色。
+    // 荣誉毕业在上游仍是 status=1，但不算「在团」；单列以保持总数可加。
     if (data.honorary > 0) {
       statusTiles.push({
         label: '荣誉毕业',
@@ -136,45 +111,26 @@ const tiles = computed<OverviewTile[]>(() => {
     },
     ...statusTiles,
     { label: '在团队伍', value: data.teams, suffix: '支', accent: 'var(--color-albums)' },
-    // 总选名次走庆典红：与成员页「总选名次」分区的强调色同一套语义
     { label: '有总选名次', value: data.ranked, suffix: '人', accent: 'var(--color-elections)' },
     { label: '平均身高', value: data.averageHeight, suffix: 'cm', accent: 'var(--color-follow)' },
   ]
 })
 
-/** 两列：最高 / 最矮。鎏金只给「最高」的榜首 —— 「最矮」的第一名不值得表彰 */
+/** 身高之最：鎏金只给最高榜首。 */
 const heightColumns = computed(() => [
   { key: 'tallest', label: '最高', highlightTop: true, entries: heights.value.tallest },
   { key: 'shortest', label: '最矮', highlightTop: false, entries: heights.value.shortest },
 ])
 
-/** 范围切换：通知页面改 v-model（本组件不持有范围状态） */
 function pickScope(key: string) {
   if (key !== props.scope)
     emit('update:scope', key)
-}
-
-/** 状态切换：组件内部状态 */
-function pickStatus(key: StatsStatus) {
-  status.value = key
-}
-
-/**
- * 选中态药丸的文字色，按团体色亮度取。
- *
- * 选中态是**实心填充**（未选中只剩淡底 + 同色描边，两者对比太弱 —— 用户报过区分度不够）。
- * 但各团体色明度跨度极大：SNH48 #8FD3F6 是浅蓝、CGT48 #D21217 是深红，
- * 一律白字会让浅色底上的标签糊成一片。范围项没有 color（全库）时按白字兜底。
- */
-function scopeInk(color: string | undefined): string {
-  return Tools.readableInk(color)
 }
 </script>
 
 <template>
   <div class="stats-board">
-    <!-- 筛选条：两个正交维度 —— 范围（分团）× 状态（全部 / 在团）。
-         都不吃左上角的 tab（那个管成员列表），看板自带一份，两者互不影响 -->
+    <!-- 范围和状态是两个正交筛选维度。 -->
     <div class="board-filters">
       <div class="scope-bar">
         <button
@@ -182,7 +138,7 @@ function scopeInk(color: string | undefined): string {
           :key="option.key"
           class="scope-pill"
           :class="{ 'is-active': option.key === scope }"
-          :style="{ '--scope-accent': option.color || 'var(--brand-primary)', '--scope-ink': scopeInk(option.color) }"
+          :style="{ '--scope-accent': option.color || 'var(--brand-primary)', '--scope-ink': Tools.readableInk(option.color) }"
           type="button"
           :title="`按 ${option.label} 统计`"
           @click="pickScope(option.key)"
@@ -202,7 +158,7 @@ function scopeInk(color: string | undefined): string {
             :class="{ 'is-active': option.key === status }"
             type="button"
             :title="option.title"
-            @click="pickStatus(option.key)"
+            @click="status = option.key"
           >
             {{ option.label }}
           </button>
@@ -210,7 +166,7 @@ function scopeInk(color: string | undefined): string {
       </div>
     </div>
 
-    <!-- key 绑 scope + status：换任一筛选时整块重挂，条形图重新播一次生长动画（而不是干巴巴地跳数字） -->
+    <!-- 换筛选时整块重挂，让条形图重新播放生长动画。 -->
     <div :key="`${scope}:${status}`" class="board-body">
       <header class="board-head">
         <h2 class="board-head__title">
@@ -227,7 +183,7 @@ function scopeInk(color: string | undefined): string {
         </p>
       </header>
 
-      <!-- ===== 人员结构：编制怎么排（只放轻量图，两张巨卡挪到最后的「编制明细」） ===== -->
+      <!-- 人员结构：只放轻量图，巨卡放到最后的「队伍明细」。 -->
       <section class="board-section" :style="{ '--sec-accent': ACCENT_STRUCTURE }">
         <h3 class="board-section__title">
           人员结构
@@ -252,14 +208,13 @@ function scopeInk(color: string | undefined): string {
         </div>
 
         <div class="chart-grid">
-          <!-- 分团分布只在「全部」范围下有意义：单团范围里它只有一根满格柱 -->
+          <!-- 分团分布只在全库范围有意义。 -->
           <MemberStatBars v-if="isAll" title="分团分布" :items="groups" :accent="ACCENT_STRUCTURE" />
-          <!-- 入团年份 15 条：排成两列，卡高正好与隔壁的分团分布齐平，也不会撑出卡内滚动条 -->
           <MemberStatBars title="入团年份" :items="joinYears" :accent="ACCENT_STRUCTURE" :columns="2" />
         </div>
       </section>
 
-      <!-- ===== 人群画像：他们是什么样的人 ===== -->
+      <!-- 人群画像 -->
       <section class="board-section" :style="{ '--sec-accent': ACCENT_PROFILE }">
         <h3 class="board-section__title">
           人群画像
@@ -270,14 +225,12 @@ function scopeInk(color: string | undefined): string {
           <MemberStatBars title="星座分布" :items="constellations" :accent="ACCENT_PROFILE" />
           <MemberStatBars title="血型分布" :items="bloodTypes" :accent="ACCENT_PROFILE" />
           <MemberStatBars title="生日月份" :items="birthMonths" :accent="ACCENT_PROFILE" />
-          <!-- 出生地条目多（真实数据 36 个省级行政区）且不截断，占满整行 + 按 300px 列宽自适应多栏。
-               它必须独占一行：若与上面三张挤同一套轨道，第 4 张会独占半行留出大片空白
-               （auto-fit 只折叠「每一行都空」的轨道）。 -->
+          <!-- 出生地条目多，独占一行并自适应多栏。 -->
           <MemberStatBars class="chart-wide" columns="auto" title="出生地分布" :items="birthplaces" :accent="ACCENT_PROFILE" />
         </div>
       </section>
 
-      <!-- ===== 身体数据：分布 + 之最 ===== -->
+      <!-- 身体数据：分布 + 之最 -->
       <section class="board-section" :style="{ '--sec-accent': ACCENT_BODY }">
         <h3 class="board-section__title">
           身体数据
@@ -289,7 +242,6 @@ function scopeInk(color: string | undefined): string {
         <div class="chart-grid">
           <MemberStatBars title="身高分布" :items="heightBuckets" :accent="ACCENT_BODY" />
 
-          <!-- 全看板唯一一块不用条形图的：个体名单比分布更有趣 -->
           <div class="height-card">
             <p class="height-card__title">
               身高之最
@@ -328,12 +280,10 @@ function scopeInk(color: string | undefined): string {
         </div>
       </section>
 
-      <!-- ===== 编制明细：两张「条目数天生就多」的巨卡放最后 =====
-           全库范围下分别有 84 / 31 条，占满整行、卡内按 300px 列宽自适应多栏。放在最前会把首屏
-           占掉一千多像素，星座、血型这些轻量图全被挤到第二屏 —— 用户正是因此以为「星座分布没数据」。 -->
+      <!-- 队伍明细：条目多，放最后避免挤占首屏。 -->
       <section class="board-section" :style="{ '--sec-accent': ACCENT_ESTABLISH }">
         <h3 class="board-section__title">
-          编制明细
+          队伍明细
           <span class="board-section__note">期数与队伍逐项</span>
         </h3>
 
@@ -353,9 +303,7 @@ function scopeInk(color: string | undefined): string {
   gap: 14px;
 }
 
-/* ===== 筛选条：范围（分团）× 状态（全部 / 在团） =====
- * 两个正交维度并排，中间用竖线断开 —— 不加分隔的话六七个药丸会连成一串，
- * 读起来像「同一组单选里选了 全部」，看不出「全部 / 在团」是另一个维度。 */
+/* 范围和状态是两个正交筛选维度。 */
 .board-filters {
   display: flex;
   flex-wrap: wrap;
@@ -369,8 +317,7 @@ function scopeInk(color: string | undefined): string {
   gap: 6px;
 }
 
-/* 状态维度：标签 + 凹陷轨道，与范围的「团体色实心药丸」是两套视觉语言，
- * 两个维度不会被误读成同一个控件的两段 */
+/* 状态维度：标签 + 凹陷轨道。 */
 .status-bar {
   display: flex;
   align-items: center;
@@ -424,11 +371,7 @@ function scopeInk(color: string | undefined): string {
   }
 }
 
-/* 范围药丸：**未选中是淡底 + 同色描边，选中是团体色实心填充**。
- * 之前两端都是淡底（8% ↔ 20%）+ 同色文字，浓度差几乎看不出来，用户报过区分度不够；
- * 改成实心后，选中与否的差别从「深浅」变成「有无」，一眼可辨。
- * 浅色团体色（SNH48 #8FD3F6、CKG48 #FFBA07）上的文字走 --scope-ink ——
- * 由 scopeInk() 按底色亮度取，实心底 + 白字在这两个团上会糊成一片。 */
+/* 范围药丸：选中用团体色实心填充；文字色按底色亮度计算。 */
 .scope-pill {
   --scope-accent: var(--brand-primary);
   --scope-ink: #fff;
@@ -468,7 +411,6 @@ function scopeInk(color: string | undefined): string {
   }
 }
 
-/* 队色圆点：五个分团各有官方色，圆点是比文字更快的识别符号 */
 .scope-pill__dot {
   flex: none;
   width: 7px;
@@ -477,7 +419,7 @@ function scopeInk(color: string | undefined): string {
   background: var(--scope-accent);
 }
 
-/* 实心底上队色圆点会隐形，改用文字色（已是该底的对比色）画点 */
+/* 选中态圆点跟随文字色。 */
 .scope-pill.is-active .scope-pill__dot {
   background: currentColor;
 }
@@ -613,13 +555,7 @@ function scopeInk(color: string | undefined): string {
   color: var(--el-text-color-secondary);
 }
 
-/* ===== 图表区：宽窗三列，窄窗自动堆成一列 =====
- * 下限 360px 而不是 300px：期数 / 队伍这两张图的标签最长（「SNH48 十二期生」），
- * 四列时标签会吃掉大半张卡，条形短得看不出高下。三列下每张卡约 450px，标签与条形都能舒展。
- *
- * align-items: start 而非默认的 stretch：同一排里「分团分布」只有 5 条、「入团年份」有 19 条，
- * 拉伸对齐会在短卡内部留出一大块空白，看起来像没渲染完。让每张卡按内容定高，
- * 空白落回行与行之间，反而像正常的留白。 */
+/* 图表区：宽窗三列，窄窗堆叠；卡片按内容定高。 */
 .chart-grid {
   display: grid;
   align-items: start;
@@ -627,8 +563,6 @@ function scopeInk(color: string | undefined): string {
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
 }
 
-/* 宽版图表占满整行。class 打在子组件根节点上，父级的 scope 属性同样落在那里，
- * 所以这条选择器能直接命中（不需要 :deep）。 */
 .chart-grid > .chart-wide {
   grid-column: 1 / -1;
 }
@@ -642,8 +576,7 @@ function scopeInk(color: string | undefined): string {
   box-shadow: var(--shadow-sm);
 }
 
-/* 与 .stat-bars__title 同一套长相：同排并排时两张卡的标题必须对齐同高，
- * 否则「身高分布」的标题比「身高之最」低几个像素，一眼就看出是两块拼的 */
+/* 与条形图标题保持同一套长相。 */
 .height-card__title {
   display: flex;
   align-items: center;
@@ -682,7 +615,6 @@ function scopeInk(color: string | undefined): string {
   padding: 0;
   list-style: none;
 
-  /* 行间距打在 li 上：.height-row 是 li 里的按钮，二者不是兄弟节点，& + & 在这里不成立 */
   li + li {
     margin-top: 2px;
   }
@@ -715,7 +647,6 @@ function scopeInk(color: string | undefined): string {
   color: var(--el-text-color-placeholder);
   font-variant-numeric: tabular-nums;
 
-  /* 榜首：鎏金，和总选皇冠同一套荣誉语言 */
   &.is-top {
     color: var(--color-follow);
     text-shadow: 0 0 8px color-mix(in srgb, var(--color-follow) 50%, transparent);

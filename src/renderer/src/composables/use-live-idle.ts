@@ -189,6 +189,7 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
       if ((content.liveList?.length ?? 0) > 0) {
         debugLog('list', '空态轮询：检测到新直播 → 交回列表刷新')
         stopPolling()
+        waitingSince.value = 0
         onLiveFound()
       }
     }
@@ -201,10 +202,12 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   function startPolling(): void {
     if (timer)
       return
-    waitingSince.value = Date.now()
-    clock.value = waitingSince.value
-    // 进入空态的前提就是列表刚返回过，把这一刻记为「上次检查」，避免立刻重复请求
-    lastCheckAt.value = waitingSince.value
+    // 离开页面再回来沿用原等待周期；只有发现直播后重置，下一轮空态才重新计时
+    if (!waitingSince.value) {
+      waitingSince.value = Date.now()
+      lastCheckAt.value = waitingSince.value
+    }
+    clock.value = Date.now()
     timer = setInterval(() => {
       void checkLiveOnce()
     }, POLL_INTERVAL)
