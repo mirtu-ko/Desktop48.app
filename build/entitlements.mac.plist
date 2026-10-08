@@ -8,5 +8,8 @@
     <true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
+    <!-- ad-hoc 签名无 Team ID，hardenedRuntime 下必须放开库校验，否则框架加载失败。 -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
   </dict>
 </plist>

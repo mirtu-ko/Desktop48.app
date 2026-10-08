@@ -3,15 +3,36 @@ productName: Desktop48
 directories:
   buildResources: build
 files:
-  - '!**/.vscode/*'
   - '!src/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml,.nvmrc}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,tsconfig.web.tsbuildinfo,vitest.config.ts}'
   - '!{test,docs,.vitest}/**'
+  - '!**/.vitest-run.log'
+  # 本地脚手架 + AI 编码工具目录。
+  - '!**/{.tmp,.preview-shot,.workbuddy*,.trae,.github,.claude,.cursor,.continue,.codex,.gemini,.windsurf,.clinerules,.roo,.kilocode,.specstory,.vscode}/**'
+  # 文件级：MCP 配置里常带第三方 token；aider 会留 .aider.conf.yml / .aider.chat.history.md 等。
+  - '!**/{.mcp.json,.aider*}'
 asarUnpack:
   - resources/**
+electronLanguages:
+  - zh-CN
+  - en-US
+  # ⚠ macOS 必须额外写 zh_CN：win/linux 的 locale 是 locales/zh-CN.pak（连字符），
+  - zh_CN
+# 压缩档位仅影响安装包体积与构建耗时，不影响运行时。
+compression: maximum
+# 需 overrides 把 @electron/fuses 锁 ^2.1.3：1.8.0 判macOS 包路径会把目录名含 .app
+# 的路径误判，致 Windows/Linux 构建报ENOENT。
+electronFuses:
+  # fuse 翻转后二进制签名失效，需 fuses 自行重置一次（依赖 @electron/fuses >= 2.1.3）。
+  resetAdHocDarwinSignature: true
+  runAsNode: false
+  enableNodeCliInspectArguments: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
 win:
   executableName: Desktop48
 nsis:
@@ -20,25 +41,24 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  # 必须显式给 "-"，否则 fuse 翻转后签名被跳过，app 启动即被内核 SIGKILL。
+  identity: '-'
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  # macos-latest / macos-14 / macos-15 都是 arm64（M1）runner，
-  # 不显式写 arch 就只能产出 Apple Silicon 单架构包，Intel Mac 装不上。
-  # 这里两个架构都出；产物名必须带 ${arch}，否则两个架构会撞同一个文件名。
-  # 只出 dmg：zip 是 Squirrel.Mac 自动更新专用的，本项目无自动更新（未依赖 electron-updater），
-  # 去掉可省掉一次 100+MB 的压缩。若以后接入自动更新，必须把 zip 加回来。
+  # 双架构：CI runner 均为 arm64，不写 arch 出不了 Intel 包；产物名须带 ${arch} 防撞名。
+  # 只出 dmg：zip 仅供 Squirrel.Mac 自动更新，本项目未用 electron-updater；接入时需加回。
   target:
     - target: dmg
       arch:
         - x64
         - arm64
   extendInfo:
-    # 只声明实际会触发的权限：目录选择走 dialog.showOpenDialog，会用到这两个。
-    # 摄像头 / 麦克风全仓无 getUserMedia / mediaDevices 引用，故不声明。
+    # 只声明实际触发的权限（目录选择），全仓无摄像头/麦克风调用。
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  # 必须带 ${arch}：x64 与 arm64 两个产物否则会撞同名（Desktop48-0.1.6.dmg）
+  # ${arch} 防止 x64/arm64 产物撞同名。
   artifactName: ${name}-${version}-${arch}.${ext}
 linux:
   target:
