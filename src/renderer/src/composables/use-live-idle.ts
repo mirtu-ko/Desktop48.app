@@ -11,10 +11,10 @@ import { enrichLiveItem } from './use-paged-live-list'
 const POLL_INTERVAL = 60_000
 
 /** 「今晚公演」最多展示几场：空态是等待位，不该被排期挤满 */
-const MAX_PREVIEW_SHOWS = 6
+const MAX_PREVIEW_SHOWS = 4
 
 /** 「看看回放」最多展示几条 */
-const MAX_PREVIEW_PLAYBACKS = 6
+const MAX_PREVIEW_PLAYBACKS = 5
 
 /**
  * 关注成员逐个查回放的并发上限：`playbackList` 只支持单个 userId 过滤，
