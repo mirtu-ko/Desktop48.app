@@ -26,8 +26,6 @@ compression: maximum
 # 需 overrides 把 @electron/fuses 锁 ^2.1.3：1.8.0 判macOS 包路径会把目录名含 .app
 # 的路径误判，致 Windows/Linux 构建报ENOENT。
 electronFuses:
-  # fuse 翻转后二进制签名失效，需 fuses 自行重置一次（依赖 @electron/fuses >= 2.1.3）。
-  resetAdHocDarwinSignature: true
   runAsNode: false
   enableNodeCliInspectArguments: false
   enableNodeOptionsEnvironmentVariable: false
