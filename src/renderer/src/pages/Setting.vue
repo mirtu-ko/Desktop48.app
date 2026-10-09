@@ -52,7 +52,7 @@ const updaterDesc = computed(() => {
     case 'unsupported':
       return s.reason
     default:
-      return '自动检查新版本并升级'
+      return '检查新版本，并下载升级'
   }
 })
 
@@ -346,7 +346,7 @@ function hideLogo(event: Event) {
           >
             <el-icon><Refresh /></el-icon>
           </span>
-          <div class="row-text">
+          <div class="row-text row-text--fluid">
             <div class="row-title">
               版本
               <span v-if="appVersion" class="row-version">v{{ appVersion }}</span>
@@ -524,6 +524,12 @@ function hideLogo(event: Event) {
     line-height: 1.4;
     color: var(--el-text-color-secondary);
   }
+}
+
+.row-text--fluid {
+  /* 更新行没有中间控件，允许描述用满剩余宽度；普通行仍保持 190px 对齐 */
+  flex: 1;
+  width: auto;
 }
 
 .row-control {
