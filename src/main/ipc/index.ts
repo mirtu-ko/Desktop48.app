@@ -12,6 +12,7 @@ import { registerFloatWindowIPC } from './register-float-window-ipc'
 import { registerStreamIPC } from './register-stream-ipc'
 import { registerSystemIPC } from './register-system-ipc'
 import { registerTaskIPC } from './register-task-ipc'
+import { registerUpdaterIPC } from './register-updater-ipc'
 import { registerWindowIPC } from './register-window-ipc'
 
 export function registerAllIPC(): void {
@@ -23,4 +24,5 @@ export function registerAllIPC(): void {
   registerFloatWindowIPC()
   registerTaskIPC()
   registerFfmpegDownloadIPC()
+  registerUpdaterIPC()
 }

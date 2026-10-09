@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, TaskSnapshot } from './ipc-contract'
+import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 /**
@@ -133,6 +133,17 @@ const api = {
     onIpc('windowOnMaximizeChange', callback),
   preventSleep: () => invokeIpc('preventSleep'),
   allowSleep: (id: number) => invokeIpc('allowSleep', id),
+
+  // ===== 应用更新 =====
+  // 对端：main/ipc/register-updater-ipc.ts，状态与逻辑在 main/updater.ts
+  getAppVersion: () => invokeIpc('getAppVersion'),
+  updaterGetState: () => invokeIpc('updaterGetState'),
+  updaterCheck: () => invokeIpc('updaterCheck'),
+  updaterDownload: () => invokeIpc('updaterDownload'),
+  updaterInstall: () => invokeIpc('updaterInstall'),
+  // updaterState 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
+  updaterState: (callback: (_state: UpdaterState) => void) =>
+    onIpc('updaterState', callback),
 } satisfies mainAPI
 
 // 经 contextBridge 暴露给渲染进程（上下文隔离已启用）
