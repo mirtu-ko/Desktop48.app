@@ -10,6 +10,7 @@ import { closeAllFloatWindows } from './float-window'
 import { registerAllIPC } from './ipc'
 import { log } from './logger'
 import { cleanupStreamSessions } from './stream'
+import { initUpdater } from './updater'
 import { wireWindowMaximizeEvents } from './window-events'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
 
@@ -123,6 +124,9 @@ app.whenReady().then(() => {
   })
 
   createWindow()
+
+  // 自动更新：mac 未签名不启用、dev 环境跳过（判据见 updater.ts 的 resolveUpdaterSupport）
+  initUpdater()
 
   app.on('activate', () => {
     // macOS 约定：点击 Dock 图标恢复应用。最小化时窗口仍存在，但被系统隐藏，

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { Connection, Cpu, Document, Folder, Hide } from '@element-plus/icons-vue'
+import { Connection, Cpu, Document, Folder, Hide, Refresh } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
+import { useUpdater } from '@renderer/composables/use-updater'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
 import Constants from '@renderer/utils/constants'
 import Tools from '@renderer/utils/tools'
 import { ElMessageBox } from 'element-plus'
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
@@ -26,10 +27,64 @@ const {
 /** 屏蔽名单：模块级共享状态，机制见 stores/member-flags.ts */
 const { blockedMembers, refreshBlockedMembers, unblockMember, clearBlockedMembers } = useBlockedMembersStore()
 
+// 自动更新：状态镜像与操作集中在 use-updater.ts
+const { state: updaterState, checking: updaterChecking, version: appVersion, check: checkUpdate, download: downloadUpdate, install: installUpdate } = useUpdater()
+
 onMounted(async () => {
   await loadAppConfig()
   await refreshBlockedMembers()
 })
+
+/** 更新行的描述文案：一行说清当前处于什么状态、下一步该做什么 */
+const updaterDesc = computed(() => {
+  const s = updaterState.value
+  switch (s.phase) {
+    case 'checking':
+      return '正在检查更新…'
+    case 'available':
+      return `发现新版本 ${s.version}，可立即下载`
+    case 'downloading':
+      return `正在下载 ${s.version}… ${s.percent.toFixed(1)}%`
+    case 'ready':
+      return `新版本 ${s.version} 已下载，重启后生效`
+    case 'error':
+      return `检查更新失败：${s.message}`
+    case 'unsupported':
+      return s.reason
+    default:
+      return '检查新版本，并下载升级'
+  }
+})
+
+/** 主操作按钮：状态决定文案与语义，无可用操作时为空串（模板据此渲染次要按钮） */
+const updaterAction = computed(() => {
+  const s = updaterState.value
+  if (s.phase === 'downloading')
+    return { label: '下载中', disabled: true, handler: () => {} }
+  if (s.phase === 'ready')
+    return { label: '立即重启', disabled: false, handler: installUpdate }
+  if (s.phase === 'available')
+    return { label: '下载更新', disabled: false, handler: downloadUpdate }
+  // 不支持自动更新的环境（如 macOS）给出手工出路，别让用户对着禁用按钮无计可施
+  if (s.phase === 'unsupported' && s.url)
+    return { label: '去下载', disabled: false, handler: () => openReleasePage(s.url!) }
+  return { label: '检查更新', disabled: updaterChecking.value || s.phase === 'unsupported', handler: checkUpdate }
+})
+
+/**
+ * 打开手工下载页。
+ *
+ * 经 `window.open` 触发主进程的 `setWindowOpenHandler`，转交系统浏览器
+ * （与 use-album-player.ts 同一路径；主进程只放行 http/https）。
+ */
+function openReleasePage(url: string) {
+  window.open(url, '_blank', 'noopener')
+}
+
+/** 下载进度条（仅 downloading 态展示） */
+const updaterPercent = computed(() =>
+  updaterState.value.phase === 'downloading' ? Math.min(100, updaterState.value.percent) : 0,
+)
 
 /** 清空名单前二次确认 */
 async function confirmClearBlockedMembers() {
@@ -282,6 +337,51 @@ function hideLogo(event: Event) {
         </div>
       </section>
 
+      <!-- 版本与更新：轻量单行，作为设置项收尾，与下方声明区的「关于」语义衔接 -->
+      <section class="setting-card glass-card">
+        <div class="setting-row">
+          <span
+            class="row-icon icon-tile"
+            :style="{ '--tile-color': 'var(--color-albums)' }"
+          >
+            <el-icon><Refresh /></el-icon>
+          </span>
+          <div class="row-text row-text--fluid">
+            <div class="row-title">
+              版本
+              <span v-if="appVersion" class="row-version">v{{ appVersion }}</span>
+            </div>
+            <div class="row-desc">
+              {{ updaterDesc }}
+            </div>
+          </div>
+          <div class="row-actions">
+            <el-button
+              v-if="updaterState.phase === 'available' || updaterState.phase === 'ready'"
+              :disabled="updaterChecking"
+              @click="checkUpdate"
+            >
+              重新检查
+            </el-button>
+            <el-button
+              type="primary"
+              :disabled="updaterAction.disabled"
+              :loading="updaterAction.label === '下载中'"
+              @click="updaterAction.handler"
+            >
+              {{ updaterAction.label }}
+            </el-button>
+          </div>
+        </div>
+        <div v-if="updaterState.phase === 'downloading'" class="row-body">
+          <el-progress
+            :percentage="updaterPercent"
+            :stroke-width="8"
+            :show-text="false"
+          />
+        </div>
+      </section>
+
       <!-- 权利声明 -->
       <section class="setting-card glass-card">
         <div class="setting-row">
@@ -405,12 +505,31 @@ function hideLogo(event: Event) {
     color: var(--el-text-color-primary);
   }
 
+  /* 版本号：紧贴标题的次要徽标，等宽数字便于逐位辨读 */
+  .row-version {
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    color: var(--el-text-color-secondary);
+    background: color-mix(in srgb, var(--el-text-color-secondary) 12%, transparent);
+  }
+
   .row-desc {
     margin-top: 2px;
     font-size: 12px;
     line-height: 1.4;
     color: var(--el-text-color-secondary);
   }
+}
+
+.row-text--fluid {
+  /* 更新行没有中间控件，允许描述用满剩余宽度；普通行仍保持 190px 对齐 */
+  flex: 1;
+  width: auto;
 }
 
 .row-control {

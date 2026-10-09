@@ -126,6 +126,33 @@ export interface FloatPlayerPayload {
   bilibiliRoomId?: number
 }
 
+// ===== 应用更新 =====
+
+/**
+ * 自动更新状态（对端：main/updater.ts）。
+ *
+ * 用可辨识联合而非多个布尔字段：各状态互斥，布尔组合会产生 2^n 种非法状态，
+ * 渲染端只能靠约定断言。`phase` 即判别键，可安全 switch / if 收窄。
+ *
+ * 定义在契约文件而非主进程模块：避免 web 类型程序经此引用拉入主进程文件
+ * （与 FfmpegDownloadProgress 同理）。
+ */
+export type UpdaterState
+  /** 未检查 / 当前已是最新 */
+  = | { phase: 'idle' }
+  /** 正在检查（首次检查可能持续数秒） */
+    | { phase: 'checking' }
+  /** 发现新版本，等待用户确认是否下载 */
+    | { phase: 'available', version: string, releaseNotes: string }
+  /** 正在下载 */
+    | { phase: 'downloading', version: string, percent: number, bytesPerSecond: number, transferred: number, total: number }
+  /** 已下载完成，等待重启安装 */
+    | { phase: 'ready', version: string }
+  /** 检查 / 下载失败（国内访问 GitHub 不稳定属常态，非致命） */
+    | { phase: 'error', message: string }
+  /** 当前环境不支持自动更新（macOS 未签名 / dev 环境 / 免安装版）；url 非空时可引导手工下载 */
+    | { phase: 'unsupported', reason: string, url?: string }
+
 // ===== 类型化 IPC 通道映射 =====
 
 interface InvokeSpec<Args extends readonly unknown[], Return> {
@@ -176,6 +203,16 @@ interface StaticIpcInvokeMap {
   windowIsMaximized: InvokeSpec<[], boolean>
   preventSleep: InvokeSpec<[], number>
   allowSleep: InvokeSpec<[id: number], void>
+  /** 当前应用版本号（如 "0.1.9"），设置页展示用 */
+  getAppVersion: InvokeSpec<[], string>
+  /** 取当前更新状态（渲染端挂载时回取一次快照；后续变化走 updaterState 事件） */
+  updaterGetState: InvokeSpec<[], UpdaterState>
+  /** 手动检查更新；返回检查后的状态（失败已折进状态，调用方无需 try/catch） */
+  updaterCheck: InvokeSpec<[], UpdaterState>
+  /** 用户确认后开始下载新版本 */
+  updaterDownload: InvokeSpec<[], void>
+  /** 退出并安装已下载的更新 */
+  updaterInstall: InvokeSpec<[], void>
 }
 
 type TaskInvokeMap = {
@@ -223,6 +260,11 @@ export type IpcEventMap = {
   liveUnavailable: [liveId: string]
   /** B 站弹幕攒批下发（对端：main/bilibili/danmaku-session.ts，仅发给订阅了该房间的窗口） */
   danmakuBatch: [batch: DanmakuBatch]
+  /**
+   * 更新状态变化（对端：main/updater.ts）。
+   * 状态归主进程所有、每个窗口各存镜像，因此广播给全部窗口（见 main/ipc/send.ts 的 broadcastIpc）。
+   */
+  updaterState: [state: UpdaterState]
 } & TaskEventMap
 
 export type IpcEventChannel = keyof IpcEventMap

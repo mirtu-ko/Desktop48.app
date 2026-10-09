@@ -198,6 +198,19 @@ onUnmounted(() => {
     <LiveTabBar @refresh="refreshList" />
 
     <div class="live-main">
+      <!-- 空态灵动岛：脱离滚动流，固定在页面顶部 -->
+      <div v-if="liveList.length === 0 && !loading" class="idle-head" role="status">
+        <span class="idle-dot" aria-hidden="true" />
+        <div class="idle-head-main">
+          <p class="idle-title">
+            当前没有直播
+          </p>
+          <p class="idle-sub">
+            {{ waitedText }} · 每 60 秒自动检查，一开播立刻出现在这里
+          </p>
+        </div>
+        <span class="idle-check">上次检查 {{ lastCheckText }}</span>
+      </div>
       <!-- 首屏骨架：比全屏 loading 蒙层更稳定，能预先表达卡片布局和即将出现的内容 -->
       <el-scrollbar
         v-if="showSkeleton"
@@ -214,18 +227,6 @@ onUnmounted(() => {
         class="scrollbar-wrapper"
       >
         <div class="live-idle">
-          <div class="idle-head">
-            <div class="idle-head-main">
-              <p class="idle-title">
-                当前没有直播
-              </p>
-              <p class="idle-sub">
-                {{ waitedText }} · 每 60 秒自动检查，一开播立刻出现在这里
-              </p>
-            </div>
-            <span class="idle-check">上次检查 {{ lastCheckText }}</span>
-          </div>
-
           <template v-if="hasPreviewShows">
             <h2 class="section-title section-title--live">
               {{ previewShowsTitle }}
@@ -337,7 +338,7 @@ onUnmounted(() => {
   padding: var(--page-pad);
 }
 
-/* 空态（白天无人直播）：顶部状态条 + 公演预告。
+/* 空态（白天无人直播）：顶部灵动岛 + 公演预告。
  * 外层是 el-scrollbar，内容随页面滚动，故这里只负责内边距与纵向节奏 */
 .live-idle {
   display: flex;
@@ -346,14 +347,33 @@ onUnmounted(() => {
 }
 
 .idle-head {
-  display: flex;
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 6;
+  transform: translateX(-50%);
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 20px;
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--el-bg-color) 72%, transparent);
-  box-shadow: 0 0 0 1px var(--el-border-color) inset;
+  gap: 12px;
+  max-width: calc(100% - 32px);
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  background: rgba(18, 18, 22, 0.68);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 14px 30px -18px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(20px) saturate(170%);
+
+  .idle-dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #8ee7a6;
+    box-shadow: 0 0 10px rgba(142, 231, 166, 0.55);
+    animation: idle-dot-pulse 2.4s ease-in-out infinite;
+  }
 
   .idle-head-main {
     min-width: 0;
@@ -361,22 +381,44 @@ onUnmounted(() => {
 
   .idle-title {
     margin: 0;
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 500;
-    color: var(--el-text-color-primary);
+    line-height: 1.4;
+    color: rgba(255, 255, 255, 0.94);
   }
 
   .idle-sub {
-    margin: 4px 0 0;
-    font-size: 13px;
-    line-height: 1.6;
-    color: var(--el-text-color-secondary);
+    margin: 1px 0 0;
+    font-size: 10px;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.6);
   }
 
   .idle-check {
     flex: none;
+    margin-left: 4px;
+    padding-left: 14px;
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
     font-size: 12px;
-    color: var(--el-text-color-placeholder);
+    color: rgba(255, 255, 255, 0.44);
+  }
+}
+
+@keyframes idle-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+  50% {
+    opacity: 0.62;
+    transform: scale(0.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .idle-dot {
+    animation: none;
   }
 }
 

@@ -2,18 +2,16 @@ appId: com.electron.desktop48
 productName: Desktop48
 directories:
   buildResources: build
+# 白名单：只放构建产物与运行时资源。源码、测试、IDE/AI 工具配置、凭据文件默认不进包，
+# 根目录将来新增任何文件都不会意外泄漏，无需维护逐条排除规则。
+# package.json 由 electron-builder 自动追加；生产依赖由 node_modules 收集器单独处理，
+# 不受本清单影响。
 files:
-  - '!src/*'
-  - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml,.nvmrc}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,tsconfig.web.tsbuildinfo,vitest.config.ts}'
-  - '!{test,docs,.vitest}/**'
-  - '!**/.vitest-run.log'
-  # 本地脚手架 + AI 编码工具目录。
-  - '!**/{.tmp,.preview-shot,.workbuddy*,.trae,.github,.claude,.cursor,.continue,.codex,.gemini,.windsurf,.clinerules,.roo,.kilocode,.specstory,.vscode}/**'
-  # 文件级：MCP 配置里常带第三方 token；aider 会留 .aider.conf.yml / .aider.chat.history.md 等。
-  - '!**/{.mcp.json,.aider*}'
+  - out/**
+  - resources/**
+  - LICENSE
+  # 入口在 out/ 内；若将来开启 sourcemap，避免把 .map 打进安装包
+  - '!out/**/*.map'
 asarUnpack:
   - resources/**
 electronLanguages:
@@ -39,12 +37,13 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  category: public.app-category.utilities
   # 必须显式给 "-"，否则 fuse 翻转后签名被跳过，app 启动即被内核 SIGKILL。
   identity: '-'
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   # 双架构：CI runner 均为 arm64，不写 arch 出不了 Intel 包；产物名须带 ${arch} 防撞名。
-  # 只出 dmg：zip 仅供 Squirrel.Mac 自动更新，本项目未用 electron-updater；接入时需加回。
+  # 只出 dmg：electron-updater；接入时需加回。
   target:
     - target: dmg
       arch:
@@ -52,8 +51,8 @@ mac:
         - arm64
   extendInfo:
     # 只声明实际触发的权限（目录选择），全仓无摄像头/麦克风调用。
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
+    NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
   # ${arch} 防止 x64/arm64 产物撞同名。
@@ -65,12 +64,10 @@ linux:
   maintainer: mirtu-ko
   category: Utility
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: false
 publish:
   provider: github
   owner: mirtu-ko
   repo: Desktop48.app
   releaseType: release # 与 CI 预创建的正式 release 匹配，否则 electron-builder 默认发 draft，类型不兼容会跳过上传
-electronDownload:
-  mirror: https://npmmirror.com/mirrors/electron/
