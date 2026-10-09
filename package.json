@@ -1,11 +1,11 @@
 {
   "name": "Desktop48",
   "type": "module",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "Desktop48",
   "author": "Zack",
   "license": "MIT",
-  "homepage": "https://github.com/mirtu-ko/desktop48.app",
+  "homepage": "https://github.com/mirtu-ko/Desktop48.app",
   "main": "./out/main/index.js",
   "engines": {
     "node": ">=22.12.0"
