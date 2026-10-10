@@ -5,7 +5,7 @@
  * 并依赖 `./ipc/send` 广播状态，二者在纯 Node 测试环境都不可用，故整体替换为替身。
  * electron-updater 同理 —— 这里只验证我们自己那层重试包装，不碰真实网络。
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // ── 替身 ───────────────────────────────────────────────────────────────
 // app.isPackaged 决定 resolveUpdaterSupport 是否放行；getVersion 供设置页展示。
@@ -24,6 +24,13 @@ vi.mock('node:fs', () => ({ existsSync: existsSyncMock }))
 // 而 resolveUpdaterSupport 会拿它拼 app-update.yml 路径 —— path.join(undefined) 直接抛。
 // 补一个非空值即可，真实取值与断言语义无关。
 process.resourcesPath = 'C:\\fake\\resources'
+
+// resolveUpdaterSupport 对 darwin 有一票否决（macOS 未签名/公证，整条链路直接判不支持），
+// 在 mac 上跑会让下面所有用例短路成 unsupported、checkForUpdates 一次都不发生。
+// 本文件测的是重试包装层，不是平台门禁，故统一钉到受支持的平台。
+// process 是线程级全局、不随用例文件重置，afterAll 还原，避免将来关掉 isolate 后污染别的用例。
+const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
 
 // electron-updater 的 autoUpdater：checkForUpdates 由各用例注入行为。
 const autoUpdaterMock = {
@@ -61,6 +68,11 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
+})
+
+afterAll(() => {
+  if (originalPlatform)
+    Object.defineProperty(process, 'platform', originalPlatform)
 })
 
 describe('checkForUpdates 重试与退避', () => {

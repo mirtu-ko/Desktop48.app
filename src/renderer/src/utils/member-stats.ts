@@ -375,24 +375,6 @@ export function birthMonthStats(members: MemberDetail[]): StatItem[] {
   }))
 }
 
-/** 生肖（按公历年份推算：1900 年为庚子鼠年）。1-2 月生日可能差一位，趣味向不做农历换算 */
-const ZODIAC = '鼠 牛 虎 兔 龙 蛇 马 羊 猴 鸡 狗 猪'.split(' ')
-
-/**
- * 生肖分布：只统计给了出生年份的成员。
- *
- * ⚠️ **本项目的数据源永远给不出年份**：`starInfo.birthday` 与 `allmembers.birth_day`
- * 一律是 `MM-DD`（实测 900 + 765 条里含 4 位年份的为 0），所以这个函数恒返回空数组。
- * 保留它只为「将来上游补上年份」留个入口 —— **看板已不再挂这张图**（挂上去只会恒显示「暂无数据」）。
- */
-export function zodiacStats(members: MemberDetail[]): StatItem[] {
-  const names = members
-    .map(member => parseBirthday(member.birthday)?.year ?? 0)
-    .filter(year => year > 1900)
-    .map(year => ZODIAC[(year - 1900) % 12])
-  return toItems(countBy(names)).sort(byCountDesc)
-}
-
 /**
  * 出生地 → 省级行政区。三步：
  *
