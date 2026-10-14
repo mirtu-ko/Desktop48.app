@@ -8,7 +8,7 @@ import useLoadMore from '@renderer/composables/use-load-more'
 import usePagedList from '@renderer/composables/use-paged-list'
 import Apis from '@renderer/services/apis'
 import useFloatPlayersStore from '@renderer/stores/float-players'
-import { resolveBilibiliRoomId } from '@renderer/utils/bilibili-room'
+import { resolveBilibiliRoomIdAsync } from '@renderer/utils/bilibili-room'
 import Constants from '@renderer/utils/constants'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
@@ -143,7 +143,7 @@ const showSkeleton = computed(() =>
   initialLoading.value && showList.value.length === 0 && historyList.value.length === 0)
 
 /** 进行中的公演：以独立播放窗直接打开直播，停留当前页继续浏览 */
-function openLiveStream(show: OpenLive) {
+async function openLiveStream(show: OpenLive) {
   if (show.status !== 2) {
     debugLog('show', `公演选路: ${show.liveId} 状态=${show.status}（非进行中），忽略本次点击`)
     return
@@ -159,9 +159,9 @@ function openLiveStream(show: OpenLive) {
     avatar: show.coverPath,
     liveType: 1,
     liveMode: 0,
-    // 弹幕房间按团体映射（认 groupId；CGT48 等 teamList 为空时退回标题匹配），
-    // 映射不到就不带该字段，播放器据此不显示弹幕入口
-    bilibiliRoomId: resolveBilibiliRoomId({
+    // 弹幕房间三级解析：groupId → 标题文本 → 在播官方房间标题兜底（teamList 为空的公演靠第三级）
+    // 全部落空则不带该字段，播放器据此不显示弹幕入口
+    bilibiliRoomId: await resolveBilibiliRoomIdAsync({
       groupId: show.teamList?.[0]?.groupId,
       texts: [show.title, show.subTitle],
     }),

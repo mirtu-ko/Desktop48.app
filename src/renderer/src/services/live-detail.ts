@@ -51,6 +51,11 @@ export interface LiveDetailView {
   barrageUrl: string
   /** 回放是否已生成；open 源恒 true（该接口无此概念） */
   review: boolean
+  /**
+   * 口袋聊天室 ID（网易云信 chatroom）：仅 user 源的进行中直播携带，
+   * 口袋互动消息弹幕的会话锚点；缺失/公演恒 undefined。
+   */
+  chatroomId?: string
 }
 
 export interface LoadLiveDetailOptions {
@@ -62,6 +67,17 @@ export interface LoadLiveDetailOptions {
   avatarUrl?: string
   /** 开播时间（毫秒时间戳）：一直播 HLS 路径按此日期重写，仅 source=user 时生效 */
   startTime?: number
+}
+
+/** 聊天室 id 归一：0 / 负数 / 空都是「无」。无 token 的详情 roomId 恒 0，绝不能当真值（'0' 去连聊天室必然失败） */
+function toChatroomId(value: unknown): string {
+  const text = String(value ?? '').trim()
+  if (!text)
+    return ''
+  const num = Number(text)
+  if (Number.isFinite(num) && num <= 0)
+    return ''
+  return text
 }
 
 /** user 源：把 LiveDetail 归一到视图模型（单档地址 + 一直播路径重写 + 弹幕地址） */
@@ -87,6 +103,11 @@ function fromUserLive(
     carouselTime: normalizeCarouselTime(raw.carousels?.carouselTime),
     barrageUrl: raw.msgFilePath || '',
     review: Boolean(raw.review),
+    // 聊天室 id 服务端字段名不统一（chatroomId / roomId），双兜底并过滤 0；仅进行中的直播带。
+    // 注意：无 token 的 getLiveOne 两个字段都拿不到真值，真正取数靠 use-live-session 补拉的带 token 接口
+    chatroomId: toChatroomId((raw as { chatroomId?: unknown }).chatroomId)
+      || toChatroomId((raw as { roomId?: unknown }).roomId)
+      || undefined,
   }
 }
 

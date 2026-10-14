@@ -3,6 +3,7 @@ import { computed } from 'vue'
 /** 视频实际渲染区（去 letterbox 黑边）在容器内的矩形；元数据未就绪时为 null */
 interface DanmakuLayerRect {
   left: number
+  top: number
   height: number
   bottom: number
 }
@@ -41,5 +42,17 @@ export function useDanmakuLayer(options: {
     }
   })
 
-  return { fontSize, position }
+  /** 画面渲染区左上角锚点（与 position 同一内缩量）：互动榜单面板悬于气泡层正上方并左对齐用 */
+  const topLeft = computed(() => {
+    const rect = videoRect()
+    if (!rect)
+      return { left: `${MARGIN}px`, top: `${MARGIN}px` }
+
+    return {
+      left: `${(rect.left + MARGIN).toFixed(1)}px`,
+      top: `${(rect.top + MARGIN).toFixed(1)}px`,
+    }
+  })
+
+  return { fontSize, position, topLeft }
 }

@@ -1,6 +1,7 @@
 import type { LiveDetailView } from '@renderer/services/live-detail'
 import type { Ref } from 'vue'
 import { loadLiveDetail } from '@renderer/services/live-detail'
+import { ensurePocketAuthState, pocketAuthState } from '@renderer/stores/pocket-auth'
 import { debugLog } from '@renderer/utils/debug'
 import {
   buildPlaybackUrl,
@@ -9,7 +10,7 @@ import {
 } from '@renderer/utils/live-stream'
 import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
 /**
  * 直播会话：直播详情获取 + 本地 HTTP-FLV 会话生命周期（创建/停止/重启）。
@@ -52,6 +53,8 @@ export function useLiveSession(options: {
   const coverImage = ref('')
   const realName = ref('')
   const userAvatar = ref('')
+  /** 口袋聊天室 ID（getLiveOne 详情携带）：口袋互动弹幕的会话锚点；空串 = 无（公演/回放/已结束） */
+  const chatroomId = ref('')
   /** 电台轮播图与切换间隔（毫秒） */
   const carousels = ref<string[]>([])
   const carouselTime = ref(5000)
@@ -62,6 +65,7 @@ export function useLiveSession(options: {
   /** 直播详情与界面状态同步，不直接处理播放器 */
   function applyLiveDetail(view: LiveDetailView) {
     coverImage.value = view.coverUrl
+    chatroomId.value = view.chatroomId || ''
     // 电台无轮播图时回退封面单张展示（live-stream.ts 内 resolveCarouselImages 的既定契约）
     carousels.value = resolveCarouselImages(
       options.isRadio(),
@@ -95,6 +99,35 @@ export function useLiveSession(options: {
     debugLog('live', `②拉详情: 归一结果 streamType=${view.streamType ?? '单档'} cover=${view.coverUrl ? '有' : '无'}`, view)
     return view
   }
+
+  /**
+   * 补拉聊天室 ID（口袋互动弹幕的会话锚点）。
+   * 渲染层 getLiveOne 不带登录 token，服务端不返回 chatroomId（roomId 恒 0），
+   * 所以详情归一后必须用主进程带 token 的接口再取一次；未登录返回空串（登录后由 watch 重试）。
+   */
+  async function refreshChatroomId() {
+    if (options.source() === 'open')
+      return
+    const liveId = options.liveId()
+    if (!liveId || options.isDisposed.value)
+      return
+    // 触发登录态镜像初始化：未登录时主进程返回空串，等真实登录态到达后由下方 watch 重试
+    ensurePocketAuthState()
+    try {
+      const id = await window.mainAPI.pocketGetChatroomId(liveId)
+      if (id && !options.isDisposed.value && liveId === options.liveId())
+        chatroomId.value = id
+    }
+    catch (error) {
+      debugLog('live', '口袋聊天室 ID 获取失败:', error)
+    }
+  }
+
+  // 登录态晚于直播打开（浮窗冷启动 + 异步读凭证）时，登录一到手立即补拉
+  watch(() => pocketAuthState.value.loggedIn, (loggedIn) => {
+    if (loggedIn)
+      void refreshChatroomId()
+  })
 
   /** 停掉当前会话并等待主进程确认（重建流之前调用，确保旧 FFmpeg 已退出） */
   async function stopCurrentLiveStream() {
@@ -173,6 +206,7 @@ export function useLiveSession(options: {
       if (options.isDisposed.value)
         return
       applyLiveDetail(data)
+      void refreshChatroomId()
       await restartLiveStream(data.playStreamPath)
     }
     catch (error: any) {
@@ -211,6 +245,7 @@ export function useLiveSession(options: {
     realName,
     carousels,
     carouselTime,
+    chatroomId,
     fetchLiveDetail,
     applyLiveDetail,
     getLiveOne,

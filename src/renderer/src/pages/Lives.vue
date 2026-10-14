@@ -13,7 +13,7 @@ import Apis from '@renderer/services/apis'
 import EventBus from '@renderer/services/event-bus'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useFollowedMembersStore } from '@renderer/stores/member-flags'
-import { resolveBilibiliRoomId } from '@renderer/utils/bilibili-room'
+import { resolveBilibiliRoomIdAsync } from '@renderer/utils/bilibili-room'
 import { debugLog } from '@renderer/utils/debug'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
@@ -118,7 +118,7 @@ function play(item: LiveListItem) {
  * 空态里的公演预告：只有「进行中」（status === 2）可点开直播，
  * 选路与弹幕房间映射与公演页（Shows.vue 的 openLiveStream）保持一致。
  */
-function openShowStream(show: OpenLive) {
+async function openShowStream(show: OpenLive) {
   if (show.status !== 2) {
     debugLog('show', `公演选路: ${show.liveId} 状态=${show.status}（非进行中），忽略本次点击`)
     return
@@ -133,7 +133,8 @@ function openShowStream(show: OpenLive) {
     avatar: show.coverPath,
     liveType: 1,
     liveMode: 0,
-    bilibiliRoomId: resolveBilibiliRoomId({
+    // 弹幕房间三级解析（与公演页同口径）：groupId → 标题文本 → 在播官方房间标题兜底
+    bilibiliRoomId: await resolveBilibiliRoomIdAsync({
       groupId: show.teamList?.[0]?.groupId,
       texts: [show.title, show.subTitle],
     }),

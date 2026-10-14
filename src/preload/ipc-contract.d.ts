@@ -153,6 +153,68 @@ export type UpdaterState
   /** 当前环境不支持自动更新（macOS 未签名 / dev 环境 / 免安装版）；url 非空时可引导手工下载 */
     | { phase: 'unsupported', reason: string, url?: string }
 
+// ===== 口袋48账号 =====
+
+/** 口袋48登录态（不含 token 本体；token 只留在主进程） */
+export interface PocketAuthState {
+  loggedIn: boolean
+  nickname: string
+  avatar: string
+  /** 脱敏手机号（139****1234）；空串表示未记住 */
+  mobileMasked: string
+  /** true = 平台无安全加密能力，token 以明文落盘（仅提示用） */
+  plainFallback: boolean
+}
+
+/** 发送验证码结果：needCaptcha=true 时携带反爬问答题 */
+export interface PocketSmsResult {
+  needCaptcha: boolean
+  question: string
+  options: string[]
+  message: string
+}
+
+/** 登录有效性验证结果：imOk 表示弹幕实际依赖的 IM 凭据链路是否可用 */
+export interface PocketVerifyResult {
+  valid: boolean
+  nickname: string
+  userId: string
+  level: string
+  imOk: boolean
+  imAccid: string
+  message: string
+}
+
+/** 口袋48聊天室原始消息（主进程协议客户端解码出的传输层形状；业务归一在渲染层 utils/pocket-chat-message.ts） */
+export interface PocketRawChatMessage {
+  uuid: string
+  /** 传输层类型：0=文本，其余为自定义消息 */
+  type: 'text' | 'custom'
+  msgType: number
+  /** 附件 / 正文（文本消息即正文） */
+  attach: string
+  /** 业务扩展 JSON 字符串（messageType / user / giftInfo 等都在里面） */
+  custom: string
+  /** 正文（文本消息取 attach，自定义消息取扩展文本属性） */
+  text: string
+  fromNick: string
+  fromAvatar: string
+  from: string
+  time: number
+}
+
+export type PocketDanmakuStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+
+/** 口袋聊天室事件批次（对端：main/pocket48/pocket-danmaku.ts，仅发给订阅了该聊天室的窗口） */
+export interface PocketDanmakuBatch {
+  /** 渲染层传入的聊天室 ID，多会话订阅时据此过滤 */
+  chatroomId: string
+  kind: 'status' | 'messages'
+  status?: PocketDanmakuStatus
+  message?: string
+  items?: PocketRawChatMessage[]
+}
+
 // ===== 类型化 IPC 通道映射 =====
 
 interface InvokeSpec<Args extends readonly unknown[], Return> {
@@ -213,6 +275,32 @@ interface StaticIpcInvokeMap {
   updaterDownload: InvokeSpec<[], void>
   /** 退出并安装已下载的更新 */
   updaterInstall: InvokeSpec<[], void>
+
+  // ===== 口袋48账号 =====
+  // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts
+  /** 发送登录验证码；命中反爬问答题时返回 needCaptcha=true 与题目选项 */
+  pocketSendSms: InvokeSpec<[mobile: string, answer?: string], PocketSmsResult>
+  /** 验证码登录；失败（验证码错误等）以 reject 报错 */
+  pocketLoginByCode: InvokeSpec<[mobile: string, code: string], PocketAuthState>
+  /** 粘贴 token 登录：主进程校验有效后落盘；无效以 reject 报错 */
+  pocketLoginByToken: InvokeSpec<[token: string, mobile?: string], PocketAuthState>
+  /** 当前登录态（读本地凭证，不做网络校验） */
+  pocketGetAuthState: InvokeSpec<[], PocketAuthState>
+  /** 退出登录：删除本地凭证 */
+  pocketLogout: InvokeSpec<[], void>
+  /** 取直播的聊天室 id（需登录，无 token 的详情接口拿不到）；未登录返回空串，过期 reject */
+  pocketGetChatroomId: InvokeSpec<[liveId: string], string>
+  /** 验证登录有效性：真实请求 token 校验与 IM 凭据两个需登录接口 */
+  pocketVerifyLogin: InvokeSpec<[], PocketVerifyResult>
+  /** 起口袋聊天室弹幕会话并登记订阅；false = 未登录/凭据失效/参数无效 */
+  pocketDanmakuStart: InvokeSpec<[chatroomId: string, liveId: string], boolean>
+  /** 退订聊天室弹幕；最后一个订阅者离开时主进程断开连接 */
+  pocketDanmakuStop: InvokeSpec<[chatroomId: string], void>
+
+  // ===== B 站直播间信息 =====
+  // 对端：main/bilibili/room-info.ts；公演缺团体信息时渲染层拿房间标题做兜底匹配
+  /** 五个团体官方直播间的标题与开播状态（主进程 5 分钟缓存；单房间风控失败以空标题占位） */
+  bilibiliRoomInfos: InvokeSpec<[], import('../common/bilibili-rooms').BilibiliRoomInfo[]>
 }
 
 type TaskInvokeMap = {
@@ -260,6 +348,8 @@ export type IpcEventMap = {
   liveUnavailable: [liveId: string]
   /** B 站弹幕攒批下发（对端：main/bilibili/danmaku-session.ts，仅发给订阅了该房间的窗口） */
   danmakuBatch: [batch: DanmakuBatch]
+  /** 口袋聊天室事件（对端：main/pocket48/pocket-danmaku.ts，仅发给订阅了该聊天室的窗口） */
+  pocketDanmakuBatch: [batch: PocketDanmakuBatch]
   /**
    * 更新状态变化（对端：main/updater.ts）。
    * 状态归主进程所有、每个窗口各存镜像，因此广播给全部窗口（见 main/ipc/send.ts 的 broadcastIpc）。

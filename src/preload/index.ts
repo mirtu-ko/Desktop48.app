@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, TaskSnapshot, UpdaterState } from './ipc-contract'
+import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketDanmakuBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 /**
@@ -144,6 +144,26 @@ const api = {
   // updaterState 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   updaterState: (callback: (_state: UpdaterState) => void) =>
     onIpc('updaterState', callback),
+
+  // ===== 口袋48账号 =====
+  // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts。
+  // IM 凭据（accid + imToken）不在此暴露：渲染层零调用方，token 只留在主进程
+  pocketSendSms: (mobile: string, answer?: string) => invokeIpc('pocketSendSms', mobile, answer),
+  pocketLoginByCode: (mobile: string, code: string) => invokeIpc('pocketLoginByCode', mobile, code),
+  pocketLoginByToken: (token: string, mobile?: string) => invokeIpc('pocketLoginByToken', token, mobile),
+  pocketGetAuthState: () => invokeIpc('pocketGetAuthState'),
+  pocketLogout: () => invokeIpc('pocketLogout'),
+  pocketGetChatroomId: (liveId: string) => invokeIpc('pocketGetChatroomId', liveId),
+  pocketVerifyLogin: () => invokeIpc('pocketVerifyLogin'),
+  pocketDanmakuStart: (chatroomId: string, liveId: string) => invokeIpc('pocketDanmakuStart', chatroomId, liveId),
+  pocketDanmakuStop: (chatroomId: string) => invokeIpc('pocketDanmakuStop', chatroomId),
+  // pocketDanmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
+  pocketDanmakuBatch: (callback: (_batch: PocketDanmakuBatch) => void) =>
+    onIpc('pocketDanmakuBatch', callback),
+
+  // ===== B 站直播间信息 =====
+  // 对端：main/bilibili/room-info.ts；公演缺团体信息时渲染层拿房间标题做兜底匹配
+  bilibiliRoomInfos: () => invokeIpc('bilibiliRoomInfos'),
 } satisfies mainAPI
 
 // 经 contextBridge 暴露给渲染进程（上下文隔离已启用）

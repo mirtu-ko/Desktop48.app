@@ -9,6 +9,7 @@ import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
 import { closeAllFloatWindows } from './float-window'
 import { registerAllIPC } from './ipc'
 import { log } from './logger'
+import { cleanupPocketDanmakuSessions } from './pocket48/pocket-danmaku'
 import { cleanupStreamSessions } from './stream'
 import { initUpdater } from './updater'
 import { wireWindowMaximizeEvents } from './window-events'
@@ -156,6 +157,7 @@ app.on('before-quit', () => {
   closeAllFloatWindows()
   cleanupStreamSessions()
   cleanupDanmakuSessions()
+  cleanupPocketDanmakuSessions()
   // 对仍在运行的所有 ffmpeg 任务写 'q' 优雅收尾，避免退出后残留孤儿进程
   stopAllFfmpegTasks()
   releaseAllSleepBlockers()

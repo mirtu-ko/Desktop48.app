@@ -50,7 +50,12 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
       :key="item.id"
       class="danmaku-bubble"
     >
-      <span v-if="item.username" class="danmaku-author">{{ item.username }}</span>
+      <span v-if="item.level" class="danmaku-level">Lv{{ item.level }}</span>
+      <span
+        v-if="item.username"
+        class="danmaku-author"
+        :class="item.tone ? `danmaku-author--${item.tone}` : undefined"
+      >{{ item.username }}</span>
       <span class="danmaku-text">
         <template v-for="(segment, index) in item.segments" :key="index">
           <img
@@ -151,6 +156,30 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
 /* 迷你窗：气泡更紧凑 */
 .danmaku-bubbles.is-compact {
   gap: 0.4em;
+}
+
+/* 作者名色调按消息类型区分（布局走全局 .danmaku-author）：
+ * 礼物 → 金色；系统（进场/兜底）→ 弱化灰；弹幕缺省走全局的品牌色 */
+.danmaku-author--gift {
+  color: #ffd479;
+}
+
+.danmaku-author--system {
+  color: var(--brand-primary-light);
+}
+
+/* 等级徽章：作者名后的小号圆角片；字号略小于正文，避免抢戏 */
+.danmaku-level {
+  flex: none;
+  padding: 0.05em 0.5em;
+  border-radius: 0.8em;
+  background: rgba(255, 212, 121, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 212, 121, 0.4);
+  color: #ffd479;
+  font-size: 0.78em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
 }
 
 .danmaku-bubbles.is-compact .danmaku-bubble {
