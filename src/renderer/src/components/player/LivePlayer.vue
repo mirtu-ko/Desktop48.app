@@ -101,9 +101,8 @@ const {
 watch(playing, value => emit('playing', value))
 
 // ── 弹幕（双源按直播类型分流）────────────────────────────────────
-// 数据源模型：公演（open）只用 B 站弹幕（房间号由 payload 携带，Shows/Lives 按团体映射）；
-// 个人直播（user）只用口袋48互动消息（聊天室 ID 由详情接口携带，需登录且直播进行中）。
-// 两类互不混用：B 站房间号只认 open 源，口袋聊天室只认 user 源。
+// 公演（open）只用 B 站弹幕（房间号由 payload 携带）；个人直播（user）只用口袋48互动消息
+// （聊天室 ID 由详情接口携带，需登录且直播进行中）。两类互不混用。
 const danmakuRoomId = computed(() => (props.source === 'open' && props.bilibiliRoomId > 0 ? props.bilibiliRoomId : undefined))
 const danmakuEnabled = ref(true)
 
@@ -144,7 +143,6 @@ const session = useLiveSession({
 const { localPlaybackUrl, coverImage, realName, carousels, carouselTime, chatroomId } = session
 
 // 弹幕订阅须在 session 之后创建：口袋源读 session.chatroomId，同步时立即求值
-// 口袋聊天室只认 user 源：公演没有口袋聊天室，user 源也不该混入 B 站房间
 const pocketChatroomId = computed(() => (props.source === 'user' ? chatroomId.value : ''))
 /** 有任一弹幕源才显示气泡层与开关（个人直播未登录时两边都没有，连开关都不给） */
 const hasDanmakuRoom = computed(() => danmakuRoomId.value !== undefined || !!pocketChatroomId.value)

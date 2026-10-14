@@ -1,6 +1,6 @@
 /**
- * B 站官方直播间标题拉取：公演条目缺团体信息时，渲染层拿标题做兜底匹配（见渲染层 utils/bilibili-room.ts）。
- * get_info 匿名可访问（实测 2026-10）；带 5 分钟内存缓存 —— 打开公演窗是低频操作，无需更讲究的失效策略。
+ * B 站官方直播间信息拉取。公演条目缺团体信息时，渲染层以在播房间标题做公演名兜底匹配。
+ * get_info 匿名可访问；结果缓存 5 分钟，单房间失败以空标题占位。
  */
 import type { BilibiliRoomInfo } from '../../common/bilibili-rooms'
 import { GROUP_ROOMS } from '../../common/bilibili-rooms'
@@ -12,7 +12,7 @@ const REQUEST_TIMEOUT_MS = 10 * 1000
 
 let cache: { at: number, infos: BilibiliRoomInfo[] } | null = null
 
-/** 单房间标题；接口偶发风控（code≠0）时该房间以空标题占位，匹配自然落空 */
+/** 拉取单房间信息；接口风控/超时时抛错 */
 async function fetchRoomInfo(roomId: number): Promise<BilibiliRoomInfo> {
   const response = await fetch(`${ROOM_INFO_URL}?room_id=${roomId}`, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
@@ -28,7 +28,7 @@ async function fetchRoomInfo(roomId: number): Promise<BilibiliRoomInfo> {
   }
 }
 
-/** 拉全部团体的房间标题；整体失败时抛错，由调用方决定降级（映射不到就不开弹幕） */
+/** 拉取全部团体的房间信息（带缓存）；失败的房间以空标题占位 */
 export async function getBilibiliRoomInfos(): Promise<BilibiliRoomInfo[]> {
   if (cache && Date.now() - cache.at < CACHE_TTL_MS)
     return cache.infos

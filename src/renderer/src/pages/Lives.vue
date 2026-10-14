@@ -133,7 +133,7 @@ async function openShowStream(show: OpenLive) {
     avatar: show.coverPath,
     liveType: 1,
     liveMode: 0,
-    // 弹幕房间三级解析（与公演页同口径）：groupId → 标题文本 → 在播官方房间标题兜底
+    // 弹幕房间三级解析（与公演页同口径）
     bilibiliRoomId: await resolveBilibiliRoomIdAsync({
       groupId: show.teamList?.[0]?.groupId,
       texts: [show.title, show.subTitle],

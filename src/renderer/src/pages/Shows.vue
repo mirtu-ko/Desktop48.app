@@ -159,8 +159,7 @@ async function openLiveStream(show: OpenLive) {
     avatar: show.coverPath,
     liveType: 1,
     liveMode: 0,
-    // 弹幕房间三级解析：groupId → 标题文本 → 在播官方房间标题兜底（teamList 为空的公演靠第三级）
-    // 全部落空则不带该字段，播放器据此不显示弹幕入口
+    // 弹幕房间三级解析：groupId → 标题文本 → 在播官方房间标题兜底；全部落空则无弹幕入口
     bilibiliRoomId: await resolveBilibiliRoomIdAsync({
       groupId: show.teamList?.[0]?.groupId,
       texts: [show.title, show.subTitle],

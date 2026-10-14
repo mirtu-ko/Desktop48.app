@@ -11,6 +11,6 @@ export function registerDanmakuIPC(): void {
     handleDanmakuStart(roomId, event.sender))
   handleTraced('danmakuStop', (event, roomId: number) =>
     handleDanmakuStop(roomId, event.sender))
-  // 房间标题与开播状态：公演条目缺团体信息时，渲染层拿在播房间的标题做公演名兜底匹配
+  // 房间信息：公演缺团体信息时，渲染层以在播房间标题做公演名兜底匹配
   handleTraced('bilibiliRoomInfos', () => getBilibiliRoomInfos())
 }

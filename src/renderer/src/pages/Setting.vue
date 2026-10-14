@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { Connection, Cpu, Document, Folder, Hide, Refresh, User } from '@element-plus/icons-vue'
+import type { PocketVerifyResult } from '../../../preload/ipc-contract'
+import { Connection, Cpu, Document, Folder, Hide, Refresh, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { useUpdater } from '@renderer/composables/use-updater'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
@@ -16,7 +17,7 @@ import {
 import Constants from '@renderer/utils/constants'
 import Tools from '@renderer/utils/tools'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
@@ -166,40 +167,67 @@ async function confirmLogout() {
 // ===== 登录有效性验证（点击已登录头像触发） =====
 
 const verifying = ref(false)
+const verifyDialogVisible = ref(false)
+/** 最近一次验证结果；null = 尚未验证 */
+const verifyResult = ref<PocketVerifyResult | null>(null)
+/** 验证过程中的网络异常（与「服务端判定失效」分开呈现） */
+const verifyError = ref('')
+
+/** 验证失败：网络异常，或服务端明确判定登录失效 */
+const verifyFailed = computed(() => !verifying.value && (!!verifyError.value || (!!verifyResult.value && !verifyResult.value.valid)))
+const verifyFailedMessage = computed(() => verifyError.value || verifyResult.value?.message || '登录已失效，请重新登录')
+
+/** 凭证在本机的保存天数（savedAt 为 0 时不展示） */
+const savedDays = computed(() => {
+  const savedAt = pocketAuthState.value.savedAt
+  if (!savedAt)
+    return 0
+  return Math.max(0, Math.floor((Date.now() - savedAt) / 86_400_000))
+})
+
+/** 金额：千分位 + 两位小数（元） */
+function formatMoney(value: number): string {
+  return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+/** 计数：千分位整数；非数字原样返回 */
+function formatCount(value: string): string {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed.toLocaleString('zh-CN') : value
+}
 
 /**
- * 真实请求两个需登录的接口（token 校验 + IM 凭据）验证登录态：
- * 有效时展示从服务端取回的资料（本地存的只是上次登录的快照），
- * 失效时明确提示过期，引导重新登录。
+ * 真实请求需登录的接口（token 校验 + IM 凭据 + 口袋钱包）验证登录态：
+ * 有效时展示从服务端取回的资料与余额（本地存的只是上次登录的快照），
+ * 失效时在结果弹窗里给出重新登录入口。
  */
 async function verifyLogin() {
   if (verifying.value)
     return
   verifying.value = true
+  verifyError.value = ''
+  verifyResult.value = null
+  verifyDialogVisible.value = true
   try {
     const result = await verifyPocketLogin()
-    if (!result.valid) {
-      ElMessage.error(result.message || '登录已失效，请重新登录')
-      return
+    verifyResult.value = result
+    if (result.valid) {
+      // 服务端资料可能比本地快照新（改过头像/昵称）：主进程已回写，这里回读刷新展示
+      await refreshPocketAuthState()
     }
-    const lines = [
-      result.nickname ? `昵称：${result.nickname}` : '',
-      result.userId ? `用户 ID：${result.userId}` : '',
-      result.level ? `等级：Lv.${result.level}` : '',
-      result.imOk ? `互动消息凭据：有效（accid: ${result.imAccid}）` : result.message,
-    ].filter(Boolean)
-    ElMessageBox.alert(
-      h('div', { style: 'white-space:pre-line;line-height:1.9' }, lines.join('\n')),
-      result.imOk ? '登录有效' : '登录有效（部分功能异常）',
-      { confirmButtonText: '知道了' },
-    )
   }
   catch (error) {
-    ElMessage.error(pocketAuthErrorMessage(error))
+    verifyError.value = pocketAuthErrorMessage(error)
   }
   finally {
     verifying.value = false
   }
+}
+
+/** 验证失败后直接从结果弹窗跳转登录弹窗，少一次关闭操作 */
+function reloginFromVerify() {
+  verifyDialogVisible.value = false
+  openLoginDialog()
 }
 
 /** 服务端返回的头像多为相对路径，归一成完整 URL 供展示 */
@@ -369,7 +397,7 @@ function hideLogo(event: Event) {
             class="row-icon icon-tile auth-avatar"
             :class="{ 'is-clickable': pocketAuthState.loggedIn, 'is-verifying': verifying }"
             :style="{ '--tile-color': 'var(--brand-primary)' }"
-            :title="pocketAuthState.loggedIn ? (verifying ? '正在验证登录…' : '点击验证登录是否有效') : ''"
+            :title="pocketAuthState.loggedIn ? (verifying ? '正在验证登录…' : '点击查看登录状态与账号资料') : ''"
             @click="pocketAuthState.loggedIn ? verifyLogin() : undefined"
           >
             <img
@@ -389,7 +417,7 @@ function hideLogo(event: Event) {
               <template v-if="pocketAuthState.loggedIn">
                 已登录{{ pocketAuthState.nickname ? `：${pocketAuthState.nickname}` : '' }}<template v-if="pocketAuthState.mobileMasked">
                   （{{ pocketAuthState.mobileMasked }}）
-                </template>，点击头像可验证登录是否有效
+                </template>，点击头像查看登录状态与账号资料
               </template>
               <template v-else>
                 登录后可在直播页实时查看口袋互动消息
@@ -815,6 +843,123 @@ function hideLogo(event: Event) {
         凭证仅保存在本机（safeStorage 加密），不会上传。token 由服务端掌控有效期，失效后需重新登录。
       </div>
     </el-dialog>
+
+    <!-- 登录状态验证结果：点击已登录头像触发，资料 / 钱包 / 链路状态一屏看完 -->
+    <el-dialog
+      v-model="verifyDialogVisible"
+      :title="verifyFailed ? '登录状态异常' : '登录状态'"
+      width="460px"
+      append-to-body
+      class="verify-dialog"
+    >
+      <!-- 验证中：主进程依次请求 token 校验 / IM 凭据 / 口袋钱包三个接口 -->
+      <div v-if="verifying" class="verify-loading">
+        <span class="verify-spinner" />
+        <span>正在向口袋48服务端校验登录状态…</span>
+      </div>
+
+      <!-- 验证失败：网络异常或服务端判定失效，直接给重新登录入口 -->
+      <div v-else-if="verifyFailed" class="verify-fail">
+        <el-icon class="verify-fail-icon">
+          <WarningFilled />
+        </el-icon>
+        <p class="verify-fail-message">
+          {{ verifyFailedMessage }}
+        </p>
+        <p class="verify-fail-hint">
+          可立即重新登录；若是网络不通，恢复后重试即可。
+        </p>
+      </div>
+
+      <!-- 验证成功：服务端取回的账号资料卡 -->
+      <div v-else-if="verifyResult?.valid" class="verify-card">
+        <div class="verify-head">
+          <span class="verify-avatar">
+            <img v-if="authAvatarUrl" :src="authAvatarUrl" alt="账号头像">
+            <el-icon v-else>
+              <User />
+            </el-icon>
+          </span>
+          <div class="verify-idblock">
+            <div class="verify-nick">
+              {{ verifyResult.nickname || pocketAuthState.nickname || '口袋48用户' }}
+              <span v-if="verifyResult.level" class="verify-level">Lv.{{ verifyResult.level }}</span>
+            </div>
+            <div class="verify-uid">
+              ID {{ verifyResult.userId || '—' }}
+            </div>
+          </div>
+        </div>
+
+        <p v-if="verifyResult.signature" class="verify-signature">
+          「{{ verifyResult.signature }}」
+        </p>
+
+        <div class="verify-stats">
+          <div class="verify-stat verify-stat--money">
+            <div class="stat-value">
+              {{ verifyResult.moneyOk ? `¥${formatMoney(verifyResult.moneyTotal)}` : '—' }}
+            </div>
+            <div class="stat-label">
+              口袋钱包
+            </div>
+            <div class="stat-sub">
+              <template v-if="verifyResult.moneyOk">
+                付费 ¥{{ formatMoney(verifyResult.moneyPay) }} · 免费 ¥{{ formatMoney(verifyResult.moneyFree) }}
+              </template>
+              <template v-else>
+                获取失败
+              </template>
+            </div>
+          </div>
+          <div v-if="verifyResult.fans" class="verify-stat">
+            <div class="stat-value">
+              {{ formatCount(verifyResult.fans) }}
+            </div>
+            <div class="stat-label">
+              粉丝
+            </div>
+          </div>
+          <div v-if="verifyResult.likes" class="verify-stat">
+            <div class="stat-value">
+              {{ formatCount(verifyResult.likes) }}
+            </div>
+            <div class="stat-label">
+              获赞
+            </div>
+          </div>
+        </div>
+
+        <div class="verify-links">
+          <div class="verify-link">
+            <span class="verify-link-name">互动消息</span>
+            <span class="verify-link-desc">直播弹幕 / 礼物 / 榜单</span>
+            <span class="verify-link-state" :class="verifyResult.imOk ? 'is-ok' : 'is-bad'">
+              {{ verifyResult.imOk ? '可用' : '不可用' }}
+            </span>
+          </div>
+        </div>
+
+        <div class="verify-local">
+          凭证保存：{{ pocketAuthState.plainFallback ? '明文（当前系统无加密能力）' : '本机安全加密' }}<template v-if="savedDays > 0">
+            ，已保存 {{ savedDays }} 天
+          </template>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="verifyDialogVisible = false">
+          关闭
+        </el-button>
+        <el-button
+          v-if="verifyFailed"
+          type="primary"
+          @click="reloginFromVerify"
+        >
+          重新登录
+        </el-button>
+      </template>
+    </el-dialog>
   </el-scrollbar>
 </template>
 
@@ -1172,5 +1317,210 @@ function hideLogo(event: Event) {
     cursor: wait;
     filter: grayscale(0.6) brightness(0.85);
   }
+}
+
+/* ===== 登录状态验证弹窗 ===== */
+
+/* 验证中：主进程在后台打三个需登录接口，给一个不打扰的等待态 */
+.verify-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 30px 0 24px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.verify-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid color-mix(in srgb, var(--brand-primary) 25%, transparent);
+  border-top-color: var(--brand-primary);
+  border-radius: 50%;
+  animation: verify-spin 0.9s linear infinite;
+}
+
+@keyframes verify-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 验证失败：图标 + 原因 + 一句出路 */
+.verify-fail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 6px 8px;
+  text-align: center;
+
+  .verify-fail-icon {
+    font-size: 40px;
+    color: var(--el-color-warning);
+  }
+
+  .verify-fail-message {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+
+  .verify-fail-hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
+}
+
+/* 资料卡头部：大头像 + 昵称 + 等级徽标 + ID */
+.verify-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.verify-avatar {
+  display: flex;
+  width: 56px;
+  height: 56px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
+  color: #fff;
+  font-size: 24px;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+}
+
+.verify-idblock {
+  min-width: 0;
+}
+
+.verify-nick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.verify-level {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
+}
+
+.verify-uid {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 个性签名：弱底色引用块 */
+.verify-signature {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--brand-primary) 5%, transparent);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+}
+
+/* 统计瓦片：钱包为主（flex 权重更大），粉丝 / 获赞按服务端返回有无展示 */
+.verify-stats {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.verify-stat {
+  flex: 1;
+  padding: 12px 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-md);
+  text-align: center;
+
+  .stat-value {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--el-text-color-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat-label {
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--el-text-color-secondary);
+  }
+
+  .stat-sub {
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--el-text-color-placeholder);
+  }
+}
+
+.verify-stat--money {
+  flex: 1.4;
+}
+
+/* 功能链路：互动消息是弹幕功能的实际依赖，单独一行给出可用性 */
+.verify-links {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+.verify-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+
+  .verify-link-name {
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+
+  .verify-link-desc {
+    flex: 1;
+    color: var(--el-text-color-secondary);
+  }
+
+  .verify-link-state {
+    font-weight: 600;
+
+    &.is-ok {
+      color: var(--el-color-success);
+    }
+
+    &.is-bad {
+      color: var(--el-color-danger);
+    }
+  }
+}
+
+/* 本地凭证：保存方式与保存时长，佐证「这台机器上的登录态」 */
+.verify-local {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--el-text-color-placeholder);
 }
 </style>

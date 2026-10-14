@@ -162,7 +162,7 @@ const api = {
     onIpc('pocketDanmakuBatch', callback),
 
   // ===== B 站直播间信息 =====
-  // 对端：main/bilibili/room-info.ts；公演缺团体信息时渲染层拿房间标题做兜底匹配
+  // 对端：main/bilibili/room-info.ts
   bilibiliRoomInfos: () => invokeIpc('bilibiliRoomInfos'),
 } satisfies mainAPI
 

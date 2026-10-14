@@ -14,6 +14,7 @@ const LOGGED_OUT: PocketAuthState = {
   avatar: '',
   mobileMasked: '',
   plainFallback: false,
+  savedAt: 0,
 }
 
 /** 登录态快照；启动后由调用方（设置页）refresh 一次 */

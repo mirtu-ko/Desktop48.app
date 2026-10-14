@@ -25,6 +25,8 @@ const SMS_LOGIN_URL = 'https://pocketapi.48.cn/user/api/v1/login/app/mobile/code
 const TOKEN_CHECK_URL = 'https://pocketapi.48.cn/user/api/v1/user/info/reload'
 /** 网易云信 IM 凭据（直播聊天室连接用）：需登录 token，额外带 P-Sign-Type 头 */
 const IM_USER_INFO_URL = 'https://pocketapi.48.cn/im/api/v1/im/userinfo'
+/** 口袋钱包余额：验证登录态时顺带展示，接口失败不影响登录态判定 */
+const USER_MONEY_URL = 'https://pocketapi.48.cn/user/api/v1/user/money'
 /** 直播详情：仅带 token 的请求才返回 chatroomId（实测无 token 时 roomId 恒 0 且无 chatroomId 字段） */
 const LIVE_ONE_URL = 'https://pocketapi.48.cn/live/api/v1/live/getLiveOne'
 
@@ -81,6 +83,8 @@ export interface PocketAuthState {
   mobileMasked: string
   /** true = 平台无 safeStorage，token 以明文落盘（仅提示用） */
   plainFallback: boolean
+  /** 凭证保存时间（ms 时间戳）；0 = 无记录，供设置页展示「已保存 N 天」 */
+  savedAt: number
 }
 
 /** 发送验证码结果：needCaptcha=true 时携带问答题 */
@@ -238,6 +242,7 @@ function toAuthState(stored: StoredAuth | null): PocketAuthState {
     avatar: stored?.avatar || '',
     mobileMasked: maskMobile(stored?.mobile || ''),
     plainFallback: !!stored && !!stored.tokenPlain && !safeStorageAvailable(),
+    savedAt: stored?.savedAt || 0,
   }
 }
 
@@ -375,13 +380,63 @@ export interface PocketVerifyResult {
   level: string
   imOk: boolean
   imAccid: string
+  /** 口袋钱包（元）；moneyOk=false 时三个余额无意义（接口失败不影响登录态判定） */
+  moneyOk: boolean
+  moneyPay: number
+  moneyFree: number
+  moneyTotal: number
+  /** 社交资料：服务端不返回的字段为空串，UI 据此隐藏对应条目 */
+  fans: string
+  likes: string
+  signature: string
   message: string
 }
 
+/** 社交资料提取：服务端不同接口字段名不统一，逐个兜底；缺失返回空串 */
+function pickSocialStats(user: Record<string, unknown>): { fans: string, likes: string, signature: string } {
+  const num = (...keys: string[]): string => {
+    for (const key of keys) {
+      const value = user[key]
+      if (typeof value === 'number' && Number.isFinite(value))
+        return String(value)
+      if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value)))
+        return value.trim()
+    }
+    return ''
+  }
+  const text = (...keys: string[]): string => {
+    for (const key of keys) {
+      const value = user[key]
+      if (typeof value === 'string' && value.trim())
+        return value.trim()
+    }
+    return ''
+  }
+  return {
+    fans: num('fansNum', 'fansTimes', 'fans', 'follower'),
+    likes: num('likeCount', 'bePraisedTimes', 'praisedTimes', 'likesNum'),
+    signature: text('signature', 'autograph', 'introduce', 'description'),
+  }
+}
+
+/** 钱包余额（元）：字段缺失按 0 计；moneyTotal 缺失时用付费 + 免费兜底 */
+function pickMoney(content: Record<string, unknown> | undefined | null): { moneyPay: number, moneyFree: number, moneyTotal: number } {
+  const c = (content || {}) as Record<string, unknown>
+  const num = (key: string): number => {
+    const value = c[key]
+    const parsed = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+  }
+  const moneyPay = num('moneyPay')
+  const moneyFree = num('moneyFree')
+  return { moneyPay, moneyFree, moneyTotal: num('moneyTotal') || moneyPay + moneyFree }
+}
+
 /**
- * 验证登录是否有效：真实请求两个需要登录的接口——
- * 1. user/info/reload（token 校验 + 资料）；2. im/userinfo（弹幕聊天室凭据链路）。
- * 前者失败即登录失效；后者失败说明弹幕不可用，但登录态本身仍有效。
+ * 验证登录是否有效：真实请求需要登录的接口——
+ * 1. user/info/reload（token 校验 + 资料 + 社交数据）；2. im/userinfo（弹幕聊天室凭据链路）；
+ * 3. user/money（口袋钱包，失败不影响登录态判定）。
+ * 前者失败即登录失效；后两者失败只降级对应展示，登录态本身仍有效。
  */
 export async function verifyLogin(): Promise<PocketVerifyResult> {
   const empty: PocketVerifyResult = {
@@ -391,6 +446,13 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
     level: '',
     imOk: false,
     imAccid: '',
+    moneyOk: false,
+    moneyPay: 0,
+    moneyFree: 0,
+    moneyTotal: 0,
+    fans: '',
+    likes: '',
+    signature: '',
     message: '',
   }
   const token = getToken()
@@ -404,6 +466,9 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
   const info = pickUserInfo(envelope.content)
   const c = (envelope.content || {}) as Record<string, unknown>
   const user = (c.userInfo || c.user || c) as Record<string, unknown>
+  const social = pickSocialStats(user)
+  // 验证通过即用服务端最新资料回写本地（用户可能改过头像/昵称），token 不动
+  refreshStoredProfile(info)
   let imOk = false
   let imAccid = ''
   let imMessage = ''
@@ -415,6 +480,18 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
   catch (error) {
     imMessage = error instanceof Error ? error.message : String(error)
   }
+  let moneyOk = false
+  let money: ReturnType<typeof pickMoney> = { moneyPay: 0, moneyFree: 0, moneyTotal: 0 }
+  try {
+    const moneyEnvelope = await postPocket<Record<string, unknown>>(USER_MONEY_URL, { token }, token)
+    if (moneyEnvelope.success) {
+      money = pickMoney(moneyEnvelope.content)
+      moneyOk = true
+    }
+  }
+  catch {
+    // 钱包接口失败不影响登录态判定，仅余额展示为「获取失败」
+  }
   return {
     valid: true,
     nickname: info.nickname,
@@ -422,8 +499,23 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
     level: String(user.level ?? ''),
     imOk,
     imAccid,
+    moneyOk,
+    ...money,
+    fans: social.fans,
+    likes: social.likes,
+    signature: social.signature,
     message: imOk ? '登录有效' : `登录有效，但互动消息凭据获取失败：${imMessage}`,
   }
+}
+
+/** 验证通过后把服务端最新资料回写本地凭证（头像/昵称变更后设置页即时刷新；无变化不写盘） */
+function refreshStoredProfile(info: PocketUserInfo): void {
+  const stored = readStoredAuth()
+  if (!stored)
+    return
+  if (stored.nickname === info.nickname && stored.avatar === info.avatar && stored.userId === info.userId)
+    return
+  saveStoredAuth({ ...stored, nickname: info.nickname, avatar: info.avatar, userId: info.userId })
 }
 
 /**

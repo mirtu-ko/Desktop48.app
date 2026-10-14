@@ -164,6 +164,8 @@ export interface PocketAuthState {
   mobileMasked: string
   /** true = 平台无安全加密能力，token 以明文落盘（仅提示用） */
   plainFallback: boolean
+  /** 凭证保存时间（ms 时间戳）；0 = 无记录，供设置页展示「已保存 N 天」 */
+  savedAt: number
 }
 
 /** 发送验证码结果：needCaptcha=true 时携带反爬问答题 */
@@ -182,6 +184,15 @@ export interface PocketVerifyResult {
   level: string
   imOk: boolean
   imAccid: string
+  /** 口袋钱包（元）；moneyOk=false 时三个余额无意义（接口失败不影响登录态判定） */
+  moneyOk: boolean
+  moneyPay: number
+  moneyFree: number
+  moneyTotal: number
+  /** 社交资料：服务端不返回的字段为空串，UI 据此隐藏对应条目 */
+  fans: string
+  likes: string
+  signature: string
   message: string
 }
 
@@ -298,8 +309,8 @@ interface StaticIpcInvokeMap {
   pocketDanmakuStop: InvokeSpec<[chatroomId: string], void>
 
   // ===== B 站直播间信息 =====
-  // 对端：main/bilibili/room-info.ts；公演缺团体信息时渲染层拿房间标题做兜底匹配
-  /** 五个团体官方直播间的标题与开播状态（主进程 5 分钟缓存；单房间风控失败以空标题占位） */
+  // 对端：main/bilibili/room-info.ts
+  /** 五个团体官方直播间的标题与开播状态（主进程缓存 5 分钟，失败房间以空标题占位） */
   bilibiliRoomInfos: InvokeSpec<[], import('../common/bilibili-rooms').BilibiliRoomInfo[]>
 }
 
