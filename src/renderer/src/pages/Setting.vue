@@ -2,6 +2,7 @@
 import type { PocketVerifyResult } from '../../../preload/ipc-contract'
 import { Connection, Cpu, Document, Folder, Hide, Refresh, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
+import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
 import { useUpdater } from '@renderer/composables/use-updater'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
 import {
@@ -41,10 +42,21 @@ const { blockedMembers, refreshBlockedMembers, unblockMember, clearBlockedMember
 // 自动更新：状态镜像与操作集中在 use-updater.ts
 const { state: updaterState, checking: updaterChecking, version: appVersion, check: checkUpdate, download: downloadUpdate, install: installUpdate } = useUpdater()
 
+// 口袋关注同步：启动/登录后把账号维度的关注合并进本地名单（use-pocket-follow.ts）
+const {
+  syncing: followSyncing,
+  syncTotal: followSyncTotal,
+  syncError: followSyncError,
+  sync: syncPocketFollow,
+  syncIfStale: syncPocketFollowIfStale,
+} = usePocketFollowSync()
+
 onMounted(async () => {
   await loadAppConfig()
   await refreshBlockedMembers()
   await refreshPocketAuthState()
+  // 已登录则静默同步一次口袋关注（friends/id 一次性返回，无分页成本）
+  syncPocketFollowIfStale(5 * 60 * 1000)
 })
 
 /** 更新行的描述文案：一行说清当前处于什么状态、下一步该做什么 */
@@ -293,6 +305,7 @@ async function submitSmsLogin() {
     const state = await loginBySmsCode(smsForm.mobile, smsForm.code)
     loginDialogVisible.value = false
     notifyLoginSuccess(state)
+    void syncPocketFollow()
   }
   catch (error) {
     ElMessage.error(pocketAuthErrorMessage(error))
@@ -310,6 +323,7 @@ async function submitTokenLogin() {
     const state = await loginByPastedToken(tokenForm.token, tokenForm.mobile)
     loginDialogVisible.value = false
     notifyLoginSuccess(state)
+    void syncPocketFollow()
   }
   catch (error) {
     ElMessage.error(pocketAuthErrorMessage(error))
@@ -409,7 +423,7 @@ function hideLogo(event: Event) {
               <User />
             </el-icon>
           </span>
-          <div class="row-text">
+          <div class="row-text row-text--fluid">
             <div class="row-title">
               口袋48账号
             </div>
@@ -417,7 +431,13 @@ function hideLogo(event: Event) {
               <template v-if="pocketAuthState.loggedIn">
                 已登录{{ pocketAuthState.nickname ? `：${pocketAuthState.nickname}` : '' }}<template v-if="pocketAuthState.mobileMasked">
                   （{{ pocketAuthState.mobileMasked }}）
-                </template>，点击头像查看登录状态与账号资料
+                </template><template v-if="followSyncing">
+                  ，正在同步口袋关注…
+                </template><template v-else-if="followSyncError">
+                  ，口袋关注同步失败
+                </template><template v-else-if="followSyncTotal !== null">
+                  ，口袋关注已同步（{{ followSyncTotal }} 人）
+                </template>
               </template>
               <template v-else>
                 登录后可在直播页实时查看口袋互动消息
@@ -434,6 +454,12 @@ function hideLogo(event: Event) {
               >
                 明文存储
               </el-tag>
+              <el-button
+                :loading="followSyncing"
+                @click="syncPocketFollow()"
+              >
+                同步关注
+              </el-button>
               <el-button
                 type="danger"
                 plain

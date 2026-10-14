@@ -252,6 +252,8 @@ interface StaticIpcInvokeMap {
   getMemberFlags: InvokeSpec<[kind: MemberFlagKind], MemberFlag[]>
   setMemberFlags: InvokeSpec<[kind: MemberFlagKind, ids: Array<number | string>], void>
   addMemberFlag: InvokeSpec<[kind: MemberFlagKind, userId: number], void>
+  /** 批量幂等合并（口袋关注同步）：整批一次读改写 */
+  addMemberFlags: InvokeSpec<[kind: MemberFlagKind, userIds: number[]], void>
   removeMemberFlag: InvokeSpec<[kind: MemberFlagKind, userId: number], void>
   getConfig: InvokeSpec<[key: ConfigKey], string>
   setConfig: InvokeSpec<[key: ConfigKey, value: string], void>
@@ -303,6 +305,12 @@ interface StaticIpcInvokeMap {
   pocketGetChatroomId: InvokeSpec<[liveId: string], string>
   /** 验证登录有效性：真实请求 token 校验与 IM 凭据两个需登录接口 */
   pocketVerifyLogin: InvokeSpec<[], PocketVerifyResult>
+  /** 拉取账号关注成员 ID 列表（只给 ID，详情由本地成员树解析）；未登录空数组，过期 reject */
+  pocketGetFollowedIds: InvokeSpec<[], number[]>
+  /** 关注成员（桌面端 toggle 双写）；失败 reject，调用方静默降级 */
+  pocketFollowMember: InvokeSpec<[userId: number], void>
+  /** 取消关注成员（桌面端 toggle 双写）；失败 reject，调用方静默降级 */
+  pocketUnfollowMember: InvokeSpec<[userId: number], void>
   /** 起口袋聊天室弹幕会话并登记订阅；false = 未登录/凭据失效/参数无效 */
   pocketDanmakuStart: InvokeSpec<[chatroomId: string, liveId: string], boolean>
   /** 退订聊天室弹幕；最后一个订阅者离开时主进程断开连接 */

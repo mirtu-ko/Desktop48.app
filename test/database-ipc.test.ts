@@ -23,6 +23,7 @@ describe('registerDatabaseIPC 通道注册', () => {
     const channels = vi.mocked(handleTraced).mock.calls.map(([channel]) => channel)
     expect(channels.sort()).toEqual([
       'addMemberFlag',
+      'addMemberFlags',
       'getAllMembers',
       'getConfig',
       'getMemberFlags',

@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getAuthState, verifyLogin } from '../src/main/pocket48/pocket-auth'
+import { followMember, getAuthState, getFollowedIds, unfollowMember, verifyLogin } from '../src/main/pocket48/pocket-auth'
 
 /**
  * verifyLogin 的接口编排：token 校验 / IM 凭据 / 口袋钱包三个请求的
@@ -257,5 +257,58 @@ describe('pocket-auth verifyLogin', () => {
     expect(state.loggedIn).toBe(true)
     expect(state.savedAt).toBe(STORED.savedAt)
     expect(state.mobileMasked).toBe('138****8000')
+  })
+})
+
+describe('pocket-auth 关注列表', () => {
+  it('getFollowedIds 解析 content.data 并过滤脏值', async () => {
+    env.replies['friendships/friends/id'] = {
+      status: 200,
+      body: { status: 200, success: true, content: { data: ['10001', 10002, 0, -1, null, 'abc'] } },
+    }
+    await expect(getFollowedIds()).resolves.toEqual([10001, 10002])
+  })
+
+  it('data 缺失时返回空数组', async () => {
+    env.replies['friendships/friends/id'] = { status: 200, body: { status: 200, success: true, content: {} } }
+    await expect(getFollowedIds()).resolves.toEqual([])
+  })
+
+  it('未登录返回空数组且不发请求', async () => {
+    env.stored = null
+    await expect(getFollowedIds()).resolves.toEqual([])
+    expect(env.requests).toHaveLength(0)
+  })
+
+  it('token 失效抛「登录已过期」', async () => {
+    env.replies['friendships/friends/id'] = { status: 200, body: { status: 401005, success: false } }
+    await expect(getFollowedIds()).rejects.toThrow('登录已过期')
+  })
+
+  it('接口业务失败抛原始 message', async () => {
+    env.replies['friendships/friends/id'] = { status: 200, body: { status: 200, success: false, message: '炸了' } }
+    await expect(getFollowedIds()).rejects.toThrow('炸了')
+  })
+
+  it('关注 / 取关带 toSourceId 与 toType=1（yaya 同款）', async () => {
+    env.replies['friendships/friends/add'] = { status: 200, body: { status: 200, success: true } }
+    env.replies['friendships/friends/remove'] = { status: 200, body: { status: 200, success: true } }
+    await followMember(10001)
+    await unfollowMember(10001)
+    const add = env.requests.find(r => r.url.includes('friends/add'))
+    const remove = env.requests.find(r => r.url.includes('friends/remove'))
+    expect(add?.body).toEqual({ toSourceId: 10001, toType: 1 })
+    expect(remove?.body).toEqual({ toSourceId: 10001, toType: 1 })
+  })
+
+  it('关注业务失败抛错（调用方静默降级）', async () => {
+    env.replies['friendships/friends/add'] = { status: 200, body: { status: 200, success: false, message: '已关注' } }
+    await expect(followMember(10001)).rejects.toThrow('已关注')
+  })
+
+  it('未登录时关注直接抛错，不发请求', async () => {
+    env.stored = null
+    await expect(followMember(10001)).rejects.toThrow('未登录')
+    expect(env.requests).toHaveLength(0)
   })
 })

@@ -158,9 +158,13 @@ const payload = {
   source: 'open', // 决定后续调用哪个详情接口
   avatar: 'https://source.48.cn/mediasource/xxx.jpg',
   liveType: 1, // 1=视频，其它=电台（纯音频）
-  liveMode: 0
+  liveMode: 0,
+  bilibiliRoomId: 383045 // B 站直播间号；见「弹幕链路」，仅公演携带，映射不到则缺省
 }
 ```
+
+`openLiveStream` 为 async：`bilibiliRoomId` 在点击时经三级解析得出（见「弹幕链路」），
+映射失败时缺省该字段，播放器不显示弹幕入口。
 
 `payload` 在后续三层中原样透传（数组项 → FloatPlayer → LivePlayer props），
 可作为追踪整条链路的线索。
@@ -261,8 +265,8 @@ handleCreateLiveStream → assertLocalServerAvailable + isAllowedStreamUrl
 
 ## 6. LivePlayer.vue 中 composable 的协作关系
 
-该文件是本项目耦合度最高的模块，共挂载 7 个 composable。其中**前 4 个之间存在环状引用**，
-依靠 JavaScript 函数声明提升（hoisting）解决实例化顺序问题——因此
+该文件是本项目耦合度最高的模块，共挂载 9 个 composable。其中 session / retry / player / recoverStream
+之间存在环状引用，依靠 JavaScript 函数声明提升（hoisting）解决实例化顺序问题——因此
 `useLiveSession({ onBeforeRebuild: rebuildMedia, onSessionStart: beginSession })`
 中引用的两个 handler 定义于文件更靠后的位置，此为有意为之。
 
@@ -286,15 +290,17 @@ handleCreateLiveStream → assertLocalServerAvailable + isAllowedStreamUrl
 
 职责划分如下：
 
-| composable           | 负责范围                                         | 不负责范围                      |
-| -------------------- | ------------------------------------------------ | ------------------------------- |
-| `use-live-session`   | 拉详情、开/停本地转流会话、界面状态同步          | 播放器实例、重试节奏、轮询      |
-| `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位               | 地址来源、错误处理策略          |
-| `use-stream-retry`   | 重试节奏（默认 2 秒 × 3 次，决策走纯函数）       | 具体恢复逻辑（由 attempt 注入） |
-| `use-live-polling`   | 已播时长、在线人数定时刷新                       | 播放行为本身                    |
-| `use-video-rotation` | 旋转 / 容器全屏 / 播放暂停 / 音量                | 地址、重试                      |
-| `use-sleep-blocker`  | 播放期间阻止系统休眠                             | 播放行为                        |
-| `use-media-download` | 录制发起（走原始 RTMP 直存文件，不经本地转封装） | 页面播放链路                    |
+| composable           | 负责范围                                                   | 不负责范围                           |
+| -------------------- | ---------------------------------------------------------- | ------------------------------------ |
+| `use-live-session`   | 拉详情、补拉口袋聊天室 ID、开/停本地转流会话、界面状态同步 | 播放器实例、重试节奏、轮询、弹幕订阅 |
+| `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位                         | 地址来源、错误处理策略               |
+| `use-stream-retry`   | 重试节奏（默认 2 秒 × 3 次，决策走纯函数）                 | 具体恢复逻辑（由 attempt 注入）      |
+| `use-live-polling`   | 已播时长、在线人数定时刷新                                 | 播放行为本身                         |
+| `use-video-rotation` | 旋转 / 容器全屏 / 播放暂停 / 音量                          | 地址、重试                           |
+| `use-sleep-blocker`  | 播放期间阻止系统休眠                                       | 播放行为                             |
+| `use-media-download` | 录制发起（走原始 RTMP 直存文件，不经本地转封装）           | 页面播放链路                         |
+| `use-live-danmaku`   | 双源弹幕订阅与投放（B 站 + 口袋，见「弹幕链路」）          | 播放行为、气泡层渲染                 |
+| `use-danmaku-layer`  | 弹幕层锚定（左下气泡 / 左上互动榜）、字号自适应            | 弹幕内容与生命周期                   |
 
 ## 7. 四处需要注意的实现约定
 
@@ -357,7 +363,35 @@ Stream Key 不变。旧地址随即失效 → 主进程 FFmpeg 退出 → 本地
 - 重试计数语义是「连续失败次数」，必须在 canplay 时清零（`retry.markRecovered()`）：
   否则一场直播里累计断流 3 次（连麦很容易做到）就会被误判为「直播已结束」并关窗。
 
-## 8. 对照：历史公演（回放）链路
+## 8. 弹幕链路
+
+与播放链路并行、共享 LivePlayer 的互动消息子系统。**双源按直播类型分流，互不混用**：
+
+| 直播类型                    | 数据源         | 会话锚点                              | 主进程模块                         |
+| --------------------------- | -------------- | ------------------------------------- | ---------------------------------- |
+| 公演（`source='open'`）     | B 站弹幕       | `bilibiliRoomId`（payload 携带）      | `main/bilibili/danmaku-session.ts` |
+| 个人直播（`source='user'`） | 口袋48互动消息 | `chatroomId`（use-live-session 补拉） | `main/pocket48/pocket-danmaku.ts`  |
+
+两个源由 `use-live-danmaku` 统一订阅，投放到同一气泡层（`use-live-danmaku-overlay`）；
+口袋的 LIVEUPDATE 消息不进气泡层，路由到左上角互动榜面板（LivePlayer 的 rank-panel）。
+口袋源走自研网易云信 TCP 协议客户端（`main/pocket48/nim-chatroom.ts`），需登录口袋账号。
+
+### 8.1 B 站房间号三级解析（`utils/bilibili-room.ts`）
+
+公演条目到房间号的映射按从严到宽依次尝试，全部落空则无弹幕：
+
+1. `teamList[0].groupId` 查团体房间表（`common/bilibili-rooms.ts`）；
+2. 标题/副标题文本匹配：先团体名（SNH48…），再队伍名（TEAM X…，接口的 teamName 不含团体名）；
+3. 在线兜底：主进程拉五个官方直播间信息（`bilibiliRoomInfos` IPC，缓存 5 分钟），
+   **只取在播中的房间**，公演名书名号段与房间标题互配命中即用——
+   teamList 为空的公演（新生公演、生日会等）靠这层发现。
+
+### 8.2 断连与降级
+
+弹幕连不上只提示一次，不影响直播播放：B 站握手失败经 toast 提示后关闭弹幕层；
+口袋源断连由协议客户端自动重连，未登录直接不建立会话。
+
+## 9. 对照：历史公演（回放）链路
 
 同一 Shows 页面中，点击历史公演走 `openHistoryStream` → `openPlayback(payload)`
 → `PlaybackPlayer`：
@@ -372,17 +406,17 @@ PlaybackPlayer
 该链路不涉及 FFmpeg 与本地 HTTP 服务，因为 VOD 地址（http 协议的 m3u8/mp4）
 浏览器可直接播放。与直播链路对照阅读，有助于理解后者引入转封装的必要性。
 
-## 9. 链路验证方法
+## 10. 链路验证方法
 
-### 9.1 debug 日志（首选）
+### 10.1 debug 日志（首选）
 
 三条播放链已埋讲解型 debug 日志，scope 对照表登记在 `utils/debug.ts` 头部：
 
-| scope      | 覆盖场景                                   |
-| ---------- | ------------------------------------------ |
-| `live`     | LivePlayer 直播链（阶段编号 ①②…）          |
-| `show`     | Shows.vue 按 `status` 分流到直播/回放      |
-| `playback` | PlaybackPlayer 录播链（hls.js / 原生 MP4） |
+| scope      | 覆盖场景                                            |
+| ---------- | --------------------------------------------------- |
+| `live`     | LivePlayer 直播链（阶段编号 ①②…）与双源弹幕收发     |
+| `show`     | Shows.vue 按 `status` 分流到直播/回放、B 站房间映射 |
+| `playback` | PlaybackPlayer 录播链（hls.js / 原生 MP4）          |
 
 打开方式：
 
@@ -393,7 +427,7 @@ PlaybackPlayer
 - IPC 层：`main/ipc/trace.ts` 的 `handleTraced` 包装所有 invoke 通道，
   自动记录通道名/参数摘要/耗时/错误，无需业务代码埋点。
 
-### 9.2 关键断点位置
+### 10.2 关键断点位置
 
 | 位置                                                             | 观察内容                         |
 | ---------------------------------------------------------------- | -------------------------------- |

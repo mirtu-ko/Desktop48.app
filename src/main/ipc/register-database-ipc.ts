@@ -20,6 +20,7 @@ export function registerDatabaseIPC(): void {
   handleTraced('getMemberFlags', async (_event, kind: MemberFlagKind) => db().getMemberFlags(kind))
   handleTraced('setMemberFlags', async (_event, kind: MemberFlagKind, ids: Array<number | string>) => db().setMemberFlags(kind, ids))
   handleTraced('addMemberFlag', async (_event, kind: MemberFlagKind, userId: number) => db().addMemberFlag(kind, userId))
+  handleTraced('addMemberFlags', async (_event, kind: MemberFlagKind, userIds: number[]) => db().addMemberFlags(kind, userIds))
   handleTraced('removeMemberFlag', async (_event, kind: MemberFlagKind, userId: number) => db().removeMemberFlag(kind, userId))
   handleTraced('getConfig', async (_event, key: ConfigKey) => db().getConfig(key))
   handleTraced('setConfig', async (_event, key: ConfigKey, value: string) => db().setConfig(key, value))

@@ -47,6 +47,7 @@ const api = {
   getMemberFlags: (kind: MemberFlagKind) => invokeIpc('getMemberFlags', kind),
   setMemberFlags: (kind: MemberFlagKind, ids: Array<number | string>) => invokeIpc('setMemberFlags', kind, ids),
   addMemberFlag: (kind: MemberFlagKind, userId: number) => invokeIpc('addMemberFlag', kind, userId),
+  addMemberFlags: (kind: MemberFlagKind, userIds: number[]) => invokeIpc('addMemberFlags', kind, userIds),
   removeMemberFlag: (kind: MemberFlagKind, userId: number) => invokeIpc('removeMemberFlag', kind, userId),
 
   // ===== 应用配置 =====
@@ -155,6 +156,9 @@ const api = {
   pocketLogout: () => invokeIpc('pocketLogout'),
   pocketGetChatroomId: (liveId: string) => invokeIpc('pocketGetChatroomId', liveId),
   pocketVerifyLogin: () => invokeIpc('pocketVerifyLogin'),
+  pocketGetFollowedIds: () => invokeIpc('pocketGetFollowedIds'),
+  pocketFollowMember: (userId: number) => invokeIpc('pocketFollowMember', userId),
+  pocketUnfollowMember: (userId: number) => invokeIpc('pocketUnfollowMember', userId),
   pocketDanmakuStart: (chatroomId: string, liveId: string) => invokeIpc('pocketDanmakuStart', chatroomId, liveId),
   pocketDanmakuStop: (chatroomId: string) => invokeIpc('pocketDanmakuStop', chatroomId),
   // pocketDanmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI

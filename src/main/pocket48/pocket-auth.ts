@@ -27,6 +27,11 @@ const TOKEN_CHECK_URL = 'https://pocketapi.48.cn/user/api/v1/user/info/reload'
 const IM_USER_INFO_URL = 'https://pocketapi.48.cn/im/api/v1/im/userinfo'
 /** 口袋钱包余额：验证登录态时顺带展示，接口失败不影响登录态判定 */
 const USER_MONEY_URL = 'https://pocketapi.48.cn/user/api/v1/user/money'
+/** 关注成员 ID 列表（账号维度，一次性返回无分页；只给 ID，详情由本地成员树解析） */
+const FRIENDS_IDS_URL = 'https://pocketapi.48.cn/user/api/v1/friendships/friends/id'
+/** 关注 / 取消关注成员（桌面端 toggle 双写用） */
+const FRIEND_ADD_URL = 'https://pocketapi.48.cn/user/api/v2/friendships/friends/add'
+const FRIEND_REMOVE_URL = 'https://pocketapi.48.cn/user/api/v2/friendships/friends/remove'
 /** 直播详情：仅带 token 的请求才返回 chatroomId（实测无 token 时 roomId 恒 0 且无 chatroomId 字段） */
 const LIVE_ONE_URL = 'https://pocketapi.48.cn/live/api/v1/live/getLiveOne'
 
@@ -516,6 +521,56 @@ function refreshStoredProfile(info: PocketUserInfo): void {
   if (stored.nickname === info.nickname && stored.avatar === info.avatar && stored.userId === info.userId)
     return
   saveStoredAuth({ ...stored, nickname: info.nickname, avatar: info.avatar, userId: info.userId })
+}
+
+// ===== 关注列表（账号维度） =====
+
+/** 关注对象类型：1=成员；0=队伍（本应用只同步成员，队伍维度无对应概念） */
+const FOLLOW_TO_TYPE_MEMBER = 1
+
+/**
+ * 拉取当前账号关注的成员 ID 列表。
+ * 接口只返回 ID 数组（无分页、无昵称头像），详情由本地成员树解析——
+ * 与 yaya_msg 同款策略，未登录返回空数组，token 失效抛「登录已过期」。
+ */
+export async function getFollowedIds(): Promise<number[]> {
+  const token = getToken()
+  if (!token)
+    return []
+  const envelope = await postPocket<Record<string, unknown>>(FRIENDS_IDS_URL, {}, token)
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throw new Error('登录已过期，请重新登录口袋48账号')
+  if (!envelope.success)
+    throw new Error(envelope.message || '获取关注列表失败')
+  const data = (envelope.content as Record<string, unknown> | undefined)?.data
+  return (Array.isArray(data) ? data : [])
+    .map(id => Number(id))
+    .filter(id => Number.isFinite(id) && id > 0)
+}
+
+/** 关注成员（桌面端 toggle 双写）：失败抛错，调用方静默降级 */
+export async function followMember(userId: number): Promise<void> {
+  await postFollow(FRIEND_ADD_URL, userId, '关注')
+}
+
+/** 取消关注成员（桌面端 toggle 双写）：失败抛错，调用方静默降级 */
+export async function unfollowMember(userId: number): Promise<void> {
+  await postFollow(FRIEND_REMOVE_URL, userId, '取消关注')
+}
+
+async function postFollow(url: string, userId: number, action: string): Promise<void> {
+  const token = getToken()
+  if (!token)
+    throw new Error('未登录口袋48账号')
+  const envelope = await postPocket<Record<string, unknown>>(
+    url,
+    { toSourceId: userId, toType: FOLLOW_TO_TYPE_MEMBER },
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throw new Error('登录已过期，请重新登录口袋48账号')
+  if (!envelope.success)
+    throw new Error(envelope.message || `${action}失败`)
 }
 
 /**

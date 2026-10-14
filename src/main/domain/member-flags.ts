@@ -25,6 +25,23 @@ export function addMemberFlagId(
   return [...list, userId]
 }
 
+/** 批量幂等合并（口袋关注同步用）：一次读改写，无变化返回 null 免写盘 */
+export function addMemberFlagIds(
+  memberIds: Array<number | string> | undefined,
+  userIds: number[],
+): Array<number | string> | null {
+  let list = memberIds || []
+  let changed = false
+  for (const userId of userIds) {
+    const next = addMemberFlagId(list, userId)
+    if (next) {
+      list = next
+      changed = true
+    }
+  }
+  return changed ? list : null
+}
+
 /** 返回移除后的数组（不改动入参）；名单未初始化视为空 */
 export function removeMemberFlagId(
   memberIds: Array<number | string> | undefined,
