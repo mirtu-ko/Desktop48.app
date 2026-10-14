@@ -36,8 +36,13 @@ export interface PocketRoomMessageView {
   /** roleId > 1 = 成员（xox），昵称可着色区分 */
   isMember: boolean
   msgTime: number
+
   /** 图片直链（IMAGE/EXPRESSIMAGE）；空串 = 非图片或取不到 URL */
   imageUrl: string
+  /** 图片原始宽度；0 = 未返回（无法预留占位，加载时仍会轻微抖动） */
+  imageWidth: number
+  /** 图片原始高度；0 = 未返回 */
+  imageHeight: number
   /** 音频直链（AUDIO / 语音回复 / 语音翻牌）；空串 = 无 */
   audioUrl: string
   /** 视频直链（VIDEO / 视频翻牌）；空串 = 无 */
@@ -232,12 +237,19 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
   const text = messageText(msgType, msg, body)
 
   // 媒体直链：bodys JSON 的 url 系字段（字段名对齐参考实现 yaya_msg 的解析）
+
   let imageUrl = ''
+  let imageWidth = 0
+  let imageHeight = 0
   let audioUrl = ''
   let videoUrl = ''
   let videoPoster = ''
+
   if (msgType === 'IMAGE') {
     imageUrl = mediaUrl(firstStr(body, ['url', 'imageUrl', 'imgUrl']), 'source')
+    // 尺寸给渲染层做 aspect-ratio 占位（消除图片加载时的布局抖动）；字段名宽容匹配
+    imageWidth = num(body?.width) || num(body?.imgWidth) || num(body?.w)
+    imageHeight = num(body?.height) || num(body?.imgHeight) || num(body?.h)
   }
   else if (msgType === 'EXPRESSIMAGE') {
     imageUrl = mediaUrl(firstStr(parseJson(body?.expressImgInfo), ['emotionRemote']) || firstStr(body, ['url']), 'source')
@@ -301,6 +313,8 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
     msgTime: num(msg.msgTime),
 
     imageUrl,
+    imageWidth,
+    imageHeight,
     audioUrl,
     videoUrl,
     videoPoster,

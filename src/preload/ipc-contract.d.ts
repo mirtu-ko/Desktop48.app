@@ -257,6 +257,25 @@ export interface PocketDanmakuBatch {
   items?: PocketRawChatMessage[]
 }
 
+// ===== 房间未读 =====
+
+// 对端：main/pocket48/pocket-unread.ts。检测与未读状态归主进程（唯一真相），
+// 渲染层 stores/pocket-unread.ts 只做镜像，变化经 pocketUnreadBatch 全量广播。
+
+/** 单个房间的未读快照（userId 为键；count>0 的房间才会出现） */
+export interface PocketUnreadRoomState {
+  /** 未读条数（lastMsgList 每频道只有最新一条，一轮按「有新消息」粗算 +1） */
+  count: number
+  /** 最新一条未读消息时刻（ms） */
+  latestTime: number
+}
+/** 未读全量快照 */
+export interface PocketUnreadBatch {
+  rooms: Record<string, PocketUnreadRoomState>
+  /** 全部房间未读总数（Dock tab / 任务栏角标用） */
+  total: number
+}
+
 // ===== 类型化 IPC 通道映射 =====
 
 interface InvokeSpec<Args extends readonly unknown[], Return> {
@@ -352,6 +371,10 @@ interface StaticIpcInvokeMap {
   pocketDanmakuStart: InvokeSpec<[chatroomId: string, liveId: string], boolean>
   /** 退订聊天室弹幕；最后一个订阅者离开时主进程断开连接 */
   pocketDanmakuStop: InvokeSpec<[chatroomId: string], void>
+  /** 房间未读全量快照（启动时回取一次；后续变化走 pocketUnreadBatch 事件） */
+  pocketUnreadState: InvokeSpec<[], PocketUnreadBatch>
+  /** 标记房间已读：水位上移、未读清零并广播；msgTime 传该房间最新已见消息时刻 */
+  pocketMarkRead: InvokeSpec<[userId: number, msgTime?: number], void>
 
   // ===== B 站直播间信息 =====
   // 对端：main/bilibili/room-info.ts
@@ -406,6 +429,11 @@ export type IpcEventMap = {
   danmakuBatch: [batch: DanmakuBatch]
   /** 口袋聊天室事件（对端：main/pocket48/pocket-danmaku.ts，仅发给订阅了该聊天室的窗口） */
   pocketDanmakuBatch: [batch: PocketDanmakuBatch]
+  /**
+   * 房间未读状态变化（对端：main/pocket48/pocket-unread.ts，全量快照）。
+   * 未读状态由主进程统一持有、每个窗口各存镜像，因此广播给全部窗口（见 main/ipc/send.ts）。
+   */
+  pocketUnreadBatch: [state: PocketUnreadBatch]
   /**
    * 更新状态变化（对端：main/updater.ts）。
    * 状态归主进程所有、每个窗口各存镜像，因此广播给全部窗口（见 main/ipc/send.ts 的 broadcastIpc）。

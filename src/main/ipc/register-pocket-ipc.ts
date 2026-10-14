@@ -5,6 +5,7 @@
 import type { IpcMainInvokeEvent } from 'electron'
 import * as pocketAuth from '../pocket48/pocket-auth'
 import { handlePocketDanmakuStart, handlePocketDanmakuStop } from '../pocket48/pocket-danmaku'
+import * as pocketUnread from '../pocket48/pocket-unread'
 import { handleTraced } from './trace'
 
 export function registerPocketIPC(): void {
@@ -44,4 +45,8 @@ export function registerPocketIPC(): void {
     handlePocketDanmakuStart(chatroomId, liveId, event.sender))
   handleTraced('pocketDanmakuStop', (event, chatroomId: string) =>
     handlePocketDanmakuStop(chatroomId, event.sender))
+  // 房间未读（主进程 60s 轮询检测，见 main/pocket48/pocket-unread.ts）：快照回取 + 标记已读
+  handleTraced('pocketUnreadState', () => pocketUnread.getState())
+  handleTraced('pocketMarkRead', (_event: IpcMainInvokeEvent, userId: number, msgTime?: number) =>
+    pocketUnread.markRead(userId, msgTime))
 }

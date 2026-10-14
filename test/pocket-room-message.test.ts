@@ -61,6 +61,18 @@ describe('pocket-room-message / 文本与多媒体', () => {
     expect(absolute.imageUrl).toBe('https://source.48.cn/mediasource/x.jpg')
   })
 
+  it('image 提取宽高（字段宽容匹配）供 aspect-ratio 占位；缺省 0', () => {
+    const sized = normalizePocketRoomMessage(roomMessage('IMAGE', {
+      bodys: { url: '/a.jpg', imgWidth: 800, imgHeight: 600 },
+    }))!
+    expect(sized.imageWidth).toBe(800)
+    expect(sized.imageHeight).toBe(600)
+
+    const unsized = normalizePocketRoomMessage(roomMessage('IMAGE', { bodys: { url: '/b.jpg' } }))!
+    expect(unsized.imageWidth).toBe(0)
+    expect(unsized.imageHeight).toBe(0)
+  })
+
   it('expressimage 从 expressImgInfo.emotionRemote 取图', () => {
     const view = normalizePocketRoomMessage(roomMessage('EXPRESSIMAGE', {
       bodys: { expressImgInfo: { emotionRemote: '/emotion/1.png' } },

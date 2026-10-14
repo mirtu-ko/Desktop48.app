@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketDanmakuBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
+import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketDanmakuBatch, PocketUnreadBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 /**
@@ -168,6 +168,14 @@ const api = {
   // pocketDanmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   pocketDanmakuBatch: (callback: (_batch: PocketDanmakuBatch) => void) =>
     onIpc('pocketDanmakuBatch', callback),
+
+  // ===== 房间未读 =====
+  // 对端：main/pocket48/pocket-unread.ts（主进程唯一真相，检测不受窗口失焦节流）
+  pocketUnreadState: () => invokeIpc('pocketUnreadState'),
+  pocketMarkRead: (userId: number, msgTime?: number) => invokeIpc('pocketMarkRead', userId, msgTime),
+  // pocketUnreadBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
+  pocketUnreadBatch: (callback: (_state: PocketUnreadBatch) => void) =>
+    onIpc('pocketUnreadBatch', callback),
 
   // ===== B 站直播间信息 =====
   // 对端：main/bilibili/room-info.ts

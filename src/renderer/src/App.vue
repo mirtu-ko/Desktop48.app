@@ -10,6 +10,7 @@ import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
 import DownloadsCard from '@renderer/components/ui/DownloadsCard.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import EventBus from '@renderer/services/event-bus'
+import { installPocketUnread, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import Constants from '@renderer/utils/constants'
 import { scrollPageToTop } from '@renderer/utils/page-scroll'
 import { computed, KeepAlive, onErrorCaptured, ref, watch } from 'vue'
@@ -45,10 +46,14 @@ const activeIndex = ref(resolveActiveMenu(route.path))
 let lastLivePath = '/lives'
 
 // 底部 Dock 菜单项（语义色引用 app.scss 的 --color-* 变量）。
-// index 就是路由 path（Constants.Menu 的值），同时充当激活态匹配标识
+// index 就是路由 path（Constants.Menu 的值），同时充当激活态匹配标识；
+// 房间项带未读总数角标（主进程检测 → stores/pocket-unread 镜像，同下载入口角标语言）
+const { totalUnread } = usePocketUnreadStore()
+installPocketUnread()
+
 const dockItems = computed(() => [
   { index: Constants.Menu.LIVES, label: '直播', icon: VideoCamera, color: 'var(--color-lives)' },
-  { index: Constants.Menu.ROOMS, label: '房间', icon: ChatDotRound, color: 'var(--color-rooms)' },
+  { index: Constants.Menu.ROOMS, label: '房间', icon: ChatDotRound, color: 'var(--color-rooms)', badge: totalUnread.value || undefined },
   { index: Constants.Menu.SHOWS, label: '公演', icon: Microphone, color: 'var(--color-shows)' },
   { index: Constants.Menu.ALBUMS, label: '专辑', icon: Headset, color: 'var(--color-albums)' },
   { index: Constants.Menu.MEMBERS, label: '成员', icon: User, color: 'var(--color-members)' },

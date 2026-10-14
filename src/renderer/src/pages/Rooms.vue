@@ -9,6 +9,7 @@ import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
 import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
+import { markRoomRead, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { liveShareTitle } from '@renderer/utils/pocket-room-message'
 import Tools from '@renderer/utils/tools'
 import dayjs from 'dayjs'
@@ -95,6 +96,10 @@ watch(() => messages.value.length, async (len, oldLen) => {
     return
   }
   newCount.value = 0
+  // 贴底浏览即已读：把未读水位推到消息流末条（首次拉到消息 / 轮询增量都走这里），
+  // 主进程清零后广播，左列与 Dock 角标同步消失。上翻浏览时不标记，未读保留
+  if (selectedUserId.value !== null && messages.value.length)
+    void markRoomRead(selectedUserId.value, messages.value[messages.value.length - 1].msgTime)
   await nextTick()
   const el = listRef.value
   if (el)
@@ -289,6 +294,11 @@ onMounted(() => {
               <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
               <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
               <span v-if="room.live" class="room-live-badge">LIVE</span>
+              <!-- 未读角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角，与右下 LIVE 点错开 -->
+              <span
+                v-if="unreadCountOf(room.userId)"
+                class="room-unread"
+              >{{ unreadCountOf(room.userId) > 99 ? '99+' : unreadCountOf(room.userId) }}</span>
             </span>
             <span class="room-meta">
               <span class="room-name-row">
@@ -787,6 +797,24 @@ onMounted(() => {
   box-shadow: 0 0 0 2px var(--el-bg-color);
 }
 
+/* 未读数角标：贴在头像右上角（LIVE 点在右下角，两者不打架）；
+ * 视觉语言同右下角下载入口的 .entry-badge（红色药丸 + 底色描边） */
+.room-unread {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  color: #fff;
+  background: var(--el-color-danger);
+  box-shadow: 0 0 0 2px var(--el-bg-color);
+}
+
 .room-meta {
   flex: 1;
   min-width: 0;
@@ -1102,14 +1130,10 @@ onMounted(() => {
     color: var(--color-rooms);
   }
 
-  .msg-bubble {
+  .msg-bubble:not(.msg-bubble--media) {
     color: var(--el-text-color-primary);
     background: color-mix(in srgb, var(--color-rooms) 12%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 30%, transparent);
-  }
-
-  .msg-bubble--media {
-    background: color-mix(in srgb, var(--color-rooms) 9%, transparent);
   }
 }
 
@@ -1245,10 +1269,10 @@ onMounted(() => {
   transition: color 0.18s ease;
 }
 
-/* 媒体气泡：内缩为贴边容器，媒体自带圆角 */
+/* 媒体气泡：去掉外层聊天底框，媒体贴边展示（自带圆角/底色） */
 .msg-bubble--media {
-  padding: 4px;
-  background: var(--el-fill-color-light);
+  padding: 0;
+  background: none;
 }
 
 .msg-image {
@@ -1269,8 +1293,9 @@ onMounted(() => {
 }
 
 /* 语音条附带的正文（语音回复的回复语等） */
+
 .msg-media-text {
-  margin: 4px 6px 2px;
+  margin: 6px 0 0;
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
