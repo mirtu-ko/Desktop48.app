@@ -14,11 +14,12 @@ import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import EventBus from '@renderer/services/event-bus'
 import { debugLog } from '@renderer/utils/debug'
 import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
+import Tools from '@renderer/utils/tools'
 
 import { useEventListener } from '@vueuse/core'
 
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import DanmakuBubbles from './DanmakuBubbles.vue'
 import MiniControls from './MiniControls.vue'
 import PlayerLoading from './PlayerLoading.vue'
@@ -152,6 +153,8 @@ const showDanmaku = computed(() => hasDanmakuRoom.value && danmakuEnabled.value)
 // 榜单不进气泡层，独立显示在画面右上角（.player-actions 下方）；可由胶囊开关收起
 const rankUsers = ref<PocketRankUser[]>([])
 const rankVisible = ref(true)
+/** 加载失败的榜单头像（按 userId 记账）：回退首字母占位 */
+const failedRankAvatars = reactive(new Set<string>())
 
 const { danmakuItems } = useLiveDanmaku({
   roomId: () => danmakuRoomId.value,
@@ -161,6 +164,9 @@ const { danmakuItems } = useLiveDanmaku({
   onRank: (users) => {
     rankUsers.value = users
     debugLog('rankUsers', users)
+    // 换场清榜时一并清头像失败记录，下一场从头加载
+    if (!users.length)
+      failedRankAvatars.clear()
   },
 })
 
@@ -439,6 +445,17 @@ onUnmounted(() => {
           class="rank-panel__row"
         >
           <span class="rank-panel__index" :class="{ 'is-top': index < 3 }">{{ index + 1 }}</span>
+          <!-- 头像：加载失败或服务端未给时回退用户名首字母 -->
+          <img
+            v-if="user.avatar && !failedRankAvatars.has(user.userId || String(index))"
+            class="rank-panel__avatar"
+            :src="Tools.sourceUrl(user.avatar)"
+            referrerpolicy="no-referrer"
+            loading="lazy"
+            alt=""
+            @error="failedRankAvatars.add(user.userId || String(index))"
+          >
+          <span v-else class="rank-panel__avatar rank-panel__avatar--fallback">{{ (user.userName || '神')[0] }}</span>
           <span class="rank-panel__name">{{ user.userName || '神秘用户' }}</span>
         </div>
       </div>
@@ -611,6 +628,25 @@ onUnmounted(() => {
   font-weight: 700;
   color: #f7ba2a;
   opacity: 1;
+}
+
+/* 头像：20px 圆形；无图 / 加载失败时回退用户名首字母占位 */
+.rank-panel__avatar {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.rank-panel__avatar--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .rank-panel__name {
