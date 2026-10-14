@@ -107,6 +107,8 @@ describe('pocket-chat-message.normalizePocketChatMessage', () => {
           topList: [
             { user: { userId: 167706829, userName: '许愿大', avatar: 'https://img.example/a.jpg' } },
             { user: { userId: 42, userName: '路人甲' } },
+            // 榜单实测报文（2026-10-14）：头像字段为 userAvatar 且为相对路径
+            { user: { userId: 859171, userName: '阿琂是谁🍥', userAvatar: '/avatar/2026/0601/859171.jpg', level: 16 } },
           ],
         },
       }),
@@ -116,6 +118,7 @@ describe('pocket-chat-message.normalizePocketChatMessage', () => {
     expect(result?.rankUsers).toEqual([
       { userId: '167706829', userName: '许愿大', avatar: 'https://img.example/a.jpg' },
       { userId: '42', userName: '路人甲', avatar: '' },
+      { userId: '859171', userName: '阿琂是谁🍥', avatar: '/avatar/2026/0601/859171.jpg' },
     ])
   })
 

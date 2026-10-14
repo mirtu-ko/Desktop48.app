@@ -159,6 +159,10 @@ const api = {
   pocketGetFollowedIds: () => invokeIpc('pocketGetFollowedIds'),
   pocketFollowMember: (userId: number) => invokeIpc('pocketFollowMember', userId),
   pocketUnfollowMember: (userId: number) => invokeIpc('pocketUnfollowMember', userId),
+  pocketGetRoomChannel: (userId: number) => invokeIpc('pocketGetRoomChannel', userId),
+  pocketGetRoomMessages: (channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all') =>
+    invokeIpc('pocketGetRoomMessages', channelId, serverId, nextTime, scope),
+  pocketGetRoomLastMessages: (serverIds: string[]) => invokeIpc('pocketGetRoomLastMessages', serverIds),
   pocketDanmakuStart: (chatroomId: string, liveId: string) => invokeIpc('pocketDanmakuStart', chatroomId, liveId),
   pocketDanmakuStop: (chatroomId: string) => invokeIpc('pocketDanmakuStop', chatroomId),
   // pocketDanmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI

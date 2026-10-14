@@ -72,8 +72,8 @@ export function useLiveDanmaku(options: {
     stopPocket()
     activePocketRoomId = roomId
     pocketReceivedCount = 0
-    // 同房间重建由 service 层复用在册会话（不双订阅）；失败只走 onStatus，不抛错
-    void connectPocketChatroom({
+    // 同房间重建由 service 层复用在册会话（fan-out，不双订阅）；失败只走 onStatus，不抛错
+    connectPocketChatroom({
       chatroomId: roomId,
       // 串扰过滤锚点必须是真 liveId：传聊天室 ID 会和消息扩展里的 liveId 比对失败，整条流被丢光
       liveId: options.liveId?.() || '',

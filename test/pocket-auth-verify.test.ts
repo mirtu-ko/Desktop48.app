@@ -1,6 +1,15 @@
 import { Buffer } from 'node:buffer'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { followMember, getAuthState, getFollowedIds, unfollowMember, verifyLogin } from '../src/main/pocket48/pocket-auth'
+import {
+  followMember,
+  getAuthState,
+  getFollowedIds,
+  getRoomChannel,
+  getRoomLastMessages,
+  getRoomMessages,
+  unfollowMember,
+  verifyLogin,
+} from '../src/main/pocket48/pocket-auth'
 
 /**
  * verifyLogin 的接口编排：token 校验 / IM 凭据 / 口袋钱包三个请求的
@@ -310,5 +319,117 @@ describe('pocket-auth 关注列表', () => {
     env.stored = null
     await expect(followMember(10001)).rejects.toThrow('未登录')
     expect(env.requests).toHaveLength(0)
+  })
+})
+
+describe('pocket-auth 成员房间', () => {
+  it('getRoomChannel：starId + targetType=1 解析出 serverId 与 channelId', async () => {
+    env.replies['im/server/jump'] = {
+      status: 200,
+      body: { status: 200, success: true, content: { serverId: 888, channelId: 999 } },
+    }
+    await expect(getRoomChannel(10001)).resolves.toEqual({ serverId: '888', channelId: '999' })
+    const request = env.requests.find(r => r.url.includes('im/server/jump'))
+    expect(request?.body).toEqual({ starId: 10001, targetType: 1 })
+  })
+
+  it('getRoomChannel 未登录返回空频道，不发请求', async () => {
+    env.stored = null
+    await expect(getRoomChannel(10001)).resolves.toEqual({ serverId: '', channelId: '' })
+    expect(env.requests).toHaveLength(0)
+  })
+
+  it('getRoomChannel token 失效抛「登录已过期」', async () => {
+    env.replies['im/server/jump'] = { status: 200, body: { status: 401005, success: false } }
+    await expect(getRoomChannel(10001)).rejects.toThrow('登录已过期')
+  })
+
+  it('getRoomMessages：四参请求体，解析 message 数组与 nextTime 游标', async () => {
+    env.replies['team/message/list/homeowner'] = {
+      status: 200,
+      body: {
+        status: 200,
+        success: true,
+        content: {
+          nextTime: 123,
+          message: [
+            { msgIdServer: '1', msgIdClient: 'c1', msgType: 'TEXT', msgTime: 100, bodys: '你好', extInfo: '{}' },
+            { msgIdServer: '2', msgIdClient: 'c2', msgType: 'IMAGE', msgTime: 200, bodys: '', extInfo: '' },
+          ],
+        },
+      },
+    }
+    const result = await getRoomMessages('999', '888', 0)
+    expect(result.nextTime).toBe(123)
+    expect(result.messages).toHaveLength(2)
+    expect(result.messages[0]).toMatchObject({ msgIdClient: 'c1', msgType: 'TEXT', msgTime: 100, bodys: '你好' })
+    const request = env.requests.find(r => r.url.includes('team/message/list/homeowner'))
+    expect(request?.body).toEqual({ channelId: 999, serverId: 888, nextTime: 0, limit: 50 })
+  })
+
+  it('getRoomMessages：兼容 messageList 字段名并过滤脏条目', async () => {
+    env.replies['team/message/list/homeowner'] = {
+      status: 200,
+      body: {
+        status: 200,
+        success: true,
+        content: { nextTime: 0, messageList: [{ msgIdClient: 'c1', msgType: 'TEXT', msgTime: 1, bodys: 'hi' }, null, 'x'] },
+      },
+    }
+    const result = await getRoomMessages('999', '888')
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0].msgIdClient).toBe('c1')
+    // bodys/extInfo 非字符串时序列化兜底，渲染层 parseJson 仍可解析
+    expect(result.messages[0].extInfo).toBe('{}')
+  })
+
+  it('getRoomMessages 未登录抛错，不发请求', async () => {
+    env.stored = null
+    await expect(getRoomMessages('999', '888')).rejects.toThrow('未登录')
+    expect(env.requests).toHaveLength(0)
+  })
+
+  it('getRoomMessages 业务失败抛原始 message', async () => {
+    env.replies['team/message/list/homeowner'] = { status: 200, body: { status: 200, success: false, message: '频道不存在' } }
+    await expect(getRoomMessages('999', '888')).rejects.toThrow('频道不存在')
+  })
+
+  it('getRoomLastMessages：serverIdList 批量请求，解析 lastMsgList', async () => {
+    env.replies['team/classic/last/message/get'] = {
+      status: 200,
+      body: {
+        status: 200,
+        success: true,
+        content: {
+          lastMsgList: [
+            { channelId: '999', starName: '甲', msgContent: '{"messageType":"TEXT","text":"晚安"}', msgTime: 300, unreadCount: 2 },
+            { channelId: '998', starName: '乙', msgContent: '在吗', msgTime: 200 },
+            null,
+          ],
+        },
+      },
+    }
+    const list = await getRoomLastMessages(['888', '887'])
+    expect(list).toHaveLength(2)
+    expect(list[0]).toMatchObject({ channelId: '999', starName: '甲', msgTime: 300, unreadCount: 2 })
+    expect(list[0].msgContent).toBe('{"messageType":"TEXT","text":"晚安"}')
+    const request = env.requests.find(r => r.url.includes('team/classic/last/message/get'))
+    expect(request?.body).toEqual({ serverIdList: [888, 887] })
+  })
+
+  it('getRoomLastMessages：空 serverIds 不发请求，返回空数组', async () => {
+    await expect(getRoomLastMessages([])).resolves.toEqual([])
+    await expect(getRoomLastMessages(['0', 'x'])).resolves.toEqual([])
+    expect(env.requests).toHaveLength(0)
+  })
+
+  it('getRoomLastMessages token 失效抛「登录已过期」', async () => {
+    env.replies['team/classic/last/message/get'] = { status: 200, body: { status: 401003, success: false } }
+    await expect(getRoomLastMessages(['888'])).rejects.toThrow('登录已过期')
+  })
+
+  it('getRoomLastMessages 业务失败抛原始 message（调用方静默降级无预览）', async () => {
+    env.replies['team/classic/last/message/get'] = { status: 200, body: { status: 200, success: false, message: '服务不存在' } }
+    await expect(getRoomLastMessages(['888'])).rejects.toThrow('服务不存在')
   })
 })

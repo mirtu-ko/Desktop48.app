@@ -39,6 +39,7 @@ const Constants = {
    */
   Menu: {
     LIVES: '/lives',
+    ROOMS: '/rooms',
     SHOWS: '/shows',
     ALBUMS: '/albums',
     MEMBERS: '/members',

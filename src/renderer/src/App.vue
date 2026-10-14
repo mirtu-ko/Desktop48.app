@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ComponentInternalInstance, ComponentPublicInstance } from 'vue'
-import { Headset, Microphone, Setting, Trophy, User, VideoCamera } from '@element-plus/icons-vue'
+import { ChatDotRound, Headset, Microphone, Setting, Trophy, User, VideoCamera } from '@element-plus/icons-vue'
 import AppDock from '@renderer/components/app/AppDock.vue'
 import AppTitleBar from '@renderer/components/app/AppTitleBar.vue'
 import BackTopButton from '@renderer/components/app/BackTopButton.vue'
@@ -48,6 +48,7 @@ let lastLivePath = '/lives'
 // index 就是路由 path（Constants.Menu 的值），同时充当激活态匹配标识
 const dockItems = computed(() => [
   { index: Constants.Menu.LIVES, label: '直播', icon: VideoCamera, color: 'var(--color-lives)' },
+  { index: Constants.Menu.ROOMS, label: '房间', icon: ChatDotRound, color: 'var(--color-rooms)' },
   { index: Constants.Menu.SHOWS, label: '公演', icon: Microphone, color: 'var(--color-shows)' },
   { index: Constants.Menu.ALBUMS, label: '专辑', icon: Headset, color: 'var(--color-albums)' },
   { index: Constants.Menu.MEMBERS, label: '成员', icon: User, color: 'var(--color-members)' },

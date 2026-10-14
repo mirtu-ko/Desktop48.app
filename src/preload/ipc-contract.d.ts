@@ -196,6 +196,37 @@ export interface PocketVerifyResult {
   message: string
 }
 
+/** 成员的房间频道（team server + channel）：口袋 App「房间」留言流的订阅目标 */
+export interface PocketRoomChannel {
+  serverId: string
+  channelId: string
+}
+
+/** 单条房间消息（CustomMessageV2）：正文 bodys 多为 JSON 字符串，发送者资料在 extInfo.user */
+export interface PocketRoomMessage {
+  msgIdServer: string
+  msgIdClient: string
+  msgType: string
+  msgTime: number
+  bodys: string
+  extInfo: string
+}
+
+export interface PocketRoomMessages {
+  messages: PocketRoomMessage[]
+  /** 更早历史的游标（接口返回；0 = 没有更多） */
+  nextTime: number
+}
+
+/** 频道最后一条消息（左侧房间列表预览；msgContent 与房间消息 bodys 同构） */
+export interface PocketRoomLastMessage {
+  channelId: string
+  starName: string
+  msgContent: string
+  msgTime: number
+  unreadCount: number
+}
+
 /** 口袋48聊天室原始消息（主进程协议客户端解码出的传输层形状；业务归一在渲染层 utils/pocket-chat-message.ts） */
 export interface PocketRawChatMessage {
   uuid: string
@@ -311,6 +342,12 @@ interface StaticIpcInvokeMap {
   pocketFollowMember: InvokeSpec<[userId: number], void>
   /** 取消关注成员（桌面端 toggle 双写）；失败 reject，调用方静默降级 */
   pocketUnfollowMember: InvokeSpec<[userId: number], void>
+  /** 解析成员的房间频道（口袋 App「房间」留言流用，非直播间弹幕）；未登录返回空频道，过期 reject */
+  pocketGetRoomChannel: InvokeSpec<[userId: number], PocketRoomChannel>
+  /** 拉取房间频道消息（msgTime 倒序最新在前；nextTime 为更早历史游标，轮询传 0 拉最新） */
+  pocketGetRoomMessages: InvokeSpec<[channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all'], PocketRoomMessages>
+  /** 批量拉取各 server 频道的最后一条消息（左侧列表预览） */
+  pocketGetRoomLastMessages: InvokeSpec<[serverIds: string[]], PocketRoomLastMessage[]>
   /** 起口袋聊天室弹幕会话并登记订阅；false = 未登录/凭据失效/参数无效 */
   pocketDanmakuStart: InvokeSpec<[chatroomId: string, liveId: string], boolean>
   /** 退订聊天室弹幕；最后一个订阅者离开时主进程断开连接 */

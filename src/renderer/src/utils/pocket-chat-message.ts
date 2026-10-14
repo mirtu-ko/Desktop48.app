@@ -31,7 +31,7 @@ export interface PocketChatMessage {
 export interface PocketRankUser {
   userId: string
   userName: string
-  /** 头像 URL；服务端未给时为空串（调用方用首字母兜底） */
+  /** 头像 URL（相对/完整路径，Tools.sourceUrl 归一）；服务端未给时为空串 */
   avatar: string
 }
 
@@ -52,9 +52,10 @@ export function extractRankUsers(extension: Record<string, unknown>): PocketRank
     // userId 等 ID 字段服务端时而是数字，str() 只收字符串会丢值，必须宽松转换
     const userId = strLoose(profile.userId) || strLoose((entry as Record<string, unknown>).userId)
     const userName = strLoose(profile.userName) || strLoose(profile.nickName) || strLoose(profile.nickname)
-    // 头像字段名服务端未定档，宽候选：avatar / headerUrl / uImg / userImg / imgUrl / headImg / avatarUrl
-    const avatar = str(profile.avatar) || str(profile.headerUrl) || str(profile.uImg)
-      || str(profile.userImg) || str(profile.imgUrl) || str(profile.headImg) || str(profile.avatarUrl)
+    // 头像字段候选：榜单条目实测为 userAvatar（2026-10-14 报文），其余为历史兜底
+    const avatar = str(profile.userAvatar) || str(profile.avatar) || str(profile.headerUrl)
+      || str(profile.uImg) || str(profile.userImg) || str(profile.imgUrl)
+      || str(profile.headImg) || str(profile.avatarUrl)
     if (userName || userId)
       users.push({ userId, userName, avatar })
   }
@@ -138,8 +139,8 @@ function extractUser(msg: Record<string, unknown>, extension: Record<string, unk
       || str(msg.fromNick) || str(msg.nick),
     userId: strLoose(user.userId) || strLoose(extension.userId),
     level: Number(user.level ?? user.userLevel ?? 0) || 0,
-    // 头像字段名服务端未定档，宽候选兜底；NIM 协议层属性 8（fromAvatar）最后兜底
-    avatar: str(user.avatar) || str(user.headerUrl) || str(user.uImg) || str(user.userImg)
+    // 头像字段候选：榜单/进场消息实测为 userAvatar（2026-10-14 报文），其余为历史兜底
+    avatar: str(user.userAvatar) || str(user.avatar) || str(user.headerUrl) || str(user.uImg) || str(user.userImg)
       || str(user.imgUrl) || str(user.headImg) || str(user.avatarUrl) || str(msg.fromAvatar),
   }
 }

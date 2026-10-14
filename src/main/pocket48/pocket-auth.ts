@@ -600,6 +600,167 @@ export async function getChatroomId(liveId: string): Promise<string> {
   return Number.isFinite(roomId) && roomId > 0 ? String(roomId) : ''
 }
 
+// ===== 成员房间（口袋 App「房间」频道的留言流，与直播间弹幕是两套体系） =====
+
+/** 成员 userId → 房间频道（team server + channel）解析：starId 即成员 userId */
+const SERVER_JUMP_URL = 'https://pocketapi.48.cn/im/api/v1/im/server/jump'
+/**
+ * 房间频道历史消息（HTTP 拉取）。
+ * 参考实现 yaya_msg 的实时消息走 QChat 长连接（另一套 NIM 协议），
+ * 本版本以轮询替代实时推送，覆盖「查看房间消息」场景。
+ */
+/**
+ * 房间消息列表接口：同一频道两档口径（参考实现 yaya_msg 同款切换）。
+ * homeowner 仅房主（成员）发言（会混入官方系统账号 121569667，由渲染层过滤）；
+ * all 全员发言。
+ */
+const ROOM_MESSAGE_URLS = {
+  member: 'https://pocketapi.48.cn/im/api/v1/team/message/list/homeowner',
+  all: 'https://pocketapi.48.cn/im/api/v1/team/message/list/all',
+} as const
+
+/** 消息范围：member = 只看成员发言，all = 全部用户发言 */
+export type RoomMessageScope = keyof typeof ROOM_MESSAGE_URLS
+/** 批量取各 server 下每个频道的最后一条消息（左侧列表预览用；参考实现 yaya_msg 同款） */
+const ROOM_LAST_MESSAGE_URL = 'https://pocketapi.48.cn/im/api/v1/team/classic/last/message/get'
+/** 房间消息单次拉取条数：一屏量，翻历史用 nextTime 游标 */
+const ROOM_MESSAGE_LIMIT = 50
+
+export interface PocketRoomChannel {
+  serverId: string
+  channelId: string
+}
+
+/** 单条房间消息（CustomMessageV2）：正文 bodys 多为 JSON 字符串，发送者资料在 extInfo.user */
+export interface PocketRoomMessage {
+  msgIdServer: string
+  msgIdClient: string
+  msgType: string
+  msgTime: number
+  bodys: string
+  extInfo: string
+}
+
+export interface PocketRoomMessages {
+  messages: PocketRoomMessage[]
+  /** 更早历史的游标（接口返回；0 = 没有更多） */
+  nextTime: number
+}
+
+/**
+ * 解析成员的房间频道（serverId + channelId）。
+ * 未登录返回空频道，token 失效抛「登录已过期」。
+ */
+export async function getRoomChannel(userId: number): Promise<PocketRoomChannel> {
+  const token = getToken()
+  if (!token)
+    return { serverId: '', channelId: '' }
+  const envelope = await postPocket<Record<string, unknown>>(
+    SERVER_JUMP_URL,
+    { starId: Number(userId), targetType: 1 },
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throw new Error('登录已过期，请重新登录口袋48账号')
+  if (!envelope.success)
+    throw new Error(envelope.message || '获取房间频道失败')
+  const content = envelope.content || {}
+  return {
+    serverId: String(content.serverId || '').trim(),
+    channelId: String(content.channelId || '').trim(),
+  }
+}
+
+/**
+ * 拉取房间频道消息（按 msgTime 倒序，最新在前；nextTime 为更早历史的游标）。
+ * nextTime 传 0 拉最近一页——轮询新消息同样传 0，由调用方按 msgTime 增量过滤。
+ */
+export async function getRoomMessages(
+  channelId: string,
+  serverId: string,
+  nextTime = 0,
+  scope: RoomMessageScope = 'member',
+): Promise<PocketRoomMessages> {
+  const token = getToken()
+  if (!token)
+    throw new Error('未登录口袋48账号')
+  const envelope = await postPocket<Record<string, unknown>>(
+    ROOM_MESSAGE_URLS[scope],
+    {
+      channelId: Number(channelId),
+      serverId: Number(serverId),
+      nextTime: Number(nextTime) || 0,
+      limit: ROOM_MESSAGE_LIMIT,
+    },
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throw new Error('登录已过期，请重新登录口袋48账号')
+  if (!envelope.success)
+    throw new Error(envelope.message || '获取房间消息失败')
+  const content = (envelope.content || {}) as Record<string, unknown>
+  const list = content.message ?? content.messageList
+  const messages: PocketRoomMessage[] = (Array.isArray(list) ? list : [])
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map(item => ({
+      msgIdServer: String(item.msgIdServer ?? ''),
+      msgIdClient: String(item.msgIdClient ?? ''),
+      msgType: String(item.msgType ?? ''),
+      msgTime: Number(item.msgTime) || 0,
+      bodys: typeof item.bodys === 'string' ? item.bodys : JSON.stringify(item.bodys ?? ''),
+      extInfo: typeof item.extInfo === 'string' ? item.extInfo : JSON.stringify(item.extInfo ?? {}),
+    }))
+  return { messages, nextTime: Number(content.nextTime) || 0 }
+}
+
+/** 频道最后一条消息（左侧房间列表预览；msgContent 与房间消息 bodys 同构） */
+export interface PocketRoomLastMessage {
+  channelId: string
+  /** 房间所属成员名（服务端给的 starName） */
+  starName: string
+  /** 最后一条消息的正文（JSON 字符串或纯文本） */
+  msgContent: string
+  msgTime: number
+  unreadCount: number
+}
+
+/**
+ * 批量拉取各 server 下频道的最后一条消息（一次请求覆盖整个关注列表）。
+ * serverId 即 im/server/jump 解析出的 serverId；失败抛错，调用方静默降级（无预览）。
+ */
+export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRoomLastMessage[]> {
+  const token = getToken()
+  if (!token)
+    throw new Error('未登录口袋48账号')
+  const ids = serverIds
+    .map(id => Number(id))
+    .filter(id => Number.isFinite(id) && id > 0)
+  if (!ids.length)
+    return []
+  const envelope = await postPocket<Record<string, unknown>>(
+    ROOM_LAST_MESSAGE_URL,
+    { serverIdList: ids },
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throw new Error('登录已过期，请重新登录口袋48账号')
+  if (!envelope.success)
+    throw new Error(envelope.message || '获取房间最新消息失败')
+  const content = (envelope.content || {}) as Record<string, unknown>
+  const list = content.lastMsgList ?? content.messageList ?? content.list
+  return (Array.isArray(list) ? list : [])
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map(item => ({
+      channelId: String(item.channelId ?? '').trim(),
+      starName: String(item.starName ?? '').trim(),
+      msgContent: typeof item.msgContent === 'string'
+        ? item.msgContent
+        : JSON.stringify(item.msgContent ?? ''),
+      msgTime: Number(item.msgTime) || 0,
+      unreadCount: Number(item.unreadCount) || 0,
+    }))
+}
+
 // ===== 网易云信 IM 凭据（直播聊天室） =====
 
 export interface PocketImCredentials {

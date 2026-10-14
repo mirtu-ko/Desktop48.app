@@ -27,6 +27,19 @@ export function registerPocketIPC(): void {
     pocketAuth.followMember(userId))
   handleTraced('pocketUnfollowMember', (_event: IpcMainInvokeEvent, userId: number) =>
     pocketAuth.unfollowMember(userId))
+  // 成员房间（口袋 App「房间」频道留言流，非直播间弹幕）：频道解析 + 历史消息拉取
+  handleTraced('pocketGetRoomChannel', (_event: IpcMainInvokeEvent, userId: number) =>
+    pocketAuth.getRoomChannel(userId))
+  handleTraced('pocketGetRoomMessages', (
+    _event: IpcMainInvokeEvent,
+    channelId: string,
+    serverId: string,
+    nextTime?: number,
+    scope?: 'member' | 'all',
+  ) => pocketAuth.getRoomMessages(channelId, serverId, nextTime, scope))
+  // 批量最新消息（左侧列表预览）
+  handleTraced('pocketGetRoomLastMessages', (_event: IpcMainInvokeEvent, serverIds: string[]) =>
+    pocketAuth.getRoomLastMessages(serverIds))
   handleTraced('pocketDanmakuStart', (event, chatroomId: string, liveId: string) =>
     handlePocketDanmakuStart(chatroomId, liveId, event.sender))
   handleTraced('pocketDanmakuStop', (event, chatroomId: string) =>
