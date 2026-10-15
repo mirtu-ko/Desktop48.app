@@ -5,6 +5,7 @@
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { ArrowRight, ChatDotRound, Lock, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import ImageViewerToolbar from '@renderer/components/rooms/ImageViewerToolbar.vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
 import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
@@ -691,7 +692,17 @@ onMounted(() => {
                             hide-on-click-modal
                             @load="onMediaLoad"
                             @error="onMediaLoad"
-                          />
+                          >
+                            <!-- 预览工具条：EP 默认那排没有下载，整排自绘后追加一项（见 ImageViewerToolbar） -->
+                            <template #toolbar="{ actions, reset, activeIndex }">
+                              <ImageViewerToolbar
+                                :actions="actions"
+                                :reset="reset"
+                                :urls="[message.imageUrl]"
+                                :active-index="activeIndex"
+                              />
+                            </template>
+                          </el-image>
                           <template v-else-if="message.audioUrl">
                             <RoomVoiceBar :src="message.audioUrl" />
                             <p v-if="message.text && message.text !== '[语音回复消息]'" class="msg-media-text">
