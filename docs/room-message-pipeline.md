@@ -154,6 +154,8 @@ rooms.value（在直播的排前，其余按昵称 localeCompare('zh')）
 
 未识别类型不丢弃：`extMsgType` 动态消息（POST_INFO 等）使用兜底文本，为空时显示 `[新消息]`。协议侧语音类型名是 `AUDIO` 不是 `VOICE`。左列预览（`normalizePocketRoomPreview`）复用同一套分发，两侧文案一致；左列单行无法容纳引用块，回复类预览以「回复 昵称」前缀保留上下文，无正文时退回被引用内容。
 
+**表情还原**：协议里的表情是中括号占位符（`[爱心]`），官方 App 用表情图渲染，本版本原样显示会露出字面量。`data/pocket-emojis.ts` 提供「占位符 → 等价 emoji」映射，替换点只有「取用户原文」的三处：发言正文（`bodyText`）、翻牌答案、引用摘要（`parseReplyQuote` 的 `replyText`），未收录的占位符保留原样。归一化自己拼的占位文案（`[图片消息]` 等）与 `[礼物] 名 xN` 前缀**不走**该表——`[礼物]` 同时是表情名，在 `messageText` 出口统一替换会把业务前缀改成 `🎁`。
+
 发送者资料主路径取 `extInfo.user`（userId/nickName/avatar/level/roleId），顶层字段兜底；`roleId > 1` 判定成员（昵称着色 + 「房主」标签）。userId 需宽松数字强转——接口对纯数字 ID 返回 number 与 string 不定。
 
 ### 6.2 引用块：replyInfo 的字段语义

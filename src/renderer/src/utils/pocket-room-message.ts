@@ -8,7 +8,10 @@
  *
  * 归一规则对齐参考实现 yaya_msg 的消息解析：msgType 分发 + bodys JSON 兜底，
  * 未识别类型不丢（兜底 [新消息]），DELETE 类通知无展示价值直接过滤。
+ * 用户原文里的表情占位符（[爱心] 等）统一在这里换成 emoji，见 data/pocket-emojis.ts。
  */
+
+import { replacePocketEmoji } from '../data/pocket-emojis'
 
 /** 消息类别：决定气泡样式与正文占位文案 */
 export type PocketRoomMessageKind
@@ -156,9 +159,10 @@ function mediaUrl(raw: unknown, host: 'source' | 'mp4'): string {
  * 解析失败的纯文本才整体作正文（TEXT 消息 bodys 可能就是裸文本）。
  */
 function bodyText(msg: Record<string, unknown>, body: Record<string, unknown> | null): string {
-  if (body)
-    return jsonText(body, 'text')
-  return typeof msg.bodys === 'string' && msg.bodys.trim() ? msg.bodys.trim() : ''
+  const raw = body
+    ? jsonText(body, 'text')
+    : (typeof msg.bodys === 'string' ? msg.bodys.trim() : '')
+  return replacePocketEmoji(raw)
 }
 
 /**
@@ -180,7 +184,7 @@ function giftSummary(gift: Record<string, unknown> | null): string {
  * 即回复语）， bodys 为裸文本时兜底。空串 = 无正文（调用方给占位文案）。
  */
 function replyOwnText(info: Record<string, unknown>, msg: Record<string, unknown>, body: Record<string, unknown> | null): string {
-  return jsonText(info, 'text') || bodyText(msg, body)
+  return replacePocketEmoji(jsonText(info, 'text')) || bodyText(msg, body)
 }
 
 /**
@@ -217,7 +221,7 @@ function messageText(msgType: string, msg: Record<string, unknown>, body: Record
       const info = parseJson(body?.flipCardInfo) || parseJson(body?.filpCardInfo)
         || parseJson(body?.flipCardAudioInfo) || parseJson(body?.flipCardVideoInfo) || body || {}
       const answer = str(info.answer)
-      return answer && !answer.startsWith('{') ? answer : '[翻牌回复]'
+      return answer && !answer.startsWith('{') ? replacePocketEmoji(answer) : '[翻牌回复]'
     }
 
     case 'LIVEPUSH':
@@ -262,7 +266,8 @@ function parseReplyQuote(body: Record<string, unknown> | null): PocketRoomQuote 
   if (!info)
     return null
   const replyName = str(info.replyName)
-  const replyText = jsonText(info, 'replyText')
+  // 被引用内容同为用户原文，表情一并还原
+  const replyText = replacePocketEmoji(jsonText(info, 'replyText'))
   const gift = parseJson(info.giftInfo)
   if (!replyText && !gift && !replyName)
     return null

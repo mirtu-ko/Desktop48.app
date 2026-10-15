@@ -394,3 +394,45 @@ describe('pocket-room-message / 左列最新消息预览', () => {
     expect(normalizePocketRoomPreview('{}')).toBe('[新消息]')
   })
 })
+
+describe('pocket-room-message / 表情占位符还原', () => {
+  it('正文里的表情占位符换成 emoji，其余文字不动', () => {
+    const view = normalizePocketRoomMessage(roomMessage('TEXT', { bodys: '大家晚安[爱心][玫瑰]' }))!
+    expect(view.text).toBe('大家晚安❤️🌹')
+  })
+
+  it('未收录的占位符原样保留（不吞字、不报错）', () => {
+    const view = normalizePocketRoomMessage(roomMessage('TEXT', { bodys: '[新表情来了] 在吗' }))!
+    expect(view.text).toBe('[新表情来了] 在吗')
+  })
+
+  it('归一化自己拼的占位文案不过表情表（[礼物] 前缀不能被换成 🎁）', () => {
+    expect(normalizePocketRoomMessage(roomMessage('IMAGE'))!.text).toBe('[图片消息]')
+    expect(normalizePocketRoomMessage(roomMessage('GIFT_TEXT', {
+      bodys: { giftInfo: { giftName: '荧光棒', giftNum: 3 } },
+    }))!.text).toBe('[礼物] 荧光棒 x3')
+  })
+
+  it('引用摘要与回复正文里的表情都要还原', () => {
+    const view = normalizePocketRoomMessage(roomMessage('REPLY', {
+      bodys: { replyInfo: { replyName: '甲', replyText: '送你[玫瑰]', text: '[爱心]收到' } },
+    }))!
+    expect(view.text).toBe('❤️收到')
+    expect(view.quote?.text).toBe('送你🌹')
+  })
+
+  it('翻牌答案是用户原文，同样还原表情', () => {
+    const view = normalizePocketRoomMessage(roomMessage('FLIPCARD', {
+      bodys: { flipCardInfo: { answer: '加油[强]' } },
+    }))!
+    expect(view.text).toBe('加油👍')
+  })
+
+  it('左列预览与消息流口径一致', () => {
+    expect(normalizePocketRoomPreview(JSON.stringify({ messageType: 'TEXT', text: '[爱心]晚安' }))).toBe('❤️晚安')
+    expect(normalizePocketRoomPreview(JSON.stringify({
+      messageType: 'REPLY',
+      replyInfo: { replyName: '甲', replyText: '原话', text: '[亲亲]' },
+    }))).toBe('[回复 甲] 😚')
+  })
+})
