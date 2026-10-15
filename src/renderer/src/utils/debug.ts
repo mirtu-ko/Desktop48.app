@@ -26,8 +26,8 @@
  * 房间消息链主进程侧对照 [pocket-auth] / [pocket-unread] 输出（均为 debug 级，生产包默认关闭）。
  */
 
-import { setVerboseEnabled } from '../../../common/log'
+import { setVerboseEnabled } from '@common/log'
 
 setVerboseEnabled(import.meta.env.DEV)
 
-export { debugLog } from '../../../common/log'
+export { debugLog } from '@common/log'

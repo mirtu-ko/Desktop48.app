@@ -4,7 +4,7 @@
  * 两类名单的状态结构、增删流程和持久化语义一致，只差 kind 与用户提示；
  * 因此共用一个模块级工厂，下面仅保留面向调用方的语义化别名。
  */
-import type { MemberFlag, MemberFlagKind, MemberFlagTarget } from '../../../common/member-flags'
+import type { MemberFlag, MemberFlagKind, MemberFlagTarget } from '@common/member-flags'
 import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { computed, ref } from 'vue'

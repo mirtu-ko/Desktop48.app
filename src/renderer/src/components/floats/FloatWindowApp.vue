@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import type { FloatPlayerKind, FloatPlayerPayload } from '../../../../preload/ipc-contract'
+import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
+import { FLOAT_BAR_HEIGHT } from '@common/float-window'
 import LivePlayer from '@renderer/components/player/LivePlayer.vue'
 import PlaybackPlayer from '@renderer/components/player/PlaybackPlayer.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import EventBus from '@renderer/services/event-bus'
 import { useEventListener } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue'
-import { FLOAT_BAR_HEIGHT } from '../../../../common/float-window'
 
 /**
  * 独立播放窗根组件（无边框 + 自定义标题栏）。

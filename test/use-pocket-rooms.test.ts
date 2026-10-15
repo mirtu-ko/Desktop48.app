@@ -111,6 +111,10 @@ interface SetupOptions {
   lastMessages?: Array<{ channelId: string, starName?: string, msgContent: string, msgTime?: number }>
   /** serverId → 该 server 下的频道（seine 频道详情，页签显示真实频道名用） */
   serverChannels?: Record<string, Array<{ channelId: string, channelName: string }>>
+  /** userId → 已发现的小房间频道；未设置 = 未发现（页签只有大房间） */
+  smallChannels?: Record<number, { serverId: string, channelId: string }>
+  /** channelId → 暗号问题；未设置 = room/info 未被拦（无门禁，切进去直接拉消息） */
+  roomQuestions?: Record<string, { questionId: string, question: string }>
 }
 
 async function setup(options: SetupOptions = {}) {
@@ -159,10 +163,10 @@ async function setup(options: SetupOptions = {}) {
         calls.serverChannelsFetched.push(serverId)
         return options.serverChannels?.[serverId] ?? []
       }),
-      // 小房间频道发现走主进程归属自愈：本层测试里恒未发现（入口隐藏）
-      pocketGetSmallChannel: vi.fn(async () => null),
-      // 暗号链路同理备齐 mock：缺了会被 try/catch 静默吞掉，测试照过但不真实
-      pocketGetRoomQuestion: vi.fn(async () => null),
+      // 小房间频道发现走主进程归属自愈：默认未发现（页签只有大房间）
+      pocketGetSmallChannel: vi.fn(async (userId: number) => options.smallChannels?.[userId] ?? null),
+      // 默认无门禁（room/info 未被拦）；给了问题即视为被暗号拦下
+      pocketGetRoomQuestion: vi.fn(async (channelId: string) => options.roomQuestions?.[channelId] ?? null),
       pocketCheckRoomAnswer: vi.fn(async () => ({ ok: false, reason: 'unverified' as const })),
       openFloatWindow: vi.fn(async (kind: string, payload: unknown) => {
         calls.openFloatWindow.push([kind, payload])
@@ -562,6 +566,63 @@ describe('use-pocket-rooms / 选中连房与消息流', () => {
       ['粉丝甲', '成员发言', 200],
     ])
     expect(calls.messageFetched.map(item => item.scope)).toEqual(['member', 'all'])
+  })
+
+  it('小房间视图下切消息范围：留在小房间，只换拉取口径（回归：原先被弹回大房间）', async () => {
+    const { api, calls, digest } = await setup({
+      pocketIds: [10001],
+      smallChannels: { 10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' } },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '大房间留言')] } },
+        'ch-10001-small': { 0: { nextTime: 0, messages: [roomMsg('s', 300, '小房间密语')] } },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    // 小房间频道是 selectRoom 里 fire-and-forget 发现的，冲一遍微任务
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.smallChannel.value?.channelId).toBe('ch-10001-small')
+
+    await api.setViewMode('small')
+    expect(api.viewMode.value).toBe('small')
+    expect(digest()).toEqual([['粉丝甲', '小房间密语', 300]])
+
+    api.messageScope.value = 'all'
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 范围切换只换口径：视图仍在小房间，拉的也还是小房间频道（原先走 selectRoom 会被复位）
+    expect(api.viewMode.value).toBe('small')
+    expect(digest()).toEqual([['粉丝甲', '小房间密语', 300]])
+    expect(calls.messageFetched.map(item => [item.channelId, item.scope])).toEqual([
+      ['ch-10001', 'member'],
+      ['ch-10001-small', 'member'],
+      ['ch-10001-small', 'all'],
+    ])
+  })
+
+  it('小房间被暗号拦下时切消息范围：仍留在小房间（暗号层展示，不发小房间消息请求）', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      smallChannels: { 10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' } },
+      roomQuestions: { 'ch-10001-small': { questionId: 'q1', question: '暗号是什么？' } },
+      roomPages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '大房间留言')] } } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.smallRequiresAnswer.value).toBe(true)
+
+    await api.setViewMode('small')
+    expect(api.viewMode.value).toBe('small')
+    expect(api.smallLocked.value).toBe(true)
+
+    api.messageScope.value = 'all'
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.viewMode.value).toBe('small')
+    expect(api.smallLocked.value).toBe(true)
+    // 锁定态本来就不拉小房间消息；切范围同样不该回落大房间重拉
+    expect(calls.messageFetched.map(item => item.channelId)).toEqual(['ch-10001'])
   })
 })
 

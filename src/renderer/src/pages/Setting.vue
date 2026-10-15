@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { PocketVerifyResult } from '../../../preload/ipc-contract'
+import type { PocketVerifyResult } from '@preload/ipc-contract'
 import { Connection, Cpu, Document, Folder, Hide, Refresh, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'

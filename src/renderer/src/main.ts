@@ -1,7 +1,7 @@
+import { FLOAT_WINDOW_HASH_PATH } from '@common/float-window'
 import ElementPlus from 'element-plus'
 import { createApp } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
-import { FLOAT_WINDOW_HASH_PATH } from '../../common/float-window'
 import App from './App.vue'
 import FloatWindowApp from './components/floats/FloatWindowApp.vue'
 import routes from './routes'

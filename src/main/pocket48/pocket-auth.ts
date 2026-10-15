@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, net, safeStorage } from 'electron'
+import { ROOM_MESSAGE_LIMIT } from '../../common/pocket-rooms'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
 import { currentPa, ensurePaWasm } from './pa-sign'
@@ -668,12 +669,10 @@ const ROOM_MESSAGE_URLS = {
   all: 'https://pocketapi.48.cn/im/api/v1/team/message/list/all',
 } as const
 
-/** 消息范围：member = 只看成员发言，all = 全部用户发言 */
+/** 消息范围：member = 只看房主发言，all = 全部用户发言 */
 export type RoomMessageScope = keyof typeof ROOM_MESSAGE_URLS
 /** 批量取各 server 下每个频道的最后一条消息（左侧列表预览用；参考实现 yaya_msg 同款） */
 const ROOM_LAST_MESSAGE_URL = 'https://pocketapi.48.cn/im/api/v1/team/classic/last/message/get'
-/** 房间消息单次拉取条数：一屏量，翻历史用 nextTime 游标 */
-const ROOM_MESSAGE_LIMIT = 50
 
 export interface PocketRoomChannel {
   serverId: string
@@ -688,6 +687,11 @@ export interface PocketRoomMessage {
   msgTime: number
   bodys: string
   extInfo: string
+  /**
+   * 发送者 userId（extInfo.user 解出，与渲染层归一化同源）。
+   * 主进程未读计数要用它剔除官方系统账号，口径与渲染层的成员视图一致。
+   */
+  userId: string
 }
 
 export interface PocketRoomMessages {
@@ -871,9 +875,9 @@ export async function getRoomQuestion(channelId: string): Promise<PocketRoomQues
 /**
  * 万能暗号：客户端直通，不发起任何请求。
  * 自用通道——真实暗号由服务端校验（见 checkRoomAnswer），但并非每个房间的暗号都已知。
- * 界面不公开它的存在。
+ * 界面不公开它的存在。导出只为单测引用（主进程模块，渲染层拿不到），改动此处不必再改测试。
  */
-const MASTER_PASSCODE = 'desktop48'
+export const MASTER_PASSCODE = '18951002'
 
 /** 暗号提交结果（结构对齐 ipc-contract 的 PocketRoomAnswerResult） */
 export interface PocketRoomAnswerResult {
@@ -949,6 +953,30 @@ export async function checkRoomAnswer(
 }
 
 /**
+ * 从 extInfo 里解出发送者 userId。
+ * 归一层（renderer/utils/pocket-room-message.ts）走的是同一条路径，
+ * 主进程未读计数按它剔除官方系统账号，两边口径必须一致。
+ */
+function senderUserId(rawExtInfo: unknown): string {
+  let ext: Record<string, unknown> = {}
+  if (typeof rawExtInfo === 'string') {
+    try {
+      ext = JSON.parse(rawExtInfo) as Record<string, unknown>
+    }
+    catch {
+      // extInfo 不是 JSON（纯文本占位）：当作没有发送者资料
+      ext = {}
+    }
+  }
+  else if (rawExtInfo && typeof rawExtInfo === 'object') {
+    ext = rawExtInfo as Record<string, unknown>
+  }
+  const user = (ext.user && typeof ext.user === 'object' ? ext.user : {}) as Record<string, unknown>
+  const id = user.userId ?? user.id
+  return id === undefined || id === null ? '' : String(id)
+}
+
+/**
  * 拉取房间频道消息（按 msgTime 倒序，最新在前；nextTime 为更早历史的游标）。
  * nextTime 传 0 拉最近一页——轮询新消息同样传 0，由调用方按 msgTime 增量过滤。
  */
@@ -981,14 +1009,18 @@ export async function getRoomMessages(
   const list = content.message ?? content.messageList
   const messages: PocketRoomMessage[] = (Array.isArray(list) ? list : [])
     .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-    .map(item => ({
-      msgIdServer: String(item.msgIdServer ?? ''),
-      msgIdClient: String(item.msgIdClient ?? ''),
-      msgType: String(item.msgType ?? ''),
-      msgTime: Number(item.msgTime) || 0,
-      bodys: typeof item.bodys === 'string' ? item.bodys : JSON.stringify(item.bodys ?? ''),
-      extInfo: typeof item.extInfo === 'string' ? item.extInfo : JSON.stringify(item.extInfo ?? {}),
-    }))
+    .map((item) => {
+      const extInfo = typeof item.extInfo === 'string' ? item.extInfo : JSON.stringify(item.extInfo ?? {})
+      return {
+        msgIdServer: String(item.msgIdServer ?? ''),
+        msgIdClient: String(item.msgIdClient ?? ''),
+        msgType: String(item.msgType ?? ''),
+        msgTime: Number(item.msgTime) || 0,
+        bodys: typeof item.bodys === 'string' ? item.bodys : JSON.stringify(item.bodys ?? ''),
+        extInfo,
+        userId: senderUserId(extInfo) || String(item.senderUserId ?? item.senderId ?? ''),
+      }
+    })
   const result = { messages, nextTime: Number(content.nextTime) || 0 }
   debug('[pocket-auth] 获取频道消息回包：', JSON.stringify({
     ...request,
@@ -1018,14 +1050,17 @@ export interface PocketRoomLastMessage {
   msgContent: string
   /**
    * 消息身份键（msgidClient 优先，msgid 系列兜底，最后退到 msgTime:msgContent）。
-   * pa 降级时回包无 msgidClient 系列字段，键退到 msgTime:msgContent——
-   * 同一房间连发两条一模一样的文本会漏计一次，属接口信息上限。
+   * 降级回包无 msgidClient 系列字段，键退到 msgTime:msgContent。
+   * 未读检测只用它判断「该频道是否来了新消息」（触发），不参与计数。
    */
   msgKey: string
   msgTime: number
   /**
    * 服务端记录的该频道真实未读数（官方客户端角标同源）。
-   * null = 回包没给（pa 静态降级时只有 4 个字段），调用方走身份键粗算。
+   * ⚠️ 实测恒为 null：该字段要求服务端回完整档，而 15 组 A/B 探测（pa 三态 ×
+   * 平台特征头 × 参考实现的真实客户端 profile）全部只回 4 个字段。
+   * 保留解析只为排查（回包结构若变化，日志里能看见），未读计数改走消息列表逐条数，
+   * 见 pocket-unread.ts 顶部。
    */
   unreadCount: number | null
 }

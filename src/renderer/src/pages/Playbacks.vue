@@ -1,6 +1,6 @@
 <script setup lang="ts">
+import type { MemberTreeGroupPayload } from '@preload/ipc-contract'
 import type { LiveListItemView } from '@renderer/services/api-types'
-import type { MemberTreeGroupPayload } from '../../../preload/ipc-contract'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
 import LiveTabBar from '@renderer/components/ui/LiveTabBar.vue'

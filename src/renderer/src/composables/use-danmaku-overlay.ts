@@ -1,5 +1,5 @@
+import type { DanmakuEmoteMap } from '@common/live-danmaku'
 import type { DanmakuSegment } from '@renderer/utils/danmaku-content'
-import type { DanmakuEmoteMap } from '../../../common/live-danmaku'
 import { splitDanmakuContent } from '@renderer/utils/danmaku-content'
 import { shallowRef } from 'vue'
 

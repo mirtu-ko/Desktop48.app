@@ -1,4 +1,4 @@
-import type { ConfigKey } from '../../../common/app-config'
+import type { ConfigKey } from '@common/app-config'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ref } from 'vue'
 

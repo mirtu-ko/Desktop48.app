@@ -4,8 +4,8 @@
  * 2. 标题/副标题文本匹配（团体名 → 队伍名，接口的 teamName 不含团体名）；
  * 3. 在线兜底：与在播官方房间的标题互配公演名，teamList 为空的公演（新生公演、生日会等）靠这层发现。
  */
-import type { BilibiliRoomInfo } from '../../../common/bilibili-rooms'
-import { GROUP_ROOMS } from '../../../common/bilibili-rooms'
+import type { BilibiliRoomInfo } from '@common/bilibili-rooms'
+import { GROUP_ROOMS } from '@common/bilibili-rooms'
 import Constants from './constants'
 import { debugLog } from './debug'
 

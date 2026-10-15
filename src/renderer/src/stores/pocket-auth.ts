@@ -4,7 +4,7 @@
  * 状态镜像自主进程 pocket48-auth.json：本 store 只负责拉取/登录/退出的接线与提示，
  * 不持有凭证本体——token 只留在主进程，渲染层拿到的永远是脱敏登录态。
  */
-import type { PocketAuthState, PocketVerifyResult } from '../../../preload/ipc-contract'
+import type { PocketAuthState, PocketVerifyResult } from '@preload/ipc-contract'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 

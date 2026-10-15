@@ -14,8 +14,11 @@ export default defineConfig({
     resolve: {
       alias: {
         // 相对本配置文件解析，不用 resolve()：后者相对 CWD，从子目录启动会指到错误位置。
-        // 与 tsconfig.web.json / vitest.config.ts 的 @renderer 目标保持一致。
+        // 与 tsconfig.web.json / vitest.config.ts 的同名目标保持一致。
         '@renderer': fileURLToPath(new URL('./src/renderer/src', import.meta.url)),
+        // 跨树共享层：common（主/渲染共用逻辑）与 preload 的 IPC 契约，免 ../.. 爬树
+        '@common': fileURLToPath(new URL('./src/common', import.meta.url)),
+        '@preload': fileURLToPath(new URL('./src/preload', import.meta.url)),
       },
     },
     plugins: [vue()],

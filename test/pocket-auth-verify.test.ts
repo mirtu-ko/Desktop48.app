@@ -8,6 +8,7 @@ import {
   getRoomChannel,
   getRoomLastMessages,
   getRoomMessages,
+  MASTER_PASSCODE,
   unfollowMember,
   verifyLogin,
 } from '../src/main/pocket48/pocket-auth'
@@ -440,7 +441,7 @@ describe('pocket-auth checkRoomAnswer', () => {
   const VERIFY = 'team/channel/question/answer/verify'
 
   it('万能密码客户端直通：不发任何请求', async () => {
-    await expect(checkRoomAnswer('40948216', '986', 'desktop48')).resolves.toEqual({ ok: true, via: 'master' })
+    await expect(checkRoomAnswer('40948216', '986', MASTER_PASSCODE)).resolves.toEqual({ ok: true, via: 'master' })
     expect(env.requests).toHaveLength(0)
   })
 

@@ -1,5 +1,3 @@
-import type { LiveListItem } from '@renderer/services/api-types'
-import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 /**
  * 口袋「房间」页编排层：左侧关注成员房间列表 + 右侧房间消息流。
  *
@@ -11,14 +9,17 @@ import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
  *   （含房间已关闭/被回收：同样解析不出频道，一并过滤，进不了列表）；
  * - 房间预览：im/team/classic/last/message/get 批量拉各频道最后一条消息（一次请求）；
  * - 房间消息：im/team/message/list/{homeowner,all} HTTP 拉取（msgTime 倒序，nextTime 游标翻历史），
- *   对应「只看成员 / 全部消息」两档范围；homeowner 会混入官方系统账号，已过滤。
+ *   对应「只看房主 / 全部消息」两档范围；homeowner 会混入官方系统账号，已过滤。
  *   参考实现的实时推送走 QChat 长连接（另一套 NIM 协议），本版本以轮询替代，
  *   覆盖「查看房间消息」场景——注意与浮窗播放器的直播间弹幕是两套体系。
  *
  * 失败一律静默降级：频道解析/消息拉取失败只影响右侧消息区，左侧列表照常可用；
  * 唯一例外是 token 失效（重新登录才能恢复），直接上抛让整页报错。
  */
-import type { PocketRoomChannel, PocketRoomLastMessage, PocketRoomQuestion } from '../../../preload/ipc-contract'
+import type { PocketRoomChannel, PocketRoomLastMessage, PocketRoomQuestion } from '@preload/ipc-contract'
+import type { LiveListItem } from '@renderer/services/api-types'
+import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
+import { OFFICIAL_POCKET_USER_ID } from '@common/pocket-rooms'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
@@ -56,10 +57,8 @@ export type PocketRoomChatStatus = 'idle' | 'loading' | 'ready' | 'error'
 const MESSAGE_POLL_MS = 5_000
 /** 房间频道/状态遍历的并发上限：关注几十人时不打爆接口，也不至于让首灌等太久 */
 const ROOM_RESOLVE_CONCURRENCY = 5
-/** 口袋官方系统账号：homeowner（只看成员）接口会混入其发言，需过滤（参考实现 yaya_msg 同款） */
-const OFFICIAL_USER_ID = '121569667'
 
-/** 右侧消息范围：member = 只看成员发言（homeowner 接口），all = 全部用户发言（all 接口） */
+/** 右侧消息范围：member = 只看房主发言（homeowner 接口），all = 全部用户发言（all 接口） */
 export type PocketRoomMessageScope = 'member' | 'all'
 
 /** 右侧消息视图：room = 大房间留言流（默认），small = 小房间（暗号频道问答流） */
@@ -488,9 +487,9 @@ export function usePocketRooms() {
     const views = result.messages
       .map(normalizePocketRoomMessage)
       .filter((item): item is PocketRoomMessageView => item !== null)
-    // 只看成员时剔掉混入的官方系统账号发言（接口侧不区分）
+    // 只看房主时剔掉混入的官方系统账号发言（接口侧不区分）
     mergeMessages(
-      scope === 'member' ? views.filter(item => item.userId !== OFFICIAL_USER_ID) : views,
+      scope === 'member' ? views.filter(item => item.userId !== OFFICIAL_POCKET_USER_ID) : views,
       mode,
     )
     historyCursor = result.nextTime
@@ -684,30 +683,48 @@ export function usePocketRooms() {
   }
 
   /**
+   * 按当前 `viewMode` 重开频道（调用方负责先 clearChat）。
+   * 切视图与切消息范围共用这一条重开路径——范围变化只换拉取口径，不该改变看的是哪个频道。
+   * 小房间频道缺失（自愈尚未发现）时退回大房间。
+   */
+  async function reopenActiveView() {
+    const userId = selectedUserId.value
+    if (userId === null)
+      return
+    const mode = viewMode.value
+    if (mode === 'small' && smallChannel.value) {
+      // 小房间锁定态：不拉消息，渲染层展示暗号输入层（解锁成功后 unlockSmall 里补拉）
+      if (smallLocked.value) {
+        void ensureSmallQuestion()
+        return
+      }
+      await openChannel(userId, smallChannel.value)
+      return
+    }
+    const channel = channelCache.get(userId) ?? null
+    if (channel) {
+      if (mode === 'small')
+        viewMode.value = 'room'
+      await openChannel(userId, channel)
+      return
+    }
+    // 大房间频道缓存缺失：走完整选中流程补解析（会把视图复位到大房间，此处正确）
+    viewMode.value = 'room'
+    await selectRoom(userId)
+  }
+
+  /**
    * 切换大房间 / 小房间视图：换频道重拉当前成员的消息流（去重键/游标随 clearChat 复位）。
-   * 小房间频道缺失（自愈尚未发现）时退回大房间；轮询与翻历史走 activeChannel，自动跟随。
+   * 轮询与翻历史走 activeChannel，自动跟随。
    */
   async function setViewMode(mode: PocketRoomViewMode) {
     if (viewMode.value === mode)
       return
     viewMode.value = mode
-    const userId = selectedUserId.value
-    if (userId === null)
+    if (selectedUserId.value === null)
       return
-    const channel = mode === 'small'
-      ? smallChannel.value
-      : channelCache.get(userId) ?? null
-    if (!channel) {
-      viewMode.value = 'room'
-      return
-    }
     clearChat()
-    // 小房间锁定态：不拉消息，渲染层展示暗号输入层（解锁成功后 unlockSmall 里补拉）
-    if (mode === 'small' && smallLocked.value) {
-      void ensureSmallQuestion()
-      return
-    }
-    await openChannel(userId, channel)
+    await reopenActiveView()
   }
 
   /** 加载更早历史（prepend 到消息流头部） */
@@ -807,12 +824,14 @@ export function usePocketRooms() {
   // 登录态变化（在设置页登录/退出后回到本页）：重新首灌
   watch(loggedIn, () => void load())
 
-  // 切换消息范围：重拉当前房间（去重键/游标随 clearChat 复位；未选中时切了也无需动作）
+  // 切换消息范围：重拉**当前视图**的消息流（去重键/游标随 clearChat 复位；未选中时切了也无需动作）。
+  // 必须走 reopenActiveView —— selectRoom 会把 viewMode 复位到大房间，
+  // 在小房间里切范围会被弹回大房间（踩过）。
   watch(messageScope, () => {
-    if (selectedUserId.value !== null) {
-      clearChat()
-      void selectRoom(selectedUserId.value)
-    }
+    if (selectedUserId.value === null)
+      return
+    clearChat()
+    void reopenActiveView()
   })
 
   // 卸载/作用域销毁：停轮询（消息区状态随页面销毁自然废弃）

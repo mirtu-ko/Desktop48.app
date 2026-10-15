@@ -391,9 +391,10 @@ onUnmounted(() => {
           @volumechange="onVolumeChange"
         />
       </div>
-      <!-- 直播弹幕（B 站公演源 + 口袋互动消息）：与 video-wrapper 同级，故不参与画面旋转；left/bottom 由脚本锚画面左下角 -->
+      <!-- 直播弹幕（B 站公演源 + 口袋互动消息）：与 video-wrapper 同级，故不参与画面旋转；left/bottom 由脚本锚画面左下角。
+           加载中一并隐藏：加载蒙层要盖住全部浮层，气泡不悬在加载态上 -->
       <div
-        v-show="showDanmaku"
+        v-show="showDanmaku && !mediaLoading"
         class="danmaku-list"
         :class="{ 'is-compact': compact }"
         :style="{ fontSize: `${danmakuFontSize}px`, ...danmakuPosition }"
@@ -408,9 +409,10 @@ onUnmounted(() => {
         label="正在加载直播"
         hint="连接直播源中，请稍候"
       />
-      <div class="player-actions">
+      <!-- 悬浮按钮整组随加载隐藏：蒙层盖住全部浮层，且流就绪前录制无从谈起 -->
+      <div v-show="!mediaLoading" class="player-actions">
         <RotationControls
-          v-if="liveType === 1 && !mediaLoading"
+          v-if="liveType === 1"
           :angle="rotationAngle"
           @rotate-left="rotateLeft"
           @rotate-right="rotateRight"
@@ -430,7 +432,7 @@ onUnmounted(() => {
 
       <!-- 互动榜单：口袋 LIVEUPDATE 消息驱动，锚画面渲染区左上角 —— 悬于弹幕气泡层正上方并左对齐 -->
       <div
-        v-if="rankUsers.length"
+        v-if="rankUsers.length && !mediaLoading"
         v-show="rankVisible"
         class="rank-panel"
         :style="rankPosition"

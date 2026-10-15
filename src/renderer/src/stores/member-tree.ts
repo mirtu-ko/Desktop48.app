@@ -13,7 +13,7 @@
  * - 写：数据库更新（services/apis.ts 的 syncInfo 落库后广播 members-updated）时
  *   由本文件作废缓存并立刻重拉 —— 订阅收在这里，消费方不必各自监听事件。
  */
-import type { MemberTreeGroupPayload } from '../../../preload/ipc-contract'
+import type { MemberTreeGroupPayload } from '@preload/ipc-contract'
 import EventBus from '@renderer/services/event-bus'
 import { ref } from 'vue'
 

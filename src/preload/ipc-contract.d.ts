@@ -292,7 +292,7 @@ export interface PocketDanmakuBatch {
 
 /** 单个房间的未读快照（userId 为键；count>0 的房间才会出现） */
 export interface PocketUnreadRoomState {
-  /** 未读条数（大房间 + 小房间合计；lastMsgList 每频道只有最新一条，一轮按「有新消息」粗算 +1） */
+  /** 未读条数（大房间 + 小房间合计；单频道按消息列表一页封顶 → 角标显示 50+） */
   count: number
   /** 大房间频道的未读贡献（频道切换 tab 的点点） */
   bigCount: number
@@ -418,7 +418,7 @@ interface StaticIpcInvokeMap {
   pocketCheckRoomAnswer: InvokeSpec<[channelId: string, questionId: string, answer: string], PocketRoomAnswerResult>
   /**
    * 标记房间已读：目标频道未读清零并广播，另一路（大/小房间）未读保留；
-   * 主进程把该频道基线对齐到当下、下一轮检测重新锚定（见 pocket-unread.ts）
+   * 主进程随即把该频道的已读水位推到当下，下一轮检测数出的就是读了之后的新消息
    */
   pocketMarkRead: InvokeSpec<[userId: number, target?: 'room' | 'small'], void>
 

@@ -3,6 +3,7 @@
 // 数据与连接编排见 composables/use-pocket-rooms.ts（本页只做展示与交互）。
 
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
+import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { ArrowRight, ChatDotRound, Lock, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
@@ -53,14 +54,25 @@ const {
 
 const router = useRouter()
 
-/** 未读数字角标文案：超过 99 收敛为 99+（与 Dock 角标同一规则） */
+/** 未读数字角标文案：计数按列表一页封顶，触顶即「至少这么多」，收敛为 50+ */
 function unreadText(count: number): string {
-  return count > 99 ? '99+' : String(count)
+  return count >= ROOM_MESSAGE_LIMIT ? `${ROOM_MESSAGE_LIMIT}+` : String(count)
 }
 
-/** 频道切换回调：参数收窄到视图模式（模板里由页签传字面量） */
-function onViewModeChange(mode: 'room' | 'small') {
-  void setViewMode(mode)
+/**
+ * 频道切换（页签）：切到大房间视同「点进大房间」，清其未读（有未读则回底）；
+ * 切到小房间不清——小房间走自己的入口语义（暗号解锁 + 贴底即读）。
+ */
+async function onViewModeChange(mode: 'room' | 'small') {
+  if (mode !== 'room') {
+    void setViewMode(mode)
+    return
+  }
+  const userId = selectedUserId.value
+  const hadUnread = userId !== null && unreadChannelOf(userId).big > 0
+  await setViewMode(mode)
+  if (userId !== null)
+    await settleBigRoomEnter(userId, hadUnread)
 }
 
 /**
@@ -198,6 +210,29 @@ function scrollToBottom() {
   const el = listRef.value
   if (el)
     el.scrollTop = el.scrollHeight
+}
+
+/**
+ * 进入大房间视图的公共收尾（点左列条目、点大房间页签共用）：
+ * 与官方客户端一致，进房即清该成员**大房间**的未读（Tab 级计数职责移交房间页），
+ * 小房间未读保留——它有自己的页签入口，用户点开小房间时才清。
+ * 清零的前提是用户确实看得到消息：进入前大房间已有未读时，加载完成后强制回底，
+ * 否则会出现「角标没了但新消息还在上面」的漏读。未读为 0 时不额外动作，
+ * 交给消息流自身的贴底逻辑（同房重进不重拉，位置得以保留）。
+ */
+async function settleBigRoomEnter(userId: number, hadUnread: boolean) {
+  void markRoomRead(userId, 'room')
+  if (!hadUnread)
+    return
+  await nextTick()
+  scrollToBottom()
+}
+
+/** 点进房间（左列条目）：选中 → 清大房间未读（有未读则回底） */
+async function enterRoom(userId: number) {
+  const hadUnread = unreadChannelOf(userId).big > 0
+  await selectRoom(userId)
+  await settleBigRoomEnter(userId, hadUnread)
 }
 
 watch(selectedUserId, () => {
@@ -413,7 +448,7 @@ onMounted(() => {
             type="button"
             class="room-item"
             :class="{ 'is-active': selectedRoom?.userId === room.userId, 'is-live': !!room.live }"
-            @click="selectRoom(room.userId)"
+            @click="enterRoom(room.userId)"
           >
             <span class="room-avatar">
               <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
@@ -521,7 +556,7 @@ onMounted(() => {
           <!-- 右区双栏：左侧聊天流，右侧成员信息卡 + 相册 -->
           <div class="main-body">
             <section class="main-chat">
-              <!-- 消息范围（只看成员 / 全部消息）：聊天区右上角。
+              <!-- 消息范围（只看房主 / 全部消息）：聊天区右上角。
                    与头部的频道页签分两层——频道是导航、范围是次级筛选，故用中性配色 -->
               <div v-if="!smallLocked" class="chat-tools">
                 <div class="scope-tabs" role="tablist" aria-label="消息范围">
@@ -533,7 +568,7 @@ onMounted(() => {
                     :aria-selected="messageScope === 'member'"
                     @click="messageScope = 'member'"
                   >
-                    只看成员
+                    只看房主
                   </button>
                   <button
                     type="button"
@@ -1128,7 +1163,7 @@ onMounted(() => {
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
-/* 消息范围切换（只看成员 / 全部消息）：聊天区右上角，中性配色。
+/* 消息范围切换（只看房主 / 全部消息）：聊天区右上角，中性配色。
  * 与头部频道页签（房间青）分两层——这里是次级筛选，不抢导航的视觉权重 */
 .chat-tools {
   display: flex;
