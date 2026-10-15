@@ -66,15 +66,16 @@ function unreadText(count: number): string {
 }
 
 /**
- * 频道切换（页签）：切到大房间视同「点进大房间」，清其未读（有未读则回底）；
- * 切到小房间不清——小房间走自己的入口语义（暗号解锁 + 贴底即读）。
+ * 频道切换（页签）：切到哪个频道就清当前频道的未读。
  */
 async function onViewModeChange(mode: 'room' | 'small') {
+  const userId = selectedUserId.value
   if (mode !== 'room') {
     void setViewMode(mode)
+    if (userId !== null && unreadChannelOf(userId).small > 0)
+      void markRoomRead(userId, 'small')
     return
   }
-  const userId = selectedUserId.value
   const hadUnread = userId !== null && unreadChannelOf(userId).big > 0
   await setViewMode(mode)
   if (userId !== null)
