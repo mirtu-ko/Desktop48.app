@@ -4,7 +4,7 @@
  * 类型 OpenLiveStream 来自 services/api-types，纯类型导入不产生运行时依赖。
  * 对应单测见 test/live-stream.test.ts（测试即用法文档）。
  */
-import type { OpenLiveStream } from '../services/api-types'
+import type { OpenLiveStream } from '@renderer/services/api-types'
 
 /**
  * 开放公演流选择：优先高清（streamType 2），

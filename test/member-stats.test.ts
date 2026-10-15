@@ -21,7 +21,6 @@ import {
   statsOverview,
   statusMembers,
   teamStats,
-  zodiacStats,
 } from '../src/renderer/src/utils/member-stats'
 import { makeMember } from './fixtures/member'
 
@@ -344,22 +343,6 @@ describe('birthMonthStats（生日月份）', () => {
     expect(result[0]).toEqual({ label: '1 月', count: 0 })
     expect(result[2]).toEqual({ label: '3 月', count: 2 })
     expect(result[11]).toEqual({ label: '12 月', count: 0 })
-  })
-})
-
-describe('zodiacStats（生肖分布 —— 数据源给不出出生年份，看板已不挂这张图）', () => {
-  it('按公历年份推算，1900 年为鼠年；没给年份的不计入', () => {
-    const list = [
-      makeMember({ realName: '甲', birthday: '2000-05-01' }), // 龙
-      makeMember({ realName: '乙', birthday: '2012-05-01' }), // 龙
-      makeMember({ realName: '丙', birthday: '2001-05-01' }), // 蛇
-      makeMember({ realName: '丁', birthday: '03-15' }),
-      makeMember({ realName: '戊', birthday: '' }),
-    ]
-    expect(zodiacStats(list)).toEqual([
-      { label: '龙', count: 2 },
-      { label: '蛇', count: 1 },
-    ])
   })
 })
 

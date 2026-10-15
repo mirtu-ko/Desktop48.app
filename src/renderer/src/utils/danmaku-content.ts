@@ -1,5 +1,5 @@
 /** 弹幕文本的表情切分（纯函数，可脱离 Electron 单测）。把 "[热]" 这类占位符切成表情图片段 */
-import type { DanmakuEmoteMap } from '../../../common/live-danmaku'
+import type { DanmakuEmoteMap } from '@common/live-danmaku'
 
 /** 一条弹幕最多替换的表情数，超出部分按原文本显示（防刷屏） */
 export const DANMAKU_EMOTE_LIMIT = 9

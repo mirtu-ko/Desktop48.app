@@ -7,7 +7,9 @@ export default antfu({
     markdown: true,
   },
   vue: true,
-  ignores: ['build'],
+  // resources/pocket48/ 是官方 App 抽取的 wasm 签名模块与其生成胶水（见 main/pocket48/pa-sign.ts），
+  // 生成物代码风格不可控，不参与 lint；build 为构建产物目录
+  ignores: ['build', 'resources/pocket48'],
 }, {
   rules: {
     // 恢复严格相等检查，但放行 `!= null`（判空惯用写法，语义上就是“非 null/undefined”）

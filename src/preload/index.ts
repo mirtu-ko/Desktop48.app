@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, TaskSnapshot, UpdaterState } from './ipc-contract'
+import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketDanmakuBatch, PocketUnreadBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 /**
@@ -47,6 +47,7 @@ const api = {
   getMemberFlags: (kind: MemberFlagKind) => invokeIpc('getMemberFlags', kind),
   setMemberFlags: (kind: MemberFlagKind, ids: Array<number | string>) => invokeIpc('setMemberFlags', kind, ids),
   addMemberFlag: (kind: MemberFlagKind, userId: number) => invokeIpc('addMemberFlag', kind, userId),
+  addMemberFlags: (kind: MemberFlagKind, userIds: number[]) => invokeIpc('addMemberFlags', kind, userIds),
   removeMemberFlag: (kind: MemberFlagKind, userId: number) => invokeIpc('removeMemberFlag', kind, userId),
 
   // ===== 应用配置 =====
@@ -144,6 +145,46 @@ const api = {
   // updaterState 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   updaterState: (callback: (_state: UpdaterState) => void) =>
     onIpc('updaterState', callback),
+
+  // ===== 口袋48账号 =====
+  // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts。
+  // IM 凭据（accid + imToken）不在此暴露：渲染层零调用方，token 只留在主进程
+  pocketSendSms: (mobile: string, answer?: string) => invokeIpc('pocketSendSms', mobile, answer),
+  pocketLoginByCode: (mobile: string, code: string) => invokeIpc('pocketLoginByCode', mobile, code),
+  pocketLoginByToken: (token: string, mobile?: string) => invokeIpc('pocketLoginByToken', token, mobile),
+  pocketGetAuthState: () => invokeIpc('pocketGetAuthState'),
+  pocketLogout: () => invokeIpc('pocketLogout'),
+  pocketGetChatroomId: (liveId: string) => invokeIpc('pocketGetChatroomId', liveId),
+  pocketVerifyLogin: () => invokeIpc('pocketVerifyLogin'),
+  pocketGetFollowedIds: () => invokeIpc('pocketGetFollowedIds'),
+  pocketFollowMember: (userId: number) => invokeIpc('pocketFollowMember', userId),
+  pocketUnfollowMember: (userId: number) => invokeIpc('pocketUnfollowMember', userId),
+  pocketGetRoomChannel: (userId: number) => invokeIpc('pocketGetRoomChannel', userId),
+  pocketGetRoomMessages: (channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all') =>
+    invokeIpc('pocketGetRoomMessages', channelId, serverId, nextTime, scope),
+  pocketGetRoomLastMessages: (serverIds: string[]) => invokeIpc('pocketGetRoomLastMessages', serverIds),
+  pocketGetServerChannels: (serverId: string) => invokeIpc('pocketGetServerChannels', serverId),
+  pocketDanmakuStart: (chatroomId: string, liveId: string) => invokeIpc('pocketDanmakuStart', chatroomId, liveId),
+  pocketDanmakuStop: (chatroomId: string) => invokeIpc('pocketDanmakuStop', chatroomId),
+  // pocketDanmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
+  pocketDanmakuBatch: (callback: (_batch: PocketDanmakuBatch) => void) =>
+    onIpc('pocketDanmakuBatch', callback),
+
+  // ===== 房间未读 =====
+  // 对端：main/pocket48/pocket-unread.ts（主进程唯一真相，检测不受窗口失焦节流）
+  pocketUnreadState: () => invokeIpc('pocketUnreadState'),
+  pocketGetSmallChannel: (userId: number) => invokeIpc('pocketGetSmallChannel', userId),
+  pocketGetRoomQuestion: (channelId: string) => invokeIpc('pocketGetRoomQuestion', channelId),
+  pocketCheckRoomAnswer: (channelId: string, questionId: string, answer: string) =>
+    invokeIpc('pocketCheckRoomAnswer', channelId, questionId, answer),
+  pocketMarkRead: (userId: number, target?: 'room' | 'small') => invokeIpc('pocketMarkRead', userId, target),
+  // pocketUnreadBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
+  pocketUnreadBatch: (callback: (_state: PocketUnreadBatch) => void) =>
+    onIpc('pocketUnreadBatch', callback),
+
+  // ===== B 站直播间信息 =====
+  // 对端：main/bilibili/room-info.ts
+  bilibiliRoomInfos: () => invokeIpc('bilibiliRoomInfos'),
 } satisfies mainAPI
 
 // 经 contextBridge 暴露给渲染进程（上下文隔离已启用）

@@ -1,12 +1,24 @@
 <script setup lang="ts">
-import { Connection, Cpu, Document, Folder, Hide, Refresh } from '@element-plus/icons-vue'
+import type { PocketVerifyResult } from '@preload/ipc-contract'
+import { Connection, Cpu, Document, Folder, Hide, Refresh, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
+import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
 import { useUpdater } from '@renderer/composables/use-updater'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
+import {
+  loginByPastedToken,
+  loginBySmsCode,
+  logoutPocket,
+  notifyLoginSuccess,
+  pocketAuthErrorMessage,
+  pocketAuthState,
+  refreshPocketAuthState,
+  verifyPocketLogin,
+} from '@renderer/stores/pocket-auth'
 import Constants from '@renderer/utils/constants'
 import Tools from '@renderer/utils/tools'
-import { ElMessageBox } from 'element-plus'
-import { computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
@@ -30,9 +42,21 @@ const { blockedMembers, refreshBlockedMembers, unblockMember, clearBlockedMember
 // 自动更新：状态镜像与操作集中在 use-updater.ts
 const { state: updaterState, checking: updaterChecking, version: appVersion, check: checkUpdate, download: downloadUpdate, install: installUpdate } = useUpdater()
 
+// 口袋关注同步：启动/登录后把账号维度的关注合并进本地名单（use-pocket-follow.ts）
+const {
+  syncing: followSyncing,
+  syncTotal: followSyncTotal,
+  syncError: followSyncError,
+  sync: syncPocketFollow,
+  syncIfStale: syncPocketFollowIfStale,
+} = usePocketFollowSync()
+
 onMounted(async () => {
   await loadAppConfig()
   await refreshBlockedMembers()
+  await refreshPocketAuthState()
+  // 已登录则静默同步一次口袋关注（friends/id 一次性返回，无分页成本）
+  syncPocketFollowIfStale(5 * 60 * 1000)
 })
 
 /** 更新行的描述文案：一行说清当前处于什么状态、下一步该做什么 */
@@ -106,6 +130,216 @@ function goMembers() {
   router.push('/members')
 }
 
+// ===== 口袋48账号登录 =====
+// 登录与凭证存储在主进程（stores/pocket-auth.ts 接线）；这里只管表单与流程编排。
+
+const loginDialogVisible = ref(false)
+const loginTab = ref<'sms' | 'token'>('sms')
+
+/** 短信登录表单状态 */
+const smsForm = reactive({
+  mobile: '',
+  code: '',
+  sending: false,
+  loggingIn: false,
+  countdown: 0,
+  /** 反爬问答题：发送命中 2001 时置位，用户作答后随下一次发送提交 */
+  captcha: null as null | { question: string, options: string[], answer: string },
+})
+/** token 粘贴登录表单状态 */
+const tokenForm = reactive({
+  token: '',
+  mobile: '',
+  loggingIn: false,
+})
+
+function openLoginDialog() {
+  smsForm.code = ''
+  smsForm.captcha = null
+  clearCountdown()
+  tokenForm.token = ''
+  loginDialogVisible.value = true
+}
+
+async function confirmLogout() {
+  try {
+    await ElMessageBox.confirm('退出后直播互动消息将不可用，确定退出？', '退出登录', {
+      type: 'warning',
+      confirmButtonText: '退出',
+      cancelButtonText: '取消',
+    })
+  }
+  catch {
+    return
+  }
+  await logoutPocket()
+  ElMessage.success('已退出登录')
+}
+
+// ===== 登录有效性验证（点击已登录头像触发） =====
+
+const verifying = ref(false)
+const verifyDialogVisible = ref(false)
+/** 最近一次验证结果；null = 尚未验证 */
+const verifyResult = ref<PocketVerifyResult | null>(null)
+/** 验证过程中的网络异常（与「服务端判定失效」分开呈现） */
+const verifyError = ref('')
+
+/** 验证失败：网络异常，或服务端明确判定登录失效 */
+const verifyFailed = computed(() => !verifying.value && (!!verifyError.value || (!!verifyResult.value && !verifyResult.value.valid)))
+const verifyFailedMessage = computed(() => verifyError.value || verifyResult.value?.message || '登录已失效，请重新登录')
+
+/** 凭证在本机的保存天数（savedAt 为 0 时不展示） */
+const savedDays = computed(() => {
+  const savedAt = pocketAuthState.value.savedAt
+  if (!savedAt)
+    return 0
+  return Math.max(0, Math.floor((Date.now() - savedAt) / 86_400_000))
+})
+
+/** 金额：千分位 + 两位小数（元） */
+function formatMoney(value: number): string {
+  return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+/** 计数：千分位整数；非数字原样返回 */
+function formatCount(value: string): string {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed.toLocaleString('zh-CN') : value
+}
+
+/**
+ * 真实请求需登录的接口（token 校验 + IM 凭据 + 口袋钱包）验证登录态：
+ * 有效时展示从服务端取回的资料与余额（本地存的只是上次登录的快照），
+ * 失效时在结果弹窗里给出重新登录入口。
+ */
+async function verifyLogin() {
+  if (verifying.value)
+    return
+  verifying.value = true
+  verifyError.value = ''
+  verifyResult.value = null
+  verifyDialogVisible.value = true
+  try {
+    const result = await verifyPocketLogin()
+    verifyResult.value = result
+    if (result.valid) {
+      // 服务端资料可能比本地快照新（改过头像/昵称）：主进程已回写，这里回读刷新展示
+      await refreshPocketAuthState()
+    }
+  }
+  catch (error) {
+    verifyError.value = pocketAuthErrorMessage(error)
+  }
+  finally {
+    verifying.value = false
+  }
+}
+
+/** 验证失败后直接从结果弹窗跳转登录弹窗，少一次关闭操作 */
+function reloginFromVerify() {
+  verifyDialogVisible.value = false
+  openLoginDialog()
+}
+
+/** 服务端返回的头像多为相对路径，归一成完整 URL 供展示 */
+const authAvatarUrl = computed(() => Tools.sourceUrl(pocketAuthState.value.avatar))
+
+/** 发送验证码；命中反爬问答题时展示题目，作答后可重发 */
+async function sendSmsCode() {
+  if (smsForm.sending || smsForm.countdown > 0)
+    return
+  smsForm.sending = true
+  try {
+    const result = await window.mainAPI.pocketSendSms(
+      smsForm.mobile,
+      smsForm.captcha?.answer || undefined,
+    )
+    if (result.needCaptcha) {
+      smsForm.captcha = { question: result.question, options: result.options, answer: '' }
+      ElMessage.warning('需要先完成下方验证')
+      return
+    }
+    smsForm.captcha = null
+    ElMessage.success('验证码已发送，请留意短信')
+    startCountdown()
+  }
+  catch (error) {
+    ElMessage.error(pocketAuthErrorMessage(error))
+  }
+  finally {
+    smsForm.sending = false
+  }
+}
+
+/** 验证码倒计时定时器：弹窗关闭 / 组件卸载必须清，否则空转着改响应式状态 */
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+
+function clearCountdown() {
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
+  smsForm.countdown = 0
+}
+
+function startCountdown() {
+  clearCountdown()
+  smsForm.countdown = 60
+  countdownTimer = setInterval(() => {
+    smsForm.countdown--
+    if (smsForm.countdown <= 0)
+      clearCountdown()
+  }, 1000)
+}
+
+// 弹窗关闭即停表（倒计时期间关窗是常态）；onBeforeUnmount 兜底组件直接销毁的场景
+watch(loginDialogVisible, visible => visible || clearCountdown())
+onBeforeUnmount(clearCountdown)
+
+async function submitSmsLogin() {
+  if (smsForm.loggingIn)
+    return
+  smsForm.loggingIn = true
+  try {
+    const state = await loginBySmsCode(smsForm.mobile, smsForm.code)
+    loginDialogVisible.value = false
+    notifyLoginSuccess(state)
+    void syncPocketFollow()
+  }
+  catch (error) {
+    ElMessage.error(pocketAuthErrorMessage(error))
+  }
+  finally {
+    smsForm.loggingIn = false
+  }
+}
+
+async function submitTokenLogin() {
+  if (tokenForm.loggingIn)
+    return
+  tokenForm.loggingIn = true
+  try {
+    const state = await loginByPastedToken(tokenForm.token, tokenForm.mobile)
+    loginDialogVisible.value = false
+    notifyLoginSuccess(state)
+    void syncPocketFollow()
+  }
+  catch (error) {
+    ElMessage.error(pocketAuthErrorMessage(error))
+  }
+  finally {
+    tokenForm.loggingIn = false
+  }
+}
+
+/** 手机号是否可发送验证码 */
+const smsSendable = computed(() => /^\d{11}$/.test(smsForm.mobile))
+/** 验证码登录按钮可用性 */
+const smsLoginable = computed(() => smsSendable.value && smsForm.code.trim().length > 0)
+/** token 登录按钮可用性 */
+const tokenLoginable = computed(() => tokenForm.token.trim().length > 0)
+
 /** 友情链接（logo 加载失败时回退为首字磁贴）；应用内主题色引用 app.scss 变量 */
 interface FriendLink {
   name: string
@@ -170,6 +404,81 @@ function hideLogo(event: Event) {
     wrap-class="scrollbar-wrapper"
   >
     <div class="setting-root">
+      <!-- 口袋48账号 -->
+      <section class="setting-card glass-card">
+        <div class="setting-row">
+          <span
+            class="row-icon icon-tile auth-avatar"
+            :class="{ 'is-clickable': pocketAuthState.loggedIn, 'is-verifying': verifying }"
+            :style="{ '--tile-color': 'var(--brand-primary)' }"
+            :title="pocketAuthState.loggedIn ? (verifying ? '正在验证登录…' : '点击查看登录状态与账号资料') : ''"
+            @click="pocketAuthState.loggedIn ? verifyLogin() : undefined"
+          >
+            <img
+              v-if="pocketAuthState.loggedIn && authAvatarUrl"
+              :src="authAvatarUrl"
+              alt="账号头像"
+            >
+            <el-icon v-else>
+              <User />
+            </el-icon>
+          </span>
+          <div class="row-text row-text--fluid">
+            <div class="row-title">
+              口袋48账号
+            </div>
+            <div class="row-desc">
+              <template v-if="pocketAuthState.loggedIn">
+                已登录{{ pocketAuthState.nickname ? `：${pocketAuthState.nickname}` : '' }}<template v-if="pocketAuthState.mobileMasked">
+                  （{{ pocketAuthState.mobileMasked }}）
+                </template><template v-if="followSyncing">
+                  ，正在同步口袋关注…
+                </template><template v-else-if="followSyncError">
+                  ，口袋关注同步失败
+                </template><template v-else-if="followSyncTotal !== null">
+                  ，口袋关注已同步（{{ followSyncTotal }} 人）
+                </template>
+              </template>
+              <template v-else>
+                登录后可在直播页实时查看口袋互动消息
+              </template>
+            </div>
+          </div>
+          <div class="row-actions">
+            <template v-if="pocketAuthState.loggedIn">
+              <el-tag
+                v-if="pocketAuthState.plainFallback"
+                type="warning"
+                size="small"
+                class="auth-fallback-tag"
+              >
+                明文存储
+              </el-tag>
+              <el-button
+                :loading="followSyncing"
+                @click="syncPocketFollow()"
+              >
+                同步关注
+              </el-button>
+              <el-button
+                type="danger"
+                plain
+                @click="confirmLogout"
+              >
+                退出登录
+              </el-button>
+            </template>
+            <el-button
+              v-else
+              type="primary"
+              @click="openLoginDialog"
+            >
+              登录
+            </el-button>
+          </div>
+        </div>
+      </section>
+
       <!-- User-Agent -->
       <section class="setting-card glass-card">
         <div class="setting-row">
@@ -458,6 +767,225 @@ function hideLogo(event: Event) {
         </div>
       </section>
     </div>
+
+    <!-- 口袋48登录弹窗：短信验证码 / Token 粘贴 两种方式 -->
+    <el-dialog
+      v-model="loginDialogVisible"
+      title="登录口袋48账号"
+      width="440px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <el-tabs v-model="loginTab">
+        <el-tab-pane
+          label="短信验证码"
+          name="sms"
+        >
+          <div class="login-form">
+            <el-input
+              v-model="smsForm.mobile"
+              placeholder="手机号"
+              maxlength="11"
+              :disabled="smsForm.loggingIn"
+            />
+            <div
+              v-if="smsForm.captcha"
+              class="login-captcha"
+            >
+              <div class="captcha-question">
+                {{ smsForm.captcha.question }}
+              </div>
+              <el-radio-group
+                v-model="smsForm.captcha.answer"
+                class="captcha-options"
+              >
+                <el-radio
+                  v-for="option in smsForm.captcha.options"
+                  :key="option"
+                  :value="option"
+                >
+                  {{ option }}
+                </el-radio>
+              </el-radio-group>
+            </div>
+            <div class="login-code-row">
+              <el-input
+                v-model="smsForm.code"
+                placeholder="验证码"
+                maxlength="8"
+                :disabled="smsForm.loggingIn"
+                @keyup.enter="smsLoginable && submitSmsLogin()"
+              />
+              <el-button
+                class="login-code-btn"
+                :disabled="!smsSendable || smsForm.countdown > 0"
+                :loading="smsForm.sending"
+                @click="sendSmsCode"
+              >
+                {{ smsForm.countdown > 0 ? `${smsForm.countdown}s` : (smsForm.captcha ? '重新发送' : '发送验证码') }}
+              </el-button>
+            </div>
+            <el-button
+              type="primary"
+              class="login-submit"
+              :disabled="!smsLoginable"
+              :loading="smsForm.loggingIn"
+              @click="submitSmsLogin"
+            >
+              登录
+            </el-button>
+          </div>
+        </el-tab-pane>
+        <el-tab-pane
+          label="Token 粘贴"
+          name="token"
+        >
+          <div class="login-form">
+            <el-input
+              v-model="tokenForm.token"
+              type="textarea"
+              :rows="4"
+              placeholder="粘贴口袋48 token（抓包或从其他工具获取）"
+              class="login-token-input"
+            />
+            <el-input
+              v-model="tokenForm.mobile"
+              placeholder="手机号（选填，用于下次登录预填）"
+              maxlength="11"
+            />
+            <el-button
+              type="primary"
+              class="login-submit"
+              :disabled="!tokenLoginable"
+              :loading="tokenForm.loggingIn"
+              @click="submitTokenLogin"
+            >
+              登录
+            </el-button>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+      <div class="login-hint">
+        凭证仅保存在本机（safeStorage 加密），不会上传。token 由服务端掌控有效期，失效后需重新登录。
+      </div>
+    </el-dialog>
+
+    <!-- 登录状态验证结果：点击已登录头像触发，资料 / 钱包 / 链路状态一屏看完 -->
+    <el-dialog
+      v-model="verifyDialogVisible"
+      :title="verifyFailed ? '登录状态异常' : '登录状态'"
+      width="460px"
+      append-to-body
+      class="verify-dialog"
+    >
+      <!-- 验证中：主进程依次请求 token 校验 / IM 凭据 / 口袋钱包三个接口 -->
+      <div v-if="verifying" class="verify-loading">
+        <span class="verify-spinner" />
+        <span>正在向口袋48服务端校验登录状态…</span>
+      </div>
+
+      <!-- 验证失败：网络异常或服务端判定失效，直接给重新登录入口 -->
+      <div v-else-if="verifyFailed" class="verify-fail">
+        <el-icon class="verify-fail-icon">
+          <WarningFilled />
+        </el-icon>
+        <p class="verify-fail-message">
+          {{ verifyFailedMessage }}
+        </p>
+        <p class="verify-fail-hint">
+          可立即重新登录；若是网络不通，恢复后重试即可。
+        </p>
+      </div>
+
+      <!-- 验证成功：服务端取回的账号资料卡 -->
+      <div v-else-if="verifyResult?.valid" class="verify-card">
+        <div class="verify-head">
+          <span class="verify-avatar">
+            <img v-if="authAvatarUrl" :src="authAvatarUrl" alt="账号头像">
+            <el-icon v-else>
+              <User />
+            </el-icon>
+          </span>
+          <div class="verify-idblock">
+            <div class="verify-nick">
+              {{ verifyResult.nickname || pocketAuthState.nickname || '口袋48用户' }}
+              <span v-if="verifyResult.level" class="verify-level">Lv.{{ verifyResult.level }}</span>
+            </div>
+            <div class="verify-uid">
+              ID {{ verifyResult.userId || '—' }}
+            </div>
+          </div>
+        </div>
+
+        <p v-if="verifyResult.signature" class="verify-signature">
+          「{{ verifyResult.signature }}」
+        </p>
+
+        <div class="verify-stats">
+          <div class="verify-stat verify-stat--money">
+            <div class="stat-value">
+              {{ verifyResult.moneyOk ? `¥${formatMoney(verifyResult.moneyTotal)}` : '—' }}
+            </div>
+            <div class="stat-label">
+              口袋钱包
+            </div>
+            <div class="stat-sub">
+              <template v-if="verifyResult.moneyOk">
+                付费 ¥{{ formatMoney(verifyResult.moneyPay) }} · 免费 ¥{{ formatMoney(verifyResult.moneyFree) }}
+              </template>
+              <template v-else>
+                获取失败
+              </template>
+            </div>
+          </div>
+          <div v-if="verifyResult.fans" class="verify-stat">
+            <div class="stat-value">
+              {{ formatCount(verifyResult.fans) }}
+            </div>
+            <div class="stat-label">
+              粉丝
+            </div>
+          </div>
+          <div v-if="verifyResult.likes" class="verify-stat">
+            <div class="stat-value">
+              {{ formatCount(verifyResult.likes) }}
+            </div>
+            <div class="stat-label">
+              获赞
+            </div>
+          </div>
+        </div>
+
+        <div class="verify-links">
+          <div class="verify-link">
+            <span class="verify-link-name">互动消息</span>
+            <span class="verify-link-desc">直播弹幕 / 礼物 / 榜单</span>
+            <span class="verify-link-state" :class="verifyResult.imOk ? 'is-ok' : 'is-bad'">
+              {{ verifyResult.imOk ? '可用' : '不可用' }}
+            </span>
+          </div>
+        </div>
+
+        <div class="verify-local">
+          凭证保存：{{ pocketAuthState.plainFallback ? '明文（当前系统无加密能力）' : '本机安全加密' }}<template v-if="savedDays > 0">
+            ，已保存 {{ savedDays }} 天
+          </template>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="verifyDialogVisible = false">
+          关闭
+        </el-button>
+        <el-button
+          v-if="verifyFailed"
+          type="primary"
+          @click="reloginFromVerify"
+        >
+          重新登录
+        </el-button>
+      </template>
+    </el-dialog>
   </el-scrollbar>
 </template>
 
@@ -727,4 +1255,298 @@ function hideLogo(event: Event) {
 }
 
 /* 品牌渐变主按钮已全局统一，见 app.scss */
+
+/* ===== 口袋48登录弹窗 ===== */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+/* 问答题卡片：服务端反爬（2001），题目 + 单选作答 */
+.login-captcha {
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--brand-primary) 4%, transparent);
+
+  .captcha-question {
+    margin-bottom: 6px;
+    font-size: 13px;
+    color: var(--el-text-color-primary);
+  }
+
+  .captcha-options {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 14px;
+  }
+}
+
+.login-code-row {
+  display: flex;
+  gap: 8px;
+
+  .login-code-btn {
+    flex-shrink: 0;
+    /* 固定最小宽度避免 60s 倒计时数字宽度抖动 */
+    min-width: 108px;
+  }
+}
+
+.login-submit {
+  margin-top: 4px;
+}
+
+.login-token-input {
+  :deep(.el-textarea__inner) {
+    font-family: var(--el-font-family, monospace);
+    font-size: 12px;
+    word-break: break-all;
+  }
+}
+
+.login-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}
+
+/* 明文存储降级提示 */
+.auth-fallback-tag {
+  margin-right: 4px;
+}
+
+/* 已登录头像：点击触发登录有效性验证 */
+.auth-avatar {
+  overflow: hidden;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+  }
+
+  &.is-clickable {
+    cursor: pointer;
+    transition: filter 0.2s;
+
+    &:hover {
+      filter: brightness(1.15);
+    }
+  }
+
+  &.is-verifying {
+    cursor: wait;
+    filter: grayscale(0.6) brightness(0.85);
+  }
+}
+
+/* ===== 登录状态验证弹窗 ===== */
+
+/* 验证中：主进程在后台打三个需登录接口，给一个不打扰的等待态 */
+.verify-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 30px 0 24px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.verify-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid color-mix(in srgb, var(--brand-primary) 25%, transparent);
+  border-top-color: var(--brand-primary);
+  border-radius: 50%;
+  animation: verify-spin 0.9s linear infinite;
+}
+
+@keyframes verify-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 验证失败：图标 + 原因 + 一句出路 */
+.verify-fail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 6px 8px;
+  text-align: center;
+
+  .verify-fail-icon {
+    font-size: 40px;
+    color: var(--el-color-warning);
+  }
+
+  .verify-fail-message {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+
+  .verify-fail-hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
+}
+
+/* 资料卡头部：大头像 + 昵称 + 等级徽标 + ID */
+.verify-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.verify-avatar {
+  display: flex;
+  width: 56px;
+  height: 56px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
+  color: #fff;
+  font-size: 24px;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+}
+
+.verify-idblock {
+  min-width: 0;
+}
+
+.verify-nick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.verify-level {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
+}
+
+.verify-uid {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 个性签名：弱底色引用块 */
+.verify-signature {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--brand-primary) 5%, transparent);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+}
+
+/* 统计瓦片：钱包为主（flex 权重更大），粉丝 / 获赞按服务端返回有无展示 */
+.verify-stats {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.verify-stat {
+  flex: 1;
+  padding: 12px 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-md);
+  text-align: center;
+
+  .stat-value {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--el-text-color-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat-label {
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--el-text-color-secondary);
+  }
+
+  .stat-sub {
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--el-text-color-placeholder);
+  }
+}
+
+.verify-stat--money {
+  flex: 1.4;
+}
+
+/* 功能链路：互动消息是弹幕功能的实际依赖，单独一行给出可用性 */
+.verify-links {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+.verify-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+
+  .verify-link-name {
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+
+  .verify-link-desc {
+    flex: 1;
+    color: var(--el-text-color-secondary);
+  }
+
+  .verify-link-state {
+    font-weight: 600;
+
+    &.is-ok {
+      color: var(--el-color-success);
+    }
+
+    &.is-bad {
+      color: var(--el-color-danger);
+    }
+  }
+}
+
+/* 本地凭证：保存方式与保存时长，佐证「这台机器上的登录态」 */
+.verify-local {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--el-text-color-placeholder);
+}
 </style>

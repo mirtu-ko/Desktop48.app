@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import type { FloatPlayerKind, FloatPlayerPayload } from '../../../../preload/ipc-contract'
+import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
+import { FLOAT_BAR_HEIGHT } from '@common/float-window'
 import LivePlayer from '@renderer/components/player/LivePlayer.vue'
 import PlaybackPlayer from '@renderer/components/player/PlaybackPlayer.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import EventBus from '@renderer/services/event-bus'
 import { useEventListener } from '@vueuse/core'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { FLOAT_BAR_HEIGHT } from '../../../../common/float-window'
+import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue'
 
 /**
  * 独立播放窗根组件（无边框 + 自定义标题栏）。
@@ -54,6 +54,13 @@ const barTitle = computed(() => {
   if (!current)
     return ''
   return current.nickname ? `${current.nickname}: ${current.title}` : current.title
+})
+
+// macOS 程序坞右键菜单 / 调度中心窗口标题
+watchEffect(() => {
+  const title = barTitle.value
+  if (title)
+    document.title = `${kind === 'live' ? '直播' : '回放'} · ${title}`
 })
 
 // 窄窗标记，仅供播放器内部使用（弹幕延迟控件 / 弹幕列表在窄窗下换排布）；

@@ -4,6 +4,7 @@ import Elections from './pages/Elections.vue'
 import Lives from './pages/Lives.vue'
 import Members from './pages/Members.vue'
 import Playbacks from './pages/Playbacks.vue'
+import Rooms from './pages/Rooms.vue'
 import Setting from './pages/Setting.vue'
 import Shows from './pages/Shows.vue'
 
@@ -11,6 +12,10 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/lives',
     component: Lives,
+  },
+  {
+    path: '/rooms',
+    component: Rooms,
   },
   {
     path: '/lives/playbacks',

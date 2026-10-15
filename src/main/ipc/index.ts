@@ -9,6 +9,7 @@ import { registerFfmpegDownloadIPC } from '../ffmpeg/ffmpeg-download'
 import { registerDanmakuIPC } from './register-danmaku-ipc'
 import { registerDatabaseIPC } from './register-database-ipc'
 import { registerFloatWindowIPC } from './register-float-window-ipc'
+import { registerPocketIPC } from './register-pocket-ipc'
 import { registerStreamIPC } from './register-stream-ipc'
 import { registerSystemIPC } from './register-system-ipc'
 import { registerTaskIPC } from './register-task-ipc'
@@ -21,6 +22,7 @@ export function registerAllIPC(): void {
   registerSystemIPC()
   registerStreamIPC()
   registerDanmakuIPC()
+  registerPocketIPC()
   registerFloatWindowIPC()
   registerTaskIPC()
   registerFfmpegDownloadIPC()

@@ -1,7 +1,10 @@
+import type { DanmakuEmoteMap } from '@common/live-danmaku'
 import type { DanmakuSegment } from '@renderer/utils/danmaku-content'
-import type { DanmakuEmoteMap } from '../../../common/live-danmaku'
 import { splitDanmakuContent } from '@renderer/utils/danmaku-content'
 import { shallowRef } from 'vue'
+
+/** 作者名色调：区分消息类型（礼物金 / 系统灰），缺省为弹幕默认的品牌色 */
+export type DanmakuAuthorTone = 'gift' | 'system'
 
 /** 弹幕条目：seconds 为预计算的播放时刻（已排序） */
 export interface DanmakuOverlayEntry {
@@ -17,6 +20,10 @@ export interface DanmakuOverlayItem {
   content: string
   // 发送者显示名（气泡内作者前缀）
   username: string
+  /** 作者名色调；缺省 = 弹幕默认色 */
+  tone?: DanmakuAuthorTone
+  /** 发送者等级；缺省不显示等级徽章 */
+  level?: number
   /** 渲染片段：文本与表情图交替。切分在入队时收口，模板只管画 */
   segments: DanmakuSegment[]
   // 逾期即从顶部淡出，以播放进度为基准
@@ -119,6 +126,8 @@ export function useDanmakuOverlay(options: UseDanmakuOverlayOptions) {
 interface PendingDanmaku {
   content: string
   username: string
+  tone?: DanmakuAuthorTone
+  level?: number
   segments: DanmakuSegment[]
   showAt: number
 }
@@ -138,12 +147,24 @@ export function useLiveDanmakuOverlay() {
   let nextId = 0
 
   /** 排入一条弹幕；showAt 到点后由 tick 投放（同一批共用同一时刻，批内先后由 push 顺序保证） */
-  function push(content: string, username: string, showAt: number, emots?: DanmakuEmoteMap) {
+  function push(
+    content: string,
+    username: string,
+    showAt: number,
+    meta?: { emots?: DanmakuEmoteMap, tone?: DanmakuAuthorTone, level?: number },
+  ) {
     if (!content)
       return
 
     // 切分在入队时做一次：模板里同一条会被 patch 多次，放那儿是白烧 CPU
-    pending.push({ content, username, segments: splitDanmakuContent(content, emots), showAt })
+    pending.push({
+      content,
+      username,
+      tone: meta?.tone,
+      level: meta?.level,
+      segments: splitDanmakuContent(content, meta?.emots),
+      showAt,
+    })
     if (pending.length > MAX_PENDING)
       pending.shift()
   }
@@ -166,6 +187,8 @@ export function useLiveDanmakuOverlay() {
           id: nextId++,
           content: item.content,
           username: item.username,
+          tone: item.tone,
+          level: item.level,
           segments: item.segments,
           expireAt: time + LIVE_DISPLAY_SECONDS,
         }))

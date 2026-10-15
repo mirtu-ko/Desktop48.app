@@ -34,6 +34,7 @@
   /* ===== 语义主题色 =====
    * 语义主题色的唯一来源；模板和脚本只传变量引用，不保存色值。*/
   --color-lives: #ff5e7e; // 直播 / 录制：玫红
+  --color-rooms: #14b8a6; // 房间（关注成员聊天室）：青
   --color-shows: #f59e0b; // 公演：琥珀
   --color-albums: #d946ef; // 专辑：品红
   --color-members: #3b82f6; // 成员：蓝
@@ -644,15 +645,22 @@ body,
   }
 }
 
-/* 专辑类型徽章：专辑网格卡片与专辑详情卡片共用。EP 玫粉 / 专辑 品牌紫 / 单曲 青绿，
- * 未知 tag 走中性灰兜底（语义色见本文件的 --color-* 变量） */
-.album-tag {
+/* ===== 药丸徽章底座：.album-tag / .team-badge 共用的外观骨架 =====
+ * 两类徽章同一套视觉语言（药丸形 + 11px 白字），仅底色配方与 display 不同，
+ * 骨架在此只写一份；display 由各自补充（album-tag 默认 inline，team-badge 居中 inline-flex） */
+.album-tag,
+.team-badge {
   flex: none;
   padding: 1px 8px;
   border-radius: var(--radius-pill);
   font-size: 11px;
   line-height: 1.6;
   color: #fff;
+}
+
+/* 专辑类型徽章：专辑网格卡片与专辑详情卡片共用。EP 玫粉 / 专辑 品牌紫 / 单曲 青绿，
+ * 未知 tag 走中性灰兜底（语义色见本文件的 --color-* 变量） */
+.album-tag {
   background: linear-gradient(135deg, #909399, color-mix(in srgb, #909399 70%, #fff));
   box-shadow: 0 3px 8px -3px rgba(144, 147, 153, 0.55);
 
@@ -663,7 +671,7 @@ body,
 
   &.album-tag--zj {
     background: var(--gradient-brand);
-    box-shadow: 0 3px 8px -3px var(--shadow-glow);
+    box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--brand-primary) 55%, transparent);
   }
 
   &.album-tag--sg {
@@ -673,12 +681,33 @@ body,
   }
 }
 
-/* 专辑封面：解码完成才淡入，铺满容器见 .media-fill */
-.cover-src {
-  animation: cover-fade 0.25s ease;
+/* 未读数字角标：红色胶囊 + 白字，单位数占 16px 方块、两位数自动撑宽。
+ * 只描述外观与排版，落点由使用处决定（房间列表贴头像角、频道页签跟在文字后）。
+ * 房间列表与频道页签共用，避免同页出现两种规格的未读标记 */
+.unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #fff;
+  background: var(--el-color-danger);
 }
 
-@keyframes cover-fade {
+/* 专辑封面：解码完成才淡入，铺满容器见 .media-fill */
+.cover-src {
+  animation: fade-in 0.25s ease;
+}
+
+/* 纯透明度淡入：.cover-src（封面淡入）与 .rotate-hint（旋转提示浮现）共用。
+ * 时长 / 缓动由使用方在 animation 里给 */
+@keyframes fade-in {
   from {
     opacity: 0;
   }
@@ -856,7 +885,7 @@ body,
 
   &::-webkit-scrollbar-thumb {
     border: 2px solid transparent;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     background-clip: content-box;
     background-color: var(--el-border-color);
   }
@@ -1019,20 +1048,14 @@ body,
 }
 
 /* ===== 队伍徽章（直播/回放卡片、成员卡片、成员详情、公演卡片共用） =====
- * 与 .album-tag 同一套视觉语言：药丸 + 同色渐变 + 同色柔光；
+ * 药丸骨架与 .album-tag 共用上面的底座，底色配方自持；
  * 队伍主题色由 --tb-color 注入，缺省时中性灰 */
 .team-badge {
   --tb-color: #909399;
 
-  flex: none;
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  padding: 1px 8px;
-  border-radius: var(--radius-pill);
-  font-size: 11px;
-  line-height: 1.6;
-  color: #fff;
   background: linear-gradient(135deg, var(--tb-color), color-mix(in srgb, var(--tb-color) 65%, #fff));
   box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--tb-color) 55%, transparent);
 }
@@ -1332,16 +1355,7 @@ body,
   white-space: nowrap;
   z-index: 25;
   pointer-events: none;
-  animation: hint-fade 0.18s ease;
-}
-
-@keyframes hint-fade {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+  animation: fade-in 0.18s ease;
 }
 
 /* 全局 360° 旋转：黑胶盘标（Albums / FloatAudioBar）与加载环（PlayerLoading）共用 */

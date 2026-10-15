@@ -353,7 +353,7 @@ function onClearAll() {
   margin-top: 2px;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--brand-primary), var(--brand-primary-light));
-  box-shadow: 0 0 6px -1px var(--shadow-glow);
+  box-shadow: 0 0 6px -1px rgba(var(--brand-rgb), 0.55);
   transition: height 0.15s ease;
   pointer-events: none;
 

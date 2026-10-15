@@ -1,9 +1,9 @@
 <script setup lang="ts">
+import { FLOAT_BAR_HEIGHT } from '@common/float-window'
 import appIcon from '@renderer/assets/icon.png'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { useEventListener } from '@vueuse/core'
 import { onMounted, onUnmounted, ref } from 'vue'
-import { FLOAT_BAR_HEIGHT } from '../../../../common/float-window'
 
 const isMaximized = ref(false)
 let disposeChange: (() => void) | undefined

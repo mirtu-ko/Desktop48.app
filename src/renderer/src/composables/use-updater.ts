@@ -1,4 +1,4 @@
-import type { UpdaterState } from '../../../preload/ipc-contract'
+import type { UpdaterState } from '@preload/ipc-contract'
 import { onActivated, onMounted, onUnmounted, ref } from 'vue'
 
 /** 自动更新状态与操作；主进程持真相，本模块只维护渲染端镜像。 */

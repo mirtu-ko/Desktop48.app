@@ -20,7 +20,7 @@ import { app } from 'electron'
 import { CONFIG_DEFAULTS } from '../common/app-config'
 import { assertMemberFlagKind } from '../common/member-flags'
 import data from './data'
-import { addMemberFlagId, removeMemberFlagId, resolveMemberFlags } from './domain/member-flags'
+import { addMemberFlagId, addMemberFlagIds, removeMemberFlagId, resolveMemberFlags } from './domain/member-flags'
 import { buildMemberTree, teamColorOf } from './domain/member-tree'
 import { log } from './logger'
 import { SafeJSONFileSync } from './safe-json-file-sync'
@@ -254,6 +254,17 @@ class Database {
     assertMemberFlagKind(kind)
     const key = memberFlagKey(kind)
     const changed = addMemberFlagId(this.db[key], userId)
+    if (changed) {
+      this.db[key] = changed
+      this.storage.write(this.db)
+    }
+  }
+
+  /** 批量幂等合并（口袋关注同步）：整批只写盘一次，无变化不写 */
+  public addMemberFlags(kind: MemberFlagKind, userIds: number[]) {
+    assertMemberFlagKind(kind)
+    const key = memberFlagKey(kind)
+    const changed = addMemberFlagIds(this.db[key], userIds)
     if (changed) {
       this.db[key] = changed
       this.storage.write(this.db)

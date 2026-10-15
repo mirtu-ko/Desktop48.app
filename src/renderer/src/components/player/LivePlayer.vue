@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { PocketRankUser } from '@renderer/utils/pocket-chat-message'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { useDanmakuLayer } from '@renderer/composables/use-danmaku-layer'
 import { useLiveDanmaku } from '@renderer/composables/use-live-danmaku'
@@ -13,11 +14,12 @@ import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import EventBus from '@renderer/services/event-bus'
 import { debugLog } from '@renderer/utils/debug'
 import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
+import Tools from '@renderer/utils/tools'
 
 import { useEventListener } from '@vueuse/core'
 
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import DanmakuBubbles from './DanmakuBubbles.vue'
 import MiniControls from './MiniControls.vue'
 import PlayerLoading from './PlayerLoading.vue'
@@ -99,20 +101,13 @@ const {
 // 免得视频还没出画面就先掉到别的窗口后面。
 watch(playing, value => emit('playing', value))
 
-// ── B 站弹幕（公演专用）──────────────────────────────────────────
-// 房间号由 payload 携带（Shows.vue 按团体映射），个人直播没有对应房间故为空
-const danmakuRoomId = computed(() => (props.bilibiliRoomId > 0 ? props.bilibiliRoomId : undefined))
+// ── 弹幕（双源按直播类型分流）────────────────────────────────────
+// 公演（open）只用 B 站弹幕（房间号由 payload 携带）；个人直播（user）只用口袋48互动消息
+// （聊天室 ID 由详情接口携带，需登录且直播进行中）。两类互不混用。
+const danmakuRoomId = computed(() => (props.source === 'open' && props.bilibiliRoomId > 0 ? props.bilibiliRoomId : undefined))
 const danmakuEnabled = ref(true)
-/** 个人直播没有对应的 B 站房间：连开关都不给 */
-const hasDanmakuRoom = computed(() => danmakuRoomId.value !== undefined)
-const showDanmaku = computed(() => hasDanmakuRoom.value && danmakuEnabled.value)
 
-const { danmakuItems } = useLiveDanmaku({
-  roomId: () => danmakuRoomId.value,
-  enabled: () => danmakuEnabled.value,
-})
-
-const { fontSize: danmakuFontSize, position: danmakuPosition } = useDanmakuLayer({
+const { fontSize: danmakuFontSize, position: danmakuPosition, topLeft: rankPosition } = useDanmakuLayer({
   videoRect: () => videoRect.value,
   compact: () => props.compact,
 })
@@ -146,7 +141,34 @@ const session = useLiveSession({
 
 // 详情展示状态直接解构给模板（解构出的仍是 ref，不丢响应性）。
 // localPlaybackUrl = 本地 HTTP-FLV 地址，下方 watch 盯着它重建播放器
-const { localPlaybackUrl, coverImage, realName, carousels, carouselTime } = session
+const { localPlaybackUrl, coverImage, realName, carousels, carouselTime, chatroomId } = session
+
+// 弹幕订阅须在 session 之后创建：口袋源读 session.chatroomId，同步时立即求值
+const pocketChatroomId = computed(() => (props.source === 'user' ? chatroomId.value : ''))
+/** 有任一弹幕源才显示气泡层与开关（个人直播未登录时两边都没有，连开关都不给） */
+const hasDanmakuRoom = computed(() => danmakuRoomId.value !== undefined || !!pocketChatroomId.value)
+const showDanmaku = computed(() => hasDanmakuRoom.value && danmakuEnabled.value)
+
+// ── 互动榜单（口袋 LIVEUPDATE 消息）─────────────────────────────
+// 榜单不进气泡层，独立显示在画面右上角（.player-actions 下方）；可由胶囊开关收起
+const rankUsers = ref<PocketRankUser[]>([])
+const rankVisible = ref(true)
+/** 加载失败的榜单头像（按 userId 记账）：回退首字母占位 */
+const failedRankAvatars = reactive(new Set<string>())
+
+const { danmakuItems } = useLiveDanmaku({
+  roomId: () => danmakuRoomId.value,
+  liveId: () => props.liveId,
+  pocketRoomId: () => pocketChatroomId.value,
+  enabled: () => danmakuEnabled.value,
+  onRank: (users) => {
+    rankUsers.value = users
+    debugLog('rankUsers', users)
+    // 换场清榜时一并清头像失败记录，下一场从头加载
+    if (!users.length)
+      failedRankAvatars.clear()
+  },
+})
 
 // ── mpegts 播放器实例 ────────────────────────────────────────────
 const player = useLivePlayer({
@@ -369,9 +391,10 @@ onUnmounted(() => {
           @volumechange="onVolumeChange"
         />
       </div>
-      <!-- B 站弹幕：与 video-wrapper 同级，故不参与画面旋转；left/bottom 由脚本锚画面左下角 -->
+      <!-- 直播弹幕（B 站公演源 + 口袋互动消息）：与 video-wrapper 同级，故不参与画面旋转；left/bottom 由脚本锚画面左下角。
+           加载中一并隐藏：加载蒙层要盖住全部浮层，气泡不悬在加载态上 -->
       <div
-        v-show="showDanmaku"
+        v-show="showDanmaku && !mediaLoading"
         class="danmaku-list"
         :class="{ 'is-compact': compact }"
         :style="{ fontSize: `${danmakuFontSize}px`, ...danmakuPosition }"
@@ -386,9 +409,10 @@ onUnmounted(() => {
         label="正在加载直播"
         hint="连接直播源中，请稍候"
       />
-      <div class="player-actions">
+      <!-- 悬浮按钮整组随加载隐藏：蒙层盖住全部浮层，且流就绪前录制无从谈起 -->
+      <div v-show="!mediaLoading" class="player-actions">
         <RotationControls
-          v-if="liveType === 1 && !mediaLoading"
+          v-if="liveType === 1"
           :angle="rotationAngle"
           @rotate-left="rotateLeft"
           @rotate-right="rotateRight"
@@ -404,6 +428,38 @@ onUnmounted(() => {
             <MediaIcon name="videoCamera" :size="16" />
           </button>
         </el-tooltip>
+      </div>
+
+      <!-- 互动榜单：口袋 LIVEUPDATE 消息驱动，锚画面渲染区左上角 —— 悬于弹幕气泡层正上方并左对齐 -->
+      <div
+        v-if="rankUsers.length && !mediaLoading"
+        v-show="rankVisible"
+        class="rank-panel"
+        :style="rankPosition"
+      >
+        <div class="rank-panel__title">
+          <MediaIcon name="trophy" :size="13" />
+          <span>互动榜</span>
+        </div>
+        <div
+          v-for="(user, index) in rankUsers.slice(0, 10)"
+          :key="user.userId || index"
+          class="rank-panel__row"
+        >
+          <span class="rank-panel__index" :class="{ 'is-top': index < 3 }">{{ index + 1 }}</span>
+          <!-- 头像：加载失败或服务端未给时回退用户名首字母 -->
+          <img
+            v-if="user.avatar && !failedRankAvatars.has(user.userId || String(index))"
+            class="rank-panel__avatar"
+            :src="Tools.sourceUrl(user.avatar)"
+            referrerpolicy="no-referrer"
+            loading="lazy"
+            alt=""
+            @error="failedRankAvatars.add(user.userId || String(index))"
+          >
+          <span v-else class="rank-panel__avatar rank-panel__avatar--fallback">{{ (user.userName || '神')[0] }}</span>
+          <span class="rank-panel__name">{{ user.userName || '神秘用户' }}</span>
+        </div>
       </div>
 
       <!-- 控制条：LIVE 状态段走 #leading 插槽；加载期间整条隐藏（连接中不显示 LIVE 状态） -->
@@ -422,11 +478,23 @@ onUnmounted(() => {
             v-if="hasDanmakuRoom"
             class="player-capsule__btn danmaku-toggle"
             :class="{ 'is-on': danmakuEnabled }"
-            :title="danmakuEnabled ? '关闭 B 站弹幕' : '开启 B 站弹幕'"
-            :aria-label="danmakuEnabled ? '关闭 B 站弹幕' : '开启 B 站弹幕'"
+            :title="danmakuEnabled ? '关闭弹幕' : '开启弹幕'"
+            :aria-label="danmakuEnabled ? '关闭弹幕' : '开启弹幕'"
             @click="danmakuEnabled = !danmakuEnabled"
           >
             <MediaIcon name="chat" :size="16" />
+          </button>
+
+          <!-- 榜单开关：有榜单数据才给入口（个人直播的 LIVEUPDATE 才会驱动） -->
+          <button
+            v-if="rankUsers.length"
+            class="player-capsule__btn rank-toggle"
+            :class="{ 'is-on': rankVisible }"
+            :title="rankVisible ? '收起互动榜' : '展开互动榜'"
+            :aria-label="rankVisible ? '收起互动榜' : '展开互动榜'"
+            @click="rankVisible = !rankVisible"
+          >
+            <MediaIcon name="trophy" :size="16" />
           </button>
 
           <span class="live-status">
@@ -507,6 +575,87 @@ onUnmounted(() => {
 /* 弹幕开关：开启时图标转品牌色（按钮尺寸 / hover 白纱见全局 .player-capsule__btn） */
 .danmaku-toggle.is-on {
   color: var(--brand-secondary);
+}
+
+/* 榜单开关与面板：开关同弹幕语言；面板挂操作按钮（.player-actions 高约 36px）下方 */
+.rank-toggle.is-on {
+  color: #f7ba2a;
+}
+
+.rank-panel {
+  position: absolute;
+  /* left / top 由脚本锚画面渲染区左上角（useDanmakuLayer.topLeft，与气泡层同一内缩量） */
+  z-index: 29;
+  min-width: 132px;
+  max-width: 200px;
+  max-height: 45%;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(12px);
+  color: #fff;
+  font-size: 12px;
+  user-select: none;
+}
+
+.rank-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+  font-weight: 600;
+  color: #f7ba2a;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.rank-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  line-height: 1.4;
+}
+
+.rank-panel__index {
+  flex: none;
+  min-width: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.rank-panel__index.is-top {
+  font-weight: 700;
+  color: #f7ba2a;
+  opacity: 1;
+}
+
+/* 头像：20px 圆形；无图 / 加载失败时回退用户名首字母占位 */
+.rank-panel__avatar {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.rank-panel__avatar--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.rank-panel__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 悬浮按钮（录制）与右上角容器样式为全局 .player-actions / .action-btn，见 app.scss */

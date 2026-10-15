@@ -17,7 +17,7 @@
  * 兼任成员（starAdjunctInfo）不在这里合并：见文件末尾的 buildAdjuncts ——
  * 它以合并结果里的本人档案为底、只覆盖队伍定位字段。
  */
-import type { AllMemberItem, StarAdjunctItem } from '../../../preload/ipc-contract'
+import type { AllMemberItem, StarAdjunctItem } from '@preload/ipc-contract'
 import Constants from '@renderer/utils/constants'
 import Tools from '@renderer/utils/tools'
 

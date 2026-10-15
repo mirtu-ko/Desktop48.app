@@ -5,6 +5,12 @@
     "paths": {
       "@renderer/*": [
         "./src/renderer/src/*"
+      ],
+      "@common/*": [
+        "./src/common/*"
+      ],
+      "@preload/*": [
+        "./src/preload/*"
       ]
     }
   },

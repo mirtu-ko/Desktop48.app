@@ -6,7 +6,7 @@
  * 建模依据：代码中的实际字段访问 + database.json 真实数据（syncInfo）。
  * 宽容原则：只用到的字段才声明为必需，其余保持可选，避免过度承诺。
  */
-import type { MemberInfo } from '../../../preload/ipc-contract'
+import type { MemberInfo } from '@preload/ipc-contract'
 
 /** ===== 接口信封（request 解析层使用，不直接暴露给消费方） ===== */
 export interface ApiEnvelope<T> {

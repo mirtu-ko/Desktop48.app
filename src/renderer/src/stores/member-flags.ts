@@ -4,7 +4,7 @@
  * 两类名单的状态结构、增删流程和持久化语义一致，只差 kind 与用户提示；
  * 因此共用一个模块级工厂，下面仅保留面向调用方的语义化别名。
  */
-import type { MemberFlag, MemberFlagKind, MemberFlagTarget } from '../../../common/member-flags'
+import type { MemberFlag, MemberFlagKind, MemberFlagTarget } from '@common/member-flags'
 import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { computed, ref } from 'vue'
@@ -161,5 +161,19 @@ export function useFollowedMembersStore() {
     isFollowed: followed.has,
     toggleFollow: followed.toggle,
     unfollowMember: followed.remove,
+    /**
+     * 口袋关注合并入本地名单（只增不删，策略 A）。
+     *
+     * 走批量 addMemberFlags 整批一次读改写——逐个 addMemberFlag 会每 id 写一次盘。
+     * 本地成员树里查不到的用户（非成员账号）id 仍会落库，但读取时不解析可见性，
+     * 对「关注成员直播优先展示」无影响；成员库同步到该用户后自然可见。
+     */
+    mergeFromPocket: async (ids: number[]): Promise<number> => {
+      const valid = ids.map(id => Number(id)).filter(id => Number.isFinite(id) && id > 0)
+      if (valid.length)
+        await window.mainAPI.addMemberFlags('followed', valid)
+      await followed.refresh()
+      return followed.members.value.length
+    },
   }
 }

@@ -3,7 +3,7 @@
  * 窗口的创建 / 去重 / 聚焦 / 关闭全部由主进程（main/float-window.ts）持有，
  * 本 store 不持有可变状态；页面 API（openLive / openPlayback）保持不变。
  */
-import type { FloatPlayerKind, FloatPlayerPayload } from '../../../preload/ipc-contract'
+import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 import EventBus from '@renderer/services/event-bus'
 
 export function useFloatPlayersStore() {

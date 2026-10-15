@@ -68,14 +68,14 @@ describe('resolveBilibiliRoomId / 标题兜底', () => {
   it('大小写不敏感', () => {
     expect(resolveBilibiliRoomId({ texts: ['gnz48 剧场公演'] })).toBe(391199)
   })
+
+  it('teamName 不含团体名时按队伍名命中（2026-10-15 新增的队伍名层级）', () => {
+    expect(resolveBilibiliRoomId({ texts: ['TEAM SII 剧场公演'] })).toBe(63727)
+    expect(resolveBilibiliRoomId({ texts: ['《别卷了G》TEAM G周年庆特别公演'] })).toBe(391199)
+  })
 })
 
 describe('resolveBilibiliRoomId / 判无', () => {
-  it('teamName 不含团体名，单独拿它匹配一个都命中不了（本次回归的根因）', () => {
-    expect(resolveBilibiliRoomId({ texts: ['TEAM SII 剧场公演', '《INTO THE LIGHT》刘增艳季度MVP公演'] })).toBeUndefined()
-    expect(resolveBilibiliRoomId({ texts: ['《别卷了G》TEAM G周年庆特别公演'] })).toBeUndefined()
-  })
-
   it('空入参 / 空数组 / 空串 / undefined 元素都返回 undefined', () => {
     expect(resolveBilibiliRoomId({})).toBeUndefined()
     expect(resolveBilibiliRoomId({ texts: [] })).toBeUndefined()

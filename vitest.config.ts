@@ -17,6 +17,17 @@ export default defineConfig({
         find: '@renderer',
         replacement: fileURLToPath(new URL('./src/renderer/src', import.meta.url)),
       },
+      // 跨树共享层（与 electron.vite.config.ts 保持一致）：common 会被渲染层模块
+      // 运行时引入（float-window/log/app-config 等），必须可解析；preload 契约虽
+      // 只被 import type（编译期擦除），一并配上免得将来出现运行时引用时踩坑
+      {
+        find: '@common',
+        replacement: fileURLToPath(new URL('./src/common', import.meta.url)),
+      },
+      {
+        find: '@preload',
+        replacement: fileURLToPath(new URL('./src/preload', import.meta.url)),
+      },
     ],
   },
   test: {
