@@ -146,7 +146,7 @@ rooms.value（在直播的排前，其余按昵称 localeCompare('zh')）
 | `AUDIO`                                                    | audio       | `[语音消息]`（解析直链，语音条播放）        |
 | `VIDEO`                                                    | video       | `[视频消息]`                                |
 | `REPLY` / `GIFTREPLY` / `AUDIO_REPLY` / `AUDIO_GIFT_REPLY` | reply       | 回复自己的话；被引用内容进 quote            |
-| `FLIPCARD` / `FLIPCARD_AUDIO` / `FLIPCARD_VIDEO`           | flip        | 答案文本 / `[翻牌回复]`（被翻提问进 quote） |
+| `FLIPCARD` / `FLIPCARD_AUDIO` / `FLIPCARD_VIDEO`           | flip        | 答案文本 / `[翻牌回复]`（被翻提问进问答卡） |
 | `LIVEPUSH` / `OPEN_LIVE` / `SHARE_LIVE` 等                 | live        | `[直播分享] 标题`（解析 liveId 封面）       |
 | `PRESENT_NORMAL` / `GIFT_TEXT` 等                          | gift        | `[礼物] 名 xN`                              |
 | `VOTE` / `DISABLE_SPEAK` / `CLOSE_ROOM_CHAT`               | vote/system | 占位文案                                    |
@@ -168,7 +168,7 @@ rooms.value（在直播的排前，其余按昵称 localeCompare('zh')）
 
 引用块为**只读展示**，不提供点击跳转：被引用消息往往不在当前列表（更早历史未拉到 / 被范围过滤 / 原消息已删）。`replyMessageId` 字段仍在协议中，本版本不解析。
 
-### 6.3 引用块：翻牌的被翻提问
+### 6.3 翻牌卡：被翻提问
 
 翻牌不是「回复某条消息」，但它同样是「对着一条消息作答」，被回复内容不落在 `replyInfo` 里，而在各自的 info 对象里：
 
@@ -178,7 +178,7 @@ rooms.value（在直播的排前，其余按昵称 localeCompare('zh')）
 | `FLIPCARD_AUDIO` | `flipCardAudioInfo` / `filpCardAudioInfo`（兼带上面两个键） | `question` | `answer` 为带 `url` 的 JSON 字符串 |
 | `FLIPCARD_VIDEO` | `flipCardVideoInfo` / `filpCardVideoInfo`（兼带上面两个键） | `question` | 同上（`previewImg` / `w` / `h`）   |
 
-`flipCardInfo()` 一处解析全部 6 个键，正文、媒体直链、被翻提问三处共用。`question` 渲染成与回复类同款的引用块，**昵称位固定「提问」**（提问者昵称协议不返回）；语音 / 视频翻牌尤其依赖它——这类消息的正文只有占位文案 `[翻牌回复]`，没有引用块就完全看不出被翻了什么。
+`flipCardInfo()` 一处解析全部 6 个键，正文、媒体直链、被翻提问三处共用。`question` **不复用回复消息的引用块**：翻牌不是回复某条消息，而是一次公开问答，UI 上渲染成独立的问答卡（`.msg-flip`）——上半是成员的回答（文字 / 语音条 / 视频），下半是被翻提问，中间一条分隔线，**提问完整展开不截断**（昵称位固定「提问」，提问者昵称协议不返回）。语音 / 视频翻牌尤其依赖它——这类消息的正文只有占位文案 `[翻牌回复]`，没有下半部分就完全看不出被翻了什么。无 `question` 的翻牌退回普通气泡。
 
 ## 7. 未读检测（主进程唯一真相）
 
@@ -239,3 +239,21 @@ tick()（60s，重入护栏）
 **频道名**：`jump` 与 `lastMsgList` 均不带频道名，名称取自 seine 频道详情 `im/api/seine/server/detail`（`{ serverId }` → `channelInfoList[].channelName`），一次请求覆盖该 server 下全部频道；取不到时静默回退「房间 / 小房间」。seine 有独立的客户端特征，`seineHeaderOverrides()` 只覆盖 `appInfo` 与 `User-Agent`，`pa` 仍由 `postPocket` 现算。名称表连 `serverId` 一起存，读取时校验归属。
 
 **界面落点**：频道切换置于 header 右侧（`.room-tab`，激活态用房间青 `--color-rooms`，锁图标常显，未读走全局 `.unread-badge` 数字角标）；消息范围置于消息区右上角（`.chat-tools` / `.scope-tab`，中性配色）。仅剩一条频道时整条页签栏不渲染（`roomTabs.length > 1`）。
+
+## 9. 消息卡的读、抄、看新
+
+三项交互都在 `pages/Rooms.vue`，共同前提是**状态只活在页面内存里**（不落 store，切房即复位）：
+
+| 能力       | 触发                  | 实现要点                                                                                                                                                                  |
+| ---------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 长文折叠   | 正文超过 10 行        | 收起态用 `max-height` 截断（不是 line-clamp）——`scrollHeight` 仍报完整高度，`measureLongText` 才能反复量出「超长」而不抖；行数由 `COLLAPSE_LINES` 注入 `--collapse-lines` |
+| 复制       | hover 按钮 / 右键菜单 | 取材清单在归一层 `pocketRoomCopyTargets`（正文优先、媒体退化为直链），页面只贴文案与图标；写入走 `utils/clipboard.ts`                                                     |
+| 新消息高亮 | 贴底时轮询追加        | 只把「上一条仍在列表里」之后的消息算作新到，切房 / 换范围 / 翻历史都不误判；上翻浏览时不打扰，仍交给浮标计数                                                              |
+
+约定：
+
+- **复制只取材用户原文**：`[图片消息]` 一类占位文案与礼物 / 直播分享的合成文案一律不进清单（判据 `isPlaceholderText`，与「语音条下要不要再补一行正文」共用同一份）；
+- 剪贴板写入失败要如实提示，不静默——`navigator.clipboard` 被拒时退回 `execCommand`；
+- hover 复制按钮压在时刻那一格上（绝对定位不占位），显示时把时刻 `visibility: hidden`，否则会从按钮边上露出半截时间戳；
+- 右键菜单视口内回弹（`components/rooms/RoomMessageMenu.vue`），点空白 / 滚动 / Esc / 缩放窗口 / 切页即关；
+- 礼物金的文字色由亮金（`#ffd479` / `#e8b84b`）改为 `color-mix(in srgb, var(--el-color-warning) 50%, #000)`：亮金是从深底弹幕沿用的，叠在浅色底上只有 1.4:1 / 1.9:1，压深后 ≈6:1（与总选「金字金底」同一套处理）。

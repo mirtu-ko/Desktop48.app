@@ -27,11 +27,11 @@ export type PocketRoomMessageKind
     | 'system'
 
 /**
- * 引用（回复）信息：消息流渲染引用块（被回复者昵称 + 被引用内容摘要）。
+ * 引用信息：消息流渲染引用块（被回复者昵称 + 被引用内容摘要）。
  * 字段来自 bodys 的 replyInfo / giftReplyInfo（协议结构见参考实现
  * yaya_msg 的 buildReplyOptions：replyName/replyText/replyMessageId/text）。
- * 翻牌的被翻提问（info.question）复用同一套外壳——它不是回复消息，被回复内容
- * 也不在 replyInfo 里，但「谁提问 + 问什么」正是这里要表达的。
+ * 翻牌的被翻提问（info.question）也归到这里：翻牌不是回复消息、被回复内容
+ * 也不在 replyInfo 里，但「谁提问 + 问什么」正是这里要表达的，由 UI 单独渲染成问答卡。
  */
 export interface PocketRoomQuote {
   /** 被引用者昵称；翻牌协议不给提问者昵称，固定「提问」 */
@@ -97,6 +97,51 @@ export interface PocketRoomMessageView {
  */
 export function liveShareTitle(text: string): string {
   return text.replace(/^\[直播分享\]\s*/, '').trim()
+}
+
+/**
+ * 类型占位文案：归一化自己拼的 [图片消息] 一类，不是用户说的话。
+ * 消息卡的正文渲染（语音条下要不要再补一行）与「复制文字」共用这一份判据。
+ */
+const PLACEHOLDER_TEXTS = new Set([
+  '[图片消息]',
+  '[语音消息]',
+  '[视频消息]',
+  '[回复消息]',
+  '[语音回复消息]',
+  '[翻牌回复]',
+  '[直播分享]',
+  '[礼物]',
+  '[投票]',
+  '[禁言通知]',
+  '[房间聊天已关闭]',
+  '[新消息]',
+])
+
+/** 是否占位文案（空串同判：没有正文） */
+export function isPlaceholderText(text: string): boolean {
+  return !text || PLACEHOLDER_TEXTS.has(text)
+}
+
+export type PocketRoomCopyKey = 'text' | 'image' | 'audio' | 'video'
+
+/**
+ * 一条消息可复制的内容清单：正文优先，媒体直链在后；空数组 = 无可复制内容（系统通知、投票）。
+ *
+ * 正文只认用户原文——占位文案与礼物 / 直播分享的合成文案不算（复制出来是垃圾）；
+ * 图片 / 语音 / 视频消息的复制目标是直链，占位正文不参与。
+ */
+export function pocketRoomCopyTargets(message: PocketRoomMessageView): Array<{ key: PocketRoomCopyKey, text: string }> {
+  const targets: Array<{ key: PocketRoomCopyKey, text: string }> = []
+  if (message.kind !== 'gift' && message.kind !== 'live' && !isPlaceholderText(message.text))
+    targets.push({ key: 'text', text: message.text })
+  if (message.imageUrl)
+    targets.push({ key: 'image', text: message.imageUrl })
+  if (message.audioUrl)
+    targets.push({ key: 'audio', text: message.audioUrl })
+  if (message.videoUrl)
+    targets.push({ key: 'video', text: message.videoUrl })
+  return targets
 }
 
 function parseJson(value: unknown): Record<string, unknown> | null {
@@ -301,7 +346,7 @@ function parseReplyQuote(body: Record<string, unknown> | null): PocketRoomQuote 
  * 解析翻牌的被翻提问：info.question → PocketRoomQuote。
  * 翻牌是「成员回答提问」而非回复某条消息，被回复内容不在 replyInfo 里，而在各自的
  * flipCard*Info.question；提问者昵称协议不给，昵称位固定「提问」。
- * 无 question（接口演进或结构变动）返回 null，不渲染空的引用块。
+ * 无 question（接口演进或结构变动）返回 null，不渲染空的问答卡。
  */
 function parseFlipQuote(body: Record<string, unknown> | null): PocketRoomQuote | null {
   const question = replacePocketEmoji(jsonText(flipCardInfo(body), 'question'))

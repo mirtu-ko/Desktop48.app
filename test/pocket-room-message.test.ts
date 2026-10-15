@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
  * 左列最新消息预览（lastMsgList.msgContent → 文案）与消息流共用同一套类型分发。
  */
 
-import { liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview } from '../src/renderer/src/utils/pocket-room-message'
+import { isPlaceholderText, liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview, pocketRoomCopyTargets } from '../src/renderer/src/utils/pocket-room-message'
 
 /** 构造一条房间消息：extInfo.bodys 可传对象（自动 JSON 化） */
 function roomMessage(msgType: string, options: {
@@ -494,5 +494,55 @@ describe('pocket-room-message / 表情占位符还原', () => {
       messageType: 'REPLY',
       replyInfo: { replyName: '甲', replyText: '原话', text: '[亲亲]' },
     }))).toBe('[回复 甲] 😚')
+  })
+})
+
+/**
+ * 消息卡「复制」的取材清单（pocketRoomCopyTargets）：正文优先、媒体退化为直链。
+ * 关键约束是「只复制用户原文」——归一化自己拼的占位文案与礼物 / 分享文案都不能进清单。
+ */
+describe('pocket-room-message / 可复制内容', () => {
+  it('占位文案判定：拼出来的类型文案算占位，空串同判', () => {
+    expect(isPlaceholderText('[图片消息]')).toBe(true)
+    expect(isPlaceholderText('[语音回复消息]')).toBe(true)
+    expect(isPlaceholderText('[新消息]')).toBe(true)
+    expect(isPlaceholderText('')).toBe(true)
+    expect(isPlaceholderText('大家晚安')).toBe(false)
+    // 还原后的表情属于用户原文，不是占位
+    expect(isPlaceholderText('❤️晚安')).toBe(false)
+  })
+
+  it('文本消息：只有正文一项，复制的是用户原文', () => {
+    const view = normalizePocketRoomMessage(roomMessage('TEXT', { bodys: '[爱心]晚安' }))!
+    expect(pocketRoomCopyTargets(view)).toEqual([{ key: 'text', text: '❤️晚安' }])
+  })
+
+  it('图片消息：占位正文不进清单，只给图片直链', () => {
+    const view = normalizePocketRoomMessage(roomMessage('IMAGE', {
+      bodys: { url: '/img/a.jpg', w: 800, h: 600 },
+    }))!
+    expect(view.text).toBe('[图片消息]')
+    expect(pocketRoomCopyTargets(view)).toEqual([{ key: 'image', text: view.imageUrl }])
+  })
+
+  it('语音回复：正文与语音直链都给（语音条下的真实回复语同样可复制）', () => {
+    const view = normalizePocketRoomMessage(roomMessage('AUDIO_REPLY', {
+      bodys: {
+        replyInfo: { replyName: '甲', replyText: '原话', text: '这条是回复语', voiceUrl: '/audio/a.mp3' },
+      },
+    }))!
+    expect(view.audioUrl).toBe('https://mp4.48.cn/audio/a.mp3')
+    expect(pocketRoomCopyTargets(view).map(item => item.key)).toEqual(['text', 'audio'])
+  })
+
+  it('礼物与直播分享的合成文案不进清单，且本身无媒体时清单为空', () => {
+    const gift = normalizePocketRoomMessage(roomMessage('GIFT_TEXT', {
+      bodys: { giftInfo: { giftName: '荧光棒', giftNum: 3 } },
+    }))!
+    expect(gift.text).toBe('[礼物] 荧光棒 x3')
+    expect(pocketRoomCopyTargets(gift)).toEqual([])
+
+    const system = normalizePocketRoomMessage(roomMessage('DISABLE_SPEAK'))!
+    expect(pocketRoomCopyTargets(system)).toEqual([])
   })
 })
