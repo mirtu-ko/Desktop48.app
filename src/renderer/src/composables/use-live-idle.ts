@@ -1,14 +1,12 @@
 import type { LiveListItem, LiveListItemView, OpenLive } from '@renderer/services/api-types'
 import Apis from '@renderer/services/apis'
+import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
 import dayjs from 'dayjs'
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { enrichLiveItem } from './use-paged-live-list'
-
-/** 自动检查开播间隔。 */
-const POLL_INTERVAL = 60_000
 
 /** 空态公演最多展示几场。 */
 const MAX_PREVIEW_SHOWS = 4
@@ -33,6 +31,7 @@ export interface UseLiveIdleOptions {
 export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   const { followedMembers, ensureFollowedLoaded } = useFollowedMembersStore()
   const { ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
+  const { liveItems, refreshLiveStatus, acquireLiveStatusPolling } = useLiveStatusStore()
 
   /** 公演排期。 */
   const shows = ref<OpenLive[]>([])
@@ -50,7 +49,7 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   const lastCheckAt = ref(0)
   const clock = ref(Date.now())
 
-  let timer: ReturnType<typeof setInterval> | null = null
+  let releaseLiveStatusPolling: (() => void) | null = null
 
   /** 上次检查时间。 */
   const lastCheckText = computed(() => (lastCheckAt.value ? dayjs(lastCheckAt.value).format('HH:mm') : '—'))
@@ -159,18 +158,22 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
     }
   }
 
-  /** 检查一次是否已有人开播：有则停轮询并把展示权交回列表 */
+  /** 有直播时停止空态轮询，并把展示权交回列表。 */
+  function handleLiveFound(): void {
+    debugLog('list', '空态轮询：检测到新直播 → 交回列表刷新')
+    stopPolling()
+    waitingSince.value = 0
+    onLiveFound()
+  }
+
+  /** 检查一次共享直播状态；有直播则交回列表。 */
   async function checkLiveOnce(): Promise<void> {
     lastCheckAt.value = Date.now()
     clock.value = lastCheckAt.value
     try {
-      const content = await Apis.lives('0', { silent: true })
-      if ((content.liveList?.length ?? 0) > 0) {
-        debugLog('list', '空态轮询：检测到新直播 → 交回列表刷新')
-        stopPolling()
-        waitingSince.value = 0
-        onLiveFound()
-      }
+      const items = await refreshLiveStatus()
+      if (items.length > 0)
+        handleLiveFound()
     }
     catch (e: any) {
       debugLog('list', `空态轮询失败（静默忽略）: ${e?.message || e}`)
@@ -178,7 +181,7 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   }
 
   function startPolling(): void {
-    if (timer)
+    if (releaseLiveStatusPolling)
       return
     // 离开页面再回来沿用原等待周期；只有发现直播后重置，下一轮空态才重新计时
     if (!waitingSince.value) {
@@ -186,19 +189,29 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
       lastCheckAt.value = waitingSince.value
     }
     clock.value = Date.now()
-    timer = setInterval(() => {
-      void checkLiveOnce()
-    }, POLL_INTERVAL)
+    releaseLiveStatusPolling = acquireLiveStatusPolling()
+    if (liveItems.value.length > 0) {
+      handleLiveFound()
+      return
+    }
+    void checkLiveOnce()
     void loadShows()
     void loadPlaybacks()
   }
 
   function stopPolling(): void {
-    if (!timer)
-      return
-    clearInterval(timer)
-    timer = null
+    releaseLiveStatusPolling?.()
+    releaseLiveStatusPolling = null
   }
+
+  // 共享 store 的 120s 轮询发现开播后，空态页立即交回列表展示。
+  watch(liveItems, (items) => {
+    if (!pageActive.value || !items.length || !isEmpty())
+      return
+    lastCheckAt.value = Date.now()
+    clock.value = lastCheckAt.value
+    handleLiveFound()
+  })
 
   // 「可见 + 空态」才轮询：任一条件变化都重新判定
   watch(

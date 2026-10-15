@@ -43,9 +43,10 @@ export function unreadCountOf(userId: number): number {
 
 /**
  * 标记房间已读（进入房间拉到消息 / 贴底看到新消息时调用）。
- * msgTime 传消息流最新一条的时刻，主进程据此上移水位。
+ * 只传 userId：主进程清零未读并删回执键，下一轮检测重新锚定到最新消息——
+ * 不传渲染层消息 id，因为渲染层 id 与主进程检测键不同空间，混写会导致已读复活。
  */
-export async function markRoomRead(userId: number, msgTime?: number): Promise<void> {
+export async function markRoomRead(userId: number): Promise<void> {
   const key = String(userId)
   // 乐观清零：广播稍后到达，值一致
   if (unreadRooms.value[key]) {
@@ -54,7 +55,7 @@ export async function markRoomRead(userId: number, msgTime?: number): Promise<vo
     unreadRooms.value = next
   }
   try {
-    await window.mainAPI.pocketMarkRead(userId, msgTime)
+    await window.mainAPI.pocketMarkRead(userId)
   }
   catch (error) {
     console.error('[pocket-unread] 标记已读失败:', error)

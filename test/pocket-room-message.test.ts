@@ -122,28 +122,57 @@ describe('pocket-room-message / 文本与多媒体', () => {
 })
 
 describe('pocket-room-message / 回复与翻牌', () => {
-  it('reply 类型展示 [回复 昵称] 正文', () => {
+  it('reply 正文取 replyInfo.text（回复自己的话），被引用内容进 quote', () => {
     const view = normalizePocketRoomMessage(roomMessage('REPLY', {
-      bodys: { replyInfo: { replyName: '成员乙', replyText: '谢谢应援', replyMessageId: 'm-1' } },
+      bodys: { replyInfo: { replyName: '成员乙', replyText: '谢谢应援', text: '不客气～' } },
     }))!
     expect(view.kind).toBe('reply')
-    expect(view.text).toBe('[回复 成员乙] 谢谢应援')
+    expect(view.text).toBe('不客气～')
+    expect(view.quote).toEqual({ nick: '成员乙', text: '谢谢应援', isGift: false })
   })
 
-  it('giftReply 礼物回复同样归 reply', () => {
+  it('giftReply 归 reply，quote 同样从 giftReplyInfo 取', () => {
     const view = normalizePocketRoomMessage(roomMessage('GIFTREPLY', {
-      bodys: { giftReplyInfo: { replyName: '成员丙', text: '收到小心心' } },
+      bodys: { giftReplyInfo: { replyName: '成员丙', replyText: '送你花花', text: '收到小心心' } },
     }))!
     expect(view.kind).toBe('reply')
-    expect(view.text).toBe('[回复 成员丙] 收到小心心')
+    expect(view.text).toBe('收到小心心')
+    expect(view.quote).toMatchObject({ nick: '成员丙', text: '送你花花', isGift: false })
   })
 
-  it('audioReply 无文本时兜底语音回复占位', () => {
+  it('replyInfo.text 缺失时正文兜底占位，不再拿被引用内容充数', () => {
+    const view = normalizePocketRoomMessage(roomMessage('REPLY', {
+      bodys: { replyInfo: { replyName: '成员乙', replyText: '原消息' } },
+    }))!
+    expect(view.text).toBe('[回复消息]')
+    expect(view.quote?.text).toBe('原消息')
+  })
+
+  it('audioReply 无文本时兜底语音回复占位；只有昵称的引用保留（内容未知）', () => {
     const view = normalizePocketRoomMessage(roomMessage('AUDIO_REPLY', {
       bodys: { replyInfo: { replyName: '成员丁' } },
     }))!
     expect(view.kind).toBe('reply')
     expect(view.text).toBe('[语音回复消息]')
+    expect(view.quote).toEqual({ nick: '成员丁', text: '', isGift: false })
+  })
+
+  it('被引用礼物消息：replyText 为空时 quote 用 giftInfo 生成摘要并标记 isGift', () => {
+    const view = normalizePocketRoomMessage(roomMessage('GIFTREPLY', {
+      bodys: { giftReplyInfo: {
+        replyName: '成员丙',
+        text: '谢谢姐姐',
+        giftInfo: { giftName: '荧光棒', giftNum: 3 },
+      } },
+    }))!
+    expect(view.text).toBe('谢谢姐姐')
+    expect(view.quote).toEqual({ nick: '成员丙', text: '[礼物] 荧光棒 x3', isGift: true })
+  })
+
+  it('replyInfo 全空 / 非回复消息：quote 为 null，不渲染空引用块', () => {
+    expect(normalizePocketRoomMessage(roomMessage('REPLY', { bodys: { replyInfo: {} } }))!.quote).toBeNull()
+    expect(normalizePocketRoomMessage(roomMessage('TEXT', { bodys: '嗨' }))!.quote).toBeNull()
+    expect(normalizePocketRoomMessage(roomMessage('IMAGE'))!.quote).toBeNull()
   })
 
   it('flipCard 优先展示答案文本', () => {
@@ -312,10 +341,6 @@ describe('pocket-room-message / 左列最新消息预览', () => {
     expect(normalizePocketRoomPreview(JSON.stringify({ messageType: 'IMAGE' }))).toBe('[图片消息]')
     expect(normalizePocketRoomPreview(JSON.stringify({ messageType: 'AUDIO' }))).toBe('[语音消息]')
     expect(normalizePocketRoomPreview(JSON.stringify({
-      messageType: 'REPLY',
-      replyInfo: { replyName: '甲', replyText: '翻个牌' },
-    }))).toBe('[回复 甲] 翻个牌')
-    expect(normalizePocketRoomPreview(JSON.stringify({
       messageType: 'GIFT_TEXT',
       giftInfo: { giftName: '荧光棒', giftNum: 3 },
     }))).toBe('[礼物] 荧光棒 x3')
@@ -324,6 +349,20 @@ describe('pocket-room-message / 左列最新消息预览', () => {
       shareInfo: { shareTitle: '深夜电台' },
     }))).toBe('[直播分享] 深夜电台')
     expect(normalizePocketRoomPreview(JSON.stringify({ messageType: 'FLIPCARD', flipCardInfo: { answer: '答好了' } }))).toBe('答好了')
+  })
+
+  it('回复类预览带「回复 昵称」前缀，正文取回复自己的话', () => {
+    expect(normalizePocketRoomPreview(JSON.stringify({
+      messageType: 'REPLY',
+      replyInfo: { replyName: '甲', replyText: '翻个牌', text: '不客气～' },
+    }))).toBe('[回复 甲] 不客气～')
+  })
+
+  it('回复无自己的正文（空回复）时预览退回被引用内容', () => {
+    expect(normalizePocketRoomPreview(JSON.stringify({
+      messageType: 'REPLY',
+      replyInfo: { replyName: '甲', replyText: '翻个牌' },
+    }))).toBe('[回复 甲] 翻个牌')
   })
 
   it('空输入返回空串（UI 决定占位）', () => {

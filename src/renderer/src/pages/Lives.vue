@@ -12,6 +12,7 @@ import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-page
 import Apis from '@renderer/services/apis'
 import EventBus from '@renderer/services/event-bus'
 import useFloatPlayersStore from '@renderer/stores/float-players'
+import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { resolveBilibiliRoomIdAsync } from '@renderer/utils/bilibili-room'
 import { debugLog } from '@renderer/utils/debug'
@@ -26,6 +27,7 @@ const { openLive, openPlayback } = useFloatPlayersStore()
 // 关注名单：模块级共享状态（与成员页共用同一份），直播列表页据此优先展示并加标识。
 // 页面被 keep-alive 缓存（只挂载一次），跨页同步靠这份共享状态而不是重新挂载
 const { followedMembers, refreshFollowedMembers, isFollowed } = useFollowedMembersStore()
+const { refreshLiveStatus } = useLiveStatusStore()
 
 // 成员详情卡片：点卡片上的成员名打开，详情按 userId 反查（数据源见 stores/member-directory）
 const {
@@ -82,7 +84,7 @@ const {
   // listSettled 是前提：挂载瞬间「列表还没开始加载」与「确实没有直播」长得一模一样，
   // 少了它会在每次进页面时白拉一次公演（有直播时这次请求纯属浪费）
   isEmpty: () => listSettled.value && !loading.value && liveList.value.length === 0,
-  onLiveFound: () => refreshList(),
+  onLiveFound: () => refreshList(false),
 })
 
 /** 关注名单非空才值得重排：空名单直接复用原数组，省掉一次全量拷贝 + 排序 */
@@ -169,9 +171,12 @@ function onLiveUnavailable(liveId: string) {
     refreshList()
 }
 
-// 手动/自动刷新：重置分页后拉取最新列表，并回到列表顶部
-function refreshList() {
+// 手动/自动刷新：重置分页后拉取最新列表，并回到列表顶部。
+// forceLiveStatus=false 用于空态检测已更新共享状态后的自动回列表，避免紧接着重复 getLiveList。
+function refreshList(forceLiveStatus = true) {
   imageVersion.value += 1
+  if (forceLiveStatus)
+    void refreshLiveStatus(true).catch(error => debugLog('list', '手动刷新共享直播状态失败', error))
   refreshFromTop()
 }
 
@@ -207,7 +212,7 @@ onUnmounted(() => {
             当前没有直播
           </p>
           <p class="idle-sub">
-            {{ waitedText }} · 每 60 秒自动检查，一开播立刻出现在这里
+            {{ waitedText }} · 每 120 秒自动检查，一开播立刻出现在这里
           </p>
         </div>
         <span class="idle-check">上次检查 {{ lastCheckText }}</span>

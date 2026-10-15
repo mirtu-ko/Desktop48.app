@@ -172,7 +172,7 @@ const api = {
   // ===== 房间未读 =====
   // 对端：main/pocket48/pocket-unread.ts（主进程唯一真相，检测不受窗口失焦节流）
   pocketUnreadState: () => invokeIpc('pocketUnreadState'),
-  pocketMarkRead: (userId: number, msgTime?: number) => invokeIpc('pocketMarkRead', userId, msgTime),
+  pocketMarkRead: (userId: number) => invokeIpc('pocketMarkRead', userId),
   // pocketUnreadBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   pocketUnreadBatch: (callback: (_state: PocketUnreadBatch) => void) =>
     onIpc('pocketUnreadBatch', callback),

@@ -19,8 +19,8 @@ import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
  * 唯一例外是 token 失效（重新登录才能恢复），直接上抛让整页报错。
  */
 import type { PocketRoomChannel, PocketRoomLastMessage } from '../../../preload/ipc-contract'
-import Apis from '@renderer/services/apis'
 import useFloatPlayersStore from '@renderer/stores/float-players'
+import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { pocketAuthState, refreshPocketAuthState } from '@renderer/stores/pocket-auth'
@@ -52,12 +52,8 @@ export interface PocketRoom {
 /** 右侧消息区状态 */
 export type PocketRoomChatStatus = 'idle' | 'loading' | 'ready' | 'error'
 
-/** 直播状态轮询间隔：房间页常驻时保持「谁开播了」新鲜，又不至于打服接口 */
-const LIVE_POLL_MS = 60_000
 /** 房间新消息轮询间隔：参考实现通知轮询 2s，这里取 5s 平衡实时性与接口压力 */
 const MESSAGE_POLL_MS = 5_000
-/** 直播列表分页上限：防接口异常时无限翻页（正常一页多一点就能翻完） */
-const MAX_LIVE_PAGES = 10
 /** 房间频道/状态遍历的并发上限：关注几十人时不打爆接口，也不至于让首灌等太久 */
 const ROOM_RESOLVE_CONCURRENCY = 5
 /** 口袋官方系统账号：homeowner（只看成员）接口会混入其发言，需过滤（参考实现 yaya_msg 同款） */
@@ -88,8 +84,19 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: 
 export function usePocketRooms() {
   const { refreshFollowedMembers, followedMembers } = useFollowedMembersStore()
   const { findMemberByUserId } = useMemberDirectoryStore()
+  const {
+    liveByUserId,
+    liveIdSet,
+    refreshLiveStatus,
+    ensureLiveStatusFresh,
+    acquireLiveStatusPolling,
+  } = useLiveStatusStore()
 
   const rooms = ref<PocketRoom[]>([])
+  /** 页面是否处于 keep-alive 激活态：共享直播轮询只在可见房间页运行 */
+  const pageActive = ref(false)
+  /** 当前页持有的共享直播轮询释放函数 */
+  let releaseLiveStatusPolling: (() => void) | null = null
   /** 首灌（关注 + 直播）中 */
   const loading = ref(false)
   /** 直播状态轮询中 */
@@ -116,18 +123,11 @@ export function usePocketRooms() {
   let activeChannel: { serverId: string, channelId: string } | null = null
   /** 已加载消息的去重键集合：轮增量与翻历史共用，防重复插入 */
   let messageKeys = new Set<string>()
-  /** 已加载的最大 msgTime：轮询只追加比它新的消息 */
-  let lastMsgTime = 0
   /** 更早历史游标；0 = 没有更多 */
   let historyCursor = 0
   /** 消息范围（见 PocketRoomMessageScope）；切换时重拉当前房间 */
   const messageScope = ref<PocketRoomMessageScope>('member')
-  /**
-   * 在播直播的 liveId 集合（随 load / refreshRoomStatus 更新）；null = 尚未拉过直播列表。
-   * 分享消息本身不带可靠的直播/回放标记（参考实现 yaya_msg 也不带，点开时才查），
-   * 卡片角标与点击路由都用这份集合判定：liveId 在播 → 直播，不在 → 回放。
-   */
-  const sharedLiveIds = ref<Set<string> | null>(null)
+
   /** userId → 频道缓存：加载时遍历解析即写入，选中/切回不重复解析 */
   const channelCache = new Map<number, { serverId: string, channelId: string }>()
   /** 首灌请求序号：丢弃过期回包，避免快速刷新时数据错乱 */
@@ -169,22 +169,10 @@ export function usePocketRooms() {
     return [...ids]
   }
 
-  /** 拉全量当前直播，按 userId 建索引（关注成员在哪一页不可预知，翻到尽或有上限为止） */
-  async function fetchLiveMap(): Promise<Map<number, LiveListItem>> {
-    const map = new Map<number, LiveListItem>()
-    let next = '0'
-    for (let page = 0; page < MAX_LIVE_PAGES; page++) {
-      const content = await Apis.lives(next, { silent: true })
-      for (const item of content.liveList || []) {
-        const userId = Tools.normalizeUserId(item.userInfo?.userId)
-        if (Number.isFinite(userId) && !map.has(userId))
-          map.set(userId, item)
-      }
-      if (!content.next || content.next === '0' || !(content.liveList || []).length)
-        break
-      next = content.next
-    }
-    return map
+  /** 共享 store 的全站直播索引；force=true 用于手动刷新并绕过 120s 新鲜缓存。 */
+  async function fetchLiveMap(force = false): Promise<Map<number, LiveListItem>> {
+    await (force ? refreshLiveStatus(true) : ensureLiveStatusFresh())
+    return liveByUserId.value
   }
 
   /** 在直播的排前面，其余按昵称排序——「谁的房间开着」是第一眼信息 */
@@ -193,6 +181,15 @@ export function usePocketRooms() {
       Number(!!b.live) - Number(!!a.live) || a.nickname.localeCompare(b.nickname, 'zh'),
     )
   }
+
+  // 共享 store 更新后同步到当前房间列表；页面不再自己持有直播轮询定时器。
+  watch(liveByUserId, (liveMap) => {
+    if (!rooms.value.length)
+      return
+    for (const room of rooms.value)
+      room.live = liveMap.get(room.userId) ?? null
+    sortRooms(rooms.value)
+  }, { immediate: true })
 
   /** 批量最新消息 → channelId → 消息；失败返回空 Map（预览静默降级，不影响房间可用） */
   async function fetchLastMessageMap(serverIds: string[]): Promise<Map<string, PocketRoomLastMessage>> {
@@ -279,10 +276,9 @@ export function usePocketRooms() {
       const ids = await loadFollowedIds()
       if (requestId !== loadRequestId)
         return
-      const liveMap = await fetchLiveMap()
+      const liveMap = await fetchLiveMap(true)
       if (requestId !== loadRequestId)
         return
-      sharedLiveIds.value = new Set([...liveMap.values()].map(item => String(item.liveId)))
 
       const entries: PocketRoom[] = await Promise.all(ids.map(async (userId): Promise<PocketRoom> => {
         const live = liveMap.get(userId) ?? null
@@ -348,14 +344,16 @@ export function usePocketRooms() {
     }
   }
 
-  /** 轮询用：刷新直播状态 + 左列最新消息预览，不重建列表（保留选中与消息流） */
-  async function refreshRoomStatus() {
+  /**
+   * 刷新直播状态 + 左列最新消息预览，不重建列表（保留选中与消息流）。
+   * force=false 供重新进入页面复用 120s 新鲜缓存；手动刷新传 true。
+   */
+  async function refreshRoomStatus(force = true) {
     if (!pocketAuthState.value.loggedIn || !rooms.value.length)
       return
     liveRefreshing.value = true
     try {
-      const liveMap = await fetchLiveMap()
-      sharedLiveIds.value = new Set([...liveMap.values()].map(item => String(item.liveId)))
+      const liveMap = await fetchLiveMap(force)
       const lastMessageMap = await fetchLastMessageMap(rooms.value.map(room => room.serverId))
       for (const room of rooms.value) {
         room.live = liveMap.get(room.userId) ?? null
@@ -381,7 +379,6 @@ export function usePocketRooms() {
     selectRequestId++
     activeChannel = null
     messageKeys = new Set()
-    lastMsgTime = 0
     historyCursor = 0
     messages.value = []
     historyExhausted.value = false
@@ -418,7 +415,6 @@ export function usePocketRooms() {
         selected.previewTime = newest.msgTime
       }
     }
-    lastMsgTime = Math.max(lastMsgTime, ...fresh.map(item => item.msgTime))
   }
 
   /** 拉取并归一一页房间消息；mode 见 mergeMessages */
@@ -542,12 +538,12 @@ export function usePocketRooms() {
 
   /**
    * 分享消息指向的直播是否在播：true = 在播，false = 不在播（按回放处理），null = 直播列表还没拉过。
-   * 数据来自 load / refreshRoomStatus 维护的 sharedLiveIds（60s 轮询保鲜，极端情况下有分钟级滞后）。
+   * 数据来自共享 live-status store：120s 轮询 / 页面恢复 / 手动刷新都会更新。
    */
   function isSharedLiveOnAir(liveId: string): boolean | null {
-    if (!liveId || sharedLiveIds.value === null)
+    if (!liveId || liveIdSet.value === null)
       return null
-    return sharedLiveIds.value.has(liveId)
+    return liveIdSet.value.has(liveId)
   }
 
   /**
@@ -575,24 +571,32 @@ export function usePocketRooms() {
       openLive(payload)
   }
 
-  // 直播状态轮询：keep-alive 页面在后台时暂停，回到前台立即补一次（失败静默，下一轮再试）
-  const { pause: pauseLivePoll, resume: resumeLivePoll } = useIntervalFn(
-    () => void refreshRoomStatus(),
-    LIVE_POLL_MS,
-    { immediate: false },
-  )
+  /** 可见且房间已加载时订阅共享直播轮询；最后一个消费者释放后 store 自动停表。 */
+  function syncLiveStatusPolling(): void {
+    const shouldPoll = pageActive.value && pocketAuthState.value.loggedIn && rooms.value.length > 0
+    if (shouldPoll && !releaseLiveStatusPolling) {
+      releaseLiveStatusPolling = acquireLiveStatusPolling()
+    }
+    else if (!shouldPoll && releaseLiveStatusPolling) {
+      releaseLiveStatusPolling()
+      releaseLiveStatusPolling = null
+    }
+  }
+
+  watch([pageActive, loggedIn, () => rooms.value.length], syncLiveStatusPolling, { immediate: true })
+
   // onActivated/onDeactivated 仅在组件 setup 中有效：裸 effectScope（单测）直驱时跳过
   if (getCurrentInstance()) {
     onActivated(() => {
+      pageActive.value = true
       if (pocketAuthState.value.loggedIn && rooms.value.length)
-        void refreshRoomStatus()
+        void refreshRoomStatus(false)
       if (activeChannel)
         void pollRoomMessages()
-      resumeLivePoll()
       resumeMessagePoll()
     })
     onDeactivated(() => {
-      pauseLivePoll()
+      pageActive.value = false
       pauseMessagePoll()
     })
   }
@@ -612,7 +616,9 @@ export function usePocketRooms() {
   onScopeDispose(() => {
     loadRequestId++
     selectRequestId++
-    pauseLivePoll()
+    pageActive.value = false
+    releaseLiveStatusPolling?.()
+    releaseLiveStatusPolling = null
     pauseMessagePoll()
   })
 

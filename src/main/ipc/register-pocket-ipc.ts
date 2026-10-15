@@ -47,6 +47,6 @@ export function registerPocketIPC(): void {
     handlePocketDanmakuStop(chatroomId, event.sender))
   // 房间未读（主进程 60s 轮询检测，见 main/pocket48/pocket-unread.ts）：快照回取 + 标记已读
   handleTraced('pocketUnreadState', () => pocketUnread.getState())
-  handleTraced('pocketMarkRead', (_event: IpcMainInvokeEvent, userId: number, msgTime?: number) =>
-    pocketUnread.markRead(userId, msgTime))
+  handleTraced('pocketMarkRead', (_event: IpcMainInvokeEvent, userId: number) =>
+    pocketUnread.markRead(userId))
 }

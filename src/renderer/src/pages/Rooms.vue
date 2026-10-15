@@ -10,6 +10,7 @@ import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { markRoomRead, unreadCountOf } from '@renderer/stores/pocket-unread'
+import { debugLog } from '@renderer/utils/debug'
 import { liveShareTitle } from '@renderer/utils/pocket-room-message'
 import Tools from '@renderer/utils/tools'
 import dayjs from 'dayjs'
@@ -46,6 +47,39 @@ const router = useRouter()
 const liveCount = ref(0)
 watch(rooms, (list) => {
   liveCount.value = list.filter(room => room.live).length
+  debugLog('rooms-page', '获取频道列表完成', {
+    count: list.length,
+    liveCount: liveCount.value,
+    hiddenRoomCount: hiddenRoomCount.value,
+    rooms: list.map(room => ({
+      userId: room.userId,
+      nickname: room.nickname,
+      serverId: room.serverId,
+      channelId: room.channelId,
+      liveId: room.live?.liveId ?? '',
+      previewTime: room.previewTime,
+    })),
+  })
+}, { immediate: true })
+
+watch([selectedUserId, chatStatus], ([userId, status]) => {
+  const room = rooms.value.find(item => item.userId === userId) ?? null
+  debugLog('rooms-page', '频道详情状态更新', {
+    userId,
+    status,
+    statusText: chatStatusText.value,
+    messageCount: messages.value.length,
+    room: room
+      ? {
+          userId: room.userId,
+          nickname: room.nickname,
+          serverId: room.serverId,
+          channelId: room.channelId,
+          liveId: room.live?.liveId ?? '',
+          previewTime: room.previewTime,
+        }
+      : null,
+  })
 }, { immediate: true })
 
 // ===== 消息流自动滚底 =====
@@ -96,10 +130,10 @@ watch(() => messages.value.length, async (len, oldLen) => {
     return
   }
   newCount.value = 0
-  // 贴底浏览即已读：把未读水位推到消息流末条（首次拉到消息 / 轮询增量都走这里），
-  // 主进程清零后广播，左列与 Dock 角标同步消失。上翻浏览时不标记，未读保留
+  // 贴底浏览即已读：主进程清零未读并删回执键（下一轮检测重锚到最新消息），
+  // 广播回来后左列与 Dock 角标同步消失。上翻浏览时不标记，未读保留
   if (selectedUserId.value !== null && messages.value.length)
-    void markRoomRead(selectedUserId.value, messages.value[messages.value.length - 1].msgTime)
+    void markRoomRead(selectedUserId.value)
   await nextTick()
   const el = listRef.value
   if (el)
@@ -145,6 +179,10 @@ async function onLoadMore() {
 function avatarUrl(avatar: string) {
   return avatar ? Tools.sourceUrl(avatar) : ''
 }
+
+// ===== 引用块 =====
+// 引用块只读展示「被回复者：被回复内容」摘要，不做点击跳转（被引用消息
+// 往往不在当前列表，跳转价值有限）。
 
 /**
  * 图片占位样式：归一层解析到原始尺寸时按 aspect-ratio 预留空间，
@@ -214,6 +252,7 @@ watch([chatStatus, chatStatusText], () => {
 }, { immediate: true })
 
 onMounted(() => {
+  debugLog('rooms-page', 'Rooms 页面挂载，开始获取频道列表', { loggedIn: loggedIn.value })
   void load()
 })
 </script>
@@ -423,6 +462,16 @@ onMounted(() => {
                           <span class="msg-time">{{ messageTime(message.msgTime) }}</span>
                         </div>
 
+                        <!-- 引用块：被回复消息的摘要（昵称 + 内容），只读展示 -->
+                        <div
+                          v-if="message.quote"
+                          class="msg-quote"
+                          :class="{ 'msg-quote--gift': message.quote.isGift }"
+                        >
+                          <span class="msg-quote-nick">{{ message.quote.nick }}</span>
+                          <span class="msg-quote-text">{{ message.quote.text || '引用了一条消息' }}</span>
+                        </div>
+
                         <div
                           class="msg-bubble"
                           :class="{
@@ -494,6 +543,14 @@ onMounted(() => {
                                 <el-icon :size="22">
                                   <VideoCamera />
                                 </el-icon>
+                              </span>
+                              <!-- 封面蒙层与播放入口：强化分享卡的视频语义，同时保持角标在最上层 -->
+                              <span class="msg-live-cover-mask" aria-hidden="true">
+                                <span class="msg-live-play">
+                                  <el-icon :size="24">
+                                    <VideoCamera />
+                                  </el-icon>
+                                </span>
                               </span>
                               <span
                                 class="msg-live-badge"
@@ -1137,6 +1194,46 @@ onMounted(() => {
   }
 }
 
+/* ===== 引用块：被回复消息的摘要（昵称 + 内容），只读展示 ===== */
+.msg-quote {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 4px;
+  padding: 3px 10px;
+  /* 左侧竖线是引用块的视觉锚点（聊天软件通用语），颜色随房间色 */
+  border-left: 2px solid color-mix(in srgb, var(--color-rooms) 45%, transparent);
+  border-radius: 4px 8px 8px 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-lighter);
+
+  .msg-quote-nick {
+    flex: none;
+    max-width: 40%;
+    overflow: hidden;
+    font-weight: 600;
+    color: var(--brand-primary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .msg-quote-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* 被引用的是礼物消息：摘要文案用礼物金（与礼物气泡同色系） */
+.msg-quote--gift .msg-quote-text {
+  color: #e8b84b;
+}
+
 /* ===== 直播/回放分享卡：竖排小卡（LiveItem 同构）——16:9 封面 + 角标叠封面 + 标题 + 时间/动作 ===== */
 .msg-bubble--live {
   padding: 4px;
@@ -1167,6 +1264,12 @@ onMounted(() => {
       .msg-live-action {
         color: var(--color-lives);
       }
+
+      .msg-live-play {
+        transform: translateY(-1px) scale(1.08);
+        background: color-mix(in srgb, var(--color-lives) 82%, #000);
+        box-shadow: 0 8px 24px color-mix(in srgb, var(--color-lives) 42%, transparent);
+      }
     }
   }
 }
@@ -1187,6 +1290,36 @@ onMounted(() => {
   transition: transform 0.3s ease;
 }
 
+/* 直播封面蒙层：底部稍深，保证中央播放入口与页面底色之间总有足够对比 */
+.msg-live-cover-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 18%), rgba(0, 0, 0, 46%));
+}
+
+.msg-live-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid rgba(255, 255, 255, 50%);
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, 42%);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 28%);
+  backdrop-filter: blur(8px);
+  transition:
+    transform 0.2s ease,
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
 /* 封面兜底：解析不到封面或加载失败时回退类型图标（直播色渐变块，与 LiveItem error 槽同思路） */
 .msg-live-cover-ph {
   display: flex;
@@ -1203,7 +1336,7 @@ onMounted(() => {
   position: absolute;
   top: 6px;
   left: 6px;
-  z-index: 1;
+  z-index: 2;
   padding: 1px 7px;
   border-radius: 6px;
   font-size: 11px;

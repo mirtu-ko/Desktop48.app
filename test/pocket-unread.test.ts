@@ -1,6 +1,7 @@
 /**
  * 房间未读检测（main/pocket48/pocket-unread.ts）核心规则单测：
- * 首见锚定水位 / 新消息计数与防重复 / markRead 清零并推进水位 / 未登录清空 / 快照持久化。
+ * 首见锚定回执键 / 新消息按身份键变化计数 / markRead 清零（删回执键待重锚，已读不复活）/
+ * 未登录清空 / 取关清理 / 归属自愈 / 小房间归属 / 快照持久化。
  * electron、pocket-auth、ipc/send、logger 全部 mock，状态落盘指向临时目录；
  * 每个用例经 vi.resetModules 重新加载被测模块，模拟「同一份持久化、全新会话」。
  */
@@ -21,6 +22,7 @@ vi.mock('electron', () => ({
 
 vi.mock('../src/main/logger', () => ({
   log: vi.fn(),
+  debug: vi.fn(),
 }))
 
 vi.mock('../src/main/ipc/send', () => ({
@@ -33,6 +35,7 @@ vi.mock('../src/main/pocket48/pocket-auth', () => ({
   getToken: vi.fn(),
   getFollowedIds: vi.fn(),
   getRoomChannel: vi.fn(),
+  getRoomChannelOwner: vi.fn(),
   getRoomLastMessages: vi.fn(),
 }))
 
@@ -45,8 +48,17 @@ async function freshModule() {
   return { mod, auth }
 }
 
+/** lastMsgList 单条回包：msgKey 是身份键（真实接口 msgTime 恒为 0、无 msgidClient，只认 key） */
 function lastOf(msgTime: number, msgContent: string) {
-  return [{ channelId: 'c1', starName: '成员', msgContent, msgTime, unreadCount: 0 }]
+  return [{
+    channelId: 'c1',
+    serverId: 's1',
+    starName: '成员',
+    msgContent,
+    msgKey: `key-${msgTime}`,
+    msgTime,
+    unreadCount: 0,
+  }]
 }
 
 /** 登录态 + 单成员单频道的最小环境 */
@@ -71,7 +83,7 @@ afterEach(() => {
 })
 
 describe('pocket-unread（房间未读检测）', () => {
-  it('首次见到频道：水位锚定当前最新消息，历史不算未读', async () => {
+  it('首次见到频道：回执键锚定当前最新消息，历史不算未读', async () => {
     const { mod, auth } = await freshModule()
     stubOnline(auth, lastOf(1000, '历史消息'))
     mod.startPocketUnread()
@@ -80,7 +92,7 @@ describe('pocket-unread（房间未读检测）', () => {
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
   })
 
-  it('超过水位的新消息计 +1，同一轮的同一条不重复累计', async () => {
+  it('最新消息身份键变化计 +1，同一条不重复累计', async () => {
     const { mod, auth } = await freshModule()
     stubOnline(auth, lastOf(1000, '历史消息'))
     mod.startPocketUnread()
@@ -92,14 +104,14 @@ describe('pocket-unread（房间未读检测）', () => {
     await vi.waitFor(() => expect(mod.getState().total).toBe(1))
     mod.stopPocketUnread()
     expect(mod.getState().rooms['1']).toMatchObject({ count: 1, latestTime: 2000 })
-    // 再跑一轮：msgTime 没超过 counted，不重复累加
+    // 再跑一轮：身份键没变（还是同一条最新消息），不重复累加
     mod.startPocketUnread()
     await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(2))
     mod.stopPocketUnread()
     expect(mod.getState().rooms['1'].count).toBe(1)
   })
 
-  it('markRead 清零并推进水位，之后的新消息重新计数', async () => {
+  it('markRead 清零后同一条消息不复活；下一条新消息重新计数', async () => {
     const { mod, auth } = await freshModule()
     stubOnline(auth, lastOf(1000, '历史消息'))
     mod.startPocketUnread()
@@ -110,12 +122,19 @@ describe('pocket-unread（房间未读检测）', () => {
     await vi.waitFor(() => expect(mod.getState().total).toBe(1))
     mod.stopPocketUnread()
 
-    // 标记已读：清零 + 广播
-    mod.markRead(1, 2000)
+    // 标记已读：清零 + 广播；回执键被删，下一轮检测重新锚定
+    mod.markRead(1)
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
     expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
 
-    // 更新的消息照常计：水位是 2000，3000 > 水位且未被计入
+    // 回归（已读复活 bug）：下一轮检测看到的还是刚读过的同一条消息（key-2000）——
+    // 重锚后不计数；markRead 若混写过渲染层键，这里会误判成新消息 +1
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(mod.getState()).toEqual({ rooms: {}, total: 0 }))
+    mod.stopPocketUnread()
+
+    // 更新的消息照常计：身份键 key-3000 ≠ 重锚后的 key-2000
     auth.getRoomLastMessages.mockResolvedValue(lastOf(3000, '更新'))
     mod.startPocketUnread()
     await vi.waitFor(() => expect(mod.getState().total).toBe(1))
@@ -134,8 +153,8 @@ describe('pocket-unread（房间未读检测）', () => {
     await vi.waitFor(() => expect(mod.getState().total).toBe(1))
     mod.stopPocketUnread()
 
-    // token 失效：本轮抛错只冻结，未读保留。前两轮 tick 已消耗 2 次调用，
-    // startPocketUnread 会立刻发起第 3 次，按基线等待本轮，不写死绝对次数
+    // token 失效：本轮抛错只冻结，未读保留。前两轮 tick 已消耗调用，
+    // startPocketUnread 会立刻再发起一次，按基线等待本轮，不写死绝对次数
     auth.getFollowedIds.mockRejectedValue(new Error('登录已过期，请重新登录口袋48账号'))
     const callsBefore = auth.getFollowedIds.mock.calls.length
     mod.startPocketUnread()
@@ -151,7 +170,7 @@ describe('pocket-unread（房间未读检测）', () => {
     mod.stopPocketUnread()
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
 
-    // 重新登录：账号相关水位/计数已随登出清空，当前消息重新锚定，不会补回登出前未读
+    // 重新登录：账号相关回执键已随登出清空，当前消息重新锚定，不会补回登出前未读
     auth.getToken.mockReturnValue('tok')
     auth.getFollowedIds.mockResolvedValue([1])
     const messageCalls = auth.getRoomLastMessages.mock.calls.length
@@ -177,7 +196,7 @@ describe('pocket-unread（房间未读检测）', () => {
     expect(restarted.getState().rooms['1']).toMatchObject({ count: 1, latestTime: 2000 })
   })
 
-  it('取关成员：未读与水位一并清理并广播；重新关注后首见重新锚定', async () => {
+  it('取关成员：未读与回执键一并清理并广播；重新关注后首见重新锚定', async () => {
     const { mod, auth } = await freshModule()
     stubOnline(auth, lastOf(1000, '历史消息'))
     mod.startPocketUnread()
@@ -189,18 +208,132 @@ describe('pocket-unread（房间未读检测）', () => {
     mod.stopPocketUnread()
 
     // 取关：房间已不在列表，markRead 无从触发——未读必须随频道缓存一并清理并广播
-
     auth.getFollowedIds.mockResolvedValue([])
     mod.startPocketUnread()
     await vi.waitFor(() => expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 }))
     mod.stopPocketUnread()
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
 
-    // 重新关注：水位已清，首轮重新锚定当前最新，历史不算未读（频道缓存已随取关清掉，会重新解析）
+    // 重新关注：回执键已清，首轮重新锚定当前最新，历史不算未读（频道缓存已随取关清掉，会重新解析）
     auth.getFollowedIds.mockResolvedValue([1])
     mod.startPocketUnread()
     await vi.waitFor(() => expect(auth.getRoomChannel.mock.calls.length).toBe(2))
     await vi.waitFor(() => expect(mod.getState()).toEqual({ rooms: {}, total: 0 }))
     mod.stopPocketUnread()
+  })
+
+  it('未归属频道自愈：room/info 反查房主补全归属表，下一轮开始计数', async () => {
+    const { mod, auth } = await freshModule()
+    auth.getToken.mockReturnValue('tok')
+    auth.getFollowedIds.mockResolvedValue([1, 2])
+    // 成员 2 的频道解析失败（空占位），其房间 c2 只会出现在 lastMsgList 回包里
+    auth.getRoomChannel.mockImplementation(async (id: number) =>
+      id === 1 ? { serverId: 's1', channelId: 'c1' } : { serverId: 's1', channelId: '' })
+    const item = (key: string) => [{
+      channelId: 'c2',
+      serverId: 's1',
+      starName: '最后发言人',
+      msgContent: 'hi',
+      msgKey: key,
+      msgTime: 0,
+      unreadCount: 0,
+    }]
+    auth.getRoomLastMessages.mockResolvedValue(item('k1'))
+    auth.getRoomChannelOwner.mockResolvedValue({ channelId: 'c2', serverId: 's1', ownerId: 2 })
+
+    // 第 1 轮：c2 无法归属 → 自愈反查 → 补进归属表（本轮不计数）
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomChannelOwner).toHaveBeenCalledTimes(1))
+    mod.stopPocketUnread()
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+
+    // 第 2 轮：c2 已归属 → 首见锚定 k1，历史不算未读；正向缓存不再反查
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(mod.getState()).toEqual({ rooms: {}, total: 0 }))
+    expect(auth.getRoomChannelOwner).toHaveBeenCalledTimes(1)
+    mod.stopPocketUnread()
+
+    // 第 3 轮：新消息 k2 → 正常计未读
+    auth.getRoomLastMessages.mockResolvedValue(item('k2'))
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(mod.getState().total).toBe(1))
+    mod.stopPocketUnread()
+    expect(mod.getState().rooms['2']).toMatchObject({ count: 1 })
+  })
+
+  it('归属反查确定性失败（频道不存在）记负缓存，不每轮重试', async () => {
+    const { mod, auth } = await freshModule()
+    auth.getToken.mockReturnValue('tok')
+    auth.getFollowedIds.mockResolvedValue([1])
+    auth.getRoomChannel.mockResolvedValue({ serverId: 's1', channelId: 'c1' })
+    auth.getRoomLastMessages.mockResolvedValue([{
+      channelId: 'cX',
+      serverId: 's1',
+      starName: '最后发言人',
+      msgContent: 'm',
+      msgKey: 'k1',
+      msgTime: 0,
+      unreadCount: 0,
+    }])
+    // 翻牌/礼物回复类频道：room/info 回「频道不存在」
+    auth.getRoomChannelOwner.mockRejectedValue(new Error('频道不存在'))
+
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomChannelOwner).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(1))
+    mod.stopPocketUnread()
+
+    // 第二轮：负缓存生效，不再反查；未归属频道只是无法计数，不影响其他房间
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(2))
+    mod.stopPocketUnread()
+    expect(auth.getRoomChannelOwner).toHaveBeenCalledTimes(1)
+  })
+
+  it('暗号频道（小房间）按同 server 大房间归属，新消息计入该成员未读', async () => {
+    const { mod, auth } = await freshModule()
+    auth.getToken.mockReturnValue('tok')
+    auth.getFollowedIds.mockResolvedValue([1])
+    auth.getRoomChannel.mockResolvedValue({ serverId: 's1', channelId: 'c1' })
+    // cX 与成员 1 的大房间 c1 同 server，room/info 被暗号拦下（questionId 信封）
+    auth.getRoomLastMessages.mockResolvedValue([{
+      channelId: 'cX',
+      serverId: 's1',
+      starName: '最后发言人',
+      msgContent: 'm',
+      msgKey: 'k1',
+      msgTime: 0,
+      unreadCount: 0,
+    }])
+    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"596","question":"暗号"}'))
+
+    // 第 1 轮：cX 识别为成员 1 的小房间并补全归属（本轮不计数）
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomChannelOwner).toHaveBeenCalledTimes(1))
+    mod.stopPocketUnread()
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+
+    // 第 2 轮：cX 已归属 → 首见锚定 k1，历史不算未读；不再反查
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(mod.getState()).toEqual({ rooms: {}, total: 0 }))
+    expect(auth.getRoomChannelOwner).toHaveBeenCalledTimes(1)
+    mod.stopPocketUnread()
+
+    // 第 3 轮：小房间新消息 k2 → 计入成员 1 未读
+    auth.getRoomLastMessages.mockResolvedValue([{
+      channelId: 'cX',
+      serverId: 's1',
+      starName: '最后发言人',
+      msgContent: 'm2',
+      msgKey: 'k2',
+      msgTime: 0,
+      unreadCount: 0,
+    }])
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(mod.getState().total).toBe(1))
+    mod.stopPocketUnread()
+    expect(mod.getState().rooms['1']).toMatchObject({ count: 1 })
   })
 })

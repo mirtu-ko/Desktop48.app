@@ -23,6 +23,20 @@ export type PocketRoomMessageKind
     | 'vote'
     | 'system'
 
+/**
+ * 引用（回复）信息：消息流渲染引用块（被回复者昵称 + 被引用内容摘要）。
+ * 字段来自 bodys 的 replyInfo / giftReplyInfo（协议结构见参考实现
+ * yaya_msg 的 buildReplyOptions：replyName/replyText/replyMessageId/text）。
+ */
+export interface PocketRoomQuote {
+  /** 被引用者昵称 */
+  nick: string
+  /** 被引用消息的文本摘要；空串 = 原消息无文本（UI 兜底占位） */
+  text: string
+  /** 被引用的是一条礼物消息（replyInfo.giftInfo）：摘要走礼物文案 */
+  isGift: boolean
+}
+
 export interface PocketRoomMessageView {
   /** 去重键：msgIdClient || msgIdServer || msgTime */
   id: string
@@ -36,6 +50,9 @@ export interface PocketRoomMessageView {
   /** roleId > 1 = 成员（xox），昵称可着色区分 */
   isMember: boolean
   msgTime: number
+
+  /** 引用信息（REPLY/GIFTREPLY/AUDIO_REPLY/AUDIO_GIFT_REPLY）；null = 非回复消息 */
+  quote: PocketRoomQuote | null
 
   /** 图片直链（IMAGE/EXPRESSIMAGE）；空串 = 非图片或取不到 URL */
   imageUrl: string
@@ -141,6 +158,28 @@ function bodyText(msg: Record<string, unknown>, body: Record<string, unknown> | 
 }
 
 /**
+ * 礼物摘要：[礼物] 名 / [礼物] 名 xN；取不到礼物名返回空串（由调用方兜底）。
+ * 礼物消息正文与被礼物消息的引用摘要共用，避免两处各写一份格式。
+ */
+function giftSummary(gift: Record<string, unknown> | null): string {
+  if (!gift)
+    return ''
+  const giftName = str(gift.giftName)
+  if (!giftName)
+    return ''
+  const giftNum = num(gift.giftNum) || num(gift.num)
+  return giftNum > 1 ? `[礼物] ${giftName} x${giftNum}` : `[礼物] ${giftName}`
+}
+
+/**
+ * 回复类消息自己的正文：replyInfo.text 优先（协议侧 buildReplyOptions 的 text
+ * 即回复语）， bodys 为裸文本时兜底。空串 = 无正文（调用方给占位文案）。
+ */
+function replyOwnText(info: Record<string, unknown>, msg: Record<string, unknown>, body: Record<string, unknown> | null): string {
+  return jsonText(info, 'text') || bodyText(msg, body)
+}
+
+/**
  * msgType + bodys JSON → 展示文案。
  * 房间消息流（normalizePocketRoomMessage）与左侧列表最新消息预览
  * （normalizePocketRoomPreview）共用同一套类型语义，两边不重复维护。
@@ -162,11 +201,11 @@ function messageText(msgType: string, msg: Record<string, unknown>, body: Record
     case 'AUDIO_REPLY':
     case 'AUDIO_GIFT_REPLY': {
       const info = parseJson(body?.replyInfo) || parseJson(body?.giftReplyInfo) || body || {}
-      const replyName = str(info.replyName) || '用户'
-      const replyText = jsonText(info, 'text') || jsonText(info, 'replyText')
-      return msgType.startsWith('AUDIO')
-        ? (replyText || '[语音回复消息]')
-        : (replyText ? `[回复 ${replyName}] ${replyText}` : '[回复消息]')
+      // 被引用内容在 replyText，已单独解析为引用块（parseReplyQuote），不拼进正文前缀
+      const own = replyOwnText(info, msg, body)
+      if (own)
+        return own
+      return msgType.startsWith('AUDIO') ? '[语音回复消息]' : '[回复消息]'
     }
     case 'FLIPCARD':
     case 'FLIPCARD_AUDIO':
@@ -192,9 +231,7 @@ function messageText(msgType: string, msg: Record<string, unknown>, body: Record
     case 'RED_PACKET_2024':
     case 'ZHONGQIU_ACTIVITY_LANTERN_FANS': {
       const info = parseJson(body?.giftInfo) || body || {}
-      const giftName = str(info.giftName)
-      const giftNum = num(info.giftNum) || num(info.num)
-      return giftName ? (giftNum > 1 ? `[礼物] ${giftName} x${giftNum}` : `[礼物] ${giftName}`) : '[礼物]'
+      return giftSummary(info) || '[礼物]'
     }
     case 'VOTE':
       return '[投票]'
@@ -205,6 +242,30 @@ function messageText(msgType: string, msg: Record<string, unknown>, body: Record
     default:
       // 未识别类型不丢：extMsgType 动态消息（POST_INFO 等）与兜底文本
       return bodyText(msg, body) || '[新消息]'
+  }
+}
+
+/**
+ * 解析引用（回复）信息：bodys 的 replyInfo / giftReplyInfo → PocketRoomQuote。
+ * 只认 replyName / replyText / giftInfo 三个字段——一个都没有（接口演进或
+ * 结构变动）时返回 null，不渲染空的引用块。
+ *
+ * 被引用内容优先 replyText（原消息文本）；原消息是礼物时 replyText 为空，
+ * 用 giftInfo 生成礼物摘要（isGift 供 UI 区分样式）。
+ */
+function parseReplyQuote(body: Record<string, unknown> | null): PocketRoomQuote | null {
+  const info = parseJson(body?.replyInfo) || parseJson(body?.giftReplyInfo)
+  if (!info)
+    return null
+  const replyName = str(info.replyName)
+  const replyText = jsonText(info, 'replyText')
+  const gift = parseJson(info.giftInfo)
+  if (!replyText && !gift && !replyName)
+    return null
+  return {
+    nick: replyName || '用户',
+    text: replyText || giftSummary(gift),
+    isGift: !replyText && !!gift,
   }
 }
 
@@ -235,6 +296,8 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
     ? 'text'
     : messageKind(msgType)
   const text = messageText(msgType, msg, body)
+  // 引用信息：仅回复类消息有；被引用内容渲染成引用块（只读），不进正文
+  const quote = kind === 'reply' ? parseReplyQuote(body) : null
 
   // 媒体直链：bodys JSON 的 url 系字段（字段名对齐参考实现 yaya_msg 的解析）
 
@@ -312,6 +375,8 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
     isMember,
     msgTime: num(msg.msgTime),
 
+    quote,
+
     imageUrl,
     imageWidth,
     imageHeight,
@@ -373,6 +438,8 @@ function messageKind(msgType: string): PocketRoomMessageKind {
  * 左侧房间列表的最新消息预览：lastMsgList.msgContent → 一行文案。
  * msgContent 与房间消息 bodys 同构（messageType + 类型字段），复用同一套分发；
  * 空内容（无消息）返回空串，由 UI 决定占位。
+ * 回复类消息带一句「回复 昵称」前缀：左列一行放不下引用块，前缀是最省的等价物；
+ * 回复无自己的正文（空回复）时退回被引用内容，避免预览只剩占位文案。
  */
 export function normalizePocketRoomPreview(rawContent: unknown): string {
   if (rawContent == null)
@@ -382,5 +449,12 @@ export function normalizePocketRoomPreview(rawContent: unknown): string {
     return ''
   const body = parseJson(bodys)
   const msgType = (str(body?.messageType) || '').toUpperCase()
-  return messageText(msgType, { bodys }, body).trim()
+  const text = messageText(msgType, { bodys }, body).trim()
+  const quote = parseReplyQuote(body)
+  if (quote) {
+    const info = parseJson(body?.replyInfo) || parseJson(body?.giftReplyInfo) || body || {}
+    const own = replyOwnText(info, { bodys }, body)
+    return `[回复 ${quote.nick}] ${own || quote.text || text}`
+  }
+  return text
 }

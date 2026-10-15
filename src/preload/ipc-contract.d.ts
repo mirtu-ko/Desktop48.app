@@ -373,8 +373,8 @@ interface StaticIpcInvokeMap {
   pocketDanmakuStop: InvokeSpec<[chatroomId: string], void>
   /** 房间未读全量快照（启动时回取一次；后续变化走 pocketUnreadBatch 事件） */
   pocketUnreadState: InvokeSpec<[], PocketUnreadBatch>
-  /** 标记房间已读：水位上移、未读清零并广播；msgTime 传该房间最新已见消息时刻 */
-  pocketMarkRead: InvokeSpec<[userId: number, msgTime?: number], void>
+  /** 标记房间已读：未读清零并广播；主进程删回执键、下一轮检测重新锚定（见 pocket-unread.ts） */
+  pocketMarkRead: InvokeSpec<[userId: number], void>
 
   // ===== B 站直播间信息 =====
   // 对端：main/bilibili/room-info.ts

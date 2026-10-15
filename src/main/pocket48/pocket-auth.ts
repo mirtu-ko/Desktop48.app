@@ -15,7 +15,7 @@ import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, net, safeStorage } from 'electron'
-import { log } from '../logger'
+import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
 
 // ===== 接口常量（与渲染层 services/api-urls.ts 保持同源；此域暂无渲染层调用，独立维护） =====
@@ -543,9 +543,11 @@ export async function getFollowedIds(): Promise<number[]> {
   if (!envelope.success)
     throw new Error(envelope.message || '获取关注列表失败')
   const data = (envelope.content as Record<string, unknown> | undefined)?.data
-  return (Array.isArray(data) ? data : [])
+  const ids = (Array.isArray(data) ? data : [])
     .map(id => Number(id))
     .filter(id => Number.isFinite(id) && id > 0)
+  debug('[pocket-auth] 获取关注成员列表回包：', JSON.stringify({ count: ids.length, userIds: ids }))
+  return ids
 }
 
 /** 关注成员（桌面端 toggle 双写）：失败抛错，调用方静默降级 */
@@ -604,6 +606,7 @@ export async function getChatroomId(liveId: string): Promise<string> {
 
 /** 成员 userId → 房间频道（team server + channel）解析：starId 即成员 userId */
 const SERVER_JUMP_URL = 'https://pocketapi.48.cn/im/api/v1/im/server/jump'
+const ROOM_INFO_URL = 'https://pocketapi.48.cn/im/api/v1/im/team/room/info'
 /**
  * 房间频道历史消息（HTTP 拉取）。
  * 参考实现 yaya_msg 的实时消息走 QChat 长连接（另一套 NIM 协议），
@@ -655,6 +658,7 @@ export async function getRoomChannel(userId: number): Promise<PocketRoomChannel>
   const token = getToken()
   if (!token)
     return { serverId: '', channelId: '' }
+  debug('[pocket-auth] 获取频道详情请求：', JSON.stringify({ userId: Number(userId) }))
   const envelope = await postPocket<Record<string, unknown>>(
     SERVER_JUMP_URL,
     { starId: Number(userId), targetType: 1 },
@@ -665,9 +669,47 @@ export async function getRoomChannel(userId: number): Promise<PocketRoomChannel>
   if (!envelope.success)
     throw new Error(envelope.message || '获取房间频道失败')
   const content = envelope.content || {}
-  return {
+  const channel = {
     serverId: String(content.serverId || '').trim(),
     channelId: String(content.channelId || '').trim(),
+  }
+  debug('[pocket-auth] 获取频道详情回包：', JSON.stringify({ userId: Number(userId), ...channel, raw: content }))
+  return channel
+}
+
+/** 房间频道反查结果：channelId → 房主 userId（未归属频道自愈用） */
+export interface PocketRoomOwnerInfo {
+  channelId: string
+  serverId: string
+  ownerId: number
+}
+
+/**
+ * 反查房间频道的归属（channelId → 房主 ownerId + 所属 server）。
+ * lastMsgList 回包里会出现同 server 下未登记的频道（成员房间或互动频道），
+ * 用它把「解析失败的关注成员房间」补进归属表；找不到/无房间返回 ownerId = 0。
+ */
+export async function getRoomChannelOwner(channelId: string): Promise<PocketRoomOwnerInfo> {
+  const token = getToken()
+  if (!token || !channelId)
+    return { channelId, serverId: '', ownerId: 0 }
+  debug('[pocket-auth] 反查频道详情请求：', JSON.stringify({ channelId: String(channelId) }))
+  const envelope = await postPocket<Record<string, unknown>>(
+    ROOM_INFO_URL,
+    { channelId: String(channelId) },
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throw new Error('登录已过期，请重新登录口袋48账号')
+  if (!envelope.success)
+    throw new Error(envelope.message || '获取房间归属失败')
+  const content = envelope.content || {}
+  const channelInfo = (content.channelInfo || {}) as Record<string, unknown>
+  debug('[pocket-auth] room/info 原始回包：', JSON.stringify(content))
+  return {
+    channelId: String(channelInfo.channelId ?? channelId).trim(),
+    serverId: String(channelInfo.serverId || '').trim(),
+    ownerId: Number(channelInfo.ownerId) || 0,
   }
 }
 
@@ -684,14 +726,16 @@ export async function getRoomMessages(
   const token = getToken()
   if (!token)
     throw new Error('未登录口袋48账号')
+  const request = {
+    channelId: Number(channelId),
+    serverId: Number(serverId),
+    nextTime: Number(nextTime) || 0,
+    limit: ROOM_MESSAGE_LIMIT,
+  }
+  debug('[pocket-auth] 获取频道消息请求：', JSON.stringify({ ...request, scope }))
   const envelope = await postPocket<Record<string, unknown>>(
     ROOM_MESSAGE_URLS[scope],
-    {
-      channelId: Number(channelId),
-      serverId: Number(serverId),
-      nextTime: Number(nextTime) || 0,
-      limit: ROOM_MESSAGE_LIMIT,
-    },
+    request,
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
@@ -710,16 +754,38 @@ export async function getRoomMessages(
       bodys: typeof item.bodys === 'string' ? item.bodys : JSON.stringify(item.bodys ?? ''),
       extInfo: typeof item.extInfo === 'string' ? item.extInfo : JSON.stringify(item.extInfo ?? {}),
     }))
-  return { messages, nextTime: Number(content.nextTime) || 0 }
+  const result = { messages, nextTime: Number(content.nextTime) || 0 }
+  debug('[pocket-auth] 获取频道消息回包：', JSON.stringify({
+    ...request,
+    scope,
+    count: messages.length,
+    nextTime: result.nextTime,
+    firstMessage: messages[0]
+      ? {
+          msgIdServer: messages[0].msgIdServer,
+          msgIdClient: messages[0].msgIdClient,
+          msgType: messages[0].msgType,
+          msgTime: messages[0].msgTime,
+        }
+      : null,
+  }))
+  return result
 }
 
 /** 频道最后一条消息（左侧房间列表预览；msgContent 与房间消息 bodys 同构） */
 export interface PocketRoomLastMessage {
   channelId: string
-  /** 房间所属成员名（服务端给的 starName） */
+  /** 所属 server（回包自带，归属未知频道时可直接入库，不必再跳转解析） */
+  serverId: string
+  /** 房间所属成员名（服务端给的 starName，注意是「最后发言人」不是房主） */
   starName: string
   /** 最后一条消息的正文（JSON 字符串或纯文本） */
   msgContent: string
+  /**
+   * 消息身份键（msgidClient 优先，msgid 系列兜底，最后退到 msgTime:msgContent）。
+   * 该接口回包的 msgTime 实测恒为 0，不能当时间轴用；判断「有新消息」只能比对身份键。
+   */
+  msgKey: string
   msgTime: number
   unreadCount: number
 }
@@ -737,6 +803,7 @@ export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRo
     .filter(id => Number.isFinite(id) && id > 0)
   if (!ids.length)
     return []
+  debug('[pocket-auth] 获取频道预览列表请求：', JSON.stringify({ serverIds: ids }))
   const envelope = await postPocket<Record<string, unknown>>(
     ROOM_LAST_MESSAGE_URL,
     { serverIdList: ids },
@@ -748,17 +815,39 @@ export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRo
     throw new Error(envelope.message || '获取房间最新消息失败')
   const content = (envelope.content || {}) as Record<string, unknown>
   const list = content.lastMsgList ?? content.messageList ?? content.list
-  return (Array.isArray(list) ? list : [])
-    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-    .map(item => ({
+  const items = (Array.isArray(list) ? list : []).filter(
+    (item): item is Record<string, unknown> => !!item && typeof item === 'object',
+  )
+  // 排查用：该接口的字段结构没有官方文档，首条原始回包可直接对照（verbose 级别）
+  if (items[0])
+    debug('[pocket-auth] lastMsgList 原始首条：', JSON.stringify(items[0]))
+  const result = items.map((item) => {
+    const msgTime = Number(item.msgTime) || 0
+    const msgContent = typeof item.msgContent === 'string'
+      ? item.msgContent
+      : JSON.stringify(item.msgContent ?? '')
+    return {
       channelId: String(item.channelId ?? '').trim(),
+      serverId: String(item.serverId ?? '').trim(),
       starName: String(item.starName ?? '').trim(),
-      msgContent: typeof item.msgContent === 'string'
-        ? item.msgContent
-        : JSON.stringify(item.msgContent ?? ''),
-      msgTime: Number(item.msgTime) || 0,
+      msgContent,
+      msgKey: String(
+        item.msgidClient || item.msgIdClient || item.msgIdServer || item.msgId || item.messageId || '',
+      ).trim() || `${msgTime}:${msgContent}`,
+      msgTime,
       unreadCount: Number(item.unreadCount) || 0,
-    }))
+    }
+  })
+  debug('[pocket-auth] 获取频道预览列表回包：', JSON.stringify({
+    count: result.length,
+    channels: result.map(({ channelId: id, serverId: sid, starName, unreadCount }) => ({
+      channelId: id,
+      serverId: sid,
+      starName,
+      unreadCount,
+    })),
+  }))
+  return result
 }
 
 // ===== 网易云信 IM 凭据（直播聊天室） =====

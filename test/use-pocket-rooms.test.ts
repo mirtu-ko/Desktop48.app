@@ -604,6 +604,7 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
       level: 0,
       isMember: true,
       msgTime: 1728000000000,
+      quote: null,
       imageUrl: '',
       audioUrl: '',
       videoUrl: '',
