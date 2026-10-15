@@ -93,6 +93,11 @@ function roomMsg(msgIdClient: string, msgTime: number, text: string, nick = '粉
  * 被 afterEach 的 setLoggedIn(true) 唤醒，打出 window is not defined 噪音。
  */
 let activeScope: ReturnType<typeof effectScope> | null = null
+/**
+ * 同一个假主进程下临时多开的 composable 实例（模拟 <KeepAlive :key> 重建后 Rooms 重挂载）：
+ * 同样要在 afterEach 停掉，理由同上。
+ */
+const extraScopes: Array<ReturnType<typeof effectScope>> = []
 
 interface SetupOptions {
   /** 口袋账号关注 ID */
@@ -115,6 +120,8 @@ interface SetupOptions {
   smallChannels?: Record<number, { serverId: string, channelId: string }>
   /** channelId → 暗号问题；未设置 = room/info 未被拦（无门禁，切进去直接拉消息） */
   roomQuestions?: Record<string, { questionId: string, question: string }>
+  /** channelId → 正确暗号；不设置则该频道的提交一律判错 */
+  roomAnswers?: Record<string, string>
 }
 
 async function setup(options: SetupOptions = {}) {
@@ -125,6 +132,7 @@ async function setup(options: SetupOptions = {}) {
     lastMessageFetched: [] as string[][],
     messageFetched: [] as Array<{ channelId: string, nextTime: number, scope: 'member' | 'all' }>,
     serverChannelsFetched: [] as string[],
+    answerChecks: [] as Array<{ channelId: string, answer: string }>,
     openFloatWindow: [] as unknown[],
   }
   roomMock.channelFail = new Set()
@@ -167,7 +175,12 @@ async function setup(options: SetupOptions = {}) {
       pocketGetSmallChannel: vi.fn(async (userId: number) => options.smallChannels?.[userId] ?? null),
       // 默认无门禁（room/info 未被拦）；给了问题即视为被暗号拦下
       pocketGetRoomQuestion: vi.fn(async (channelId: string) => options.roomQuestions?.[channelId] ?? null),
-      pocketCheckRoomAnswer: vi.fn(async () => ({ ok: false, reason: 'unverified' as const })),
+      pocketCheckRoomAnswer: vi.fn(async (channelId: string, _questionId: string, answer: string) => {
+        calls.answerChecks.push({ channelId, answer })
+        return options.roomAnswers?.[channelId] === answer
+          ? { ok: true, via: 'server' as const }
+          : { ok: false, reason: 'wrong' as const, message: '暗号不正确' }
+      }),
       openFloatWindow: vi.fn(async (kind: string, payload: unknown) => {
         calls.openFloatWindow.push([kind, payload])
       }),
@@ -185,6 +198,11 @@ async function setup(options: SetupOptions = {}) {
   }
 
   const { usePocketRooms } = await import('@renderer/composables/use-pocket-rooms')
+  // 解锁表是模块级单例，跨用例存活：每个用例开头清空，还原成「进程刚起来」的状态
+  const { clearSmallRoomUnlocks } = await import('@renderer/utils/small-room-unlock')
+  clearSmallRoomUnlocks()
+  for (const extra of extraScopes.splice(0))
+    extra.stop()
   const scope = effectScope()
   const api = scope.run(() => usePocketRooms())!
   activeScope = scope
@@ -192,6 +210,12 @@ async function setup(options: SetupOptions = {}) {
     api,
     calls,
     scope,
+    /** 再开一个 composable 实例：模拟页面层重建（实例换了，模块级单例状态应当留着） */
+    newInstance: () => {
+      const extra = effectScope()
+      extraScopes.push(extra)
+      return extra.run(() => usePocketRooms())!
+    },
     /** 当前房间消息流的 [昵称, 正文, 时刻] 摘要 */
     digest: () => api.messages.value.map(item => [item.nick, item.text, item.msgTime]),
   }
@@ -205,6 +229,8 @@ afterEach(() => {
   vi.useRealTimers()
   activeScope?.stop()
   activeScope = null
+  for (const extra of extraScopes.splice(0))
+    extra.stop()
   vi.unstubAllGlobals()
   vi.clearAllMocks()
   authMock.setLoggedIn(true)
@@ -719,6 +745,74 @@ describe('use-pocket-rooms / 选中连房与消息流', () => {
     expect(api.smallLocked.value).toBe(true)
     // 锁定态本来就不拉小房间消息；切范围同样不该回落大房间重拉
     expect(calls.messageFetched.map(item => item.channelId)).toEqual(['ch-10001'])
+  })
+
+  /** 小房间暗号用例的公共假环境：10001 的小房间被暗号拦着（答案 open-sesame），10002 另有暗号 */
+  function smallRoomAnswerFixture() {
+    return {
+      pocketIds: [10001, 10002],
+      smallChannels: {
+        10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' },
+        10002: { serverId: 'srv-10002', channelId: 'ch-10002-small' },
+      },
+      roomQuestions: {
+        'ch-10001-small': { questionId: 'q1', question: '暗号是什么？' },
+        'ch-10002-small': { questionId: 'q2', question: '暗号是什么？' },
+      },
+      roomAnswers: { 'ch-10001-small': 'open-sesame' },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '大房间留言')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('b', 110, '另一人留言')] } },
+        'ch-10001-small': { 0: { nextTime: 0, messages: [roomMsg('s', 300, '小房间密语')] } },
+      },
+    } satisfies SetupOptions
+  }
+
+  it('解锁一次后同会话内免校验：判错不放行、切走成员再回来不重锁', async () => {
+    const { api, calls, digest } = await setup(smallRoomAnswerFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.setViewMode('small')
+    expect(api.smallLocked.value).toBe(true)
+
+    // 判错不放行，也不写进解锁表
+    expect((await api.unlockSmall('乱猜')).ok).toBe(false)
+    expect(api.smallLocked.value).toBe(true)
+    // 判对即解锁并当场拉出小房间消息
+    expect((await api.unlockSmall('open-sesame')).ok).toBe(true)
+    expect(api.smallLocked.value).toBe(false)
+    expect(digest()).toEqual([['粉丝甲', '小房间密语', 300]])
+
+    // 切到别的成员（其小房间另有暗号）再切回来：仍免校验，不该再要一次
+    await api.selectRoom(10002)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.setViewMode('small')
+    expect(api.smallLocked.value).toBe(false)
+    expect(calls.answerChecks.map(item => item.answer)).toEqual(['乱猜', 'open-sesame'])
+  })
+
+  it('页面层重建（Rooms 实例重挂载）后仍免校验：解锁态活在模块级单例', async () => {
+    const { api, calls, newInstance } = await setup(smallRoomAnswerFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.setViewMode('small')
+    expect((await api.unlockSmall('open-sesame')).ok).toBe(true)
+
+    // App.vue 捕获渲染错误会 pageLayerKey += 1 重建整棵 <KeepAlive>：实例是新的，进程没重启
+    const fresh = newInstance()
+    await fresh.load()
+    await fresh.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await fresh.setViewMode('small')
+    expect(fresh.smallLocked.value).toBe(false)
+    expect(fresh.messages.value.map(item => [item.nick, item.text, item.msgTime]))
+      .toEqual([['粉丝甲', '小房间密语', 300]])
+    // 全程只有第一次那一声校验
+    expect(calls.answerChecks.map(item => item.answer)).toEqual(['open-sesame'])
   })
 })
 

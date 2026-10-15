@@ -3,8 +3,10 @@
  *
  * 状态镜像自主进程 pocket48-auth.json：本 store 只负责拉取/登录/退出的接线与提示，
  * 不持有凭证本体——token 只留在主进程，渲染层拿到的永远是脱敏登录态。
+ * 登录态一律经 applyAuthState 写入，账号身份变化时顺带作废小房间暗号的解锁态。
  */
 import type { PocketAuthState, PocketVerifyResult } from '@preload/ipc-contract'
+import { clearSmallRoomUnlocks } from '@renderer/utils/small-room-unlock'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
@@ -23,10 +25,29 @@ export const pocketAuthState = ref<PocketAuthState>({ ...LOGGED_OUT })
 /** 是否已拉取过一次登录态（避免未初始化时直播页误判未登录） */
 let initialized = false
 
+/**
+ * 账号身份指纹：登录态里没有 userId，用「脱敏手机号 + 昵称 + 凭证保存时刻」当身份。
+ * 退出走 LOGGED_OUT（savedAt=0）、换号手机号必变、同账号重登 savedAt 必变，三种都判得出。
+ */
+function accountKey(state: PocketAuthState): string {
+  return `${state.mobileMasked}|${state.nickname}|${state.savedAt}`
+}
+
+/**
+ * 登录态唯一写入口。身份一变就作废小房间暗号的解锁态（utils/small-room-unlock.ts）：
+ * channelId 跨账号稳定，不清等于把上一个账号解锁过的小房间直接交给新账号——
+ * 消息列表接口不带暗号，渲染层这道锁是唯一防线。
+ */
+function applyAuthState(next: PocketAuthState): void {
+  if (accountKey(next) !== accountKey(pocketAuthState.value))
+    clearSmallRoomUnlocks()
+  pocketAuthState.value = next
+}
+
 /** 拉取当前登录态（读主进程本地凭证，无网络请求） */
 export async function refreshPocketAuthState(): Promise<PocketAuthState> {
   try {
-    pocketAuthState.value = await window.mainAPI.pocketGetAuthState()
+    applyAuthState(await window.mainAPI.pocketGetAuthState())
     initialized = true
   }
   catch (error) {
@@ -45,21 +66,21 @@ export function ensurePocketAuthState(): PocketAuthState {
 /** 验证码登录；成功后更新登录态，失败抛错由调用方提示 */
 export async function loginBySmsCode(mobile: string, code: string): Promise<PocketAuthState> {
   const state = await window.mainAPI.pocketLoginByCode(mobile, code)
-  pocketAuthState.value = state
+  applyAuthState(state)
   return state
 }
 
 /** Token 粘贴登录；成功后更新登录态，失败抛错由调用方提示 */
 export async function loginByPastedToken(token: string, mobile = ''): Promise<PocketAuthState> {
   const state = await window.mainAPI.pocketLoginByToken(token, mobile)
-  pocketAuthState.value = state
+  applyAuthState(state)
   return state
 }
 
 /** 退出登录：主进程删除凭证文件，本地状态复位 */
 export async function logoutPocket(): Promise<void> {
   await window.mainAPI.pocketLogout()
-  pocketAuthState.value = { ...LOGGED_OUT }
+  applyAuthState({ ...LOGGED_OUT })
 }
 
 /**

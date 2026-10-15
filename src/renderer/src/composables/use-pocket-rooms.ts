@@ -28,9 +28,10 @@ import { pocketAuthState, refreshPocketAuthState } from '@renderer/stores/pocket
 import { debugLog } from '@renderer/utils/debug'
 
 import { liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview } from '@renderer/utils/pocket-room-message'
+import { isSmallRoomUnlocked, markSmallRoomUnlocked } from '@renderer/utils/small-room-unlock'
 import Tools from '@renderer/utils/tools'
 import { useIntervalFn } from '@vueuse/core'
-import { computed, getCurrentInstance, onActivated, onDeactivated, onScopeDispose, reactive, ref, watch } from 'vue'
+import { computed, getCurrentInstance, onActivated, onDeactivated, onScopeDispose, ref, watch } from 'vue'
 
 /** 左侧房间条目 */
 export interface PocketRoom {
@@ -156,28 +157,20 @@ export function usePocketRooms() {
   const channelNames = ref<{ serverId: string, map: Map<string, string> }>({ serverId: '', map: new Map() })
   /** serverId → 频道名表缓存（含空表：接口通了但没给名字，不重复打接口） */
   const serverChannelNameCache = new Map<string, Map<string, string>>()
-  /**
-   * 本次会话内已通过暗号的小房间（channelId 为键）；解锁状态只存客户端内存，
-   * 重启后重新校验一次。
-   *
-   * 必须是 reactive 而非裸 Set：`smallRequiresAnswer` 是 computed，靠 `.has()` 收集依赖，
-   * 裸 Set 的增删不触发重算——解锁后页签上的锁与消息范围开关会一直停在锁定态
-   * （消息区分支在模板里靠前，把锁定层盖住了，所以现象只露在页签的锁上）。
-   */
-  const unlockedSmallChannels = reactive(new Set<string>())
   /** 当前小房间的暗号问题（channelId → 问题缓存，含 null：room/info 未被拦，即无门禁） */
   const smallQuestion = ref<PocketRoomQuestion | null>(null)
   const smallQuestionLoading = ref(false)
   const smallQuestionCache = new Map<string, PocketRoomQuestion | null>()
   /**
-   * 小房间是否需要暗号：已发现频道 + 确认被暗号拦下（拿到问题）+ 本次会话未解锁。
+   * 小房间是否需要暗号：已发现频道 + 确认被暗号拦下（拿到问题）+ 本进程未解锁。
+   * 解锁态在 utils/small-room-unlock.ts（模块级，页面层重建不丢）；
    * 刻意与当前视图解耦——页签上的锁要在大房间视图下同样可见，
    * 否则「需要暗号」这件事只在切过去之后才暴露。
    */
   const smallRequiresAnswer = computed(() =>
     !!smallChannel.value
     && smallQuestion.value !== null
-    && !unlockedSmallChannels.has(smallChannel.value.channelId),
+    && !isSmallRoomUnlocked(smallChannel.value.channelId),
   )
   /** 暗号输入层是否展示：当前在小房间视图且该频道仍被暗号拦着 */
   const smallLocked = computed(() => viewMode.value === 'small' && smallRequiresAnswer.value)
@@ -639,7 +632,7 @@ export function usePocketRooms() {
       const result = await window.mainAPI.pocketCheckRoomAnswer(channel.channelId, question?.questionId ?? '', answer)
       if (!result.ok)
         return { ok: false, message: result.message || '暗号不正确' }
-      unlockedSmallChannels.add(channel.channelId)
+      markSmallRoomUnlocked(channel.channelId)
       clearChat()
       await openChannel(userId, channel)
       return { ok: true }
