@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// 房间语音条：播放/暂停 + 进度条 + 时长，样式同微信语音条。同时只允许一条在播。
+// 房间语音条：播放/暂停 + 进度条 + 时长，样式同微信语音条。同时只允许一条在播（占位见 utils/voice-solo.ts）。
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
-import { onUnmounted, ref, watch } from 'vue'
+import { claimVoiceSlot, releaseVoiceSlot } from '@renderer/utils/voice-solo'
+import { onDeactivated, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps<{ src: string }>()
 
@@ -10,9 +11,6 @@ const current = ref(0)
 const duration = ref(0)
 /** 加载失败：回退占位文案 */
 const failed = ref(false)
-
-/** 正在播放的那条实例的暂停器：开始播放新条目前先停掉旧的 */
-let activePause: (() => void) | null = null
 
 const audio = new Audio()
 audio.preload = 'metadata'
@@ -27,14 +25,14 @@ function onLoadedmetadata() {
 }
 
 function onEnded() {
-  playing.value = false
+  pause()
   current.value = 0
   audio.currentTime = 0
 }
 
 function onError() {
+  pause()
   failed.value = true
-  playing.value = false
 }
 
 audio.addEventListener('timeupdate', onTimeupdate)
@@ -43,8 +41,9 @@ audio.addEventListener('ended', onEnded)
 audio.addEventListener('error', onError)
 
 watch(() => props.src, () => {
+  // 换源时 Chromium 会从新资源开头继续播，必须先停手（pause 自带让位）
+  pause()
   audio.src = props.src
-  playing.value = false
   current.value = 0
   duration.value = 0
   failed.value = false
@@ -52,22 +51,27 @@ watch(() => props.src, () => {
 
 function toggle() {
   if (playing.value) {
-    audio.pause()
-    playing.value = false
+    pause()
     return
   }
   if (failed.value || !audio.src)
     return
-  activePause?.()
-  activePause = pause
+  claimVoiceSlot(pause)
   void audio.play().then(() => {
     playing.value = true
-  }).catch(() => {
+  }).catch((error: unknown) => {
+    // play() 被拒时没人替我们停手，坑位要自己交还
+    releaseVoiceSlot(pause)
+    // 被后点的语音条抢走播放权时 Chromium 抛 AbortError，属正常让位，不是加载失败
+    if (error instanceof DOMException && error.name === 'AbortError')
+      return
     failed.value = true
   })
 }
 
+/** 唯一的「停 + 让位」出口：谁停谁交还坑位，调用方不必再记得 release */
 function pause() {
+  releaseVoiceSlot(pause)
   audio.pause()
   playing.value = false
 }
@@ -90,10 +94,15 @@ function seek(event: MouseEvent) {
   current.value = audio.currentTime
 }
 
+/**
+ * KeepAlive 页面切走：缓存页不卸载，onUnmounted 不触发，语音会在后台继续播。
+ * 激活钩子会递归到后代实例，所以挂在语音条自己身上即可，不必让 Rooms 页来通知。
+ * 只停不续 —— 回来时不自动恢复（进度还停在断点，自动续播像卡住）。
+ */
+onDeactivated(pause)
+
 onUnmounted(() => {
-  if (activePause === pause)
-    activePause = null
-  audio.pause()
+  pause()
   audio.removeEventListener('timeupdate', onTimeupdate)
   audio.removeEventListener('loadedmetadata', onLoadedmetadata)
   audio.removeEventListener('ended', onEnded)
