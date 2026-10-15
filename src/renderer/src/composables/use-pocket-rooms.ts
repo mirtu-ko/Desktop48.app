@@ -18,7 +18,7 @@ import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
  * 失败一律静默降级：频道解析/消息拉取失败只影响右侧消息区，左侧列表照常可用；
  * 唯一例外是 token 失效（重新登录才能恢复），直接上抛让整页报错。
  */
-import type { PocketRoomChannel, PocketRoomLastMessage } from '../../../preload/ipc-contract'
+import type { PocketRoomChannel, PocketRoomLastMessage, PocketRoomQuestion } from '../../../preload/ipc-contract'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
@@ -29,7 +29,7 @@ import { debugLog } from '@renderer/utils/debug'
 import { liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview } from '@renderer/utils/pocket-room-message'
 import Tools from '@renderer/utils/tools'
 import { useIntervalFn } from '@vueuse/core'
-import { computed, getCurrentInstance, onActivated, onDeactivated, onScopeDispose, ref, watch } from 'vue'
+import { computed, getCurrentInstance, onActivated, onDeactivated, onScopeDispose, reactive, ref, watch } from 'vue'
 
 /** 左侧房间条目 */
 export interface PocketRoom {
@@ -61,6 +61,9 @@ const OFFICIAL_USER_ID = '121569667'
 
 /** 右侧消息范围：member = 只看成员发言（homeowner 接口），all = 全部用户发言（all 接口） */
 export type PocketRoomMessageScope = 'member' | 'all'
+
+/** 右侧消息视图：room = 大房间留言流（默认），small = 小房间（暗号频道问答流） */
+export type PocketRoomViewMode = 'room' | 'small'
 
 /** token 失效不属于「房间不可用」：上抛让整页报错，引导重新登录 */
 function isAuthExpired(error: unknown): boolean {
@@ -127,6 +130,44 @@ export function usePocketRooms() {
   let historyCursor = 0
   /** 消息范围（见 PocketRoomMessageScope）；切换时重拉当前房间 */
   const messageScope = ref<PocketRoomMessageScope>('member')
+  /** 大房间 / 小房间视图（见 PocketRoomViewMode）；切换时换频道重拉 */
+  const viewMode = ref<PocketRoomViewMode>('room')
+  /** 选中成员的小房间频道；null = 未发现（主进程归属自愈只认 lastMsgList 回包里出现过的频道） */
+  const smallChannel = ref<{ serverId: string, channelId: string } | null>(null)
+  /** userId → 小房间频道缓存（null 也缓存：查过但未发现，不重复打接口） */
+  const smallChannelCache = new Map<number, { serverId: string, channelId: string } | null>()
+  /**
+   * 频道名表（tab 显示真实频道名）：连同所属 serverId 一起存，
+   * 读取时校验归属——否则切成员后旧 server 的表会顶出新名字。
+   */
+  const channelNames = ref<{ serverId: string, map: Map<string, string> }>({ serverId: '', map: new Map() })
+  /** serverId → 频道名表缓存（含空表：接口通了但没给名字，不重复打接口） */
+  const serverChannelNameCache = new Map<string, Map<string, string>>()
+  /**
+   * 本次会话内已通过暗号的小房间（channelId 为键）；解锁状态只存客户端内存，
+   * 重启后重新校验一次。
+   *
+   * 必须是 reactive 而非裸 Set：`smallRequiresAnswer` 是 computed，靠 `.has()` 收集依赖，
+   * 裸 Set 的增删不触发重算——解锁后页签上的锁与消息范围开关会一直停在锁定态
+   * （消息区分支在模板里靠前，把锁定层盖住了，所以现象只露在页签的锁上）。
+   */
+  const unlockedSmallChannels = reactive(new Set<string>())
+  /** 当前小房间的暗号问题（channelId → 问题缓存，含 null：room/info 未被拦，即无门禁） */
+  const smallQuestion = ref<PocketRoomQuestion | null>(null)
+  const smallQuestionLoading = ref(false)
+  const smallQuestionCache = new Map<string, PocketRoomQuestion | null>()
+  /**
+   * 小房间是否需要暗号：已发现频道 + 确认被暗号拦下（拿到问题）+ 本次会话未解锁。
+   * 刻意与当前视图解耦——页签上的锁要在大房间视图下同样可见，
+   * 否则「需要暗号」这件事只在切过去之后才暴露。
+   */
+  const smallRequiresAnswer = computed(() =>
+    !!smallChannel.value
+    && smallQuestion.value !== null
+    && !unlockedSmallChannels.has(smallChannel.value.channelId),
+  )
+  /** 暗号输入层是否展示：当前在小房间视图且该频道仍被暗号拦着 */
+  const smallLocked = computed(() => viewMode.value === 'small' && smallRequiresAnswer.value)
 
   /** userId → 频道缓存：加载时遍历解析即写入，选中/切回不重复解析 */
   const channelCache = new Map<number, { serverId: string, channelId: string }>()
@@ -139,6 +180,22 @@ export function usePocketRooms() {
   const selectedRoom = computed<PocketRoom | null>(
     () => rooms.value.find(room => room.userId === selectedUserId.value) ?? null,
   )
+
+  /** 大房间（选中成员主频道）的真实频道名；空串 = 未取到，由渲染层回退通用名 */
+  const roomChannelName = computed(() => {
+    const room = selectedRoom.value
+    if (!room || channelNames.value.serverId !== room.serverId)
+      return ''
+    return channelNames.value.map.get(room.channelId) ?? ''
+  })
+
+  /** 小房间（暗号频道）的真实频道名；空串 = 未发现频道或未取到名称 */
+  const smallChannelName = computed(() => {
+    const small = smallChannel.value
+    if (!small || channelNames.value.serverId !== small.serverId)
+      return ''
+    return channelNames.value.map.get(small.channelId) ?? ''
+  })
 
   /** 口袋关注 ID；失败返回空数组并由调用方降级（不抛错） */
   async function loadPocketFollowedIds(): Promise<number[]> {
@@ -407,12 +464,15 @@ export function usePocketRooms() {
     }
     else {
       messages.value = [...messages.value, ...fresh.sort((a, b) => a.msgTime - b.msgTime)]
-      // 选中房间的左列预览同步到最新一条（批量预览接口有延迟，本地即时补）
-      const selected = rooms.value.find(room => room.userId === selectedUserId.value)
-      const newest = fresh.reduce((a, b) => (a.msgTime >= b.msgTime ? a : b))
-      if (selected && newest.msgTime >= selected.previewTime) {
-        selected.preview = newest.text
-        selected.previewTime = newest.msgTime
+      // 选中房间的左列预览同步到最新一条（批量预览接口有延迟，本地即时补）；
+      // 小房间视图的新消息不写大房间预览
+      if (viewMode.value === 'room') {
+        const selected = rooms.value.find(room => room.userId === selectedUserId.value)
+        const newest = fresh.reduce((a, b) => (a.msgTime >= b.msgTime ? a : b))
+        if (selected && newest.msgTime >= selected.previewTime) {
+          selected.preview = newest.text
+          selected.previewTime = newest.msgTime
+        }
       }
     }
   }
@@ -449,6 +509,129 @@ export function usePocketRooms() {
   )
 
   /**
+   * 取当前 server 的频道名表（页签显示真实频道名）。
+   * 一次请求覆盖该 server 下全部频道（大房间与小房间同 server）；命中缓存不再打接口；
+   * 失败静默——页签回退通用名，不影响消息链路。
+   */
+  async function ensureChannelNames(serverId: string): Promise<void> {
+    if (!serverId)
+      return
+    const cached = serverChannelNameCache.get(serverId)
+    if (cached) {
+      channelNames.value = { serverId, map: cached }
+      return
+    }
+    try {
+      const list = await window.mainAPI.pocketGetServerChannels(serverId)
+      const map = new Map(
+        list.filter(item => item.channelName).map(item => [item.channelId, item.channelName]),
+      )
+      serverChannelNameCache.set(serverId, map)
+      // 回包期间可能已切到别的成员，只认仍是当前房间的那个 server
+      if (selectedRoom.value?.serverId === serverId)
+        channelNames.value = { serverId, map }
+    }
+    catch (error) {
+      debugLog('pocket-rooms', '频道名拉取失败（页签回退通用名）', error)
+    }
+  }
+
+  /**
+   * 发现选中成员的小房间频道（主进程归属自愈的结果）；null = 未发现，入口隐藏。
+   * 频道就位后顺手取一次暗号问题：页签上的锁图标靠它判定「是否需要暗号」，
+   * 不能等到切进小房间才拉，否则在大房间视图下永远看不到锁。
+   */
+  async function ensureSmallChannel(userId: number): Promise<void> {
+    if (smallChannelCache.has(userId)) {
+      if (selectedUserId.value === userId)
+        smallChannel.value = smallChannelCache.get(userId) ?? null
+    }
+    else {
+      try {
+        const channel = await window.mainAPI.pocketGetSmallChannel(userId)
+        smallChannelCache.set(userId, channel)
+        if (selectedUserId.value === userId)
+          smallChannel.value = channel
+      }
+      catch (error) {
+        debugLog('pocket-rooms', '小房间频道查询失败（入口降级隐藏）', error)
+      }
+    }
+    if (selectedUserId.value === userId && smallChannel.value)
+      void ensureSmallQuestion()
+  }
+
+  /** 拉取当前小房间的暗号问题（channelId 缓存；null = room/info 未被拦，即无门禁） */
+  async function ensureSmallQuestion(): Promise<void> {
+    const channel = smallChannel.value
+    if (!channel || smallQuestionCache.has(channel.channelId)) {
+      smallQuestion.value = smallQuestionCache.get(channel?.channelId ?? '') ?? null
+      return
+    }
+    smallQuestionLoading.value = true
+    try {
+      const question = await window.mainAPI.pocketGetRoomQuestion(channel.channelId)
+      smallQuestionCache.set(channel.channelId, question)
+      if (selectedUserId.value !== null && smallChannel.value?.channelId === channel.channelId)
+        smallQuestion.value = question
+    }
+    catch (error) {
+      debugLog('pocket-rooms', '暗号问题拉取失败', error)
+    }
+    finally {
+      smallQuestionLoading.value = false
+    }
+  }
+
+  /**
+   * 提交暗号：只有服务端校验通过才解锁并加载小房间消息。
+   * 校验端点见 pocket-auth.checkRoomAnswer（`team/channel/question/answer/verify`）；
+   * 万能密码由主进程客户端直通。服务端判错或接口不可达时如实返回失败，**不放行**。
+   */
+  async function unlockSmall(answer: string): Promise<{ ok: boolean, message?: string }> {
+    const channel = smallChannel.value
+    const userId = selectedUserId.value
+    if (!channel || userId === null)
+      return { ok: false, message: '未发现该成员的小房间频道' }
+    try {
+      const question = smallQuestion.value
+      const result = await window.mainAPI.pocketCheckRoomAnswer(channel.channelId, question?.questionId ?? '', answer)
+      if (!result.ok)
+        return { ok: false, message: result.message || '暗号不正确' }
+      unlockedSmallChannels.add(channel.channelId)
+      clearChat()
+      await openChannel(userId, channel)
+      return { ok: true }
+    }
+    catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /** 在选中成员下打开指定频道（大房间或小房间）：首屏拉取 + 启动轮询 */
+  async function openChannel(userId: number, channel: { serverId: string, channelId: string }) {
+    const requestId = selectRequestId
+    activeChannel = channel
+    chatStatus.value = 'loading'
+    chatStatusText.value = ''
+    try {
+      await fetchRoomPage(channel, 0, 'replace')
+    }
+    catch (error) {
+      if (requestId === selectRequestId) {
+        chatStatus.value = 'error'
+        chatStatusText.value = error instanceof Error ? error.message : String(error)
+      }
+      return
+    }
+    if (requestId !== selectRequestId || selectedUserId.value !== userId)
+      return
+    chatStatus.value = 'ready'
+    chatStatusText.value = ''
+    resumeMessagePoll()
+  }
+
+  /**
    * 选中房间：取缓存频道 → 拉最近一页消息 → 启动轮询。
    * 频道在首灌时已遍历解析并缓存；缓存未命中（关注后有新增）才懒解析。
    * 选中态在 await 期间可能已被切换/清空，回包后必须复核，否则消息会串房。
@@ -460,8 +643,13 @@ export function usePocketRooms() {
       return
     clearChat()
     selectedUserId.value = userId
+    // 视图随选中成员复位到大房间；小房间频道异步发现（不阻塞大房间首屏）
+    viewMode.value = 'room'
+    smallChannel.value = null
+    smallQuestion.value = null
     if (userId === null)
       return
+    void ensureSmallChannel(userId)
 
     const requestId = selectRequestId
     chatStatus.value = 'loading'
@@ -489,22 +677,37 @@ export function usePocketRooms() {
       channelCache.set(userId, channel)
     }
 
-    activeChannel = channel
-    try {
-      await fetchRoomPage(channel, 0, 'replace')
-    }
-    catch (error) {
-      if (requestId === selectRequestId) {
-        chatStatus.value = 'error'
-        chatStatusText.value = error instanceof Error ? error.message : String(error)
-      }
+    // 频道名（页签显示真实名称）：与消息首屏并行，失败回退通用名
+    void ensureChannelNames(channel.serverId)
+
+    await openChannel(userId, channel)
+  }
+
+  /**
+   * 切换大房间 / 小房间视图：换频道重拉当前成员的消息流（去重键/游标随 clearChat 复位）。
+   * 小房间频道缺失（自愈尚未发现）时退回大房间；轮询与翻历史走 activeChannel，自动跟随。
+   */
+  async function setViewMode(mode: PocketRoomViewMode) {
+    if (viewMode.value === mode)
+      return
+    viewMode.value = mode
+    const userId = selectedUserId.value
+    if (userId === null)
+      return
+    const channel = mode === 'small'
+      ? smallChannel.value
+      : channelCache.get(userId) ?? null
+    if (!channel) {
+      viewMode.value = 'room'
       return
     }
-    if (requestId !== selectRequestId)
+    clearChat()
+    // 小房间锁定态：不拉消息，渲染层展示暗号输入层（解锁成功后 unlockSmall 里补拉）
+    if (mode === 'small' && smallLocked.value) {
+      void ensureSmallQuestion()
       return
-    chatStatus.value = 'ready'
-    chatStatusText.value = ''
-    resumeMessagePoll()
+    }
+    await openChannel(userId, channel)
   }
 
   /** 加载更早历史（prepend 到消息流头部） */
@@ -634,6 +837,14 @@ export function usePocketRooms() {
     selectedRoom,
     messages,
     messageScope,
+    viewMode,
+    smallChannel,
+    roomChannelName,
+    smallChannelName,
+    smallRequiresAnswer,
+    smallLocked,
+    smallQuestion,
+    smallQuestionLoading,
     chatStatus,
     chatStatusText,
     historyExhausted,
@@ -642,6 +853,8 @@ export function usePocketRooms() {
     refresh: load,
     refreshRoomStatus,
     selectRoom,
+    setViewMode,
+    unlockSmall,
 
     loadMoreHistory,
     openSharedLive,

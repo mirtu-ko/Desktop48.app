@@ -38,8 +38,12 @@ const EMPTY_CHANNEL_TTL = 30 * 60 * 1000
 
 /** 单个房间的未读快照 */
 interface UnreadRoomState {
-  /** 未读条数（粗算，见文件头） */
+  /** 未读条数（大房间 + 小房间合计；粗算，见文件头） */
   count: number
+  /** 大房间频道的未读贡献（房间 tab 的点点） */
+  bigCount: number
+  /** 小房间（暗号频道）的未读贡献（小房间 tab 的点点） */
+  smallCount: number
   /** 最新一条未读消息时刻（ms） */
   latestTime: number
 }
@@ -462,7 +466,9 @@ async function tick(): Promise<void> {
         contributions.set(channelId, { count: data.fallbackUnread[channelId] ?? 0 })
     }
 
-    // 聚合到成员（大房间 + 小房间都记在成员头上）并与旧快照比对
+    // 聚合到成员（大房间 + 小房间都记在成员头上）并与旧快照比对；
+    // 大/小房间分计，渲染层的频道切换 tab 按此显示点点
+    const smallChannelIds = new Set(Object.values(data.smallChannels).map(channel => channel.channelId))
     const aggregated: Record<string, UnreadRoomState> = {}
     for (const [channelId, contribution] of contributions) {
       if (contribution.count <= 0)
@@ -470,8 +476,12 @@ async function tick(): Promise<void> {
       const ownerId = channelOwner.get(channelId)
       if (!ownerId)
         continue
-      const entry = aggregated[ownerId] ?? { count: 0, latestTime: 0 }
+      const entry = aggregated[ownerId] ?? { count: 0, bigCount: 0, smallCount: 0, latestTime: 0 }
       entry.count += contribution.count
+      if (smallChannelIds.has(channelId))
+        entry.smallCount += contribution.count
+      else
+        entry.bigCount += contribution.count
       entry.latestTime = Math.max(entry.latestTime, latestByUser.get(ownerId) ?? 0)
       aggregated[ownerId] = entry
     }
@@ -530,22 +540,26 @@ export function getState(): PocketUnreadBatch {
 }
 
 /**
- * 标记房间已读：未读清零并广播，随后把该成员全部频道的基线对齐到「此刻」。
+ * 标记房间已读（target 指定大房间或小房间）：未读清零并广播，随后把该频道
+ * 的基线对齐到「此刻」。大房间与小房间是两个独立频道、各有查看入口，
+ * 进哪个清哪个——另一路的未读贡献保留（精确模式用回包 unreadCount 与基线做差，
+ * 降级模式沿用粗算累计），聚合快照按剩余贡献重建。
  *
  * 不接收渲染层的消息键——渲染层消息 id 与检测键（lastMsgList 空间）不同空间，
  * 混写回执键会让已读房间在下一轮被误判成有新消息而「复活」（踩过）。
  * 对齐方式：即时拉一轮该成员所在 server 的批量预览（此刻用户刚读到消息流底部，
  * 服务端计数里含着的正是刚看完的这些消息），把 unreadCount 基线 / 身份锚钉到当下——
  * 下一轮检测的差值就是真正的「读了之后又来的新消息」。
- * 对齐请求失败不回滚：下一轮检测兜底重锚，最多多算一轮。
+ * 对齐请求失败不回滚：下一轮检测按频道重算贡献兜底，被读频道最多多算一轮。
  */
-export async function markRead(userId: number): Promise<void> {
+export async function markRead(userId: number, target: 'room' | 'small' = 'room'): Promise<void> {
   const data = store()
   const key = String(userId)
   const entry = data.unread[key]
-  debug('[pocket-unread] markRead', key, '未读条数:', entry?.count ?? 0)
-  // 没有未读就无事可做：基线/锚已在位（首见即锚定），不产生落盘与广播
-  if (!entry)
+  debug('[pocket-unread] markRead', key, target, '未读条数:', entry?.count ?? 0)
+  // 目标频道不存在（如小房间还没被归属自愈发现）：无从对齐，无事可做
+  const clearChannel = (target === 'small' ? data.smallChannels[key] : data.channels[key]) ?? null
+  if (!entry || !clearChannel?.channelId)
     return
   delete data.unread[key]
   persist()
@@ -558,21 +572,58 @@ export async function markRead(userId: number): Promise<void> {
     return
   try {
     const channelIds = new Set(memberChannels.map(channel => channel.channelId))
+    let keptCount = 0
+    let keptTime = 0
     for (const item of await getRoomLastMessages(serverIds)) {
       if (!channelIds.has(item.channelId))
         continue
       const msgKey = item.msgKey || `${item.msgTime}:${item.msgContent}`
-      if (item.unreadCount !== null)
-        data.baselines[item.channelId] = item.unreadCount
-      data.fallbackUnread[item.channelId] = 0
-      data.seenKeys[item.channelId] = msgKey
+      if (item.channelId === clearChannel.channelId) {
+        // 被读频道：基线/锚对齐到「此刻」
+        if (item.unreadCount !== null)
+          data.baselines[item.channelId] = item.unreadCount
+        data.fallbackUnread[item.channelId] = 0
+        data.seenKeys[item.channelId] = msgKey
+      }
+      else {
+        // 未读频道：保留其未读贡献（精确模式按回包计数与基线做差，降级沿用粗算累计）
+        keptTime = Math.max(keptTime, item.msgTime || 0)
+        if (item.unreadCount !== null) {
+          const baseline = data.baselines[item.channelId]
+          if (baseline !== undefined)
+            keptCount += Math.max(0, item.unreadCount - baseline)
+        }
+        else {
+          keptCount += data.fallbackUnread[item.channelId] ?? 0
+        }
+      }
+    }
+    if (keptCount > 0) {
+      // 保留的是另一路频道：清了小房间则剩余全在大房间，反之亦然
+      data.unread[key] = {
+        count: keptCount,
+        bigCount: target === 'small' ? keptCount : 0,
+        smallCount: target === 'small' ? 0 : keptCount,
+        latestTime: keptTime,
+      }
+      publish()
     }
     persist()
-    debug('[pocket-unread] 已读基线对齐完成', key, '频道:', [...channelIds].join(','))
+    debug('[pocket-unread] 已读基线对齐完成', key, target, '频道:', clearChannel.channelId, '保留未读:', keptCount)
   }
   catch (error) {
     debug('[pocket-unread] 已读基线对齐失败（下一轮检测兜底）', error)
   }
+}
+
+/**
+ * 成员的小房间（暗号频道）频道，给渲染层查看入口用；null = 尚未发现。
+ * 小房间频道只能经归属自愈被动发现（lastMsgList 回包出现 + room/info 被暗号
+ * questionId 信封拦下 + 同 server 唯一关注成员归属），没有主动探测接口。
+ */
+export function getSmallChannel(userId: number): { serverId: string, channelId: string } | null {
+  const channel = store().smallChannels[String(userId)]
+  return channel?.channelId ? { serverId: channel.serverId, channelId: channel.channelId } : null
 }
 
 // ===== 生命周期（对端：app.ts） =====

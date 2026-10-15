@@ -41,12 +41,23 @@ export function registerPocketIPC(): void {
   // 批量最新消息（左侧列表预览）
   handleTraced('pocketGetRoomLastMessages', (_event: IpcMainInvokeEvent, serverIds: string[]) =>
     pocketAuth.getRoomLastMessages(serverIds))
+  // 频道名（seine 频道详情）：房间 / 小房间 tab 显示真实频道名
+  handleTraced('pocketGetServerChannels', (_event: IpcMainInvokeEvent, serverId: string) =>
+    pocketAuth.getServerChannels(serverId))
   handleTraced('pocketDanmakuStart', (event, chatroomId: string, liveId: string) =>
     handlePocketDanmakuStart(chatroomId, liveId, event.sender))
   handleTraced('pocketDanmakuStop', (event, chatroomId: string) =>
     handlePocketDanmakuStop(chatroomId, event.sender))
-  // 房间未读（主进程 60s 轮询检测，见 main/pocket48/pocket-unread.ts）：快照回取 + 标记已读
+  // 房间未读（主进程 60s 轮询检测，见 main/pocket48/pocket-unread.ts）：
+  // 快照回取 + 小房间频道查询 + 标记已读（target 区分大/小房间）
   handleTraced('pocketUnreadState', () => pocketUnread.getState())
-  handleTraced('pocketMarkRead', (_event: IpcMainInvokeEvent, userId: number) =>
-    pocketUnread.markRead(userId))
+  handleTraced('pocketGetSmallChannel', (_event: IpcMainInvokeEvent, userId: number) =>
+    pocketUnread.getSmallChannel(userId))
+  // 小房间暗号：问题拉取（room/info 拦截信封）+ 作答校验（万能密码客户端直通）
+  handleTraced('pocketGetRoomQuestion', (_event: IpcMainInvokeEvent, channelId: string) =>
+    pocketAuth.getRoomQuestion(channelId))
+  handleTraced('pocketCheckRoomAnswer', (_event: IpcMainInvokeEvent, channelId: string, questionId: string, answer: string) =>
+    pocketAuth.checkRoomAnswer(channelId, questionId, answer))
+  handleTraced('pocketMarkRead', (_event: IpcMainInvokeEvent, userId: number, target?: 'room' | 'small') =>
+    pocketUnread.markRead(userId, target))
 }

@@ -681,6 +681,25 @@ body,
   }
 }
 
+/* 未读数字角标：红色胶囊 + 白字，单位数占 16px 方块、两位数自动撑宽。
+ * 只描述外观与排版，落点由使用处决定（房间列表贴头像角、频道页签跟在文字后）。
+ * 房间列表与频道页签共用，避免同页出现两种规格的未读标记 */
+.unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #fff;
+  background: var(--el-color-danger);
+}
+
 /* 专辑封面：解码完成才淡入，铺满容器见 .media-fill */
 .cover-src {
   animation: fade-in 0.25s ease;

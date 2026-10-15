@@ -385,4 +385,45 @@ describe('pocket-unread（房间未读检测）', () => {
     mod.stopPocketUnread()
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
   })
+
+  it('markRead 按频道拆分：读大房间保留小房间未读；getSmallChannel 暴露小房间频道', async () => {
+    const { mod, auth } = await freshModule()
+    auth.getToken.mockReturnValue('tok')
+    auth.getFollowedIds.mockResolvedValue([1])
+    auth.getRoomChannel.mockResolvedValue({ serverId: 's1', channelId: 'c1' })
+    // c1 大房间 + cX 小房间（同 server，room/info 被暗号拦下）
+    const both = (bigKey: string, smallKey: string) => [
+      { channelId: 'c1', serverId: 's1', starName: '成员', msgContent: '大房间', msgKey: bigKey, msgTime: 0, unreadCount: null },
+      { channelId: 'cX', serverId: 's1', starName: '成员', msgContent: '小房间', msgKey: smallKey, msgTime: 0, unreadCount: null },
+    ]
+    auth.getRoomLastMessages.mockResolvedValue(both('k1a', 'k1b'))
+    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"596","question":"暗号"}'))
+
+    // 第 1 轮：c1 锚定；cX 识别为小房间并归属（本轮不计数）
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomChannelOwner).toHaveBeenCalledTimes(1))
+    mod.stopPocketUnread()
+
+    // 第 2 轮：cX 锚定；小房间频道可查
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(2))
+    mod.stopPocketUnread()
+    expect(mod.getSmallChannel(1)).toMatchObject({ serverId: 's1', channelId: 'cX' })
+    expect(mod.getSmallChannel(2)).toBeNull()
+
+    // 两个频道各来一条新消息：聚合 total 2，大/小房间分计各 1
+    auth.getRoomLastMessages.mockResolvedValue(both('k2a', 'k2b'))
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(mod.getState().total).toBe(2))
+    mod.stopPocketUnread()
+    expect(mod.getState().rooms['1']).toMatchObject({ count: 2, bigCount: 1, smallCount: 1 })
+
+    // 读大房间：只清大房间，小房间未读保留
+    await mod.markRead(1, 'room')
+    expect(mod.getState().rooms['1']).toMatchObject({ count: 1, bigCount: 0, smallCount: 1 })
+
+    // 读小房间：清零
+    await mod.markRead(1, 'small')
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+  })
 })

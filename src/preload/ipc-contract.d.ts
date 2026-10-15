@@ -202,6 +202,33 @@ export interface PocketRoomChannel {
   channelId: string
 }
 
+/** team server 下的频道（seine 频道详情）：channelId + 服务端给的频道名 */
+export interface PocketServerChannel {
+  channelId: string
+  channelName: string
+}
+
+/** 小房间（暗号频道）的暗号问题（room/info 拦截信封解析结果） */
+export interface PocketRoomQuestion {
+  questionId: string
+  question: string
+}
+
+/** 暗号提交结果（主进程对端：pocket-auth.checkRoomAnswer） */
+export interface PocketRoomAnswerResult {
+  ok: boolean
+  /** ok 时：master = 万能密码客户端直通，server = 服务端校验通过 */
+  via?: 'master' | 'server'
+  /**
+   * !ok 时：wrong = 服务端明确判错（含未取到题面），unverified = 校验接口不可达。
+   * 校验走 `im/api/v1/team/channel/question/answer/verify`（实测见
+   * pocket-auth.checkRoomAnswer）；两种情况渲染层一律视为未通过（不放行），
+   * 由 message 说明原因。
+   */
+  reason?: 'wrong' | 'unverified'
+  message?: string
+}
+
 /** 单条房间消息（CustomMessageV2）：正文 bodys 多为 JSON 字符串，发送者资料在 extInfo.user */
 export interface PocketRoomMessage {
   msgIdServer: string
@@ -265,8 +292,12 @@ export interface PocketDanmakuBatch {
 
 /** 单个房间的未读快照（userId 为键；count>0 的房间才会出现） */
 export interface PocketUnreadRoomState {
-  /** 未读条数（lastMsgList 每频道只有最新一条，一轮按「有新消息」粗算 +1） */
+  /** 未读条数（大房间 + 小房间合计；lastMsgList 每频道只有最新一条，一轮按「有新消息」粗算 +1） */
   count: number
+  /** 大房间频道的未读贡献（频道切换 tab 的点点） */
+  bigCount: number
+  /** 小房间（暗号频道）的未读贡献（频道切换 tab 的点点） */
+  smallCount: number
   /** 最新一条未读消息时刻（ms） */
   latestTime: number
 }
@@ -368,14 +399,28 @@ interface StaticIpcInvokeMap {
   pocketGetRoomMessages: InvokeSpec<[channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all'], PocketRoomMessages>
   /** 批量拉取各 server 频道的最后一条消息（左侧列表预览） */
   pocketGetRoomLastMessages: InvokeSpec<[serverIds: string[]], PocketRoomLastMessage[]>
+  /** 拉取 team server 下全部频道的 id 与名称（房间页 tab 显示真实频道名；失败返回空数组） */
+  pocketGetServerChannels: InvokeSpec<[serverId: string], PocketServerChannel[]>
   /** 起口袋聊天室弹幕会话并登记订阅；false = 未登录/凭据失效/参数无效 */
   pocketDanmakuStart: InvokeSpec<[chatroomId: string, liveId: string], boolean>
   /** 退订聊天室弹幕；最后一个订阅者离开时主进程断开连接 */
   pocketDanmakuStop: InvokeSpec<[chatroomId: string], void>
   /** 房间未读全量快照（启动时回取一次；后续变化走 pocketUnreadBatch 事件） */
   pocketUnreadState: InvokeSpec<[], PocketUnreadBatch>
-  /** 标记房间已读：未读清零并广播；主进程删回执键、下一轮检测重新锚定（见 pocket-unread.ts） */
-  pocketMarkRead: InvokeSpec<[userId: number], void>
+  /** 成员的小房间（暗号频道）频道，null = 尚未被发现（见 pocket-unread.ts 归属自愈） */
+  pocketGetSmallChannel: InvokeSpec<[userId: number], PocketRoomChannel | null>
+  /** 拉取小房间的暗号问题；null = 无门禁（room/info 未被拦），其余错误 reject */
+  pocketGetRoomQuestion: InvokeSpec<[channelId: string], PocketRoomQuestion | null>
+  /**
+   * 提交小房间暗号：走服务端校验端点，success 才算通过（via=server）；
+   * 万能密码为开发者自用通道（via=master，不发起请求）；接口不可达时 reason=unverified。
+   */
+  pocketCheckRoomAnswer: InvokeSpec<[channelId: string, questionId: string, answer: string], PocketRoomAnswerResult>
+  /**
+   * 标记房间已读：目标频道未读清零并广播，另一路（大/小房间）未读保留；
+   * 主进程把该频道基线对齐到当下、下一轮检测重新锚定（见 pocket-unread.ts）
+   */
+  pocketMarkRead: InvokeSpec<[userId: number, target?: 'room' | 'small'], void>
 
   // ===== B 站直播间信息 =====
   // 对端：main/bilibili/room-info.ts

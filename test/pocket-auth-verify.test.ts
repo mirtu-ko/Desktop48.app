@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  checkRoomAnswer,
   followMember,
   getAuthState,
   getFollowedIds,
@@ -431,5 +432,58 @@ describe('pocket-auth 成员房间', () => {
   it('getRoomLastMessages 业务失败抛原始 message（调用方静默降级无预览）', async () => {
     env.replies['team/classic/last/message/get'] = { status: 200, body: { status: 200, success: false, message: '服务不存在' } }
     await expect(getRoomLastMessages(['888'])).rejects.toThrow('服务不存在')
+  })
+})
+
+describe('pocket-auth checkRoomAnswer', () => {
+  /** 真实校验端点（塞纳河48 反编译所得），见 pocket-auth.checkRoomAnswer 注释 */
+  const VERIFY = 'team/channel/question/answer/verify'
+
+  it('万能密码客户端直通：不发任何请求', async () => {
+    await expect(checkRoomAnswer('40948216', '986', 'desktop48')).resolves.toEqual({ ok: true, via: 'master' })
+    expect(env.requests).toHaveLength(0)
+  })
+
+  it('空输入 / 缺题面：不发请求，按未通过返回', async () => {
+    await expect(checkRoomAnswer('40948216', '986', '   '))
+      .resolves
+      .toMatchObject({ ok: false, reason: 'wrong', message: '请输入暗号' })
+    await expect(checkRoomAnswer('40948216', '', '芝麻开门'))
+      .resolves
+      .toMatchObject({ ok: false, reason: 'wrong' })
+    expect(env.requests).toHaveLength(0)
+  })
+
+  it('服务端 success 才算通过；questionId 按 long 传数字、answer 去首尾空白', async () => {
+    env.replies[VERIFY] = { status: 200, body: { status: 200, success: true } }
+    await expect(checkRoomAnswer('40948216', '986', ' 1126170193 ')).resolves.toEqual({ ok: true, via: 'server' })
+    const request = env.requests.find(r => r.url.includes(VERIFY))
+    expect(request?.body).toEqual({ answer: '1126170193', questionId: 986 })
+  })
+
+  it('服务端判错：透传服务端文案、reason=wrong', async () => {
+    env.replies[VERIFY] = { status: 200, body: { status: 500, success: false, message: '回答错误' } }
+    await expect(checkRoomAnswer('40948216', '986', 'zzz9'))
+      .resolves
+      .toMatchObject({ ok: false, reason: 'wrong', message: '回答错误' })
+  })
+
+  it('问题不存在（questionId 服务端不认）同样按判错返回，不用本地文案覆盖', async () => {
+    env.replies[VERIFY] = { status: 200, body: { status: 500, success: false, message: '问题不存在' } }
+    await expect(checkRoomAnswer('40948216', '999999', 'zzz9'))
+      .resolves
+      .toMatchObject({ ok: false, reason: 'wrong', message: '问题不存在' })
+  })
+
+  it('校验接口不可达时不冒充「回答错误」，返回 unverified', async () => {
+    env.replies[VERIFY] = { status: 404, body: {} }
+    await expect(checkRoomAnswer('40948216', '986', 'zzz9'))
+      .resolves
+      .toMatchObject({ ok: false, reason: 'unverified' })
+  })
+
+  it('token 失效上抛，不吞成校验失败', async () => {
+    env.replies[VERIFY] = { status: 200, body: { status: 401005, success: false } }
+    await expect(checkRoomAnswer('40948216', '986', 'zzz9')).rejects.toThrow('登录已过期')
   })
 })

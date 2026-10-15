@@ -41,12 +41,20 @@ export function unreadCountOf(userId: number): number {
   return unreadRooms.value[String(userId)]?.count ?? 0
 }
 
+/** 某房间大/小房间各自的未读数；频道切换 tab 的点点用 */
+export function unreadChannelOf(userId: number): { big: number, small: number } {
+  const entry = unreadRooms.value[String(userId)]
+  return { big: entry?.bigCount ?? 0, small: entry?.smallCount ?? 0 }
+}
+
 /**
  * 标记房间已读（进入房间拉到消息 / 贴底看到新消息时调用）。
+ * target 区分大房间 / 小房间（暗号频道）：两个频道各有查看入口，进哪个清哪个，
+ * 另一路未读保留（主进程按频道拆分对齐基线）。
  * 只传 userId：主进程清零未读并删回执键，下一轮检测重新锚定到最新消息——
  * 不传渲染层消息 id，因为渲染层 id 与主进程检测键不同空间，混写会导致已读复活。
  */
-export async function markRoomRead(userId: number): Promise<void> {
+export async function markRoomRead(userId: number, target: 'room' | 'small' = 'room'): Promise<void> {
   const key = String(userId)
   // 乐观清零：广播稍后到达，值一致
   if (unreadRooms.value[key]) {
@@ -55,7 +63,7 @@ export async function markRoomRead(userId: number): Promise<void> {
     unreadRooms.value = next
   }
   try {
-    await window.mainAPI.pocketMarkRead(userId)
+    await window.mainAPI.pocketMarkRead(userId, target)
   }
   catch (error) {
     console.error('[pocket-unread] 标记已读失败:', error)
@@ -64,7 +72,7 @@ export async function markRoomRead(userId: number): Promise<void> {
 
 /** 未读 store：房间未读的全局镜像与已读标记（模块级单例） */
 export function usePocketUnreadStore() {
-  return { unreadRooms, totalUnread, unreadCountOf, markRoomRead }
+  return { unreadRooms, totalUnread, unreadCountOf, unreadChannelOf, markRoomRead }
 }
 
 export default usePocketUnreadStore

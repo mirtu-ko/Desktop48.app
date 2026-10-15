@@ -109,6 +109,8 @@ interface SetupOptions {
   roomPages?: Record<string, Record<number, { nextTime: number, messages: ReturnType<typeof roomMsg>[] }>>
   /** serverId → 最新一条消息（team/classic/last/message/get 的 lastMsgList 条目） */
   lastMessages?: Array<{ channelId: string, starName?: string, msgContent: string, msgTime?: number }>
+  /** serverId → 该 server 下的频道（seine 频道详情，页签显示真实频道名用） */
+  serverChannels?: Record<string, Array<{ channelId: string, channelName: string }>>
 }
 
 async function setup(options: SetupOptions = {}) {
@@ -118,6 +120,7 @@ async function setup(options: SetupOptions = {}) {
     channelFetched: [] as number[],
     lastMessageFetched: [] as string[][],
     messageFetched: [] as Array<{ channelId: string, nextTime: number, scope: 'member' | 'all' }>,
+    serverChannelsFetched: [] as string[],
     openFloatWindow: [] as unknown[],
   }
   roomMock.channelFail = new Set()
@@ -152,6 +155,15 @@ async function setup(options: SetupOptions = {}) {
         const page = options.roomPages?.[channelId]?.[nextTime] ?? { nextTime: 0, messages: [] }
         return page
       }),
+      pocketGetServerChannels: vi.fn(async (serverId: string) => {
+        calls.serverChannelsFetched.push(serverId)
+        return options.serverChannels?.[serverId] ?? []
+      }),
+      // 小房间频道发现走主进程归属自愈：本层测试里恒未发现（入口隐藏）
+      pocketGetSmallChannel: vi.fn(async () => null),
+      // 暗号链路同理备齐 mock：缺了会被 try/catch 静默吞掉，测试照过但不真实
+      pocketGetRoomQuestion: vi.fn(async () => null),
+      pocketCheckRoomAnswer: vi.fn(async () => ({ ok: false, reason: 'unverified' as const })),
       openFloatWindow: vi.fn(async (kind: string, payload: unknown) => {
         calls.openFloatWindow.push([kind, payload])
       }),
@@ -665,5 +677,33 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
 
     expect(calls.openFloatWindow).toHaveLength(1)
     expect(calls.openFloatWindow[0][0]).toBe('playback')
+  })
+
+  it('频道名：取服务端给的 channelName（页签显示真实名称的来源）', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      serverChannels: {
+        'srv-10001': [
+          { channelId: 'ch-10001', channelName: '小晴的房间' },
+          { channelId: 'ch-small', channelName: '悄悄话频道' },
+        ],
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 一次请求覆盖该 server 下全部频道
+    expect(calls.serverChannelsFetched).toEqual(['srv-10001'])
+    expect(api.roomChannelName.value).toBe('小晴的房间')
+  })
+
+  it('频道名：接口没给名称时留空（渲染层回退通用名）', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.roomChannelName.value).toBe('')
   })
 })

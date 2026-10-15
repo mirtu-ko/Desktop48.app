@@ -163,6 +163,7 @@ const api = {
   pocketGetRoomMessages: (channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all') =>
     invokeIpc('pocketGetRoomMessages', channelId, serverId, nextTime, scope),
   pocketGetRoomLastMessages: (serverIds: string[]) => invokeIpc('pocketGetRoomLastMessages', serverIds),
+  pocketGetServerChannels: (serverId: string) => invokeIpc('pocketGetServerChannels', serverId),
   pocketDanmakuStart: (chatroomId: string, liveId: string) => invokeIpc('pocketDanmakuStart', chatroomId, liveId),
   pocketDanmakuStop: (chatroomId: string) => invokeIpc('pocketDanmakuStop', chatroomId),
   // pocketDanmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
@@ -172,7 +173,11 @@ const api = {
   // ===== 房间未读 =====
   // 对端：main/pocket48/pocket-unread.ts（主进程唯一真相，检测不受窗口失焦节流）
   pocketUnreadState: () => invokeIpc('pocketUnreadState'),
-  pocketMarkRead: (userId: number) => invokeIpc('pocketMarkRead', userId),
+  pocketGetSmallChannel: (userId: number) => invokeIpc('pocketGetSmallChannel', userId),
+  pocketGetRoomQuestion: (channelId: string) => invokeIpc('pocketGetRoomQuestion', channelId),
+  pocketCheckRoomAnswer: (channelId: string, questionId: string, answer: string) =>
+    invokeIpc('pocketCheckRoomAnswer', channelId, questionId, answer),
+  pocketMarkRead: (userId: number, target?: 'room' | 'small') => invokeIpc('pocketMarkRead', userId, target),
   // pocketUnreadBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   pocketUnreadBatch: (callback: (_state: PocketUnreadBatch) => void) =>
     onIpc('pocketUnreadBatch', callback),

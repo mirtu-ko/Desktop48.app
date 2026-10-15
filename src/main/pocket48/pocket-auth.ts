@@ -236,20 +236,32 @@ function saveStoredAuth(auth: StoredAuth): void {
   authStore().write(auth)
 }
 
+/** TODO(临时调试): 上次已打印的 token，避免高频调用刷屏；排查完删除 */
+let debugLastToken = ''
+
 /** 解出可用 token；加密解密失败（如更换系统用户）视为未保存，返回空串 */
 function extractToken(stored: StoredAuth | null): string {
   if (!stored)
     return ''
+  let token: string
   if (stored.tokenEnc) {
     try {
-      return safeStorage.decryptString(Buffer.from(stored.tokenEnc, 'base64'))
+      token = safeStorage.decryptString(Buffer.from(stored.tokenEnc, 'base64'))
     }
     catch (error) {
       log('[pocket-auth] token 解密失败，按未登录处理', error)
       return ''
     }
   }
-  return stored.tokenPlain || ''
+  else {
+    token = stored.tokenPlain || ''
+  }
+  // TODO(临时调试): dev 环境打印原始 token（生产构建 verbose 门控为关，不输出）
+  if (token && token !== debugLastToken) {
+    debugLastToken = token
+    debug('[pocket-auth] 原始 token:', token)
+  }
+  return token
 }
 
 function maskMobile(mobile: string): string {
@@ -627,6 +639,21 @@ export async function getChatroomId(liveId: string): Promise<string> {
 const SERVER_JUMP_URL = 'https://pocketapi.48.cn/im/api/v1/im/server/jump'
 const ROOM_INFO_URL = 'https://pocketapi.48.cn/im/api/v1/im/team/room/info'
 /**
+ * 答案校验端点：小房间暗号唯一的真实校验入口，见 checkRoomAnswer 的实测记录。
+ * 来源：塞纳河48 客户端（com.seine48.app）jadx 反编译——Retrofit 接口
+ * `com.meta.module_base.network.api.ApiIM#questionAnswer`
+ * `@POST("im/api/v1/team/channel/question/answer/verify")`，
+ * 请求体由 `ChannelSwitchViewModel.submitQuestionAnswer` 构造：`{ answer, questionId }`。
+ */
+const ROOM_ANSWER_VERIFY_URL = 'https://pocketapi.48.cn/im/api/v1/team/channel/question/answer/verify'
+/**
+ * 频道详情（seine 服务）：给定 team server 返回其下全部频道，含服务端给的 channelName。
+ * 房间页「房间 / 小房间」切换要显示真实频道名，而 jump 与 lastMsgList 都不带频道名，
+ * 被暗号拦下的 room/info 也拿不到 channelInfo——名称只能从这里取。
+ * 参考实现 yaya_msg 同款；seine 有独立的客户端特征，见 seineHeaderOverrides。
+ */
+const SEINE_SERVER_DETAIL_URL = 'https://pocketapi.48.cn/im/api/seine/server/detail'
+/**
  * 房间频道历史消息（HTTP 拉取）。
  * 参考实现 yaya_msg 的实时消息走 QChat 长连接（另一套 NIM 协议），
  * 本版本以轮询替代实时推送，覆盖「查看房间消息」场景。
@@ -729,6 +756,195 @@ export async function getRoomChannelOwner(channelId: string): Promise<PocketRoom
     channelId: String(channelInfo.channelId ?? channelId).trim(),
     serverId: String(channelInfo.serverId || '').trim(),
     ownerId: Number(channelInfo.ownerId) || 0,
+  }
+}
+
+/** 频道名（seine 频道详情）：channelId + 服务端给的频道显示名 */
+export interface PocketServerChannel {
+  channelId: string
+  channelName: string
+}
+
+/**
+ * seine 服务的伪装头覆盖项：客户端特征与主 App 不同（appName = seine48、Alamofire UA、
+ * appVersion 1.2.0），其余字段（token / pa / Accept-Language）沿用 pocketHeaders。
+ * 只返回需要覆盖的键，pa 仍由 postPocket 统一现算，避免两处签名不一致。
+ */
+function seineHeaderOverrides(): Record<string, string> {
+  return {
+    'appInfo': JSON.stringify({
+      vendor: 'apple',
+      deviceId: deviceUuid(),
+      appVersion: '1.2.0',
+      appBuild: '26072902',
+      osVersion: '27.0',
+      osType: 'ios',
+      deviceName: 'iPhone 16 Pro',
+      appName: 'seine48',
+    }),
+    'User-Agent': 'Seina/1.2.0 (com.seine48.app; build:26072902; iOS 27.0.0) Alamofire/5.8.0',
+  }
+}
+
+/**
+ * 拉取某个 team server 下的全部频道（channelId + channelName）。
+ * 房间页用它把「房间 / 小房间」两个 tab 显示成真实频道名；
+ * 字段结构无官方文档，失败/缺字段由调用方静默回退通用名。
+ */
+export async function getServerChannels(serverId: string): Promise<PocketServerChannel[]> {
+  const token = getToken()
+  if (!token || !serverId)
+    return []
+  debug('[pocket-auth] 拉取频道列表请求：', JSON.stringify({ serverId: String(serverId) }))
+  const envelope = await postPocket<Record<string, unknown>>(
+    SEINE_SERVER_DETAIL_URL,
+    { serverId: Number(serverId) },
+    token,
+    seineHeaderOverrides(),
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throw new Error('登录已过期，请重新登录口袋48账号')
+  if (!envelope.success)
+    throw new Error(envelope.message || '获取频道列表失败')
+  const content = (envelope.content || {}) as Record<string, unknown>
+  const list = Array.isArray(content.channelInfoList) ? content.channelInfoList : []
+  const result = list
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map(item => ({
+      channelId: String(item.channelId ?? '').trim(),
+      channelName: String(item.channelName ?? '').trim(),
+    }))
+    .filter(item => item.channelId)
+  // 排查用：该接口字段结构未公开，回包里的频道名列表直接打印对照（verbose 级别）
+  debug('[pocket-auth] 获取频道列表回包：', JSON.stringify(result))
+  return result
+}
+
+/** 小房间（暗号频道）的暗号问题：room/info 被暗号拦下时回包 message 内嵌 JSON 信封 */
+export interface PocketRoomQuestion {
+  questionId: string
+  question: string
+}
+
+/** 解析 room/info 拦截信封：message 是内嵌 JSON（如 {"questionId":"596","question":"..."}） */
+function parseQuestionEnvelope(message: string): PocketRoomQuestion | null {
+  const trimmed = message.trim()
+  if (!trimmed.startsWith('{'))
+    return null
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>
+    const questionId = String(parsed.questionId ?? '').trim()
+    if (!questionId)
+      return null
+    return { questionId, question: String(parsed.question ?? '').trim() }
+  }
+  catch {
+    return null
+  }
+}
+
+/**
+ * 拉取小房间的暗号问题。
+ * room/info 正常回包 = 无门禁（或该账号已通过暗号），返回 null；
+ * 被暗号拦下返回问题；其余业务错误照常抛出。
+ */
+export async function getRoomQuestion(channelId: string): Promise<PocketRoomQuestion | null> {
+  const token = getToken()
+  if (!token || !channelId)
+    return null
+  debug('[pocket-auth] 拉取暗号问题请求：', JSON.stringify({ channelId: String(channelId) }))
+  const envelope = await postPocket<Record<string, unknown>>(
+    ROOM_INFO_URL,
+    { channelId: String(channelId) },
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throw new Error('登录已过期，请重新登录口袋48账号')
+  if (envelope.success)
+    return null
+  const question = parseQuestionEnvelope(envelope.message || '')
+  if (question)
+    return question
+  throw new Error(envelope.message || '获取暗号问题失败')
+}
+
+/**
+ * 万能暗号：客户端直通，不发起任何请求。
+ * 自用通道——真实暗号由服务端校验（见 checkRoomAnswer），但并非每个房间的暗号都已知。
+ * 界面不公开它的存在。
+ */
+const MASTER_PASSCODE = 'desktop48'
+
+/** 暗号提交结果（结构对齐 ipc-contract 的 PocketRoomAnswerResult） */
+export interface PocketRoomAnswerResult {
+  ok: boolean
+  /** ok 时：master = 万能密码客户端直通，server = 服务端校验通过 */
+  via?: 'master' | 'server'
+  /** !ok 时：wrong = 服务端明确判错（含未取到题面），unverified = 校验接口不可达 */
+  reason?: 'wrong' | 'unverified'
+  message?: string
+}
+
+/**
+ * questionId 服务端声明为 long（参考实现里是 Kotlin 的 Long）：
+ * 纯数字串转数字，其余原样透传——宁可让服务端报参数错误，也不在本地编造。
+ */
+function toQuestionId(raw: string): number | string {
+  const trimmed = raw.trim()
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : trimmed
+}
+
+/**
+ * 提交小房间暗号：只有服务端校验通过才算解锁。
+ * 失败一律不放行；仅万能密码为开发者自用通道（界面不公开）。
+ *
+ * 校验端点（2026-10-15 真机验证，改动前请先读）：
+ * - 端点 `im/api/v1/team/channel/question/answer/verify`，body `{ answer, questionId }`。
+ *   真实 questionId 配错答 → `{status:500, success:false, message:'回答错误'}`；
+ *   不存在的 questionId（999999 / 0）或缺失 → `{status:500, success:false,
+ *   message:'问题不存在'}`。即 questionId 逐题校验、答案由服务端比对，判错有明确结论。
+ * - `room/info` 给出的 questionId 与该校验端点认得的是同一空间（986 / 596 均判
+ *   「回答错误」而非「问题不存在」），因此题面取自 room/info、校验走本端点即可。
+ * - questionId 传数字或数字串服务端都能收（Jackson 自动转换），按官方客户端声明传数字。
+ * - 官方进房动作是 `seine/server/channel/change`，业务码 2001 需答题
+ *   （同族 2002 需贡献、2003 需守护）；本应用只读消息、不执行进房动作。
+ * - 本函数只认服务端 `success`，其余情况一律视为未通过。
+ *
+ * 接口不可达 / 断网时返回 unverified，**不冒充「回答错误」**。
+ */
+export async function checkRoomAnswer(
+  channelId: string,
+  questionId: string,
+  answer: string,
+): Promise<PocketRoomAnswerResult> {
+  const trimmed = answer.trim()
+  if (!trimmed)
+    return { ok: false, reason: 'wrong', message: '请输入暗号' }
+  if (trimmed === MASTER_PASSCODE)
+    return { ok: true, via: 'master' }
+  if (!questionId.trim())
+    return { ok: false, reason: 'wrong', message: '未取到暗号问题，请稍后重试' }
+  const token = getToken()
+  if (!token)
+    throw new Error('未登录口袋48账号')
+  try {
+    const envelope = await postPocket<Record<string, unknown>>(
+      ROOM_ANSWER_VERIFY_URL,
+      { answer: trimmed, questionId: toQuestionId(questionId) },
+      token,
+    )
+    if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+      throw new Error('登录已过期，请重新登录口袋48账号')
+    if (envelope.success)
+      return { ok: true, via: 'server' }
+    debug('[pocket-auth] 暗号校验未通过：', channelId, JSON.stringify(envelope))
+    return { ok: false, reason: 'wrong', message: envelope.message || '回答错误' }
+  }
+  catch (error) {
+    if (error instanceof Error && error.message.includes('登录已过期'))
+      throw error
+    debug('[pocket-auth] 暗号校验请求失败：', channelId, error)
+    return { ok: false, reason: 'unverified', message: '暗号校验接口不可用，请稍后重试' }
   }
 }
 

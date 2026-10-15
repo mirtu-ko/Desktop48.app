@@ -3,18 +3,18 @@
 // 数据与连接编排见 composables/use-pocket-rooms.ts（本页只做展示与交互）。
 
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
-import { ArrowRight, ChatDotRound, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import { ArrowRight, ChatDotRound, Lock, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
 import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
-import { markRoomRead, unreadCountOf } from '@renderer/stores/pocket-unread'
+import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { debugLog } from '@renderer/utils/debug'
 import { liveShareTitle } from '@renderer/utils/pocket-room-message'
 import Tools from '@renderer/utils/tools'
 import dayjs from 'dayjs'
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 const {
@@ -29,12 +29,22 @@ const {
   selectedUserId,
   messages,
   messageScope,
+  viewMode,
+  smallChannel,
+  roomChannelName,
+  smallChannelName,
+  smallRequiresAnswer,
+  smallLocked,
+  smallQuestion,
+  smallQuestionLoading,
   chatStatus,
   chatStatusText,
   historyExhausted,
   loadingMore,
   load,
   selectRoom,
+  setViewMode,
+  unlockSmall,
 
   loadMoreHistory,
   openSharedLive,
@@ -42,6 +52,76 @@ const {
 } = usePocketRooms()
 
 const router = useRouter()
+
+/** 未读数字角标文案：超过 99 收敛为 99+（与 Dock 角标同一规则） */
+function unreadText(count: number): string {
+  return count > 99 ? '99+' : String(count)
+}
+
+/** 频道切换回调：参数收窄到视图模式（模板里由页签传字面量） */
+function onViewModeChange(mode: 'room' | 'small') {
+  void setViewMode(mode)
+}
+
+/**
+ * 频道页签（大房间 + 已发现的小房间）：名称取服务端频道名（见 use-pocket-rooms 的
+ * ensureChannelNames），未取到退回通用名；未读按频道分计，落在各自页签上。
+ * 小房间未发现时只有一个页签，此时整条页签栏不渲染（单选分段没有切换语义）。
+ */
+const roomTabs = computed<Array<{ mode: 'room' | 'small', name: string, unread: number, locked: boolean }>>(() => {
+  const userId = selectedRoom.value?.userId
+  if (userId === undefined)
+    return []
+  const unread = unreadChannelOf(userId)
+  const tabs: Array<{ mode: 'room' | 'small', name: string, unread: number, locked: boolean }> = [
+    { mode: 'room', name: roomChannelName.value || '房间', unread: unread.big, locked: false },
+  ]
+  if (smallChannel.value) {
+    tabs.push({
+      mode: 'small',
+      name: smallChannelName.value || '小房间',
+      unread: unread.small,
+      // 与当前视图无关：只要该频道被暗号拦着且本会话未解锁，锁就一直挂在页签上
+      locked: smallRequiresAnswer.value,
+    })
+  }
+  return tabs
+})
+
+/** 小房间暗号输入层（锁定态展示） */
+const smallAnswer = ref('')
+const smallSubmitting = ref(false)
+const smallAnswerError = ref('')
+
+/** 输入即清错误：改一个字的成本应当低于重读一次报错 */
+function onSmallAnswerInput() {
+  smallAnswerError.value = ''
+}
+
+/**
+ * 提交暗号。只有校验通过（含万能密码）才解锁并加载小房间消息；
+ * 未通过一律停留在锁定层，如实展示失败原因。
+ */
+async function submitSmallAnswer() {
+  const answer = smallAnswer.value.trim()
+  if (smallSubmitting.value || !answer)
+    return
+  smallSubmitting.value = true
+  smallAnswerError.value = ''
+  const result = await unlockSmall(answer)
+  smallSubmitting.value = false
+  if (!result.ok) {
+    smallAnswerError.value = result.message || '暗号不正确'
+    return
+  }
+  smallAnswer.value = ''
+}
+
+// 换成员 / 换视图即复位输入层：上一位成员的报错不该留到下一位身上
+watch([selectedUserId, viewMode], () => {
+  smallAnswer.value = ''
+  smallAnswerError.value = ''
+})
 
 /** 在直播的房间数：列表头部一句话说明 */
 const liveCount = ref(0)
@@ -82,6 +162,12 @@ watch([selectedUserId, chatStatus], ([userId, status]) => {
   })
 }, { immediate: true })
 
+/** dev 调试：进入房间后打印归一化消息列表（仅 dev 生效，用来看消息格式与内容） */
+watch(chatStatus, (status) => {
+  if (status !== 'ready')
+    return
+  debugLog('rooms-page', '进入房间获取的消息列表', JSON.parse(JSON.stringify(messages.value)))
+})
 // ===== 消息流自动滚底 =====
 // 切房强制回底（新房子的滚动位置没有意义）；同房新消息且本就贴在底部时才拽回，
 // 上翻看历史不强行打断；翻更早历史时保持视口（新消息插在头部，贴回去等于白翻）
@@ -130,10 +216,10 @@ watch(() => messages.value.length, async (len, oldLen) => {
     return
   }
   newCount.value = 0
-  // 贴底浏览即已读：主进程清零未读并删回执键（下一轮检测重锚到最新消息），
+  // 贴底浏览即已读：主进程清掉当前视图频道（大房间/小房间）的未读并对齐基线，
   // 广播回来后左列与 Dock 角标同步消失。上翻浏览时不标记，未读保留
   if (selectedUserId.value !== null && messages.value.length)
-    void markRoomRead(selectedUserId.value)
+    void markRoomRead(selectedUserId.value, viewMode.value)
   await nextTick()
   const el = listRef.value
   if (el)
@@ -333,11 +419,11 @@ onMounted(() => {
               <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
               <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
               <span v-if="room.live" class="room-live-badge">LIVE</span>
-              <!-- 未读角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角，与右下 LIVE 点错开 -->
+              <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角，与右下 LIVE 点错开 -->
               <span
                 v-if="unreadCountOf(room.userId)"
-                class="room-unread"
-              >{{ unreadCountOf(room.userId) > 99 ? '99+' : unreadCountOf(room.userId) }}</span>
+                class="unread-badge room-unread"
+              >{{ unreadText(unreadCountOf(room.userId)) }}</span>
             </span>
             <span class="room-meta">
               <span class="room-name-row">
@@ -404,19 +490,64 @@ onMounted(() => {
               </p>
             </div>
 
-            <el-radio-group v-model="messageScope" size="small" class="main-scope">
-              <el-radio-button value="member">
-                只看成员
-              </el-radio-button>
-              <el-radio-button value="all">
-                全部消息
-              </el-radio-button>
-            </el-radio-group>
+            <!-- 频道切换（大房间 / 小房间）：放头部右侧，页签显示服务端真实频道名；
+                 小房间未发现时整条不渲染（只剩一个页签等于没有切换语义） -->
+            <div
+              v-if="roomTabs.length > 1"
+              class="room-tabs"
+              role="tablist"
+              aria-label="房间频道"
+            >
+              <button
+                v-for="tab in roomTabs"
+                :key="tab.mode"
+                type="button"
+                role="tab"
+                class="room-tab"
+                :class="{ 'is-active': viewMode === tab.mode }"
+                :aria-selected="viewMode === tab.mode"
+                :title="tab.locked ? `${tab.name} · 需要暗号` : tab.name"
+                @click="onViewModeChange(tab.mode)"
+              >
+                <el-icon v-if="tab.locked" :size="12" class="room-tab-lock">
+                  <Lock />
+                </el-icon>
+                <span class="room-tab-name">{{ tab.name }}</span>
+                <span v-if="tab.unread" class="unread-badge">{{ unreadText(tab.unread) }}</span>
+              </button>
+            </div>
           </header>
 
           <!-- 右区双栏：左侧聊天流，右侧成员信息卡 + 相册 -->
           <div class="main-body">
             <section class="main-chat">
+              <!-- 消息范围（只看成员 / 全部消息）：聊天区右上角。
+                   与头部的频道页签分两层——频道是导航、范围是次级筛选，故用中性配色 -->
+              <div v-if="!smallLocked" class="chat-tools">
+                <div class="scope-tabs" role="tablist" aria-label="消息范围">
+                  <button
+                    type="button"
+                    role="tab"
+                    class="scope-tab"
+                    :class="{ 'is-active': messageScope === 'member' }"
+                    :aria-selected="messageScope === 'member'"
+                    @click="messageScope = 'member'"
+                  >
+                    只看成员
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    class="scope-tab"
+                    :class="{ 'is-active': messageScope === 'all' }"
+                    :aria-selected="messageScope === 'all'"
+                    @click="messageScope = 'all'"
+                  >
+                    全部消息
+                  </button>
+                </div>
+              </div>
+
               <div
                 v-if="messages.length"
                 ref="listRef"
@@ -578,6 +709,52 @@ onMounted(() => {
                     </template>
                   </div>
                 </template>
+              </div>
+
+              <!-- 小房间暗号锁定层：不展示消息内容，仅在暗号校验通过后进房 -->
+              <div v-else-if="smallLocked" class="small-lock">
+                <div class="small-lock-card">
+                  <span class="small-lock-badge">
+                    <el-icon :size="18">
+                      <Lock />
+                    </el-icon>
+                  </span>
+                  <p class="small-lock-title">
+                    「{{ smallChannelName || '小房间' }}」需要暗号
+                  </p>
+                  <blockquote v-if="smallQuestion?.question" class="small-lock-question">
+                    {{ smallQuestion.question }}
+                  </blockquote>
+                  <p v-else-if="smallQuestionLoading" class="small-lock-hint">
+                    正在获取暗号问题…
+                  </p>
+                  <p v-else class="small-lock-hint">
+                    未取到暗号问题，可直接输入暗号
+                  </p>
+
+                  <div class="small-lock-form">
+                    <el-input
+                      v-model="smallAnswer"
+                      placeholder="输入暗号"
+                      clearable
+                      autofocus
+                      :disabled="smallSubmitting"
+                      @input="onSmallAnswerInput"
+                      @keyup.enter="submitSmallAnswer"
+                    />
+                    <el-button
+                      type="primary"
+                      :loading="smallSubmitting"
+                      @click="submitSmallAnswer"
+                    >
+                      进入
+                    </el-button>
+                  </div>
+
+                  <p v-if="smallAnswerError" class="small-lock-error">
+                    {{ smallAnswerError }}
+                  </p>
+                </div>
               </div>
 
               <div v-else-if="chatStatus === 'error'" class="msg-empty">
@@ -854,21 +1031,12 @@ onMounted(() => {
   box-shadow: 0 0 0 2px var(--el-bg-color);
 }
 
-/* 未读数角标：贴在头像右上角（LIVE 点在右下角，两者不打架）；
- * 视觉语言同右下角下载入口的 .entry-badge（红色药丸 + 底色描边） */
+/* 未读数字角标：贴在头像右上角（LIVE 点在右下角，两者不打架）；
+ * 外观走全局 .unread-badge，这里只给落点与外描边（把角标从头像上抬出来） */
 .room-unread {
   position: absolute;
-  top: -4px;
-  right: -6px;
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 17px;
-  text-align: center;
-  color: #fff;
-  background: var(--el-color-danger);
+  top: -5px;
+  right: -5px;
   box-shadow: 0 0 0 2px var(--el-bg-color);
 }
 
@@ -960,10 +1128,47 @@ onMounted(() => {
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
-/* 消息范围切换：推到头部最右 */
-.main-scope {
+/* 消息范围切换（只看成员 / 全部消息）：聊天区右上角，中性配色。
+ * 与头部频道页签（房间青）分两层——这里是次级筛选，不抢导航的视觉权重 */
+.chat-tools {
+  display: flex;
   flex: none;
-  margin-left: auto;
+  justify-content: flex-end;
+  padding: 10px 16px 0;
+}
+
+.scope-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--el-fill-color-light);
+}
+
+.scope-tab {
+  padding: 3px 12px;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--el-text-color-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+
+  &:hover {
+    color: var(--el-text-color-primary);
+  }
+
+  &.is-active {
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+    background: var(--el-bg-color);
+    box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+  }
 }
 
 .main-avatar {
@@ -1042,6 +1247,161 @@ onMounted(() => {
   flex: 1;
   flex-direction: column;
   min-width: 0;
+}
+
+/* 频道页签（大房间 / 小房间）：落在头部右侧，显示服务端真实频道名。
+ * 强调色用房间主题青（页面里所有房间语义都用它），不用品牌紫——
+ * 这一条正是「我在哪个频道」最需要一眼看清的地方；未读走全局 .unread-badge */
+.room-tabs {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  max-width: 340px;
+  margin-left: auto;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--el-fill-color-light);
+}
+
+.room-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 160px;
+  padding: 4px 12px;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--el-text-color-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+
+  &:hover {
+    color: var(--color-rooms);
+  }
+
+  &.is-active {
+    font-weight: 600;
+    color: #fff;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 74%, #fff), var(--color-rooms));
+    box-shadow: 0 3px 10px -4px color-mix(in srgb, var(--color-rooms) 60%, transparent);
+  }
+
+  .unread-badge {
+    flex: none;
+  }
+}
+
+/* 锁：这是「进去要暗号」的状态信息，非选中态用暖色提示；选中态跟白字站稳对比 */
+.room-tab-lock {
+  flex: none;
+  color: var(--el-color-warning);
+}
+
+.room-tab.is-active .room-tab-lock {
+  color: inherit;
+}
+
+/* 频道名可能很长：页签宽度封顶，超出省略 */
+.room-tab-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 小房间暗号锁定层：盖住消息区，不展示任何消息内容。
+ * 卡片自成一块「门牌」：徽标 → 标题 → 成员出的题（引用块）→ 输入行 → 兜底提示。
+ * 题目是成员手写的原话，用引用块而非正文呈现，避免与界面自己的措辞混作一类。 */
+.small-lock {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.small-lock-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(340px, 100%);
+  padding: 26px 22px 22px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-lg);
+  background: var(--el-bg-color);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 6%);
+  text-align: center;
+}
+
+/* 徽标用暖色：语义是「需要确认」而非错误，同时不跟页面导航的房间青抢权重 */
+.small-lock-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+}
+
+.small-lock-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--el-text-color-primary);
+}
+
+/* 成员出的题：左竖线 + 底色的引用块，一眼分辨「这是别人写的」。
+ * 这是用户唯一需要读懂的内容，用正文主色，不用降级灰 */
+.small-lock-question {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 9px 12px;
+  border-left: 3px solid var(--el-color-warning-light-3);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--el-text-color-primary);
+  background: var(--el-fill-color-light);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.small-lock-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--el-text-color-placeholder);
+  overflow-wrap: anywhere;
+}
+
+.small-lock-form {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+
+  .el-input {
+    flex: 1;
+  }
+}
+
+.small-lock-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-color-danger);
+  overflow-wrap: anywhere;
 }
 
 .rooms-aside {
