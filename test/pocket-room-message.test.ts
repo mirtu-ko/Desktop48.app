@@ -203,6 +203,8 @@ describe('pocket-room-message / 回复与翻牌', () => {
     }))!
     expect(view.kind).toBe('flip')
     expect(view.text).toBe('今天也要加油')
+    // 无 question 时不渲染空引用块
+    expect(view.quote).toBeNull()
   })
 
   it('flipCard 答案为对象时兜底占位', () => {
@@ -210,6 +212,45 @@ describe('pocket-room-message / 回复与翻牌', () => {
       bodys: { flipCardVideoInfo: { answer: { nested: true } } },
     }))!
     expect(view.text).toBe('[翻牌回复]')
+  })
+
+  it('三类翻牌：被翻提问进引用块，昵称位固定「提问」', () => {
+    const text = normalizePocketRoomMessage(roomMessage('FLIPCARD', {
+      bodys: { flipCardInfo: { question: '今晚几点睡', answer: '不睡' } },
+    }))!
+    expect(text.text).toBe('不睡')
+    expect(text.quote).toEqual({ nick: '提问', text: '今晚几点睡', isGift: false })
+
+    // 语音/视频翻牌：正文只剩占位（内容在语音条 / 视频里），提问就是唯一的文字上下文
+    const audio = normalizePocketRoomMessage(roomMessage('FLIPCARD_AUDIO', {
+      bodys: { flipCardAudioInfo: { question: '点歌', answer: JSON.stringify({ url: '/MediaSource/Voice/f.m4a' }) } },
+    }))!
+    expect(audio.text).toBe('[翻牌回复]')
+    expect(audio.audioUrl).toBe('https://mp4.48.cn/MediaSource/Voice/f.m4a')
+    expect(audio.quote?.text).toBe('点歌')
+
+    const video = normalizePocketRoomMessage(roomMessage('FLIPCARD_VIDEO', {
+      bodys: { flipCardVideoInfo: { question: '看看猫', answer: JSON.stringify({ url: '/MediaSource/Video/c.mp4' }) } },
+    }))!
+    expect(video.text).toBe('[翻牌回复]')
+    expect(video.videoUrl).toBe('https://mp4.48.cn/MediaSource/Video/c.mp4')
+    expect(video.quote?.text).toBe('看看猫')
+  })
+
+  it('翻牌缺 question：quote 为 null，不渲染空引用块', () => {
+    expect(normalizePocketRoomMessage(roomMessage('FLIPCARD', {
+      bodys: { flipCardInfo: { answer: '好' } },
+    }))!.quote).toBeNull()
+    expect(normalizePocketRoomMessage(roomMessage('FLIPCARD_AUDIO', {
+      bodys: { flipCardAudioInfo: { answer: JSON.stringify({ url: '/a.m4a' }) } },
+    }))!.quote).toBeNull()
+  })
+
+  it('翻牌提问是用户原文，表情照常还原', () => {
+    const view = normalizePocketRoomMessage(roomMessage('FLIPCARD', {
+      bodys: { flipCardInfo: { question: '晚安[爱心]', answer: '晚安' } },
+    }))!
+    expect(view.quote?.text).toBe('晚安❤️')
   })
 })
 
@@ -385,6 +426,25 @@ describe('pocket-room-message / 左列最新消息预览', () => {
       messageType: 'REPLY',
       replyInfo: { replyName: '甲', replyText: '翻个牌' },
     }))).toBe('[回复 甲] 翻个牌')
+  })
+
+  it('翻牌预览：「[提问 xxx]」前缀带被翻提问，后面接答案正文', () => {
+    expect(normalizePocketRoomPreview(JSON.stringify({
+      messageType: 'FLIPCARD',
+      flipCardInfo: { question: '今晚几点睡', answer: '不睡' },
+    }))).toBe('[提问 今晚几点睡] 不睡')
+  })
+
+  it('翻牌预览：答案无正文（语音/视频翻牌）时只留提问', () => {
+    expect(normalizePocketRoomPreview(JSON.stringify({
+      messageType: 'FLIPCARD_AUDIO',
+      flipCardAudioInfo: { question: '点歌', answer: '{"url":"/MediaSource/Voice/f.m4a"}' },
+    }))).toBe('[提问 点歌]')
+    // 无 question 时退回答案正文，不凭空拼前缀
+    expect(normalizePocketRoomPreview(JSON.stringify({
+      messageType: 'FLIPCARD',
+      flipCardInfo: { answer: '答好了' },
+    }))).toBe('答好了')
   })
 
   it('空输入返回空串（UI 决定占位）', () => {

@@ -320,8 +320,8 @@ function avatarUrl(avatar: string) {
 }
 
 // ===== 引用块 =====
-// 引用块只读展示「被回复者：被回复内容」摘要，不做点击跳转（被引用消息
-// 往往不在当前列表，跳转价值有限）。
+// 引用块只读展示「谁 + 说了什么」摘要：回复类是被回复者 + 被引用内容，翻牌是被翻提问
+// （昵称位固定「提问」）。不做点击跳转——被引用消息往往不在当前列表，跳转价值有限。
 
 /**
  * 图片占位样式：归一层解析到原始尺寸时按 aspect-ratio 预留空间，
@@ -661,7 +661,7 @@ onMounted(() => {
                           <span class="msg-time">{{ messageTime(message.msgTime) }}</span>
                         </div>
 
-                        <!-- 引用块：被回复消息的摘要（昵称 + 内容），只读展示 -->
+                        <!-- 引用块：被回复消息的摘要（回复类＝被回复者昵称，翻牌＝被翻提问），只读展示 -->
                         <div
                           v-if="message.quote"
                           class="msg-quote"
@@ -705,7 +705,11 @@ onMounted(() => {
                           </el-image>
                           <template v-else-if="message.audioUrl">
                             <RoomVoiceBar :src="message.audioUrl" />
-                            <p v-if="message.text && message.text !== '[语音回复消息]'" class="msg-media-text">
+                            <!-- 语音条本身就是内容，类型占位文案不再补一行；回复消息的真实正文（非占位）仍要展示 -->
+                            <p
+                              v-if="message.text && message.text !== '[语音消息]' && message.text !== '[语音回复消息]'"
+                              class="msg-media-text"
+                            >
                               {{ message.text }}
                             </p>
                           </template>

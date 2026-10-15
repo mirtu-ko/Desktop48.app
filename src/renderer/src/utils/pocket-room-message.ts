@@ -30,9 +30,11 @@ export type PocketRoomMessageKind
  * 引用（回复）信息：消息流渲染引用块（被回复者昵称 + 被引用内容摘要）。
  * 字段来自 bodys 的 replyInfo / giftReplyInfo（协议结构见参考实现
  * yaya_msg 的 buildReplyOptions：replyName/replyText/replyMessageId/text）。
+ * 翻牌的被翻提问（info.question）复用同一套外壳——它不是回复消息，被回复内容
+ * 也不在 replyInfo 里，但「谁提问 + 问什么」正是这里要表达的。
  */
 export interface PocketRoomQuote {
-  /** 被引用者昵称 */
+  /** 被引用者昵称；翻牌协议不给提问者昵称，固定「提问」 */
   nick: string
   /** 被引用消息的文本摘要；空串 = 原消息无文本（UI 兜底占位） */
   text: string
@@ -54,7 +56,7 @@ export interface PocketRoomMessageView {
   isMember: boolean
   msgTime: number
 
-  /** 引用信息（REPLY/GIFTREPLY/AUDIO_REPLY/AUDIO_GIFT_REPLY）；null = 非回复消息 */
+  /** 引用信息（回复类取自 replyInfo/giftReplyInfo，翻牌取自 info.question）；null = 无被引用内容 */
   quote: PocketRoomQuote | null
 
   /** 图片直链（IMAGE/EXPRESSIMAGE）；空串 = 非图片或取不到 URL */
@@ -188,6 +190,27 @@ function replyOwnText(info: Record<string, unknown>, msg: Record<string, unknown
 }
 
 /**
+ * 翻牌 info 解析：文本 / 语音 / 视频翻牌各有一套键，且协议里 flipCard 与 filpCard
+ * 两种拼写并存（实测语音 / 视频翻牌同时带多套同构键）。正文、媒体直链、被翻提问
+ * 三处共用这一处口径。
+ */
+function flipCardInfo(body: Record<string, unknown> | null): Record<string, unknown> {
+  return parseJson(body?.flipCardAudioInfo) || parseJson(body?.flipCardVideoInfo)
+    || parseJson(body?.filpCardAudioInfo) || parseJson(body?.filpCardVideoInfo)
+    || parseJson(body?.flipCardInfo) || parseJson(body?.filpCardInfo)
+    || body || {}
+}
+
+/**
+ * 翻牌答案正文：answer 是纯文本才算正文——语音 / 视频翻牌的 answer 是带 url 的 JSON 串，
+ * 内容在语音条 / 视频里，不进正文。空串 = 无正文（调用方给占位文案）。
+ */
+function flipAnswerText(info: Record<string, unknown>): string {
+  const answer = firstStr(info, ['answer'])
+  return answer && !answer.startsWith('{') ? replacePocketEmoji(answer) : ''
+}
+
+/**
  * msgType + bodys JSON → 展示文案。
  * 房间消息流（normalizePocketRoomMessage）与左侧列表最新消息预览
  * （normalizePocketRoomPreview）共用同一套类型语义，两边不重复维护。
@@ -217,12 +240,8 @@ function messageText(msgType: string, msg: Record<string, unknown>, body: Record
     }
     case 'FLIPCARD':
     case 'FLIPCARD_AUDIO':
-    case 'FLIPCARD_VIDEO': {
-      const info = parseJson(body?.flipCardInfo) || parseJson(body?.filpCardInfo)
-        || parseJson(body?.flipCardAudioInfo) || parseJson(body?.flipCardVideoInfo) || body || {}
-      const answer = str(info.answer)
-      return answer && !answer.startsWith('{') ? replacePocketEmoji(answer) : '[翻牌回复]'
-    }
+    case 'FLIPCARD_VIDEO':
+      return flipAnswerText(flipCardInfo(body)) || '[翻牌回复]'
 
     case 'LIVEPUSH':
     case 'OPEN_LIVE':
@@ -279,6 +298,17 @@ function parseReplyQuote(body: Record<string, unknown> | null): PocketRoomQuote 
 }
 
 /**
+ * 解析翻牌的被翻提问：info.question → PocketRoomQuote。
+ * 翻牌是「成员回答提问」而非回复某条消息，被回复内容不在 replyInfo 里，而在各自的
+ * flipCard*Info.question；提问者昵称协议不给，昵称位固定「提问」。
+ * 无 question（接口演进或结构变动）返回 null，不渲染空的引用块。
+ */
+function parseFlipQuote(body: Record<string, unknown> | null): PocketRoomQuote | null {
+  const question = replacePocketEmoji(jsonText(flipCardInfo(body), 'question'))
+  return question ? { nick: '提问', text: question, isGift: false } : null
+}
+
+/**
  * 归一化单条房间消息。
  * 返回 null = 无需展示（DELETE 删除通知等非发言类系统消息）。
  */
@@ -305,8 +335,12 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
     ? 'text'
     : messageKind(msgType)
   const text = messageText(msgType, msg, body)
-  // 引用信息：仅回复类消息有；被引用内容渲染成引用块（只读），不进正文
-  const quote = kind === 'reply' ? parseReplyQuote(body) : null
+  // 引用信息：回复类取 replyInfo 系列，翻牌取被翻提问；被引用内容渲染成引用块（只读），不进正文
+  let quote: PocketRoomQuote | null = null
+  if (kind === 'reply')
+    quote = parseReplyQuote(body)
+  else if (kind === 'flip')
+    quote = parseFlipQuote(body)
 
   // 媒体直链：bodys JSON 的 url 系字段（字段名对齐参考实现 yaya_msg 的解析）
 
@@ -343,10 +377,8 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
     audioUrl = mediaUrl(firstStr(info, ['voiceUrl', 'url', 'audioUrl']), 'mp4')
   }
   else if (msgType === 'FLIPCARD_AUDIO' || msgType === 'FLIPCARD_VIDEO') {
-    const info = parseJson(body?.flipCardAudioInfo) || parseJson(body?.flipCardVideoInfo)
-      || parseJson(body?.flipCardInfo) || parseJson(body?.filpCardInfo) || body
     // 语音/视频翻牌的答案是 JSON 字符串，里面带媒体 url
-    const answer = parseJson(firstStr(info, ['answer']))
+    const answer = parseJson(firstStr(flipCardInfo(body), ['answer']))
     if (msgType === 'FLIPCARD_AUDIO')
       audioUrl = mediaUrl(firstStr(answer, ['url']), 'mp4')
     else
@@ -456,6 +488,8 @@ function messageKind(msgType: string): PocketRoomMessageKind {
  * 空内容（无消息）返回空串，由 UI 决定占位。
  * 回复类消息带一句「回复 昵称」前缀：左列一行放不下引用块，前缀是最省的等价物；
  * 回复无自己的正文（空回复）时退回被引用内容，避免预览只剩占位文案。
+ * 翻牌同理，「[提问 xxx]」前缀带上被翻提问，后面接答案正文；答案无正文
+ * （语音 / 视频翻牌）时前缀就是全部信息——这正是消息流引用块存在的理由。
  */
 export function normalizePocketRoomPreview(rawContent: unknown): string {
   if (rawContent == null)
@@ -471,6 +505,11 @@ export function normalizePocketRoomPreview(rawContent: unknown): string {
     const info = parseJson(body?.replyInfo) || parseJson(body?.giftReplyInfo) || body || {}
     const own = replyOwnText(info, { bodys }, body)
     return `[回复 ${quote.nick}] ${own || quote.text || text}`
+  }
+  const flipQuote = parseFlipQuote(body)
+  if (flipQuote) {
+    const answer = flipAnswerText(flipCardInfo(body))
+    return `[提问 ${flipQuote.text}]${answer ? ` ${answer}` : ''}`
   }
   return text
 }

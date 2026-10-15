@@ -103,7 +103,7 @@ rooms.value（在直播的排前，其余按昵称 localeCompare('zh')）
 
 **② 房间频道 `PocketRoomChannel`**：`serverId` / `channelId` 来自 `im/server/jump` 回包 content；两者为空串表示该成员没有房间（未开通，或已关闭/被回收，见第 4 节）。`targetType: 1` 为固定值。
 
-**③ 消息归一化**：原始 `PocketRoomMessage`（CustomMessageV2：`msgIdServer`、`msgIdClient` 去重键首选、`msgType` 决定正文语义、`msgTime`、`bodys` 多为 JSON 字符串、`extInfo` 内嵌 `user` 资料）经 `utils/pocket-room-message.ts` 输出 `PocketRoomMessageView`，消息流、引用块、相册、语音条、分享卡共用：`id`（`msgIdClient || msgIdServer || msgTime`，轮询/翻历史去重键）、`kind`、`text`、发送者资料（`userId` / `nick` / `avatar` / `level` / `isMember`）、`msgTime`、`quote`（仅回复类，含被引用昵称/文本/是否礼物）、`imageUrl` + 原始尺寸、`audioUrl`、`videoUrl` + `videoPoster`、直播分享字段（`liveId` / `liveType` / `liveMode` / `liveStartTime` / `liveCover` / `liveIsPlayback`）。
+**③ 消息归一化**：原始 `PocketRoomMessage`（CustomMessageV2：`msgIdServer`、`msgIdClient` 去重键首选、`msgType` 决定正文语义、`msgTime`、`bodys` 多为 JSON 字符串、`extInfo` 内嵌 `user` 资料）经 `utils/pocket-room-message.ts` 输出 `PocketRoomMessageView`，消息流、引用块、相册、语音条、分享卡共用：`id`（`msgIdClient || msgIdServer || msgTime`，轮询/翻历史去重键）、`kind`、`text`、发送者资料（`userId` / `nick` / `avatar` / `level` / `isMember`）、`msgTime`、`quote`（回复类取被回复者昵称/被引用文本/是否礼物，翻牌取被翻提问、昵称位固定「提问」）、`imageUrl` + 原始尺寸、`audioUrl`、`videoUrl` + `videoPoster`、直播分享字段（`liveId` / `liveType` / `liveMode` / `liveStartTime` / `liveCover` / `liveIsPlayback`）。
 
 **④ 批量最新消息 `PocketRoomLastMessage`**：`channelId`、`serverId`、`starName`（**最后发言人**而非房主）、`msgContent`、`msgKey`（消息身份键：msgidClient 优先，最后退 `msgTime:msgContent`；只作「有新消息」的触发判据，不参与计数）、`msgTime`（⚠️ 实测恒为 0，不可作时间轴，见第 7 节）、`unreadCount`（⚠️ 实测恒为 `null`，见第 7 节）。
 
@@ -139,22 +139,22 @@ rooms.value（在直播的排前，其余按昵称 localeCompare('zh')）
 
 ### 6.1 msgType 分发
 
-| msgType                                                    | kind        | 正文                                  |
-| ---------------------------------------------------------- | ----------- | ------------------------------------- |
-| `TEXT` / 未知                                              | text        | bodys 纯文本整体 / JSON 取 `text`     |
-| `IMAGE` / `EXPRESSIMAGE`                                   | image       | `[图片消息]`（解析直链 + 尺寸）       |
-| `AUDIO`                                                    | audio       | `[语音消息]`（解析直链，语音条播放）  |
-| `VIDEO`                                                    | video       | `[视频消息]`                          |
-| `REPLY` / `GIFTREPLY` / `AUDIO_REPLY` / `AUDIO_GIFT_REPLY` | reply       | 回复自己的话；被引用内容进 quote      |
-| `FLIPCARD` / `FLIPCARD_AUDIO` / `FLIPCARD_VIDEO`           | flip        | 答案文本 / `[翻牌回复]`               |
-| `LIVEPUSH` / `OPEN_LIVE` / `SHARE_LIVE` 等                 | live        | `[直播分享] 标题`（解析 liveId 封面） |
-| `PRESENT_NORMAL` / `GIFT_TEXT` 等                          | gift        | `[礼物] 名 xN`                        |
-| `VOTE` / `DISABLE_SPEAK` / `CLOSE_ROOM_CHAT`               | vote/system | 占位文案                              |
-| `DELETE`                                                   | —           | **返回 null**，不展示                 |
+| msgType                                                    | kind        | 正文                                        |
+| ---------------------------------------------------------- | ----------- | ------------------------------------------- |
+| `TEXT` / 未知                                              | text        | bodys 纯文本整体 / JSON 取 `text`           |
+| `IMAGE` / `EXPRESSIMAGE`                                   | image       | `[图片消息]`（解析直链 + 尺寸）             |
+| `AUDIO`                                                    | audio       | `[语音消息]`（解析直链，语音条播放）        |
+| `VIDEO`                                                    | video       | `[视频消息]`                                |
+| `REPLY` / `GIFTREPLY` / `AUDIO_REPLY` / `AUDIO_GIFT_REPLY` | reply       | 回复自己的话；被引用内容进 quote            |
+| `FLIPCARD` / `FLIPCARD_AUDIO` / `FLIPCARD_VIDEO`           | flip        | 答案文本 / `[翻牌回复]`（被翻提问进 quote） |
+| `LIVEPUSH` / `OPEN_LIVE` / `SHARE_LIVE` 等                 | live        | `[直播分享] 标题`（解析 liveId 封面）       |
+| `PRESENT_NORMAL` / `GIFT_TEXT` 等                          | gift        | `[礼物] 名 xN`                              |
+| `VOTE` / `DISABLE_SPEAK` / `CLOSE_ROOM_CHAT`               | vote/system | 占位文案                                    |
+| `DELETE`                                                   | —           | **返回 null**，不展示                       |
 
-未识别类型不丢弃：`extMsgType` 动态消息（POST_INFO 等）使用兜底文本，为空时显示 `[新消息]`。协议侧语音类型名是 `AUDIO` 不是 `VOICE`。左列预览（`normalizePocketRoomPreview`）复用同一套分发，两侧文案一致；左列单行无法容纳引用块，回复类预览以「回复 昵称」前缀保留上下文，无正文时退回被引用内容。
+未识别类型不丢弃：`extMsgType` 动态消息（POST_INFO 等）使用兜底文本，为空时显示 `[新消息]`。协议侧语音类型名是 `AUDIO` 不是 `VOICE`。左列预览（`normalizePocketRoomPreview`）复用同一套分发，两侧文案一致；左列单行无法容纳引用块，回复类预览以「回复 昵称」前缀保留上下文，无正文时退回被引用内容，翻牌则以「[提问 xxx]」前缀带上被翻提问。
 
-**表情还原**：协议里的表情是中括号占位符（`[爱心]`），官方 App 用表情图渲染，本版本原样显示会露出字面量。`data/pocket-emojis.ts` 提供「占位符 → 等价 emoji」映射，替换点只有「取用户原文」的三处：发言正文（`bodyText`）、翻牌答案、引用摘要（`parseReplyQuote` 的 `replyText`），未收录的占位符保留原样。归一化自己拼的占位文案（`[图片消息]` 等）与 `[礼物] 名 xN` 前缀**不走**该表——`[礼物]` 同时是表情名，在 `messageText` 出口统一替换会把业务前缀改成 `🎁`。
+**表情还原**：协议里的表情是中括号占位符（`[爱心]`），官方 App 用表情图渲染，本版本原样显示会露出字面量。`data/pocket-emojis.ts` 提供「占位符 → 等价 emoji」映射，替换点只有「取用户原文」的几处：发言正文（`bodyText`）、翻牌答案（`flipAnswerText`）、翻牌提问、引用摘要（`parseReplyQuote` 的 `replyText`），未收录的占位符保留原样。归一化自己拼的占位文案（`[图片消息]` 等）与 `[礼物] 名 xN` 前缀**不走**该表——`[礼物]` 同时是表情名，在 `messageText` 出口统一替换会把业务前缀改成 `🎁`。
 
 发送者资料主路径取 `extInfo.user`（userId/nickName/avatar/level/roleId），顶层字段兜底；`roleId > 1` 判定成员（昵称着色 + 「房主」标签）。userId 需宽松数字强转——接口对纯数字 ID 返回 number 与 string 不定。
 
@@ -167,6 +167,18 @@ rooms.value（在直播的排前，其余按昵称 localeCompare('zh')）
 - `replyInfo.giftInfo` = 被引用的是礼物消息时，摘要走 `[礼物] 名 xN` 并标金。
 
 引用块为**只读展示**，不提供点击跳转：被引用消息往往不在当前列表（更早历史未拉到 / 被范围过滤 / 原消息已删）。`replyMessageId` 字段仍在协议中，本版本不解析。
+
+### 6.3 引用块：翻牌的被翻提问
+
+翻牌不是「回复某条消息」，但它同样是「对着一条消息作答」，被回复内容不落在 `replyInfo` 里，而在各自的 info 对象里：
+
+| 翻牌类型         | info 键（同构，flipCard / filpCard 两套拼写并存）           | 被翻提问   | 答案                               |
+| ---------------- | ----------------------------------------------------------- | ---------- | ---------------------------------- |
+| `FLIPCARD`       | `flipCardInfo` / `filpCardInfo`                             | `question` | `answer` 纯文本                    |
+| `FLIPCARD_AUDIO` | `flipCardAudioInfo` / `filpCardAudioInfo`（兼带上面两个键） | `question` | `answer` 为带 `url` 的 JSON 字符串 |
+| `FLIPCARD_VIDEO` | `flipCardVideoInfo` / `filpCardVideoInfo`（兼带上面两个键） | `question` | 同上（`previewImg` / `w` / `h`）   |
+
+`flipCardInfo()` 一处解析全部 6 个键，正文、媒体直链、被翻提问三处共用。`question` 渲染成与回复类同款的引用块，**昵称位固定「提问」**（提问者昵称协议不返回）；语音 / 视频翻牌尤其依赖它——这类消息的正文只有占位文案 `[翻牌回复]`，没有引用块就完全看不出被翻了什么。
 
 ## 7. 未读检测（主进程唯一真相）
 

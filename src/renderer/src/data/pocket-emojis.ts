@@ -93,7 +93,7 @@ export const POCKET_EMOJI_MAP: Record<string, string> = {
 
 /**
  * 替换文本里的表情占位符；无中括号时原样返回。
- * 只用于「用户原文」（发言正文 / 翻牌答案 / 引用摘要）——归一化自己拼的
+ * 只用于「用户原文」（发言正文 / 翻牌答案 / 翻牌提问 / 引用摘要）——归一化自己拼的
  * 占位文案（[礼物] 名 xN、[图片消息] 等）不能过这张表，否则业务前缀会被改掉。
  */
 export function replacePocketEmoji(text: string): string {
