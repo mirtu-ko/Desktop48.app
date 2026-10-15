@@ -48,7 +48,7 @@ async function freshModule() {
   return { mod, auth }
 }
 
-/** lastMsgList 单条回包：msgKey 是身份键（真实接口 msgTime 恒为 0、无 msgidClient，只认 key） */
+/** lastMsgList 单条回包（降级形状：无 unreadCount 字段，检测走身份键粗算） */
 function lastOf(msgTime: number, msgContent: string) {
   return [{
     channelId: 'c1',
@@ -57,7 +57,7 @@ function lastOf(msgTime: number, msgContent: string) {
     msgContent,
     msgKey: `key-${msgTime}`,
     msgTime,
-    unreadCount: 0,
+    unreadCount: null,
   }]
 }
 
@@ -122,15 +122,17 @@ describe('pocket-unread（房间未读检测）', () => {
     await vi.waitFor(() => expect(mod.getState().total).toBe(1))
     mod.stopPocketUnread()
 
-    // 标记已读：清零 + 广播；回执键被删，下一轮检测重新锚定
-    mod.markRead(1)
+    // 标记已读：清零 + 广播 + 即时对齐基线/锚（内部会拉一轮批量预览）
+    await mod.markRead(1)
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
     expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
 
     // 回归（已读复活 bug）：下一轮检测看到的还是刚读过的同一条消息（key-2000）——
-    // 重锚后不计数；markRead 若混写过渲染层键，这里会误判成新消息 +1
+    // 重锚后不计数；markRead 若混写过渲染层键，这里会误判成新消息 +1。
+    // markRead 内部基线对齐已消耗一次调用，start 的立即轮按相对基线等待
+    const callsBefore = auth.getRoomLastMessages.mock.calls.length
     mod.startPocketUnread()
-    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(callsBefore + 1))
     await vi.waitFor(() => expect(mod.getState()).toEqual({ rooms: {}, total: 0 }))
     mod.stopPocketUnread()
 
@@ -236,7 +238,7 @@ describe('pocket-unread（房间未读检测）', () => {
       msgContent: 'hi',
       msgKey: key,
       msgTime: 0,
-      unreadCount: 0,
+      unreadCount: null,
     }]
     auth.getRoomLastMessages.mockResolvedValue(item('k1'))
     auth.getRoomChannelOwner.mockResolvedValue({ channelId: 'c2', serverId: 's1', ownerId: 2 })
@@ -274,7 +276,7 @@ describe('pocket-unread（房间未读检测）', () => {
       msgContent: 'm',
       msgKey: 'k1',
       msgTime: 0,
-      unreadCount: 0,
+      unreadCount: null,
     }])
     // 翻牌/礼物回复类频道：room/info 回「频道不存在」
     auth.getRoomChannelOwner.mockRejectedValue(new Error('频道不存在'))
@@ -304,7 +306,7 @@ describe('pocket-unread（房间未读检测）', () => {
       msgContent: 'm',
       msgKey: 'k1',
       msgTime: 0,
-      unreadCount: 0,
+      unreadCount: null,
     }])
     auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"596","question":"暗号"}'))
 
@@ -329,11 +331,58 @@ describe('pocket-unread（房间未读检测）', () => {
       msgContent: 'm2',
       msgKey: 'k2',
       msgTime: 0,
-      unreadCount: 0,
+      unreadCount: null,
     }])
     mod.startPocketUnread()
     await vi.waitFor(() => expect(mod.getState().total).toBe(1))
     mod.stopPocketUnread()
     expect(mod.getState().rooms['1']).toMatchObject({ count: 1 })
+  })
+
+  it('精确模式：unreadCount 与基线做差算出真实条数；markRead 对齐基线后不复活', async () => {
+    const { mod, auth } = await freshModule()
+    auth.getToken.mockReturnValue('tok')
+    auth.getFollowedIds.mockResolvedValue([1])
+    auth.getRoomChannel.mockResolvedValue({ serverId: 's1', channelId: 'c1' })
+    const withCount = (n: number) => [{
+      channelId: 'c1',
+      serverId: 's1',
+      starName: '成员',
+      msgContent: 'm',
+      msgKey: `k${n}`,
+      msgTime: 1000,
+      unreadCount: n,
+    }]
+
+    // 第 1 轮：首见锚定基线 2，历史不算未读
+    auth.getRoomLastMessages.mockResolvedValue(withCount(2))
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(1))
+    mod.stopPocketUnread()
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+
+    // 第 2 轮：服务端计数涨到 5 → 未读 = 3（精确条数，不是粗算 +1）
+    auth.getRoomLastMessages.mockResolvedValue(withCount(5))
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(mod.getState().total).toBe(3))
+    mod.stopPocketUnread()
+    expect(mod.getState().rooms['1']).toMatchObject({ count: 3, latestTime: 1000 })
+
+    // markRead：即时拉一轮批量预览把基线对齐到当下（回 5）→ 清零不复活
+    await mod.markRead(1)
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+
+    // 第 3 轮：服务端计数没变（还是 5）→ 不复活
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(4))
+    await vi.waitFor(() => expect(mod.getState()).toEqual({ rooms: {}, total: 0 }))
+    mod.stopPocketUnread()
+
+    // 第 4 轮：服务端计数回落到 1（手机上已读）→ 基线对齐、自动清零
+    auth.getRoomLastMessages.mockResolvedValue(withCount(1))
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getRoomLastMessages).toHaveBeenCalledTimes(5))
+    mod.stopPocketUnread()
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
   })
 })

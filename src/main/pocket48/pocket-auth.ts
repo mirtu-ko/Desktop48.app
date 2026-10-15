@@ -12,11 +12,13 @@
  * 调用方收到 401005 等失效状态码时引导用户重新登录，本模块不自动重登。
  */
 import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
+import { currentPa, ensurePaWasm } from './pa-sign'
 
 // ===== 接口常量（与渲染层 services/api-urls.ts 保持同源；此域暂无渲染层调用，独立维护） =====
 
@@ -38,24 +40,15 @@ const LIVE_ONE_URL = 'https://pocketapi.48.cn/live/api/v1/live/getLiveOne'
 const REQUEST_TIMEOUT_MS = 20 * 1000
 
 /**
- * 口袋 App 伪装头。服务端校验 App 特征（UA / appInfo / source_from），
- * 缺失会被拒；pa 为设备签名字段，实测登录链路不强制校验，但补上共享样例值以贴近真实客户端。
+ * 口袋 App 伪装头。对齐 yaya_msg 的真实设备模拟（全程 iOS 客户端特征）：
+ * - UA / appInfo 声称 iPhone XR / iOS 16.3.1 / 7.0.41(24011601)；
+ * - appInfo.deviceId 每安装随机生成（UUID，对齐 yaya 的 getDeviceId 行为），持久化复用；
+ * - pa 为设备签名字段，见 POCKET_PA 与 pa-sign.ts——wasm 动态生成（内嵌当下时间戳），
+ *   wasm 不可用时退回该静态值（2021 年签名，服务端可能降级回包，但不拦截请求）。
+ * 实测服务端对请求特征分级：特征对不齐时部分接口（如 lastMsgList）只回降级字段，
+ * 缺 unreadCount / msgTime / msgidClient。
  */
-const POCKET_USER_AGENT
-  = 'PocketFans201807/7.1.7_23110903 (Galaxy S9:Android 9;Samsung INDR003245)'
-const POCKET_APP_INFO = JSON.stringify({
-  IMEI: 'fcd97ea13c7f0bdd',
-  appBuild: '23110903',
-  appName: 'pocket48',
-  appVersion: '7.1.7',
-  deviceId: 'fcd97ea13c7f0bdd',
-  deviceName: 'Galaxy S9',
-  osType: 'android',
-  osVersion: '9',
-  phoneName: 'Galaxy S9',
-  phoneSystemVersion: '9',
-  vendor: 'Samsung',
-})
+const POCKET_USER_AGENT = 'PocketFans201807/7.0.41 (iPhone; iOS 16.3.1; Scale/2.00)'
 const POCKET_PA = 'MTYzNjAxNzMxNTAwMCw3NjkyNzVkNTliZWU0MmQ0OGVjOWIyYTMwY2FkOWQzOSw3NzFhY2QwY2JiZDhkZDUzZDdjZGY3YTcxNGYzNmVlOCwyMDIxMDYwOTAx'
 
 /** token 失效的服务端状态码（与 pocket48_api 社区实现一致） */
@@ -115,13 +108,36 @@ interface PocketEnvelope<T = unknown> {
   content?: T
 }
 
-function pocketHeaders(token?: string): Record<string, string> {
+/**
+ * 伪装设备 UUID：进程内生成一次、本次会话内复用（对齐 yaya 的 getDeviceId 原行为）。
+ * 不落盘——存档与登录凭证强耦合，混写会污染 verifyLogin 的「无变化不写盘」语义（踩过）；
+ * 每次启动换新设备 ID 对服务端而言等价于重装 App，yaya 同样如此且链路正常。
+ */
+let pocketDeviceId = ''
+
+function deviceUuid(): string {
+  if (!pocketDeviceId)
+    pocketDeviceId = randomUUID().toUpperCase()
+  return pocketDeviceId
+}
+
+function pocketHeaders(token?: string, pa?: string): Record<string, string> {
+  const appInfo = JSON.stringify({
+    vendor: 'apple',
+    deviceId: deviceUuid(),
+    appVersion: '7.0.41',
+    appBuild: '24011601',
+    osVersion: '16.3.1',
+    osType: 'ios',
+    deviceName: 'iPhone XR',
+    os: 'ios',
+  })
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json; charset=UTF-8',
+    'Content-Type': 'application/json;charset=utf-8',
     'User-Agent': POCKET_USER_AGENT,
-    'appInfo': POCKET_APP_INFO,
-    'source_from': 'pocket',
-    'pa': POCKET_PA,
+    'appInfo': appInfo,
+    'Accept-Language': 'zh-Hans-CN;q=1',
+    'pa': pa ?? POCKET_PA,
   }
   if (token)
     headers.token = token
@@ -135,9 +151,12 @@ async function postPocket<T>(
   token?: string,
   extraHeaders?: Record<string, string>,
 ): Promise<PocketEnvelope<T>> {
+  // pa 每次请求现算（内嵌当下时间戳）；wasm 加载失败时退回静态值，不影响请求发出
+  await ensurePaWasm()
+  const pa = currentPa(POCKET_PA)
   return new Promise<PocketEnvelope<T>>((resolve, reject) => {
     const request = net.request({ url, method: 'POST' })
-    const headers = { ...pocketHeaders(token), ...extraHeaders }
+    const headers = { ...pocketHeaders(token, pa), ...extraHeaders }
     for (const [key, value] of Object.entries(headers))
       request.setHeader(key, value)
 
@@ -783,11 +802,16 @@ export interface PocketRoomLastMessage {
   msgContent: string
   /**
    * 消息身份键（msgidClient 优先，msgid 系列兜底，最后退到 msgTime:msgContent）。
-   * 该接口回包的 msgTime 实测恒为 0，不能当时间轴用；判断「有新消息」只能比对身份键。
+   * pa 降级时回包无 msgidClient 系列字段，键退到 msgTime:msgContent——
+   * 同一房间连发两条一模一样的文本会漏计一次，属接口信息上限。
    */
   msgKey: string
   msgTime: number
-  unreadCount: number
+  /**
+   * 服务端记录的该频道真实未读数（官方客户端角标同源）。
+   * null = 回包没给（pa 静态降级时只有 4 个字段），调用方走身份键粗算。
+   */
+  unreadCount: number | null
 }
 
 /**
@@ -835,7 +859,10 @@ export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRo
         item.msgidClient || item.msgIdClient || item.msgIdServer || item.msgId || item.messageId || '',
       ).trim() || `${msgTime}:${msgContent}`,
       msgTime,
-      unreadCount: Number(item.unreadCount) || 0,
+      // 只认字段真实存在的情况：降级回包没有该字段，0 与「未读 0 条」必须可区分
+      unreadCount: typeof item.unreadCount === 'number' && Number.isFinite(item.unreadCount)
+        ? item.unreadCount
+        : null,
     }
   })
   debug('[pocket-auth] 获取频道预览列表回包：', JSON.stringify({

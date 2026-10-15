@@ -224,7 +224,8 @@ export interface PocketRoomLastMessage {
   starName: string
   msgContent: string
   msgTime: number
-  unreadCount: number
+  /** 服务端真实未读数；null = pa 降级回包没给该字段 */
+  unreadCount: number | null
 }
 
 /** 口袋48聊天室原始消息（主进程协议客户端解码出的传输层形状；业务归一在渲染层 utils/pocket-chat-message.ts） */

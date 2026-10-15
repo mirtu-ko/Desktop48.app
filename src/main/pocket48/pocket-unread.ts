@@ -9,15 +9,13 @@ import type { PocketRoomLastMessage } from './pocket-auth'
  * 与任务列表（task-registry → stores/tasks）是同一套「主进程真相 + 各窗镜像」的模式。
  *
  * 检测链路：60s 低频轮询 im/team/classic/last/message/get 批量预览接口
- * （一次请求覆盖全部关注的房间，登录态复用 pocket-auth），与每个房间的「已读回执键」比对：
- * - 该接口回包的 msgTime 实测恒为 0，无法当时间轴；「有新消息」只能靠消息身份键
- *   （msgidClient 优先，见 getRoomLastMessages 的 msgKey）变化来判断；
- * - 首次见到某频道：回执键直接锚定当前最新消息，历史不算未读；
- * - 最新消息的身份键 ≠ 已计入的键：未读 +1（该接口每频道只回最新一条，
- *   一轮只按「有新消息」粗算 +1，进入房间后 markRead 整体清零）；
- * - seenKeys 记录已计入/已锚定的消息身份键：同一条消息不会被每轮重复累加；
- *   markRead 不写此字段（渲染层键与检测键不同空间，混写会导致已读复活），
- *   而是删除对应频道的键，下一轮检测重新锚定到用户刚读到的最新消息。
+ * （一次请求覆盖全部关注的房间，登录态复用 pocket-auth）。双模式计数：
+ * - 精确模式（pa 动态签名生效，回包带 unreadCount）：服务端计数与本地基线做差，
+ *   未读 = unreadCount - 基线，与官方客户端同源、精确到条；基线在 markRead 时
+ *   即时拉一轮批量预览对齐到「此刻」，服务端计数回落（别处已读）则自动清零；
+ * - 降级模式（静态 pa，回包只有 4 个字段）：靠消息身份键变化粗算，每频道每轮
+ *   最多 +1，同一房间连发两条相同文本会漏计——接口信息上限，见 pocket-auth 的 msgKey。
+ * 两种模式按频道独立、逐轮回包自适应（pa 失效自动落回粗算，恢复后自动升回精确）。
  *
  * 持久化（userData/pocket48-unread.json，原子写 + 坏档回退复用 SafeJSONFileSync）：
  * 频道解析结果（server/jump，开销最大的一段）随水位/未读快照一并落盘，重启不重解析、不丢未读。
@@ -56,15 +54,16 @@ interface StoredChannel {
 /** pocket48-unread.json 持久化结构（userId 十进制字符串键，与接口返回一致） */
 interface StoredUnread {
   /**
-   * 已计入/已锚定的消息身份键（**channelId 为键**——一个成员有大房间和小房间两个频道，
-   * 按 userId 存会互相顶掉）：既做「首轮锚定」（历史不算未读），又做「防重复计数」
-   * （同一条最新消息不反复 +1）。键值一律来自 lastMsgList 检测侧，渲染层不写此字段——
-   * 渲染层消息 id 与检测键不同空间（文本消息检测键是 `0:正文`，渲染层是 msgIdServer/msgTime），
-   * 混写会让已读房间被误判成有新消息（踩过）。
-   * 历史版本：v1 按 userId 存 msgTime 水位（接口 msgTime 恒为 0，废）、
-   * v2 叫 countedKeys 且被 markRead 混写过渲染层键（废）——读档直接忽略旧字段，全员重新锚定。
+   * 消息身份键锚（**channelId 为键**——一个成员有大房间和小房间两个频道）：
+   * 降级模式的「首轮锚定 + 防重复计数」判据；精确模式也同步维护它，
+   * 保证 pa 失效降级时无缝切到粗算而不误跳。键值一律来自 lastMsgList 检测侧，
+   * 渲染层不写此字段（渲染层消息 id 与检测键不同空间，混写会让已读复活，踩过）。
    */
   seenKeys: Record<string, string>
+  /** 降级模式：各频道累计的「有新消息」轮次计数（身份键变化 +1，markRead 清零） */
+  fallbackUnread: Record<string, number>
+  /** 精确模式：各频道已对齐的服务端 unreadCount 基线（markRead 对齐到当下） */
+  baselines: Record<string, number>
   /** 大房间频道缓存（userId 为键）；channelId 为空串 = 解析过但无房间（或解析失败）的占位 */
   channels: Record<string, StoredChannel>
   /**
@@ -97,6 +96,8 @@ function store(): StoredUnread {
     const loaded = storeFile.read()
     stored = {
       seenKeys: loaded?.seenKeys ?? {},
+      fallbackUnread: loaded?.fallbackUnread ?? {},
+      baselines: loaded?.baselines ?? {},
       channels: loaded?.channels ?? {},
       smallChannels: loaded?.smallChannels ?? {},
       roomOwners: loaded?.roomOwners ?? {},
@@ -153,16 +154,23 @@ async function ensureChannels(followedIds: number[]): Promise<{ dirty: boolean, 
   let dirty = false
   let unreadChanged = false
 
-  // 已取关的成员：频道缓存与未读/回执键一并清掉——房间已不在列表，markRead 无从触发，
-  // 残留的未读会永远计入 Dock 总数（广播后左列与角标同步消失）
+  // 已取关的成员：频道缓存与未读/回执状态一并清掉——房间已不在列表，markRead 无从触发，
+  // 残留的未读会永远计入 Dock 总数（广播后左列与角标同步消失）。
+  // 注意 seenKeys/fallbackUnread/baselines 都以 channelId 为键，须按频道 id 逐个删
   for (const key of known) {
     if (!followedIds.includes(Number(key))) {
       debug('[pocket-unread] 成员已取关，清理频道缓存与未读状态', key)
       const hadUnread = !!data.unread[key]
+      const channelIds = [data.channels[key]?.channelId, data.smallChannels[key]?.channelId]
+        .filter((cid): cid is string => !!cid)
       delete data.channels[key]
       delete data.smallChannels[key]
       delete data.unread[key]
-      delete data.seenKeys[key]
+      for (const channelId of channelIds) {
+        delete data.seenKeys[channelId]
+        delete data.fallbackUnread[channelId]
+        delete data.baselines[channelId]
+      }
       dirty = true
       if (hadUnread)
         unreadChanged = true
@@ -327,9 +335,14 @@ async function tick(): Promise<void> {
     if (!getToken()) {
       debug('[pocket-unread] 未登录，跳过本轮检测并清空账号状态')
       const hadUnread = Object.keys(data.unread).length > 0
-      const hadAccountState = hadUnread || Object.keys(data.seenKeys).length > 0
+      const hadAccountState = hadUnread
+        || Object.keys(data.seenKeys).length > 0
+        || Object.keys(data.baselines).length > 0
+        || Object.keys(data.fallbackUnread).length > 0
       data.unread = {}
       data.seenKeys = {}
+      data.baselines = {}
+      data.fallbackUnread = {}
       if (hadAccountState) {
         persist()
         if (hadUnread)
@@ -373,47 +386,106 @@ async function tick(): Promise<void> {
       return
     }
 
+    // 每轮按频道重算未读贡献、再按成员聚合——自愈式：基线/锚漂移会在下一轮自动收敛
+    interface ChannelContribution { count: number }
+    const contributions = new Map<string, ChannelContribution>()
+    const latestByUser = new Map<string, number>()
+    const respondedChannelIds = new Set<string>()
     let unreadChanged = false
     const lastMessages = await getRoomLastMessages([...serverIds])
     debug('[pocket-unread] lastMsgList 回包', lastMessages.length, '条：', JSON.stringify(lastMessages))
     for (const item of lastMessages) {
+      respondedChannelIds.add(item.channelId)
       const userId = channelOwner.get(item.channelId)
       if (!userId) {
         // 回包里的频道不在归属表（缓存缺失/已取关竞态）：记下来方便对线
         debug('[pocket-unread] 回包频道无法归属，跳过', item.channelId)
         continue
       }
-      // msgTime 实测恒为 0，身份键才是唯一的「新消息」判据；回执键按 channelId 存
-      // （大/小房间各自独立锚定与防重复，未读都记到成员头上）
+      if ((item.msgTime || 0) > (latestByUser.get(userId) ?? 0))
+        latestByUser.set(userId, item.msgTime || 0)
       const msgKey = item.msgKey || `${item.msgTime}:${item.msgContent}`
-      const seenKey = data.seenKeys[item.channelId]
-      if (seenKey === undefined) {
-        // 首次见到该频道（或 markRead 刚清掉回执键）：锚定当前最新消息，历史不算未读
-        debug('[pocket-unread] 锚定回执键', item.channelId, '=', msgKey.slice(0, 40))
-        data.seenKeys[item.channelId] = msgKey
-        dirty = true
-        continue
-      }
-      // 最新消息换了身份：有新消息，+1（接口每频道只回最新一条，无法数出真实增量）
-      if (msgKey !== seenKey) {
-        debug(
-          '[pocket-unread] 新消息计未读',
-          userId,
-          ': key',
-          msgKey.slice(0, 40),
-          '≠ 已计',
-          seenKey.slice(0, 40),
-        )
-        const entry = data.unread[userId] ?? { count: 0, latestTime: 0 }
-        entry.count += 1
-        entry.latestTime = item.msgTime
-        data.unread[userId] = entry
-        data.seenKeys[item.channelId] = msgKey
-        unreadChanged = true
+
+      if (item.unreadCount !== null) {
+        // ===== 精确模式：服务端给了该频道真实未读数（pa 动态签名生效）=====
+        const baseline = data.baselines[item.channelId]
+        let delta: number
+        if (baseline === undefined) {
+          // 首见锚定：以当下服务端计数为基线，历史不算未读
+          debug('[pocket-unread] 首见频道，锚定基线', item.channelId, '=', item.unreadCount)
+          delta = 0
+        }
+        else {
+          delta = Math.max(0, item.unreadCount - baseline)
+          if (item.unreadCount < baseline)
+            debug('[pocket-unread] 服务端未读回落（已在别处读过），对齐基线', item.channelId, baseline, '->', item.unreadCount)
+          else if (delta > 0)
+            debug('[pocket-unread] 新消息计未读（精确）', userId, ':', item.unreadCount, '-', baseline, '=', delta)
+        }
+        if (baseline !== item.unreadCount) {
+          data.baselines[item.channelId] = item.unreadCount
+          dirty = true
+        }
+        // 身份锚与降级计数同步维护：pa 失效降级时锚是新的，无缝切粗算不误跳
+        if (data.seenKeys[item.channelId] !== msgKey) {
+          data.seenKeys[item.channelId] = msgKey
+          dirty = true
+        }
+        if ((data.fallbackUnread[item.channelId] ?? 0) !== 0) {
+          data.fallbackUnread[item.channelId] = 0
+          dirty = true
+        }
+        contributions.set(item.channelId, { count: delta })
       }
       else {
-        debug('[pocket-unread] 无新消息', userId, ': key 未变', msgKey.slice(0, 40))
+        // ===== 降级模式：回包只有最新一条，身份键变化粗算 +1 =====
+        const seenKey = data.seenKeys[item.channelId]
+        if (seenKey === undefined) {
+          // 首次见到该频道（或 markRead 刚清掉回执键）：锚定当前最新消息，历史不算未读
+          debug('[pocket-unread] 首见频道，锚定回执键', item.channelId, '=', msgKey.slice(0, 40))
+          data.seenKeys[item.channelId] = msgKey
+          dirty = true
+        }
+        else if (msgKey !== seenKey) {
+          debug('[pocket-unread] 新消息计未读（降级粗算）', userId, ': key', msgKey.slice(0, 40), '≠ 已计', seenKey.slice(0, 40))
+          data.fallbackUnread[item.channelId] = (data.fallbackUnread[item.channelId] ?? 0) + 1
+          data.seenKeys[item.channelId] = msgKey
+          dirty = true
+        }
+        contributions.set(item.channelId, { count: data.fallbackUnread[item.channelId] ?? 0 })
       }
+    }
+
+    // 回包缺席的频道沿用上一轮计数：偶发缺条不把未读清零
+    for (const channelId of channelOwner.keys()) {
+      if (!respondedChannelIds.has(channelId))
+        contributions.set(channelId, { count: data.fallbackUnread[channelId] ?? 0 })
+    }
+
+    // 聚合到成员（大房间 + 小房间都记在成员头上）并与旧快照比对
+    const aggregated: Record<string, UnreadRoomState> = {}
+    for (const [channelId, contribution] of contributions) {
+      if (contribution.count <= 0)
+        continue
+      const ownerId = channelOwner.get(channelId)
+      if (!ownerId)
+        continue
+      const entry = aggregated[ownerId] ?? { count: 0, latestTime: 0 }
+      entry.count += contribution.count
+      entry.latestTime = Math.max(entry.latestTime, latestByUser.get(ownerId) ?? 0)
+      aggregated[ownerId] = entry
+    }
+    const previous = data.unread
+    const nextIds = Object.keys(aggregated)
+    const changed = Object.keys(previous).length !== nextIds.length
+      || nextIds.some((id) => {
+        const before = previous[id]
+        const after = aggregated[id]
+        return !before || before.count !== after.count || before.latestTime !== after.latestTime
+      })
+    if (changed) {
+      data.unread = aggregated
+      unreadChanged = true
     }
 
     // 未归属频道自愈：反查房主、补全归属表（新归属下一轮生效）；结构变化随本轮一并落盘
@@ -458,29 +530,49 @@ export function getState(): PocketUnreadBatch {
 }
 
 /**
- * 标记房间已读：未读清零并广播。
+ * 标记房间已读：未读清零并广播，随后把该成员全部频道的基线对齐到「此刻」。
+ *
  * 不接收渲染层的消息键——渲染层消息 id 与检测键（lastMsgList 空间）不同空间，
  * 混写回执键会让已读房间在下一轮被误判成有新消息而「复活」（踩过）。
- * 改为删除该房间大频道的回执键，下一轮检测重新锚定到当前最新消息
- * （锚定不计数，等价于「读到此刻为止」）；代价是 markRead 与下一轮检测之间
- * （≤60s）到达的新消息会被一并锚掉，阅读场景下可接受。
+ * 对齐方式：即时拉一轮该成员所在 server 的批量预览（此刻用户刚读到消息流底部，
+ * 服务端计数里含着的正是刚看完的这些消息），把 unreadCount 基线 / 身份锚钉到当下——
+ * 下一轮检测的差值就是真正的「读了之后又来的新消息」。
+ * 对齐请求失败不回滚：下一轮检测兜底重锚，最多多算一轮。
  */
-export function markRead(userId: number): void {
+export async function markRead(userId: number): Promise<void> {
   const data = store()
   const key = String(userId)
   const entry = data.unread[key]
   debug('[pocket-unread] markRead', key, '未读条数:', entry?.count ?? 0)
-  // 没有未读就无事可做：回执键已在位（首见即锚定），不产生落盘与广播
+  // 没有未读就无事可做：基线/锚已在位（首见即锚定），不产生落盘与广播
   if (!entry)
     return
   delete data.unread[key]
-  // 回执键按大房间 channelId 删（渲染层消息流是大房间）；小房间没有已读入口，不在此列。
-  // 下一轮 tick 走「锚定」分支会置 dirty 并落盘，这里无需额外标记
-  const receiptKeyId = data.channels[key]?.channelId
-  if (receiptKeyId)
-    delete data.seenKeys[receiptKeyId]
   persist()
   publish()
+
+  const memberChannels = [data.channels[key], data.smallChannels[key]]
+    .filter((channel): channel is StoredChannel => !!channel?.channelId)
+  const serverIds = [...new Set(memberChannels.map(channel => channel.serverId))]
+  if (!serverIds.length)
+    return
+  try {
+    const channelIds = new Set(memberChannels.map(channel => channel.channelId))
+    for (const item of await getRoomLastMessages(serverIds)) {
+      if (!channelIds.has(item.channelId))
+        continue
+      const msgKey = item.msgKey || `${item.msgTime}:${item.msgContent}`
+      if (item.unreadCount !== null)
+        data.baselines[item.channelId] = item.unreadCount
+      data.fallbackUnread[item.channelId] = 0
+      data.seenKeys[item.channelId] = msgKey
+    }
+    persist()
+    debug('[pocket-unread] 已读基线对齐完成', key, '频道:', [...channelIds].join(','))
+  }
+  catch (error) {
+    debug('[pocket-unread] 已读基线对齐失败（下一轮检测兜底）', error)
+  }
 }
 
 // ===== 生命周期（对端：app.ts） =====
