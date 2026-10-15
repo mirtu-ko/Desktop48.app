@@ -387,6 +387,102 @@ describe('use-pocket-rooms / 左列最新消息预览', () => {
     expect(api.rooms.value[0].preview).toBe('second')
     expect(api.rooms.value[0].previewTime).toBe(200)
   })
+
+  // 回归：本页曾只剩「重进页面 / 手动刷新」两条预览更新路径（60s 定时器在抽出共享直播
+  // store 时被一并删掉），表现为未读角标照涨、左列文案不动。定时器现在驱动这个函数。
+  it('refreshRoomPreviews：刷新非选中房间的预览，且不碰直播刷新态、不重复拉直播', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001, 10002],
+      lastMessages: [
+        { channelId: 'ch-10001', msgContent: '旧预览', msgTime: 100 },
+        { channelId: 'ch-10002', msgContent: '旧预览', msgTime: 100 },
+      ],
+    })
+    await api.load()
+    await api.selectRoom(10001)
+
+    vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(async () => [
+      { channelId: 'ch-10002', starName: '乙', msgContent: '乙的新消息', msgTime: 500 },
+    ])
+    await api.refreshRoomPreviews()
+
+    // 非选中房间的预览也随批量快照更新（此前只有选中房间的 5s 轮询会更新它）
+    expect(api.rooms.value.find(room => room.userId === 10002)?.preview).toBe('乙的新消息')
+    // 只走批量预览接口，不经过 refreshRoomStatus —— 否则 liveRefreshing 每轮闪一下，
+    // 刷新按钮（loading = loading || liveRefreshing）在无人操作时自己转圈
+    expect(api.liveRefreshing.value).toBe(false)
+    expect(calls.livePages).toHaveLength(1)
+    // 一次刷新 = 一次批量请求（首灌一次 + 本次一次）
+    expect(window.mainAPI.pocketGetRoomLastMessages).toHaveBeenCalledTimes(2)
+  })
+
+  // 选中房间的预览归 5s 轮询：批量接口有延迟，回写会把用户正看着的房间退回上一条。
+  // 注意这里用 msgTime=0（真实回包形状）而不是更旧的 msgTime——后者该接口永远不会给，
+  // 拿它做载荷只会为一层不存在的保护背书。
+  it('refreshRoomPreviews：选中房间的预览由 5s 轮询维护，批量回包不回写', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      lastMessages: [{ channelId: 'ch-10001', msgContent: '首灌快照', msgTime: 100 }],
+      roomPages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, 'first')] } } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+
+    // 选中房间的 5s 轮询先拿到更新的消息（previewTime 推到 200）
+    vi.mocked(window.mainAPI.pocketGetRoomMessages).mockImplementationOnce(async () => ({
+      nextTime: 0,
+      messages: [roomMsg('b', 200, 'second')],
+    }))
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(api.rooms.value[0].previewTime).toBe(200)
+
+    // 然后批量回包到位：文案不同（滞后快照），也不得回写选中房间
+    vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(async () => [
+      { channelId: 'ch-10001', starName: '甲', msgContent: '迟到的旧快照', msgTime: 0 },
+    ])
+    await api.refreshRoomPreviews()
+
+    expect(api.rooms.value[0].preview).toBe('second')
+    expect(api.rooms.value[0].previewTime).toBe(200)
+  })
+
+  // 回归：批量预览接口拿不到真实 msgTime（恒为 0，见 pa-sign 的降级回包说明），
+  // 时间守卫在这条链路上无从建立。旧守卫 `0 >= previewTime` 对「曾被 5s 轮询推高过水位」
+  // 的房间永远不成立，表现为选中过一次之后该房文案冻结 —— 切走之后也不再更新。
+  it('refreshRoomPreviews：msgTime=0 时仍更新「曾被轮询推高过水位」的非选中房间', async () => {
+    const { api } = await setup({
+      pocketIds: [10001, 10002],
+      lastMessages: [
+        { channelId: 'ch-10001', msgContent: '甲的首灌快照', msgTime: 0 },
+        { channelId: 'ch-10002', msgContent: '乙的首灌快照', msgTime: 0 },
+      ],
+      roomPages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, 'first')] } } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+
+    // 选中期间 5s 轮询把 10001 的水位推到真实时间 200
+    vi.mocked(window.mainAPI.pocketGetRoomMessages).mockImplementationOnce(async () => ({
+      nextTime: 0,
+      messages: [roomMsg('b', 200, 'second')],
+    }))
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(api.rooms.value.find(room => room.userId === 10001)?.previewTime).toBe(200)
+
+    // 切走：10001 成为非选中房间，预览改由批量接口维护
+    await api.selectRoom(10002)
+
+    vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(async () => [
+      { channelId: 'ch-10001', starName: '甲', msgContent: '更新的新消息', msgTime: 0 },
+    ])
+    await api.refreshRoomPreviews()
+
+    const room = api.rooms.value.find(item => item.userId === 10001)
+    // 批量快照不带时间（msgTime=0）但文案更新了：要能写进预览
+    expect(room?.preview).toBe('更新的新消息')
+    // 文案虽更新，本地真实水位不被 0 冲掉（供后续带真实时间的快照比较）
+    expect(room?.previewTime).toBe(200)
+  })
 })
 
 describe('use-pocket-rooms / 选中连房与消息流', () => {

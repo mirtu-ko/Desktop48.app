@@ -67,6 +67,10 @@ export interface PocketRoomMessageView {
 
   /** 视频封面；空串 = 无 */
   videoPoster: string
+  /** 视频原始宽度（bodys 的 w/width）；0 = 未提供（渲染层回退 16:9 占位） */
+  videoWidth: number
+  /** 视频原始高度；0 = 未提供 */
+  videoHeight: number
 
   /** 直播分享目标 liveId（LIVEPUSH/OPEN_LIVE/SHARE_LIVE 系）；空串 = 非分享或未解析到，卡片不可点 */
   liveId: string
@@ -307,6 +311,8 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
   let audioUrl = ''
   let videoUrl = ''
   let videoPoster = ''
+  let videoWidth = 0
+  let videoHeight = 0
 
   if (msgType === 'IMAGE') {
     imageUrl = mediaUrl(firstStr(body, ['url', 'imageUrl', 'imgUrl']), 'source')
@@ -323,6 +329,9 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
   else if (msgType === 'VIDEO') {
     videoUrl = mediaUrl(firstStr(body, ['url', 'videoUrl', 'videoPath']), 'mp4')
     videoPoster = mediaUrl(firstStr(body, ['coverUrl', 'cover', 'firstFrame', 'picUrl']), 'source')
+    // 视频原始尺寸：实测 bodys 带 w/h（如竖屏 w=1080/h=1920），渲染层按真实比例占位
+    videoWidth = num(body?.w) || num(body?.width)
+    videoHeight = num(body?.h) || num(body?.height)
   }
   else if (msgType === 'AUDIO_REPLY' || msgType === 'AUDIO_GIFT_REPLY') {
     const info = parseJson(body?.replyInfo) || parseJson(body?.giftReplyInfo) || body
@@ -383,6 +392,8 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
     audioUrl,
     videoUrl,
     videoPoster,
+    videoWidth,
+    videoHeight,
     liveId,
     liveType,
     liveMode,

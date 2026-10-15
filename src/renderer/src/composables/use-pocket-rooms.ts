@@ -44,7 +44,10 @@ export interface PocketRoom {
   channelId: string
   /** 左列预览：频道最新一条消息文案；空串 = 暂无消息 */
   preview: string
-  /** 预览对应消息时刻：防止批量预览的旧快照覆盖更新的本地预览 */
+  /**
+   * 预览对应消息时刻（0 = 未知）。批量预览接口不回该字段，实际只用于选中房间轮询的单调比较；
+   * 跨来源（批量 / 轮询）的先后由 refreshRoomPreviews 按来源划分所有权，不靠这个值。
+   */
   previewTime: number
   /** 匹配到的在直播；null = 未开播（房间留言流与直播与否无关，仍可查看） */
   live: LiveListItem | null
@@ -55,6 +58,17 @@ export type PocketRoomChatStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 /** 房间新消息轮询间隔：参考实现通知轮询 2s，这里取 5s 平衡实时性与接口压力 */
 const MESSAGE_POLL_MS = 5_000
+/**
+ * 左列预览刷新间隔：一次请求覆盖全部房间，与主进程未读检测（60s）同频，
+ * 让「预览文案」和「未读角标」同一节奏到位。
+ *
+ * 这条轮询是补回来的：本页原先只有一个 60s 定时器跑 `refreshRoomStatus`
+ * （直播状态 + 预览一起刷），抽出全站直播 store 时只把「直播」那半边改接共享轮询，
+ * 「预览」半边再没有定时器 —— 于是未读角标照常增长，左列文案却只在
+ * 重进页面（onActivated）或手动刷新（load）时才变。
+ * 只驱动预览、不再建第二个直播轮询：共享 store 已覆盖直播状态，重复建会翻倍直播接口流量。
+ */
+const ROOM_PREVIEW_POLL_MS = 60_000
 /** 房间频道/状态遍历的并发上限：关注几十人时不打爆接口，也不至于让首灌等太久 */
 const ROOM_RESOLVE_CONCURRENCY = 5
 
@@ -401,8 +415,43 @@ export function usePocketRooms() {
   }
 
   /**
+   * 刷新左列预览文案（批量最新消息，一次请求覆盖全部房间；失败静默）。
+   *
+   * 预览的所有权按「来源」划分，不按时间戳比较 —— `lastMsgList` 实测拿不到真实 msgTime
+   * （恒为 0，见 pa-sign.ts 的降级回包说明），时间守卫在这条链路上无从建立：
+   * - 非选中房间：只由本函数维护，回包文案与本地不同即采纳；
+   * - 选中房间：由 5s 消息轮询即时维护（见 mergeMessages 的 append 分支），本函数不覆盖
+   *   —— 批量接口有延迟，回写会把用户正看着的房间的预览退回上一条。判定条件与
+   *   mergeMessages 一致（仅 viewMode === 'room' 时轮询才写大房间预览），否则用户停在
+   *   「小房间」视图时该房预览无人维护，会冻死。
+   *
+   * 回包若仍带真实 msgTime（pa 特征齐全时），退化为按时间单调：更旧的快照不采纳。
+   */
+  async function refreshRoomPreviews() {
+    if (!pocketAuthState.value.loggedIn || !rooms.value.length)
+      return
+    const lastMessageMap = await fetchLastMessageMap(rooms.value.map(room => room.serverId))
+    for (const room of rooms.value) {
+      const last = lastMessageMap.get(room.channelId)
+      if (!last)
+        continue
+      if (room.userId === selectedUserId.value && viewMode.value === 'room')
+        continue
+      if (last.msgTime > 0) {
+        if (last.msgTime < room.previewTime)
+          continue
+        room.previewTime = last.msgTime
+      }
+      const nextPreview = normalizePocketRoomPreview(last.msgContent)
+      if (nextPreview !== room.preview)
+        room.preview = nextPreview
+    }
+  }
+
+  /**
    * 刷新直播状态 + 左列最新消息预览，不重建列表（保留选中与消息流）。
    * force=false 供重新进入页面复用 120s 新鲜缓存；手动刷新传 true。
+   * 预览部分复用 refreshRoomPreviews，与定时轮询走同一条口径。
    */
   async function refreshRoomStatus(force = true) {
     if (!pocketAuthState.value.loggedIn || !rooms.value.length)
@@ -410,16 +459,9 @@ export function usePocketRooms() {
     liveRefreshing.value = true
     try {
       const liveMap = await fetchLiveMap(force)
-      const lastMessageMap = await fetchLastMessageMap(rooms.value.map(room => room.serverId))
-      for (const room of rooms.value) {
+      for (const room of rooms.value)
         room.live = liveMap.get(room.userId) ?? null
-        const last = lastMessageMap.get(room.channelId)
-        // 只接受不比当前预览旧快照：轮询增量可能比批量预览更新
-        if (last && last.msgTime >= room.previewTime) {
-          room.preview = normalizePocketRoomPreview(last.msgContent)
-          room.previewTime = last.msgTime
-        }
-      }
+      await refreshRoomPreviews()
       sortRooms(rooms.value)
     }
     catch (error) {
@@ -803,7 +845,31 @@ export function usePocketRooms() {
     }
   }
 
-  watch([pageActive, loggedIn, () => rooms.value.length], syncLiveStatusPolling, { immediate: true })
+  /**
+   * 左列预览轮询：补上被抽走的那条 60s 定时器（见 ROOM_PREVIEW_POLL_MS 注解）。
+   * 只调 refreshRoomPreviews —— 不碰 liveRefreshing（否则刷新按钮每轮闪 loading），
+   * 也不重复建直播轮询（共享 store 已覆盖直播状态）。
+   */
+  const {
+    pause: pauseRoomPreviewPoll,
+    resume: resumeRoomPreviewPoll,
+    isActive: roomPreviewPolling,
+  } = useIntervalFn(() => void refreshRoomPreviews(), ROOM_PREVIEW_POLL_MS, { immediate: false })
+
+  /** 与共享直播轮询同一开关条件：页面可见 + 已登录 + 房间已加载 */
+  function syncRoomPreviewPolling(): void {
+    const shouldPoll = pageActive.value && pocketAuthState.value.loggedIn && rooms.value.length > 0
+    if (shouldPoll && !roomPreviewPolling.value)
+      resumeRoomPreviewPoll()
+    else if (!shouldPoll && roomPreviewPolling.value)
+      pauseRoomPreviewPoll()
+  }
+
+  // pageActive 由 onActivated / onDeactivated 维护，两个轮询共用这一份开关条件
+  watch([pageActive, loggedIn, () => rooms.value.length], () => {
+    syncLiveStatusPolling()
+    syncRoomPreviewPolling()
+  }, { immediate: true })
 
   // onActivated/onDeactivated 仅在组件 setup 中有效：裸 effectScope（单测）直驱时跳过
   if (getCurrentInstance()) {
@@ -871,6 +937,7 @@ export function usePocketRooms() {
     load,
     refresh: load,
     refreshRoomStatus,
+    refreshRoomPreviews,
     selectRoom,
     setViewMode,
     unlockSmall,

@@ -121,7 +121,8 @@ onUnmounted(() => {
   gap: 8px;
   min-width: 168px;
   padding: 5px 10px;
-  border-radius: 10px;
+  /* 与消息列同档圆角：在房间消息流内由 .msg-scroll 注入；独立使用时回退 10px */
+  border-radius: var(--msg-radius, 10px);
   cursor: pointer;
   user-select: none;
   background: color-mix(in srgb, var(--color-rooms) 10%, transparent);

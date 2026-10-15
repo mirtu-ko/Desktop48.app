@@ -97,6 +97,28 @@ describe('pocket-room-message / 文本与多媒体', () => {
     expect(view.videoPoster).toBe('https://source.48.cn/mediasource/cover/c.jpg')
   })
 
+  it('video 提取 w/h 尺寸（线上实测字段 w/h）供比例占位；缺省 0', () => {
+    const sized = normalizePocketRoomMessage(roomMessage('VIDEO', {
+      bodys: {
+        url: 'https://kd48-nosdn.yunxinsvr.com/NDA5MzEwOA==/bmltYV8zMzE0ODc4MjY3OTk',
+        md5: 'c42ba651085d602befd4704b8221ca08',
+        ext: 'mp4',
+        w: 1080,
+        h: 1920,
+        size: 18610086,
+        dur: 19380,
+      },
+    }))!
+    expect(sized.videoWidth).toBe(1080)
+    expect(sized.videoHeight).toBe(1920)
+
+    const unsized = normalizePocketRoomMessage(roomMessage('VIDEO', {
+      bodys: { url: '/MediaSource/Video/b.mp4' },
+    }))!
+    expect(unsized.videoWidth).toBe(0)
+    expect(unsized.videoHeight).toBe(0)
+  })
+
   it('audioReply 从 replyInfo.voiceUrl 取语音', () => {
     const view = normalizePocketRoomMessage(roomMessage('AUDIO_REPLY', {
       bodys: { replyInfo: { replyName: '成员丁', replyText: '听听这个', voiceUrl: '/MediaSource/Voice/a.m4a' } },

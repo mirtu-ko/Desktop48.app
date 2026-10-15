@@ -237,9 +237,6 @@ function saveStoredAuth(auth: StoredAuth): void {
   authStore().write(auth)
 }
 
-/** TODO(临时调试): 上次已打印的 token，避免高频调用刷屏；排查完删除 */
-let debugLastToken = ''
-
 /** 解出可用 token；加密解密失败（如更换系统用户）视为未保存，返回空串 */
 function extractToken(stored: StoredAuth | null): string {
   if (!stored)
@@ -256,11 +253,6 @@ function extractToken(stored: StoredAuth | null): string {
   }
   else {
     token = stored.tokenPlain || ''
-  }
-  // TODO(临时调试): dev 环境打印原始 token（生产构建 verbose 门控为关，不输出）
-  if (token && token !== debugLastToken) {
-    debugLastToken = token
-    debug('[pocket-auth] 原始 token:', token)
   }
   return token
 }
@@ -723,7 +715,6 @@ export async function getRoomChannel(userId: number): Promise<PocketRoomChannel>
     serverId: String(content.serverId || '').trim(),
     channelId: String(content.channelId || '').trim(),
   }
-  debug('[pocket-auth] 获取频道详情回包：', JSON.stringify({ userId: Number(userId), ...channel, raw: content }))
   return channel
 }
 
@@ -1022,20 +1013,6 @@ export async function getRoomMessages(
       }
     })
   const result = { messages, nextTime: Number(content.nextTime) || 0 }
-  debug('[pocket-auth] 获取频道消息回包：', JSON.stringify({
-    ...request,
-    scope,
-    count: messages.length,
-    nextTime: result.nextTime,
-    firstMessage: messages[0]
-      ? {
-          msgIdServer: messages[0].msgIdServer,
-          msgIdClient: messages[0].msgIdClient,
-          msgType: messages[0].msgType,
-          msgTime: messages[0].msgTime,
-        }
-      : null,
-  }))
   return result
 }
 
@@ -1093,9 +1070,7 @@ export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRo
   const items = (Array.isArray(list) ? list : []).filter(
     (item): item is Record<string, unknown> => !!item && typeof item === 'object',
   )
-  // 排查用：该接口的字段结构没有官方文档，首条原始回包可直接对照（verbose 级别）
-  if (items[0])
-    debug('[pocket-auth] lastMsgList 原始首条：', JSON.stringify(items[0]))
+
   const result = items.map((item) => {
     const msgTime = Number(item.msgTime) || 0
     const msgContent = typeof item.msgContent === 'string'
@@ -1118,11 +1093,14 @@ export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRo
   })
   debug('[pocket-auth] 获取频道预览列表回包：', JSON.stringify({
     count: result.length,
-    channels: result.map(({ channelId: id, serverId: sid, starName, unreadCount }) => ({
+    channels: result.map(({ channelId: id, serverId: sid, starName, unreadCount, msgTime, msgContent }) => ({
       channelId: id,
       serverId: sid,
       starName,
       unreadCount,
+      // msgContent 就是左列房间条展示的那条最新消息：正文截断，够对照即可
+      msgTime,
+      msgContent: msgContent.length > 120 ? `${msgContent.slice(0, 120)}…` : msgContent,
     })),
   }))
   return result

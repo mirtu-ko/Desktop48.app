@@ -183,8 +183,15 @@ watch(chatStatus, (status) => {
 // ===== 消息流自动滚底 =====
 // 切房强制回底（新房子的滚动位置没有意义）；同房新消息且本就贴在底部时才拽回，
 // 上翻看历史不强行打断；翻更早历史时保持视口（新消息插在头部，贴回去等于白翻）
+//
+// atBottom 是「钉底」开关而非纯几何判断：内容增长（懒加载图片/视频撑高）只改
+// scrollHeight 不改 scrollTop，不能据此判定用户上滚 —— 否则贴底后异步派发的
+// scroll 事件会拿「已长高」的 scrollHeight 把钉底误判成离开底部，媒体补贴底
+// 全被拦住，进房就停在了半空。onListScroll 只在 scrollTop 相对上次变小时退钉。
 const listRef = ref<HTMLElement | null>(null)
 const atBottom = ref(true)
+/** 上次滚动位置：-1 = 尚未建立基线（切房重置），用于识别用户上滚 */
+let lastSeenScrollTop = -1
 /** 翻历史中：抑制 length 监听的回底，改由 onLoadMore 显式保持视口 */
 let preservingScroll = false
 
@@ -195,7 +202,15 @@ function onListScroll() {
   const el = listRef.value
   if (!el)
     return
-  atBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+  const prevSeen = lastSeenScrollTop
+  lastSeenScrollTop = el.scrollTop
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+  // scrollTop 相对上次变小才是用户真的上滚，才允许退出钉底；
+  // 仅 scrollHeight 变大（媒体撑高、追加消息）保持钉底，由媒体回调继续补贴底
+  if (!nearBottom && prevSeen >= 0 && el.scrollTop < prevSeen - 1)
+    atBottom.value = false
+  else if (nearBottom)
+    atBottom.value = true
   // 回到底部即清空新消息计数
   if (atBottom.value)
     newCount.value = 0
@@ -205,11 +220,13 @@ function onListScroll() {
     void onLoadMore()
 }
 
-/** 浮标点击：回底（计数由随后的 scroll 事件清零） */
+/** 回底：所有程序化贴底统一走这里，同步 lastSeenScrollTop 供 onListScroll 判定 */
 function scrollToBottom() {
   const el = listRef.value
-  if (el)
-    el.scrollTop = el.scrollHeight
+  if (!el)
+    return
+  el.scrollTop = el.scrollHeight
+  lastSeenScrollTop = el.scrollTop
 }
 
 /**
@@ -238,6 +255,9 @@ async function enterRoom(userId: number) {
 watch(selectedUserId, () => {
   atBottom.value = true
   newCount.value = 0
+  // 重置滚动基线：切房清空旧内容时浏览器钳制 scrollTop，会触发一次「向上」的
+  // scroll 事件 —— 不是用户上滚，不能据此退钉
+  lastSeenScrollTop = -1
 })
 
 watch(() => messages.value.length, async (len, oldLen) => {
@@ -256,9 +276,7 @@ watch(() => messages.value.length, async (len, oldLen) => {
   if (selectedUserId.value !== null && messages.value.length)
     void markRoomRead(selectedUserId.value, viewMode.value)
   await nextTick()
-  const el = listRef.value
-  if (el)
-    el.scrollTop = el.scrollHeight
+  scrollToBottom()
 })
 
 /**
@@ -271,9 +289,7 @@ watch(() => messages.value.length, async (len, oldLen) => {
 function onMediaLoad() {
   if (preservingScroll || !atBottom.value)
     return
-  const el = listRef.value
-  if (el)
-    el.scrollTop = el.scrollHeight
+  scrollToBottom()
 }
 
 async function onLoadMore() {
@@ -294,6 +310,7 @@ async function onLoadMore() {
   await nextTick()
   // 头部插入了 prevHeight → scrollHeight 的增量，视口按同样增量下移，肉眼位置不变
   el.scrollTop = prevTop + (el.scrollHeight - prevHeight)
+  lastSeenScrollTop = el.scrollTop
 }
 
 /** 头像 URL：口袋扩展给的是相对/完整路径混杂，统一过 sourceUrl */
@@ -317,6 +334,21 @@ function imageBoxStyle(message: PocketRoomMessageView) {
     width: 'min(240px, 100%)',
     aspectRatio: `${message.imageWidth} / ${message.imageHeight}`,
   }
+}
+
+/**
+ * 视频尺寸占位：服务端 bodys 带真实 w/h（实测竖屏 w=1080/h=1920）。
+ * 横屏沿用 280px 宽上限、按真实比例出高；竖屏高度封顶 360px（小窗再按视口收缩）、
+ * 宽度按比例收——两维都显式算出，不赌 aspect-ratio 对 block 尺寸的解析。
+ * 无尺寸（视频翻牌等）返回 undefined，回退 .msg-video 默认 16:9 占位。
+ */
+function videoBoxStyle(message: PocketRoomMessageView) {
+  if (!message.videoWidth || !message.videoHeight)
+    return undefined
+  if (message.videoWidth >= message.videoHeight)
+    return { aspectRatio: `${message.videoWidth} / ${message.videoHeight}`, width: 'min(280px, 100%)' }
+  const height = 'min(360px, 50vh)'
+  return { height, width: `calc(${height} * ${(message.videoWidth / message.videoHeight).toFixed(4)})` }
 }
 
 /** 消息时刻（HH:mm:ss） */
@@ -670,6 +702,7 @@ onMounted(() => {
                           <video
                             v-else-if="message.videoUrl"
                             class="msg-video"
+                            :style="videoBoxStyle(message)"
                             :src="message.videoUrl"
                             :poster="message.videoPoster || undefined"
                             controls
@@ -1456,6 +1489,14 @@ onMounted(() => {
   box-sizing: border-box;
   min-height: 0;
   padding: 12px 16px;
+
+  /* 消息列圆角表：整列只分「大 / 小」两档 + 指向头像的收角，改这一处即整列同步。
+   * --msg-radius-inner 是「大档 − 内距」的同心内角（直播卡在气泡内含 4px 内距），
+   * 内部盒在收角那一侧沿用收角，否则会从外角后露出底衬缺口；
+   * 媒体块（图片 / 视频 / 语音条）不带收角——它们不是「说话」 */
+  --msg-radius: 14px;
+  --msg-radius-sm: 6px;
+  --msg-radius-inner: calc(var(--msg-radius) - 4px);
 }
 
 /* 加载更早历史：贴在消息流顶部的状态行（滚动到顶自动触发，不再有按钮） */
@@ -1536,7 +1577,8 @@ onMounted(() => {
 .msg-member-tag {
   flex: none;
   padding: 0 5px;
-  border-radius: 7px;
+  /* 药丸半径与同一行互斥展示的 .msg-level 对齐（也是全站小标签的通用造型） */
+  border-radius: var(--radius-pill);
   font-size: 10px;
   font-weight: 600;
   line-height: 15px;
@@ -1556,7 +1598,7 @@ onMounted(() => {
   display: inline-block;
   max-width: 100%;
   padding: 7px 12px;
-  border-radius: 4px 14px 14px 14px;
+  border-radius: var(--radius-xs) var(--msg-radius) var(--msg-radius) var(--msg-radius);
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -1600,19 +1642,21 @@ onMounted(() => {
   padding: 3px 10px;
   /* 左侧竖线是引用块的视觉锚点（聊天软件通用语），颜色随房间色 */
   border-left: 2px solid color-mix(in srgb, var(--color-rooms) 45%, transparent);
-  border-radius: 4px 8px 8px 4px;
+  border-radius: var(--radius-xs) var(--msg-radius-sm) var(--msg-radius-sm) var(--radius-xs);
   font-size: 12px;
   line-height: 1.5;
   text-align: left;
   color: var(--el-text-color-secondary);
   background: var(--el-fill-color-lighter);
 
+  /* 昵称取中性色而非品牌紫：房间青在本页专指「成员」身份（见 .msg-row--member / .msg-member-tag），
+   * 而引用对象可能是任意用户，借色等于误标身份；强调色交由左侧竖线独自承担 */
   .msg-quote-nick {
     flex: none;
     max-width: 40%;
     overflow: hidden;
     font-weight: 600;
-    color: var(--brand-primary);
+    color: var(--el-text-color-regular);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1646,7 +1690,8 @@ onMounted(() => {
   text-align: left;
   color: inherit;
   background: none;
-  border-radius: 8px;
+  /* 与气泡内壁同心：外角取同心内角，收角一侧与气泡收角对齐 */
+  border-radius: var(--radius-xs) var(--msg-radius-inner) var(--msg-radius-inner) var(--msg-radius-inner);
 
   &.is-clickable {
     cursor: pointer;
@@ -1674,7 +1719,8 @@ onMounted(() => {
   width: 100%;
   aspect-ratio: 3 / 4;
   overflow: hidden;
-  border-radius: 6px;
+  /* 与卡片同角（卡片 padding 为 0，内角不再递减），左上咬合气泡收角 */
+  border-radius: var(--radius-xs) var(--msg-radius-inner) var(--msg-radius-inner) var(--msg-radius-inner);
   background: var(--el-fill-color);
 }
 
@@ -1733,7 +1779,7 @@ onMounted(() => {
   left: 6px;
   z-index: 2;
   padding: 1px 7px;
-  border-radius: 6px;
+  border-radius: var(--msg-radius-sm);
   font-size: 11px;
   font-weight: 600;
   line-height: 17px;
@@ -1807,16 +1853,17 @@ onMounted(() => {
   display: block;
   max-width: 240px;
   max-height: 280px;
-  border-radius: 10px;
+  border-radius: var(--msg-radius);
   cursor: zoom-in;
 }
 
 .msg-video {
   display: block;
-  /* 宽度定死 + 16:9 预留：视频加载（loadedmetadata）前后高度不变，滚动不抖动 */
+  /* 默认 16:9 预留兜底；bodys 带真实 w/h 时 videoBoxStyle 覆盖为真实比例
+     （竖屏高度封顶）——加载前后高度都不变，滚动不抖动 */
   width: min(280px, 100%);
   aspect-ratio: 16 / 9;
-  border-radius: 10px;
+  border-radius: var(--msg-radius);
   background: #000;
 }
 
