@@ -150,8 +150,8 @@ const api = {
   // ===== 口袋48账号 =====
   // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts。
   // IM 凭据（accid + imToken）不在此暴露：渲染层零调用方，token 只留在主进程
-  pocketSendSms: (mobile: string, answer?: string) => invokeIpc('pocketSendSms', mobile, answer),
-  pocketLoginByCode: (mobile: string, code: string) => invokeIpc('pocketLoginByCode', mobile, code),
+  pocketSendSms: (mobile: string, area?: string, answer?: string) => invokeIpc('pocketSendSms', mobile, area, answer),
+  pocketLoginByCode: (mobile: string, code: string, area?: string) => invokeIpc('pocketLoginByCode', mobile, code, area),
   pocketLoginByToken: (token: string, mobile?: string) => invokeIpc('pocketLoginByToken', token, mobile),
   pocketGetAuthState: () => invokeIpc('pocketGetAuthState'),
   pocketLogout: () => invokeIpc('pocketLogout'),

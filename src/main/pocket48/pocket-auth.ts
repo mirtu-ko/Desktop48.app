@@ -96,6 +96,8 @@ function pocketAppInfo(): string {
 interface StoredAuth {
   /** 记住手机号（下次打开弹窗预填；明文，手机号本身不算机密） */
   mobile: string
+  /** 登录时使用的区号（如 '852'）；旧版本无此字段，读取时按 86 处理 */
+  area?: string
   /** safeStorage 加密后的 token（base64）；plainFallback 时为空 */
   tokenEnc: string
   /** safeStorage 不可用时的降级明文 token；有 tokenEnc 时恒为空 */
@@ -111,7 +113,7 @@ export interface PocketAuthState {
   loggedIn: boolean
   nickname: string
   avatar: string
-  /** 脱敏手机号（139****1234）；空串表示未记住 */
+  /** 脱敏手机号（139****1234）；非中国大陆区号登录时带 `+区号 ` 前缀；空串表示未记住 */
   mobileMasked: string
   /** true = 平台无 safeStorage，token 以明文落盘（仅提示用） */
   plainFallback: boolean
@@ -306,7 +308,17 @@ function extractToken(stored: StoredAuth | null): string {
   return token
 }
 
-function maskMobile(mobile: string): string {
+/**
+ * 脱敏手机号（139****1234）。非 86 区号加 `+区号 ` 前缀——区号是归属地信息，
+ * 无脱敏必要；海外号码 4-15 位不定长，头尾各留 2 位（短于 5 位时头尾重叠，脱敏无意义）。
+ */
+function maskMobile(mobile: string, area?: string): string {
+  const normalized = normalizeArea(area)
+  if (normalized !== '86') {
+    if (mobile.length < 5)
+      return ''
+    return `+${normalized} ${mobile.slice(0, 2)}****${mobile.slice(-2)}`
+  }
   if (mobile.length < 7)
     return ''
   return `${mobile.slice(0, 3)}****${mobile.slice(-4)}`
@@ -318,7 +330,7 @@ function toAuthState(stored: StoredAuth | null): PocketAuthState {
     loggedIn: !!token,
     nickname: stored?.nickname || '',
     avatar: stored?.avatar || '',
-    mobileMasked: maskMobile(stored?.mobile || ''),
+    mobileMasked: maskMobile(stored?.mobile || '', stored?.area),
     plainFallback: !!stored && !!stored.tokenPlain && !safeStorageAvailable(),
     savedAt: stored?.savedAt || 0,
   }
@@ -336,16 +348,27 @@ export function getToken(): string {
   return extractToken(readStoredAuth())
 }
 
+/** 区号统一去掉可能的 + 前缀；缺省或空串（如误传单个 '+'）仍按中国大陆处理 */
+function normalizeArea(area?: string): string {
+  return (area || '86').replace(/^\+/, '') || '86'
+}
+
+/** 手机号本地校验：中国大陆仍固定 11 位，其他区号放宽到 4-15 位数字 */
+function isValidMobile(mobile: string, area: string): boolean {
+  return area === '86' ? /^\d{11}$/.test(mobile) : /^\d{4,15}$/.test(mobile)
+}
+
 /**
  * 发送登录验证码。
  * 正常返回 needCaptcha=false；命中反爬问答题（2001）时返回题目与选项，
  * 用户作答后把 answer 随下一次发送一并提交。
  */
-export async function sendSms(mobile: string, answer?: string): Promise<PocketSmsResult> {
+export async function sendSms(mobile: string, area?: string, answer?: string): Promise<PocketSmsResult> {
+  const normalizedArea = normalizeArea(area)
   const trimmed = mobile.trim()
-  if (!/^\d{11}$/.test(trimmed))
-    throw new Error('请输入 11 位手机号')
-  const payload: Record<string, string> = { mobile: trimmed, area: '86' }
+  if (!isValidMobile(trimmed, normalizedArea))
+    throw new Error(normalizedArea === '86' ? '请输入 11 位手机号' : '请输入有效的手机号')
+  const payload: Record<string, string> = { mobile: trimmed, area: normalizedArea }
   if (answer)
     payload.answer = answer
   debug('[pocket-auth] → 发送验证码：', JSON.stringify({
@@ -390,11 +413,12 @@ function pickUserInfo(content: Record<string, unknown> | undefined | null): Pock
 }
 
 /** 验证码登录：成功后落盘凭证并返回登录态 */
-export async function loginByCode(mobile: string, code: string): Promise<PocketAuthState> {
+export async function loginByCode(mobile: string, code: string, area?: string): Promise<PocketAuthState> {
+  const normalizedArea = normalizeArea(area)
   const trimmedMobile = mobile.trim()
   const trimmedCode = code.trim()
-  if (!/^\d{11}$/.test(trimmedMobile))
-    throw new Error('请输入 11 位手机号')
+  if (!isValidMobile(trimmedMobile, normalizedArea))
+    throw new Error(normalizedArea === '86' ? '请输入 11 位手机号' : '请输入有效的手机号')
   if (!trimmedCode)
     throw new Error('请输入验证码')
   debug('[pocket-auth] → 验证码登录：', JSON.stringify({
@@ -405,6 +429,7 @@ export async function loginByCode(mobile: string, code: string): Promise<PocketA
   const envelope = await postPocket<{ token?: string }>(SMS_LOGIN_URL, {
     mobile: trimmedMobile,
     code: trimmedCode,
+    area: normalizedArea,
   })
   const token = envelope.content?.token
   if (!envelope.success || !token) {
@@ -427,7 +452,7 @@ export async function loginByCode(mobile: string, code: string): Promise<PocketA
   catch (error) {
     log('[pocket-auth] 登录后拉取资料失败（不阻断登录）', error)
   }
-  saveAuth(trimmedMobile, token, info)
+  saveAuth(trimmedMobile, token, info, normalizedArea)
   return getAuthState()
 }
 
@@ -452,14 +477,16 @@ export async function loginByToken(token: string, mobile = ''): Promise<PocketAu
     throw new Error(invalid ? 'token 无效或已过期' : envelope.message || 'token 校验失败')
   }
   const info = pickUserInfo(envelope.content)
-  saveAuth(mobile.trim(), trimmed, info)
+  // token 登录的手机号由用户手填、无区号语义（该链路不校验手机号），按 86 存档只为展示不带前缀
+  saveAuth(mobile.trim(), trimmed, info, '86')
   return getAuthState()
 }
 
-function saveAuth(mobile: string, token: string, info: PocketUserInfo): void {
+function saveAuth(mobile: string, token: string, info: PocketUserInfo, area: string): void {
   const encrypted = safeStorageAvailable()
   saveStoredAuth({
     mobile,
+    area,
     tokenEnc: encrypted ? safeStorage.encryptString(token).toString('base64') : '',
     tokenPlain: encrypted ? '' : token,
     nickname: info.nickname,

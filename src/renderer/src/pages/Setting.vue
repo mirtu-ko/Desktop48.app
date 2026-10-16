@@ -189,13 +189,34 @@ function goMembers() {
 const loginDialogVisible = ref(false)
 const loginTab = ref<'sms' | 'token'>('sms')
 
+/** 支持的国家/地区区号：保持短列表，避免一个全量国家表喧宾夺主 */
+const AREA_OPTIONS = [
+  { label: '中国大陆 +86', value: '86' },
+  { label: '中国香港 +852', value: '852' },
+  { label: '中国澳门 +853', value: '853' },
+  { label: '中国台湾 +886', value: '886' },
+  { label: '新加坡 +65', value: '65' },
+  { label: '日本 +81', value: '81' },
+  { label: '韩国 +82', value: '82' },
+  { label: '美国/加拿大 +1', value: '1' },
+  { label: '英国 +44', value: '44' },
+  { label: '澳大利亚 +61', value: '61' },
+]
+
 /** 短信登录表单状态 */
 const smsForm = reactive({
+  area: '86',
   mobile: '',
   code: '',
   sending: false,
   loggingIn: false,
   countdown: 0,
+  /**
+   * 验证码发出后锁定区号：服务端按 (区号+手机号) 存码，发码后切换区号会导致
+   * 登录双键失配（报「验证码错误」且烧按号计的 5 次预算）。手机号不锁——
+   * 改手机号即换服务端计数器，用户重发即可，无失配风险。
+   */
+  areaLocked: false,
   /** 反爬问答题：发送命中 2001 时置位，用户作答后随下一次发送提交 */
   captcha: null as null | { question: string, options: string[], answer: string },
 })
@@ -206,14 +227,18 @@ const tokenForm = reactive({
   loggingIn: false,
 })
 
-/** 日志用：手机号脱敏，避免验证码链路打点泄露完整号码 */
-function maskMobileForLog(mobile: string): string {
-  return /^\d{11}$/.test(mobile) ? `${mobile.slice(0, 3)}****${mobile.slice(-4)}` : '***'
+/** 日志用：手机号脱敏，避免验证码链路打点泄露完整号码；海外号码位数不一，够长即按同规则脱敏并带区号前缀 */
+function maskMobileForLog(mobile: string, area = '86'): string {
+  const masked = area === '86'
+    ? (mobile.length >= 7 ? `${mobile.slice(0, 3)}****${mobile.slice(-4)}` : '***')
+    : (mobile.length >= 5 ? `${mobile.slice(0, 2)}****${mobile.slice(-2)}` : '***')
+  return area === '86' ? masked : `+${area} ${masked}`
 }
 
 function openLoginDialog() {
   smsForm.code = ''
   smsForm.captcha = null
+  smsForm.areaLocked = false
   clearCountdown()
   tokenForm.token = ''
   loginDialogVisible.value = true
@@ -309,12 +334,13 @@ async function sendSmsCode() {
     return
   smsForm.sending = true
   debugLog('pocket-auth', '发送验证码：', JSON.stringify({
-    mobile: maskMobileForLog(smsForm.mobile),
+    mobile: maskMobileForLog(smsForm.mobile, smsForm.area),
     hasCaptchaAnswer: !!smsForm.captcha?.answer,
   }))
   try {
     const result = await window.mainAPI.pocketSendSms(
       smsForm.mobile,
+      smsForm.area,
       smsForm.captcha?.answer || undefined,
     )
     debugLog('pocket-auth', '发送验证码结果：', JSON.stringify({
@@ -329,6 +355,7 @@ async function sendSmsCode() {
     }
     smsForm.captcha = null
     ElMessage.success('验证码已发送，请留意短信')
+    smsForm.areaLocked = true
     startCountdown()
   }
   catch (error) {
@@ -370,11 +397,11 @@ async function submitSmsLogin() {
     return
   smsForm.loggingIn = true
   debugLog('pocket-auth', '提交验证码登录：', JSON.stringify({
-    mobile: maskMobileForLog(smsForm.mobile),
+    mobile: maskMobileForLog(smsForm.mobile, smsForm.area),
     codeLength: smsForm.code.trim().length,
   }))
   try {
-    const state = await loginBySmsCode(smsForm.mobile, smsForm.code)
+    const state = await loginBySmsCode(smsForm.mobile, smsForm.code, smsForm.area)
     loginDialogVisible.value = false
     notifyLoginSuccess(state)
     void syncPocketFollow()
@@ -411,8 +438,9 @@ async function submitTokenLogin() {
   }
 }
 
-/** 手机号是否可发送验证码 */
-const smsSendable = computed(() => /^\d{11}$/.test(smsForm.mobile))
+/** 手机号是否可发送验证码：中国大陆仍按 11 位校验，其他区号只要求数字主体有效 */
+const smsSendable = computed(() =>
+  smsForm.area === '86' ? /^\d{11}$/.test(smsForm.mobile) : /^\d{4,15}$/.test(smsForm.mobile))
 /** 验证码登录按钮可用性 */
 const smsLoginable = computed(() => smsSendable.value && smsForm.code.trim().length > 0)
 /** token 登录按钮可用性 */
@@ -917,12 +945,27 @@ function hideLogo(event: Event) {
           name="sms"
         >
           <div class="login-form">
-            <el-input
-              v-model="smsForm.mobile"
-              placeholder="手机号"
-              maxlength="11"
-              :disabled="smsForm.loggingIn"
-            />
+            <div class="login-mobile-row">
+              <el-select
+                v-model="smsForm.area"
+                class="login-area"
+                :disabled="smsForm.loggingIn || smsForm.areaLocked"
+              >
+                <el-option
+                  v-for="area in AREA_OPTIONS"
+                  :key="area.value"
+                  :label="area.label"
+                  :value="area.value"
+                />
+              </el-select>
+              <el-input
+                v-model="smsForm.mobile"
+                class="login-mobile"
+                placeholder="手机号"
+                :maxlength="smsForm.area === '86' ? 11 : 15"
+                :disabled="smsForm.loggingIn"
+              />
+            </div>
             <div
               v-if="smsForm.captcha"
               class="login-captcha"
@@ -1503,6 +1546,19 @@ function hideLogo(event: Event) {
     display: flex;
     flex-wrap: wrap;
     column-gap: 14px;
+  }
+}
+
+.login-mobile-row {
+  display: flex;
+  gap: 8px;
+
+  .login-area {
+    flex: 0 0 150px;
+  }
+
+  .login-mobile {
+    flex: 1;
   }
 }
 

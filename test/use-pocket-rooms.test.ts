@@ -15,6 +15,8 @@ const { directoryMock, apisMock, authMock, roomMock } = vi.hoisted(() => ({
   directoryMock: {
     /** userId → 成员详情；默认查不到（降级为「口袋用户 N」） */
     find: async (_userId: number) => null as any,
+    /** userId → 官方账号（officialInfo）；默认查不到 */
+    findOfficial: async (_userId: number) => null as any,
   },
   apisMock: {
     lives: async (_next: string, _options?: unknown) => ({ next: '0', liveList: [] as any[] }),
@@ -34,7 +36,10 @@ const { directoryMock, apisMock, authMock, roomMock } = vi.hoisted(() => ({
 }))
 
 vi.mock('@renderer/stores/member-directory', () => ({
-  useMemberDirectoryStore: () => ({ findMemberByUserId: (userId: number) => directoryMock.find(userId) }),
+  useMemberDirectoryStore: () => ({
+    findMemberByUserId: (userId: number) => directoryMock.find(userId),
+    findOfficialAccount: (userId: number) => directoryMock.findOfficial(userId),
+  }),
 }))
 
 vi.mock('@renderer/services/apis', () => ({
@@ -113,6 +118,8 @@ interface SetupOptions {
   pocketFollowFails?: boolean
   /** 成员目录反查结果 */
   directory?: Record<number, { realName: string, avatar: string, teamName: string, teamColor: string }>
+  /** 官方账号（officialInfo）反查结果：成员目录查不到时的回退源 */
+  officials?: Record<number, { name: string, avatar: string }>
   /** channelId → { 请求 nextTime: 响应页 }；响应页 nextTime 即更早历史的游标 */
   roomPages?: Record<string, Record<number, { nextTime: number, messages: ReturnType<typeof roomMsg>[] }>>
   /** serverId → 最新一条消息（team/classic/last/message/get 的 lastMsgList 条目） */
@@ -201,6 +208,7 @@ async function setup(options: SetupOptions = {}) {
   })
 
   directoryMock.find = async (userId: number) => options.directory?.[userId] ?? null
+  directoryMock.findOfficial = async (userId: number) => options.officials?.[userId] ?? null
   const pages = options.livePages ?? [{ next: '0', liveList: [] }]
   let pageIndex = 0
   apisMock.lives = async (next: string) => {
@@ -486,6 +494,42 @@ describe('use-pocket-rooms / 左列排序', () => {
 
     expect(api.rooms.value.map(room => [room.userId, !!room.temporary]))
       .toEqual([[10004, true], [10001, false], [10002, false], [10003, false]])
+  })
+})
+
+describe('use-pocket-rooms / 官方频道', () => {
+  /**
+   * 关注名单里可能混着官方号（袋王 / 各团官方号）：它们不在成员名录里，
+   * 名字与头像回退 officialInfo（member-directory 的 findOfficialAccount），
+   * 其余口径与成员房间完全一致——照常解析频道、进左列、计未读、参与排序。
+   */
+  it('官方号用 officialInfo 的真名与头像，且照常解析房间', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001, 63],
+      directory: { 10001: { realName: '成员1', avatar: 'https://source.48.cn/member.jpg', teamName: 'TEAM SII', teamColor: 'FF0000' } },
+      officials: { 63: { name: '袋王', avatar: 'https://source.48.cn/mediasource/avatar/daiwang.jpg' } },
+    })
+    await api.load()
+
+    const official = api.rooms.value.find(room => room.userId === 63)
+    expect(official?.nickname).toBe('袋王')
+    expect(official?.avatar).toBe('https://source.48.cn/mediasource/avatar/daiwang.jpg')
+    // 官方号没有队伍归属，队伍标不渲染
+    expect(official?.teamName).toBe('')
+    // 走同一条频道解析路径，不因不在成员名录里被过滤
+    expect(calls.channelFetched).toContain(63)
+  })
+
+  // 同一个 userId 同时存在于成员名录与官方号索引时以成员为准：官方号不覆盖成员详情
+  it('成员与官方号索引撞车时成员优先', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      directory: { 10001: { realName: '成员1', avatar: '', teamName: '', teamColor: '' } },
+      officials: { 10001: { name: '袋王', avatar: '' } },
+    })
+    await api.load()
+
+    expect(api.rooms.value[0]?.nickname).toBe('成员1')
   })
 })
 

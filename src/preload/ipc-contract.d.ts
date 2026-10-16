@@ -12,7 +12,7 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
 import type { LiveDanmaku } from '@common/live-danmaku'
 import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
-import type { AllMemberItem, MemberDataContent, StarAdjunctItem, StarInfoItem } from '../main/data'
+import type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { FfmpegProblem, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
 
@@ -27,7 +27,7 @@ export interface NetRequestOptions {
 // ===== 成员与屏蔽名单 =====
 
 // 类型随契约一起暴露（preload/index.ts 实现侧与渲染端合并函数引用）
-export type { AllMemberItem, MemberDataContent, StarAdjunctItem }
+export type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctItem }
 
 // 类型随契约一起暴露（preload/index.ts 实现侧与渲染端引用）
 export type { MemberFlag, MemberFlagKind }
@@ -63,11 +63,19 @@ export interface MemberTreeGroupPayload {
   children: MemberTreeTeamPayload[]
 }
 
-/** getAllMembers 返回：h5.48.cn 落库的 allmembers 成员名单 + 兼职成员档案（见 main/data.ts 对应类型） */
+/**
+ * getAllMembers 返回：h5.48.cn 落库的 allmembers 成员名单 + 兼职成员档案 + 官方账号
+ * （见 main/data.ts 对应类型）。
+ */
 export interface AllMembersPayload {
   allmembers: AllMemberItem[]
   /** starAdjunctInfo 兼职成员档案（status===1 为有效兼任，渲染端据此归入兼任队伍） */
   adjuncts?: StarAdjunctItem[]
+  /**
+   * officialInfo 官方账号（袋王 / 各团官方号）：字段与成员记录同构但不是成员，
+   * 不在 starInfo 里。房间左列按 userId 反查官方频道（用户可能关注官方号）时用它取名与头像。
+   */
+  officials?: OfficialInfoItem[]
 }
 
 // ===== FFmpeg 下载 =====
@@ -378,9 +386,9 @@ interface StaticIpcInvokeMap {
   // ===== 口袋48账号 =====
   // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts
   /** 发送登录验证码；命中反爬问答题时返回 needCaptcha=true 与题目选项 */
-  pocketSendSms: InvokeSpec<[mobile: string, answer?: string], PocketSmsResult>
+  pocketSendSms: InvokeSpec<[mobile: string, area?: string, answer?: string], PocketSmsResult>
   /** 验证码登录；失败（验证码错误等）以 reject 报错 */
-  pocketLoginByCode: InvokeSpec<[mobile: string, code: string], PocketAuthState>
+  pocketLoginByCode: InvokeSpec<[mobile: string, code: string, area?: string], PocketAuthState>
   /** 粘贴 token 登录：主进程校验有效后落盘；无效以 reject 报错 */
   pocketLoginByToken: InvokeSpec<[token: string, mobile?: string], PocketAuthState>
   /** 当前登录态（读本地凭证，不做网络校验） */

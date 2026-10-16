@@ -64,7 +64,7 @@ IPC 契约按项目约定三处同步：`preload/ipc-contract.d.ts` → `preload
    ├─ refreshPocketAuthState()   等登录态落库（同步返回旧值 + 异步刷新，冷启动首帧会误判未登录）
    ├─ loadFollowedIds()          口袋关注 ID ∪ 本地关注 ID − 屏蔽名单（见第 3 节）；口袋失败则降级为本地名单
    ├─ fetchLiveMap(true)         共享 live-status store（120s 缓存，force 强制刷新）
-   ├─ 成员目录反查               头像/昵称/队伍（接口不返回；查不到降级「口袋用户 N」）
+   ├─ 成员目录反查               头像/昵称/队伍（接口不返回；成员查不到回退官方账号，再降级「口袋用户 N」）
    ├─ resolveRooms(entries)      有界并发 5 遍历 im/server/jump
    │     ├─ 解析失败/空频道 → 过滤（无房间，含已关闭），计入 hiddenRoomCount
    │     ├─ 成功 → 写入 channelCache（userId → 频道）
@@ -135,7 +135,7 @@ route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤�
 
 ## 3. 各阶段数据形态
 
-**① 房间条目 `PocketRoom`**：`userId`、`nickname`（成员目录反查，查不到降级「口袋用户 N」）、`avatar`、`teamName`、`teamColor`、`serverId` / `channelId`、`preview`（左列预览，空串 = 暂无消息）、`previewTime`（预览对应消息时刻，防旧快照覆盖更新的本地预览）、`live`（匹配到的在播直播；留言流与直播与否无关）。
+**① 房间条目 `PocketRoom`**：`userId`、`nickname`（成员目录反查；成员查不到时回退 `officialInfo` 官方账号，再查不到才降级「口袋用户 N」）、`avatar`、`teamName`、`teamColor`、`serverId` / `channelId`、`preview`（左列预览，空串 = 暂无消息）、`previewTime`（预览对应消息时刻，防旧快照覆盖更新的本地预览）、`live`（匹配到的在播直播；留言流与直播与否无关）。
 
 **② 房间频道 `PocketRoomChannel`**：`serverId` / `channelId` 来自 `im/server/jump` 回包 content；两者为空串表示该成员没有房间（未开通，或已关闭/被回收，见第 4 节）。`targetType: 1` 为固定值。
 
@@ -146,6 +146,8 @@ route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤�
 **⑤ 未读快照 `PocketUnreadBatch`**：`{ rooms: { userId: { count, bigCount, smallCount, latestTime } }, total }`。主进程唯一真相的全量镜像，渲染层只读；变化经 `pocketUnreadBatch` 广播到所有窗口。`count` 是**下限**（单频道数到一页为止，触顶即「至少这么多」），渲染层据此收敛为 `50+`。
 
 关注名单（`loadFollowedIds()` → `number[]`）取口袋账号关注与本地关注（member-flags store）的**并集，只增不删**，再**减去本地屏蔽名单**：本地关注是用户主观行为，口袋接口失败或未登录时不得清除；反向同步（本地新增 → 双写口袋）见成员页「关注」实现。
+
+⚠️ **名单里不只有成员**：账号可能关注官方号（袋王 / 各团官方号），这些 id 不在 `starInfo` 里，成员目录反查必然落空。左列因此再回退一层 `officialInfo`（`member-directory` 的 `findOfficialAccount`，与成员索引分建两张表，官方号不进成员名录）；官方频道其余口径与成员房间一致，不另立档位、不加标识。主进程未读检测同源：关注名单含官方号时其频道照常解析并计数。
 
 ⚠️ **关注与屏蔽正交，互不改写**（接线在 renderer 的 `composables/use-member-actions.ts`）。关注是账号维度的事实，屏蔽是本地可见性偏好；早先「屏蔽即取消关注」的规则诞生于两个名单同处本地一个平面的年代，关注改为与口袋双向之后不再自洽——本地单方面取关挡不住下一次 `mergeFromPocket` 把账号关注并回来（只增不删），而真正的账号取关又是用户没点过的操作。屏蔽的效力因此改由展示层保证（**屏蔽优先**）：已屏蔽成员不展示关注态、不进左列、不计未读；唯一保留的互斥方向是用户主动点「关注」时解除屏蔽。
 

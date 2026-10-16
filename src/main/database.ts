@@ -225,6 +225,9 @@ class Database {
     return {
       allmembers: this.db.allmembers ?? [],
       adjuncts: this.db.starAdjunctInfo ?? [],
+      // 官方账号（袋王 / 各团官方号）：不在 starInfo 里，但用户关注的可能就是它们，
+      // 房间左列要用它取名与头像（见 stores/member-directory 的 findOfficialAccount）
+      officials: this.db.officialInfo ?? [],
     }
   }
 

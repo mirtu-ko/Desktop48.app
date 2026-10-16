@@ -9,7 +9,10 @@ import {
   getRoomLastMessages,
   getRoomMessages,
   getServerChannels,
+  loginByCode,
+  loginByToken,
   MASTER_PASSCODE,
+  sendSms,
   unfollowMember,
   verifyLogin,
 } from '../src/main/pocket48/pocket-auth'
@@ -544,5 +547,68 @@ describe('pocket-auth 客户端身份（主 App iOS 档 + seine Android 档）',
       expect(headers.pa).toBeTruthy()
       expect(headers.token).toBe('test-token')
     }
+  })
+})
+
+/**
+ * 区号支持：发码 / 登录 / 凭证落盘三处的 area 归一化与展示。
+ * 网络层同样走假 net，断言请求体里的 area 与写盘的 area 字段。
+ */
+describe('pocket-auth 区号处理', () => {
+  it('发码缺省区号时按 86 提交', async () => {
+    env.replies['sms/send2'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
+    await sendSms('13800138000')
+    const request = env.requests.find(r => r.url.includes('sms/send2'))
+    expect(request?.body).toEqual({ mobile: '13800138000', area: '86' })
+  })
+
+  it('发码区号带 + 前缀时归一化为纯数字', async () => {
+    env.replies['sms/send2'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
+    await sendSms('23000000', '+852')
+    const request = env.requests.find(r => r.url.includes('sms/send2'))
+    expect(request?.body).toEqual({ mobile: '23000000', area: '852' })
+  })
+
+  it('发码对 86 坚持 11 位，其他区号放宽到 4-15 位', async () => {
+    env.replies['sms/send2'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
+    await expect(sendSms('1380013800', '86')).rejects.toThrow('请输入 11 位手机号')
+    await expect(sendSms('138001380000', '86')).rejects.toThrow('请输入 11 位手机号')
+    await expect(sendSms('230', '852')).rejects.toThrow('请输入有效的手机号')
+    await expect(sendSms('2300000000000000', '852')).rejects.toThrow('请输入有效的手机号')
+    // 4 位与 15 位边界值放行
+    await sendSms('2300', '852')
+    await sendSms('230000000000000', '852')
+    expect(env.requests).toHaveLength(2)
+  })
+
+  it('登录请求体带区号，凭证落盘记录同一区号', async () => {
+    env.replies['login/app/mobile/code'] = {
+      status: 200,
+      body: { status: 200, success: true, content: { token: 'tok-1' } },
+    }
+    await loginByCode('23000000', '432613', '+852')
+    const request = env.requests.find(r => r.url.includes('login/app/mobile/code'))
+    expect(request?.body).toEqual({ mobile: '23000000', code: '432613', area: '852' })
+    expect(env.written).toMatchObject({ mobile: '23000000', area: '852', tokenPlain: 'tok-1' })
+    // 落盘内容回读即为登录态展示（mock 的 write 不同步 stored，手动回灌；头 2 尾 2 脱敏）
+    env.stored = { ...env.written } as Record<string, unknown>
+    expect(getAuthState().mobileMasked).toBe('+852 23****00')
+  })
+
+  it('token 登录的手机号无区号语义，按 86 存档', async () => {
+    await loginByToken('pasted-token', '13800138000')
+    expect(env.written).toMatchObject({ mobile: '13800138000', area: '86' })
+  })
+
+  it('旧版凭证无 area 字段时按 86 展示，不带前缀', async () => {
+    env.stored = { ...STORED }
+    expect(getAuthState().mobileMasked).toBe('138****8000')
+  })
+
+  it('资料回写保留区号字段不丢', async () => {
+    env.stored = { ...STORED, area: '852' }
+    await verifyLogin()
+    expect(env.written).toMatchObject({ area: '852', nickname: '新昵称' })
+    expect(getAuthState().mobileMasked).toBe('+852 13****00')
   })
 })

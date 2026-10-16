@@ -4,6 +4,9 @@
  * 数据来源（与参考实现 yk1z/yaya_msg 同思路，落地在 desktop48 既有管道上）：
  * - 关注名单：口袋账号关注 ID（friendships/friends/id，只给 ID）∪ 本地关注名单，
  *   成员详情（头像/昵称/队伍）由本地成员目录反查——接口本身不返回这些；
+ *   名单里可能混着官方号（袋王 / 各团官方号），它们不在成员名录里，
+ *   回退 officialInfo（见 member-directory 的 findOfficialAccount）取真名与头像，
+ *   其余口径与成员房间完全一致（同样解析频道、拉预览、计未读、参与排序，不另立档位）；
  *   被屏蔽的成员从这份并集里整体剔除（屏蔽优先，见 loadFollowedIds），
  *   屏蔽名单变化时左列条目就地摘除、右侧消息流一并收起（见 watch(blockedMembers)）；
  * - 房间频道：im/server/jump（starId=成员 userId）解析出 team server + channel，
@@ -114,7 +117,7 @@ export function usePocketRooms() {
   const { refreshFollowedMembers, followedMembers } = useFollowedMembersStore()
   /** 屏蔽名单（本地可见性偏好，与关注正交）：左列过滤 + 条目的就地摘除都读这一份 */
   const { blockedMembers, ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
-  const { findMemberByUserId } = useMemberDirectoryStore()
+  const { findMemberByUserId, findOfficialAccount } = useMemberDirectoryStore()
   /** 未读镜像（主进程唯一真相）：左列排序与角标共用同一判据，见 sortRooms */
   const { unreadRooms } = usePocketUnreadStore()
   const {
@@ -444,10 +447,14 @@ export function usePocketRooms() {
       const entries: PocketRoom[] = await Promise.all(ids.map(async (userId): Promise<PocketRoom> => {
         const live = liveMap.get(userId) ?? null
         const member = await findMemberByUserId(userId)
+        // 关注名单里可能混着官方号（袋王 / 各团官方号）：它们不在成员名录里，
+        // 回退到 officialInfo 取真名与头像，否则左列只剩「口袋用户 N」且无头像。
+        // 其余口径与成员房间一致——同样参与频道解析、预览、未读与排序，不另立档位。
+        const official = member ? null : await findOfficialAccount(userId)
         return {
           userId,
-          nickname: member?.realName || member?.nickname || live?.userInfo?.nickname || `口袋用户 ${userId}`,
-          avatar: member?.avatar || '',
+          nickname: member?.realName || member?.nickname || official?.name || live?.userInfo?.nickname || `口袋用户 ${userId}`,
+          avatar: member?.avatar || official?.avatar || '',
           teamName: member?.teamName || '',
           teamColor: member?.teamColor || '',
           serverId: '',

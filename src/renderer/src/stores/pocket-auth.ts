@@ -64,8 +64,8 @@ export function ensurePocketAuthState(): PocketAuthState {
 }
 
 /** 验证码登录；成功后更新登录态，失败抛错由调用方提示 */
-export async function loginBySmsCode(mobile: string, code: string): Promise<PocketAuthState> {
-  const state = await window.mainAPI.pocketLoginByCode(mobile, code)
+export async function loginBySmsCode(mobile: string, code: string, area?: string): Promise<PocketAuthState> {
+  const state = await window.mainAPI.pocketLoginByCode(mobile, code, area)
   applyAuthState(state)
   return state
 }

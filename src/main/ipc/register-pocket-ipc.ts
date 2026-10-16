@@ -9,10 +9,10 @@ import * as pocketUnread from '../pocket48/pocket-unread'
 import { handleTraced } from './trace'
 
 export function registerPocketIPC(): void {
-  handleTraced('pocketSendSms', (_event: IpcMainInvokeEvent, mobile: string, answer?: string) =>
-    pocketAuth.sendSms(mobile, answer))
-  handleTraced('pocketLoginByCode', (_event: IpcMainInvokeEvent, mobile: string, code: string) =>
-    pocketAuth.loginByCode(mobile, code))
+  handleTraced('pocketSendSms', (_event: IpcMainInvokeEvent, mobile: string, area?: string, answer?: string) =>
+    pocketAuth.sendSms(mobile, area, answer))
+  handleTraced('pocketLoginByCode', (_event: IpcMainInvokeEvent, mobile: string, code: string, area?: string) =>
+    pocketAuth.loginByCode(mobile, code, area))
   handleTraced('pocketLoginByToken', (_event: IpcMainInvokeEvent, token: string, mobile?: string) =>
     pocketAuth.loginByToken(token, mobile))
   handleTraced('pocketGetAuthState', () => pocketAuth.getAuthState())

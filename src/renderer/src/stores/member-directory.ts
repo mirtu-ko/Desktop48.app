@@ -5,6 +5,10 @@
  * 直播 / 回放列表的条目只带 userId 与口袋昵称，点成员名开详情抽屉时抽屉要的是完整
  * MemberDetail（生日 / 写真 / 排名 / 经历…），故在这里合并一次并缓存。
  *
+ * 同一份快照里另建一张官方账号索引（officialInfo）：官方号（袋王 / 各团官方号）字段与
+ * 成员记录同构但**不是成员**，混进成员索引会被选举页 / 详情抽屉当成员渲染。它是房间页
+ * 左列解析「用户关注的官方频道」时的取名与头像来源（见 findOfficialAccount）。
+ *
  * 缓存的是请求 Promise：并发反查共享同一次请求；失败不留坏缓存。
  * members-updated 时只作废缓存，下一次反查才拉：不为未打开的抽屉发请求，也确保读到最新树。
  *
@@ -20,19 +24,46 @@ import { useMemberTreeStore } from './member-tree'
 /** userId → 详情：反查走 Map，不必每次线性扫全量名录 */
 type DirectoryIndex = Map<number, MemberDetail>
 
-let cache: Promise<DirectoryIndex> | null = null
+/** 官方账号（officialInfo）：房间左列取名与头像用的轻量档案，字段不按成员建模 */
+export interface OfficialAccount {
+  userId: number
+  /** 显示名（realName 优先，退 nickname） */
+  name: string
+  /** 已归一化为可直接 <img src> 的地址（原始值可能是 /mediasource/... 相对路径） */
+  avatar: string
+}
 
-async function fetchIndex(): Promise<DirectoryIndex> {
+/** 一次请求拉到的目录快照：成员索引 + 官方账号索引 */
+interface DirectorySnapshot {
+  members: DirectoryIndex
+  officials: Map<number, OfficialAccount>
+}
+
+let cache: Promise<DirectorySnapshot> | null = null
+
+async function fetchIndex(): Promise<DirectorySnapshot> {
   try {
     const { loadTree } = useMemberTreeStore()
     // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts
     const [tree, payload] = await Promise.all([loadTree(), window.mainAPI.getAllMembers()])
-    const index: DirectoryIndex = new Map()
+    const members: DirectoryIndex = new Map()
     for (const member of mergeMembers(tree, payload?.allmembers)) {
       if (member.userId !== undefined)
-        index.set(member.userId, member)
+        members.set(member.userId, member)
     }
-    return index
+    const officials = new Map<number, OfficialAccount>()
+    for (const item of payload?.officials ?? []) {
+      const userId = Tools.normalizeUserId(item?.userId)
+      // 脏 userId 直接丢弃：宁可不显示，也不要挂到一个错误的账号上
+      if (!Number.isFinite(userId))
+        continue
+      officials.set(userId, {
+        userId,
+        name: String(item.realName || item.nickname || ''),
+        avatar: Tools.sourceUrl(String(item.avatar || '')),
+      })
+    }
+    return { members, officials }
   }
   catch (error) {
     cache = null // 失败不留坏缓存，下次反查可重试
@@ -46,7 +77,19 @@ async function findMemberByUserId(userId: number | string | undefined | null): P
   if (!Number.isFinite(id))
     return null
   cache ??= fetchIndex()
-  return (await cache).get(id) ?? null
+  return (await cache).members.get(id) ?? null
+}
+
+/**
+ * 按 userId 取官方账号（officialInfo）；查不到返回 null。
+ * 只服务房间左列：成员名录查不到时回退到这里，官方频道才能显示真名与头像。
+ */
+async function findOfficialAccount(userId: number | string | undefined | null): Promise<OfficialAccount | null> {
+  const id = Tools.normalizeUserId(userId)
+  if (!Number.isFinite(id))
+    return null
+  cache ??= fetchIndex()
+  return (await cache).officials.get(id) ?? null
 }
 
 let subscribed = false
@@ -63,5 +106,5 @@ function ensureSubscribed() {
 
 export function useMemberDirectoryStore() {
   ensureSubscribed()
-  return { findMemberByUserId }
+  return { findMemberByUserId, findOfficialAccount }
 }
