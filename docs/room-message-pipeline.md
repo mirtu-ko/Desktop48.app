@@ -97,6 +97,36 @@ rooms.value（在直播的排前，其余按昵称 localeCompare('zh')）
     loadMoreHistory() → fetchRoomPage(activeChannel, historyCursor, 'prepend')
 ```
 
+### 2.3 临时房间（成员详情卡入口）
+
+成员详情卡底栏的「看 TA 的房间」只对**能查询到大房间**的成员出现；点击后关闭卡片并跳转
+`/rooms?member=<userId>`。成员不必在关注名单里——这正是「临时」的用途。
+
+```
+[MemberDetailCard] watch(member.userId)
+   └─ resolveMemberRoomChannel(userId)（services/room-channel，带缓存）
+         ├─ 解析出 serverId/channelId → 底栏展示入口
+         └─ 未登录 / 空频道 / 接口故障 → 不展示（三种情形调用方不必区分）
+   ▼ 点击
+[Rooms.vue] watch(route.query.member)
+   └─ openTemporaryRoom(userId)（use-pocket-rooms）
+         ├─ 未登录 → 拒绝并提示
+         ├─ 频道未解析出 → 拒绝并提示
+         ├─ 已在关注列表 → 直接 selectRoom，不建临时条目
+         └─ 否则建 PocketRoom（temporary: true）置顶并入左列 → selectRoom（同一条选中链路）
+   ▼
+route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤条目 + 清右侧
+```
+
+约定：
+
+- 临时条目只活在本次会话内存中，不写关注名单、不落盘；左列带「临时」标记与关闭钮，关闭即撤；
+- 频道解析缓存（services/room-channel）由详情卡入口显隐与房间页临时条目共用，同一个人只解析一次。
+  **「不可判定」不等于「没有大房间」**：未登录与接口故障都不落缓存，否则登录后入口不再出现；
+- 列表重建（`load()`）会把临时条目一起冲掉，重建后必须重新并入，且**早于选中复核**——用户正看着的
+  可能正是它；成员随后被关注时，临时条目就地让位给关注条目，选中不断；
+- 临时成员不在关注名单里，也就不在主进程未读检测范围内：左列没有未读角标，`markRead` 对它是空转。
+
 ## 3. 各阶段数据形态
 
 **① 房间条目 `PocketRoom`**：`userId`、`nickname`（成员目录反查，查不到降级「口袋用户 N」）、`avatar`、`teamName`、`teamColor`、`serverId` / `channelId`、`preview`（左列预览，空串 = 暂无消息）、`previewTime`（预览对应消息时刻，防旧快照覆盖更新的本地预览）、`live`（匹配到的在播直播；留言流与直播与否无关）。
@@ -114,6 +144,8 @@ rooms.value（在直播的排前，其余按昵称 localeCompare('zh')）
 ## 4. 房间可用性判定：只认 jump 解析
 
 列表过滤的唯一依据是 `im/server/jump` 能否解析出频道：接口抛错 → 按无房间过滤并计入 `hiddenRoomCount`（左列显示「已隐藏 N 个」）；接口成功但 `serverId` / `channelId` 为空 → 同样过滤。**全部成员解析异常**时整页报错——此时为接口故障而非确实无房间，展示错误与重试入口而非静默空列表。
+
+同一判据也是成员详情卡房间入口的显隐条件（见 2.3）：解析不出频道的成员连入口都不给。
 
 ⚠️ **不应将 `im/team/room/info` 的 `channelStatus` 作为关闭判据**。该字段语义不明：实测正常房间同样返回非 0（曾据「非 0 = 已关闭」过滤，导致全部房间被误过滤）；真正关闭的房间在 jump 阶段即解析不出频道，已由上述路径覆盖。`room/info` 现用于两处：未读检测的频道归属反查（`getRoomChannelOwner`）与小房间的暗号题面拉取（`getRoomQuestion`，见第 8 节）。
 

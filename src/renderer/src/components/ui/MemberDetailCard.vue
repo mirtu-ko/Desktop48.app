@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { MemberDetail } from '@renderer/utils/member-merge'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Close, Film, Hide, Link, Star, StarFilled, View } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChatDotRound, Close, Film, Hide, Link, Star, StarFilled, View } from '@element-plus/icons-vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
+import { resolveMemberRoomChannel } from '@renderer/services/room-channel'
 import Constants from '@renderer/utils/constants'
 import { formatBirthdayCountdown, memberDaysUntilBirthday } from '@renderer/utils/member-birthday'
 import { toExperienceLines, toTags } from '@renderer/utils/member-text'
@@ -117,6 +118,25 @@ const experienceLines = computed(() => toExperienceLines(props.member?.experienc
 /** 官网独有的补充成员没有口袋 userId：屏蔽与回放入口都不可用 */
 const actionable = computed(() => typeof props.member?.userId === 'number')
 
+/**
+ * ===== 大房间入口：只对「能查询到大房间」的成员展示 =====
+ * 频道解析与房间页的临时条目共用同一份缓存（services/room-channel），
+ * 未登录、成员没有大房间、接口故障三种情形一律不给入口，免得点进去扑空。
+ */
+const hasRoom = ref(false)
+/** 探测令牌：切成员后作废旧回包，否则上一位的房间状态会被挂到下一位身上 */
+let roomProbeToken = 0
+
+watch(() => props.member?.userId, async (userId) => {
+  const token = ++roomProbeToken
+  hasRoom.value = false
+  if (typeof userId !== 'number')
+    return
+  const channel = await resolveMemberRoomChannel(userId)
+  if (token === roomProbeToken)
+    hasRoom.value = !!channel
+}, { immediate: true })
+
 /** ===== 左栏立绘：写真轮播 + 缩略图条。无写真时退回头像，避免立绘位空掉 ===== */
 const photos = computed(() => props.member?.photos ?? [])
 const photoIndex = ref(0)
@@ -210,6 +230,14 @@ function openPlaybacks() {
     return
   emit('close')
   router.push({ path: '/lives/playbacks', query: { member: String(props.member.userId) } })
+}
+
+/** 跳转房间页并以临时条目打开该成员的大房间（不写关注名单，链路见 pages/Rooms.vue） */
+function openRoom() {
+  if (!props.member?.userId)
+    return
+  emit('close')
+  router.push({ path: '/rooms', query: { member: String(props.member.userId) } })
 }
 </script>
 
@@ -405,6 +433,13 @@ function openPlaybacks() {
             <Film />
           </el-icon>
           <span>看 TA 的回放</span>
+        </button>
+        <!-- 房间入口只对「能查询到大房间」的成员出现（探测见 script 的 hasRoom） -->
+        <button v-if="hasRoom" class="act act--room" @click="openRoom">
+          <el-icon :size="15">
+            <ChatDotRound />
+          </el-icon>
+          <span>看 TA 的房间</span>
         </button>
         <button class="act act--follow" :class="{ 'is-on': followed }" @click="onFollow">
           <span :key="followPulse" class="act-icon" :class="{ 'is-pulse': followPulse > 0 }">
@@ -916,6 +951,19 @@ function openPlaybacks() {
 
     &:hover {
       background: var(--el-fill-color);
+    }
+  }
+
+  /* 房间入口：走房间主题青（与「房间」页签同一套语义色），与两个中性档区分开。
+   * 房间青在浅底上偏浅，文字混深保证可读 */
+  &--room {
+    flex: none;
+    color: color-mix(in srgb, var(--color-rooms) 62%, #000);
+    background: color-mix(in srgb, var(--color-rooms) 12%, var(--el-bg-color));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 38%, transparent);
+
+    &:hover {
+      background: color-mix(in srgb, var(--color-rooms) 20%, var(--el-bg-color));
     }
   }
 

@@ -5,7 +5,7 @@
 import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import type { Component } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
-import { ArrowRight, ChatDotRound, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import { ArrowRight, ChatDotRound, Close, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import ImageViewerToolbar from '@renderer/components/rooms/ImageViewerToolbar.vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
 import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
@@ -22,7 +22,7 @@ import { useDebounceFn, useEventListener } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { computed, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const {
   rooms,
@@ -52,6 +52,8 @@ const {
   selectRoom,
   setViewMode,
   unlockSmall,
+  openTemporaryRoom,
+  closeTemporaryRoom,
 
   loadMoreHistory,
   openSharedLive,
@@ -59,6 +61,7 @@ const {
 } = usePocketRooms()
 
 const router = useRouter()
+const route = useRoute()
 
 /** 未读数字角标文案：计数按列表一页封顶，触顶即「至少这么多」，收敛为 50+ */
 function unreadText(count: number): string {
@@ -257,6 +260,29 @@ async function enterRoom(userId: number) {
   const hadUnread = unreadChannelOf(userId).big > 0
   await selectRoom(userId)
   await settleBigRoomEnter(userId, hadUnread)
+}
+
+/**
+ * 临时房间的边界就是这条路由 query：成员详情卡底栏入口 push `/rooms?member=<userId>`，
+ * query 一旦消失（Dock 切回房间页、走别的入口）即撤掉临时条目——离开页面就不再保留。
+ * 成员不在关注名单里也照样打开，这正是「临时」的用途（不写关注名单、不落盘）。
+ */
+watch(() => route.query.member, async (value) => {
+  const userId = Number(Array.isArray(value) ? value[0] : value)
+  if (!Number.isFinite(userId) || userId <= 0) {
+    closeTemporaryRoom()
+    return
+  }
+  const result = await openTemporaryRoom(userId)
+  if (!result.ok)
+    ElMessage.warning(result.message || '未能打开该成员的大房间')
+}, { immediate: true })
+
+/** 左列关掉临时房间：一并清掉 query。否则 URL 还留着这个成员，下次点同一个入口不触发 watch */
+function closeTempRoom() {
+  closeTemporaryRoom()
+  if (route.query.member)
+    void router.replace({ path: '/rooms' })
 }
 
 watch(selectedUserId, () => {
@@ -655,37 +681,59 @@ onMounted(() => {
         </div>
 
         <div v-else-if="rooms.length" class="room-list detail-scroll">
-          <button
+          <!-- 关闭钮是条目的兄弟节点而非子节点：条目本体是 <button>，嵌套交互元素会破坏语义 -->
+          <div
             v-for="room in rooms"
             :key="room.userId"
-            type="button"
-            class="room-item"
-            :class="{ 'is-active': selectedRoom?.userId === room.userId, 'is-live': !!room.live }"
-            @click="enterRoom(room.userId)"
+            class="room-wrap"
+            :class="{ 'is-temp': room.temporary }"
           >
-            <span class="room-avatar">
-              <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
-              <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
-              <span v-if="room.live" class="room-live-badge">LIVE</span>
-              <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角，与右下 LIVE 点错开 -->
-              <span
-                v-if="unreadCountOf(room.userId)"
-                class="unread-badge room-unread"
-              >{{ unreadText(unreadCountOf(room.userId)) }}</span>
-            </span>
-            <span class="room-meta">
-              <span class="room-name-row">
-                <span class="room-name ellipsis">{{ room.nickname }}</span>
+            <button
+              type="button"
+              class="room-item"
+              :class="{ 'is-active': selectedRoom?.userId === room.userId, 'is-live': !!room.live }"
+              @click="enterRoom(room.userId)"
+            >
+              <span class="room-avatar">
+                <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
+                <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
+                <span v-if="room.live" class="room-live-badge">LIVE</span>
+                <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角，与右下 LIVE 点错开 -->
                 <span
-                  v-if="room.teamName"
-                  class="room-team"
-                  :style="Tools.colorVarStyle('--tb-color', room.teamColor)"
-                >{{ Tools.shortTeamName(room.teamName) }}</span>
+                  v-if="unreadCountOf(room.userId)"
+                  class="unread-badge room-unread"
+                >{{ unreadText(unreadCountOf(room.userId)) }}</span>
               </span>
+              <span class="room-meta">
+                <span class="room-name-row">
+                  <span class="room-name ellipsis">{{ room.nickname }}</span>
+                  <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
+                  <span v-if="room.temporary" class="room-temp-tag">临时</span>
+                  <span
+                    v-if="room.teamName"
+                    class="room-team"
+                    :style="Tools.colorVarStyle('--tb-color', room.teamColor)"
+                  >{{ Tools.shortTeamName(room.teamName) }}</span>
+                </span>
 
-              <span v-if="room.preview" class="room-preview ellipsis">{{ room.preview }}</span>
-            </span>
-          </button>
+                <span v-if="room.preview" class="room-preview ellipsis">{{ room.preview }}</span>
+              </span>
+            </button>
+
+            <!-- 关闭临时房间（悬浮显示；正看着时常驻，否则鼠标移开就找不到出口） -->
+            <button
+              v-if="room.temporary"
+              type="button"
+              class="room-temp-close"
+              :aria-label="`关闭「${room.nickname}」的临时房间`"
+              title="关闭临时房间"
+              @click="closeTempRoom"
+            >
+              <el-icon :size="12">
+                <Close />
+              </el-icon>
+            </button>
+          </div>
         </div>
 
         <div v-else-if="!loading" class="side-empty">
@@ -731,6 +779,7 @@ onMounted(() => {
                   class="room-team"
                   :style="Tools.colorVarStyle('--tb-color', selectedRoom.teamColor)"
                 >{{ Tools.shortTeamName(selectedRoom.teamName) }}</span>
+                <span v-if="selectedRoom.temporary" class="room-temp-tag">临时</span>
                 <span v-if="selectedRoom.live" class="main-live-tag">直播中</span>
               </div>
               <p class="main-head-sub ellipsis">
@@ -1294,6 +1343,56 @@ onMounted(() => {
   padding: 0 8px 12px;
 }
 
+/* 条目外层：关闭钮的定位基准（关闭钮不能嵌在 <button> 条目里） */
+.room-wrap {
+  position: relative;
+
+  /* 临时条目右侧留出关闭钮的位置，昵称与预览不会压到按钮底下 */
+  &.is-temp .room-meta {
+    padding-right: 18px;
+  }
+}
+
+/* 关闭临时房间：压在条目右上，悬浮显示、正看着时常驻。
+ * 用 visibility 而非只靠 opacity：不可见时同时屏蔽命中，不留点得到的隐形按钮 */
+.room-temp-close {
+  position: absolute;
+  top: 7px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: var(--el-text-color-secondary);
+  background: var(--el-bg-color);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.18s ease,
+    visibility 0s linear 0.18s,
+    color 0.15s ease,
+    background-color 0.15s ease;
+
+  .room-wrap:hover &,
+  .room-wrap:focus-within &,
+  .room-item.is-active ~ & {
+    opacity: 1;
+    visibility: visible;
+    transition-delay: 0s;
+  }
+
+  &:hover {
+    color: #fff;
+    background: var(--el-color-danger);
+  }
+}
+
 .room-item {
   display: flex;
   align-items: center;
@@ -1401,6 +1500,20 @@ onMounted(() => {
   line-height: 16px;
   color: var(--tb-color, var(--brand-primary));
   background: color-mix(in srgb, var(--tb-color, var(--brand-primary)) 12%, transparent);
+}
+
+/* 「临时」标记（左列条目与右栏头部共用）：造型与 .room-team 同规格，换房间主题青 + 描边，
+ * 一眼与「关注房间」区分开——它不会在下次进页面时还在 */
+.room-temp-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--color-rooms);
+  background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 34%, transparent);
 }
 
 /* 左列预览：频道最新一条消息（批量接口一次拉全，选中房间轮询到时本地即时补） */

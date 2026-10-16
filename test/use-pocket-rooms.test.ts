@@ -209,6 +209,9 @@ async function setup(options: SetupOptions = {}) {
   // 解锁表是模块级单例，跨用例存活：每个用例开头清空，还原成「进程刚起来」的状态
   const { clearSmallRoomUnlocks } = await import('@renderer/utils/small-room-unlock')
   clearSmallRoomUnlocks()
+  // 大房间频道解析缓存同理（详情卡入口与临时房间共用，见 test/room-channel.test.ts）
+  const { clearRoomChannelCache, resolveMemberRoomChannel } = await import('@renderer/services/room-channel')
+  clearRoomChannelCache()
   for (const extra of extraScopes.splice(0))
     extra.stop()
   const scope = effectScope()
@@ -218,6 +221,8 @@ async function setup(options: SetupOptions = {}) {
     api,
     calls,
     scope,
+    /** 详情卡入口显隐用的那条解析路径（与临时房间共用缓存） */
+    resolveRoomChannel: resolveMemberRoomChannel,
     /** 再开一个 composable 实例：模拟页面层重建（实例换了，模块级单例状态应当留着） */
     newInstance: () => {
       const extra = effectScope()
@@ -821,6 +826,136 @@ describe('use-pocket-rooms / 选中连房与消息流', () => {
       .toEqual([['粉丝甲', '小房间密语', 300]])
     // 全程只有第一次那一声校验
     expect(calls.answerChecks.map(item => item.answer)).toEqual(['open-sesame'])
+  })
+})
+
+describe('use-pocket-rooms / 临时房间（成员详情卡入口）', () => {
+  /** 详情卡入口带进来的成员：10002 未关注、有大房间；10001 是已关注的且在直播 */
+  function tempFixture(pocketIds: number[] = [10001]): SetupOptions {
+    return {
+      pocketIds,
+      livePages: [{ next: '0', liveList: [live('L1', 10001, '甲开播了')] }],
+      directory: {
+        10001: { realName: '甲', avatar: '/a.jpg', teamName: 'TEAM SII', teamColor: '88ccff' },
+        10002: { realName: '乙', avatar: '/b.jpg', teamName: 'TEAM NII', teamColor: 'ffcc88' },
+      },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '甲的留言')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('t', 300, '乙的留言')] } },
+      },
+    }
+  }
+
+  it('打开未关注成员的大房间：左列插入标记临时的条目并置顶、自动选中，不写关注名单', async () => {
+    const { api, calls, digest } = await setup(tempFixture())
+    await api.load()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+
+    const result = await api.openTemporaryRoom(10002)
+
+    expect(result).toEqual({ ok: true })
+    // 置顶：临时房间排在「正在直播的关注房间」前面
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary, room.nickname]))
+      .toEqual([[10002, true, '乙'], [10001, false, '甲']])
+    expect(api.selectedRoom.value?.userId).toBe(10002)
+    expect(api.chatStatus.value).toBe('ready')
+    expect(digest()).toEqual([['粉丝甲', '乙的留言', 300]])
+    // 关注的那位在首灌遍历时解析，临时这位按需解析
+    expect(calls.channelFetched).toEqual([10001, 10002])
+  })
+
+  it('已在关注名单里的成员：不建第二条条目，直接选中关注房间', async () => {
+    const { api } = await setup(tempFixture())
+    await api.load()
+
+    expect(await api.openTemporaryRoom(10001)).toEqual({ ok: true })
+
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary])).toEqual([[10001, false]])
+    expect(api.temporaryRoom.value).toBeNull()
+    expect(api.selectedRoom.value?.userId).toBe(10001)
+  })
+
+  it('与详情卡入口共用频道解析：先探测过的成员打开时不再重复请求', async () => {
+    const { api, calls, resolveRoomChannel } = await setup(tempFixture())
+    await api.load()
+
+    // 详情卡打开该成员时已探过一次（入口显隐用）
+    await resolveRoomChannel(10002)
+    await api.openTemporaryRoom(10002)
+
+    expect(calls.channelFetched.filter(id => id === 10002)).toHaveLength(1)
+  })
+
+  it('查不到大房间：如实返回失败，不插入条目', async () => {
+    const { api } = await setup(tempFixture([]))
+    await api.load()
+    vi.mocked(window.mainAPI.pocketGetRoomChannel)
+      .mockImplementationOnce(async () => ({ serverId: '', channelId: '' }))
+
+    const result = await api.openTemporaryRoom(10002)
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('未查询到该成员的大房间')
+    expect(api.rooms.value).toEqual([])
+    expect(api.selectedRoom.value).toBeNull()
+  })
+
+  it('未登录：拒绝打开且不发频道请求', async () => {
+    authMock.setLoggedIn(false)
+    const { api, calls } = await setup(tempFixture())
+
+    const result = await api.openTemporaryRoom(10002)
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('登录口袋48账号后才能查看房间')
+    expect(calls.channelFetched).toEqual([])
+    expect(api.rooms.value).toEqual([])
+  })
+
+  it('刷新重建列表后临时条目仍在，选中不被打断', async () => {
+    const { api, digest } = await setup(tempFixture())
+    await api.load()
+    await api.openTemporaryRoom(10002)
+
+    await api.load()
+
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary])).toEqual([[10002, true], [10001, false]])
+    expect(api.temporaryRoom.value?.userId).toBe(10002)
+    expect(api.selectedRoom.value?.userId).toBe(10002)
+    expect(digest()).toEqual([['粉丝甲', '乙的留言', 300]])
+  })
+
+  it('关闭临时房间：撤掉条目并清空右侧，之后刷新也不会补回来', async () => {
+    const { api } = await setup(tempFixture())
+    await api.load()
+    await api.openTemporaryRoom(10002)
+
+    api.closeTemporaryRoom()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+    expect(api.temporaryRoom.value).toBeNull()
+    expect(api.selectedRoom.value).toBeNull()
+    expect(api.messages.value).toEqual([])
+
+    await api.load()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+  })
+
+  it('临时房间的成员随后被关注：临时条目就地撤掉，只留关注条目且选中不断', async () => {
+    const pocketIds = [10001]
+    const { api } = await setup(tempFixture(pocketIds))
+    await api.load()
+    await api.openTemporaryRoom(10002)
+    expect(api.temporaryRoom.value?.userId).toBe(10002)
+
+    // 在别的页面关注了 TA：口袋关注名单变化，房间页重新首灌
+    pocketIds.push(10002)
+    await api.load()
+
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary]))
+      .toEqual([[10001, false], [10002, false]])
+    expect(api.temporaryRoom.value).toBeNull()
+    expect(api.selectedRoom.value?.userId).toBe(10002)
   })
 })
 
