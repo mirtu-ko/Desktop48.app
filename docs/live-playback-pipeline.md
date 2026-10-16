@@ -28,9 +28,10 @@ FFmpeg 为外部可执行程序，只能由主进程 spawn。该约束决定了�
 [Shows.vue] @click="openLiveStream(show)"
    │  show → payload（结构转换），仅 status === 2 才继续
    ▼
-[stores/float-players.ts] openLive(payload) → openPlayer('live', payload)
+[stores/float-players.ts] openLive(payload)
    │  薄封装：只把页面意图转成一次 IPC 调用，自身不持有状态
-   ▼ window.mainAPI.openFloatWindow(kind, payload)
+   │  checkLiveReady()（use-live-guard）：FFmpeg 未就绪则提示并跳设置页，不开必然空转的窗口
+   ▼ openPlayer('live', payload) → window.mainAPI.openFloatWindow(kind, payload)
    ===== 进程边界 =====
 [main/float-window.ts] openFloatWindow
    ├─ Map<`${kind}:${liveId}`> 去重：已存在 → restore/show/focus 复用
@@ -185,7 +186,11 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 - 本地响应没有 `Content-Length`，mpegts 判定为 LOADING_COMPLETE 而非 Early-EOF，不抛 ERROR；随后 `endOfStream()` 把时长校正到最后一段，播完缓冲即触发 `ended`（伴随 `pause`，观感是「停住 + 暂停」）。
 - 触发点取媒体元素的 `onended`（直播正常播放时永远不会 ended），一律按网络错误上抛 → `retry.schedule()` → `recoverStream` 重新拉详情拿到**新签名地址**重建。
 - ⚠️ 不要改用 mpegts 的 `LOADING_COMPLETE` 兜底：`enableWorker: true` 时 worker 回传的包只有 `{ msg, event }`、不带 `extraData`，主线程按 `'extraData' in packet` 判断后直接丢弃该事件。
-- 重试计数语义是「连续失败次数」，必须在 canplay 时清零，否则一场直播里累计断流 3 次（连麦很容易做到）会被误判为「直播已结束」并关窗。
+- 重试计数语义是「连续失败次数」，必须在 canplay 时清零，否则一场直播里累计断流 3 次（连麦很容易做到）会被误判为「已结束」并关窗。
+
+### 7.6 开播前的 FFmpeg 校验只做一次
+
+`stores/float-players.ts` 的 `openLive` 是四个开播入口（直播列表 / 公演页 / 成员页 / 房间分享卡）的唯一汇聚点，`use-live-guard` 的 `checkLiveReady()` 接在这里，新增入口无需接线；`openPlayback` 不做该校验——回放走 mpegts 直连，不经过 FFmpeg 转封装。判定口径与启动门禁、下载守卫共用 `window.mainAPI.getFfmpegStatus`（`inspectFfmpegDir`），不要另起一套。
 
 ## 8. 弹幕链路
 

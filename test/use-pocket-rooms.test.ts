@@ -184,6 +184,13 @@ async function setup(options: SetupOptions = {}) {
       openFloatWindow: vi.fn(async (kind: string, payload: unknown) => {
         calls.openFloatWindow.push([kind, payload])
       }),
+      // 开直播窗前会做 FFmpeg 校验（use-live-guard）：给就绪态，选中直播的用例才开得出窗
+      getFfmpegStatus: vi.fn(async () => ({
+        ok: true,
+        problem: null,
+        directory: '/opt/ffmpeg',
+        binaryPath: '/opt/ffmpeg/ffmpeg',
+      })),
     },
   })
 
@@ -891,6 +898,8 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
     })
     await api.load()
     api.openSharedLive(shareMsg())
+    // openLive 保持同步签名，开窗前的 FFmpeg 校验在内部异步完成，这里等它跑完
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(calls.openFloatWindow).toHaveLength(1)
     expect(calls.openFloatWindow[0][0]).toBe('live')

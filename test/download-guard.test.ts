@@ -1,3 +1,4 @@
+import type { FfmpegStatus } from '@preload/ipc-contract'
 import Constants from '@renderer/utils/constants'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useDownloadGuard } from '../src/renderer/src/composables/use-download-guard'
@@ -8,11 +9,14 @@ vi.mock('element-plus', () => ({ ElMessage: messageMock }))
 
 const fakeRouter = { push: pushMock } as any
 
+/** 就绪状态的基准值：各用例只覆盖自己关心的字段 */
+const READY: FfmpegStatus = { ok: true, problem: null, directory: '/opt/ffmpeg', binaryPath: '/opt/ffmpeg/ffmpeg' }
+
 function stubConfig(
   getConfig: (_key: string) => Promise<string>,
-  checkFfmpegBinaries: () => Promise<boolean> = async () => true,
+  getFfmpegStatus: (_dir?: string) => Promise<FfmpegStatus> = async () => READY,
 ) {
-  vi.stubGlobal('window', { mainAPI: { getConfig, checkFfmpegBinaries } })
+  vi.stubGlobal('window', { mainAPI: { getConfig, getFfmpegStatus } })
 }
 
 afterEach(() => {
@@ -23,13 +27,14 @@ afterEach(() => {
 describe('useDownloadGuard（下载/录制前的环境校验）', () => {
   it('下载目录与 FFmpeg 都可用时放行，不提示也不跳转', async () => {
     const getConfig = vi.fn(async () => '/Users/z/Downloads')
-    const checkFfmpegBinaries = vi.fn(async () => true)
-    stubConfig(getConfig, checkFfmpegBinaries)
+    const getFfmpegStatus = vi.fn(async () => READY)
+    stubConfig(getConfig, getFfmpegStatus)
 
     await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(true)
 
     expect(getConfig).toHaveBeenCalledWith('downloadDirectory')
-    expect(checkFfmpegBinaries).toHaveBeenCalledWith('/Users/z/Downloads')
+    // 不传 dir：由主进程按当前生效配置判定，渲染层不自己拼目录
+    expect(getFfmpegStatus).toHaveBeenCalledWith()
     expect(messageMock).not.toHaveBeenCalled()
     expect(pushMock).not.toHaveBeenCalled()
   })
@@ -47,8 +52,13 @@ describe('useDownloadGuard（下载/录制前的环境校验）', () => {
     expect(pushMock).toHaveBeenCalledWith(Constants.Menu.SETTING)
   })
 
-  it('ffmpeg 目录为空时提示并跳设置页', async () => {
-    stubConfig(async key => (key === 'downloadDirectory' ? '/Users/z/Downloads' : ''))
+  it('ffmpeg 未配置时提示并跳设置页', async () => {
+    stubConfig(async () => '/Users/z/Downloads', async () => ({
+      ok: false,
+      problem: 'unset',
+      directory: '',
+      binaryPath: '',
+    }))
 
     await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(false)
 
@@ -59,31 +69,51 @@ describe('useDownloadGuard（下载/录制前的环境校验）', () => {
     expect(pushMock).toHaveBeenCalledWith(Constants.Menu.SETTING)
   })
 
-  it('ffmpeg 目录失效时提示并跳设置页', async () => {
-    stubConfig(async () => '/Users/z/Downloads', async () => {
-      throw new Error('ffmpeg 不存在')
-    })
-    vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('ffmpeg 目录已失效时按「目录不存在」给出提示并跳设置页', async () => {
+    stubConfig(async () => '/Users/z/Downloads', async () => ({
+      ok: false,
+      problem: 'missing-dir',
+      directory: '/Users/z/ffmpeg',
+      binaryPath: '',
+    }))
 
     await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(false)
 
     expect(messageMock).toHaveBeenCalledWith({
-      message: 'FFmpeg 目录不可用，请到「设置」重新下载或选择 FFmpeg 目录',
+      message: 'FFmpeg 目录已失效：请在「设置」中重新下载或选择 FFmpeg 目录',
       type: 'warning',
     })
     expect(pushMock).toHaveBeenCalledWith(Constants.Menu.SETTING)
   })
 
-  it('ffmpeg 目录失效时播放浮窗只提示主窗口设置，不跳转也不误报环境检查失败', async () => {
-    stubConfig(async () => '/Users/z/Downloads', async () => {
-      throw new Error('ffmpeg 不存在')
+  it('目录内缺 ffmpeg 二进制时给出与「目录不存在」不同的提示', async () => {
+    stubConfig(async () => '/Users/z/Downloads', async () => ({
+      ok: false,
+      problem: 'missing-binary',
+      directory: '/Users/z/ffmpeg',
+      binaryPath: '',
+    }))
+
+    await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(false)
+
+    expect(messageMock).toHaveBeenCalledWith({
+      message: '该目录下没有 FFmpeg：请在「设置」中重新下载或选择 FFmpeg 目录',
+      type: 'warning',
     })
-    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  it('环境不可用时播放浮窗只提示主窗口设置，不跳转', async () => {
+    stubConfig(async () => '/Users/z/Downloads', async () => ({
+      ok: false,
+      problem: 'missing-dir',
+      directory: '/Users/z/ffmpeg',
+      binaryPath: '',
+    }))
 
     await expect(useDownloadGuard().checkDownloadDirectory()).resolves.toBe(false)
 
     expect(messageMock).toHaveBeenCalledWith({
-      message: 'FFmpeg 目录不可用，请到主窗口「设置」重新下载或选择 FFmpeg 目录',
+      message: 'FFmpeg 目录已失效：请在主窗口「设置」中重新下载或选择 FFmpeg 目录',
       type: 'warning',
     })
     expect(pushMock).not.toHaveBeenCalled()

@@ -1,24 +1,43 @@
 import type { ConfigKey } from '@common/app-config'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
 /**
- * 应用配置的集中管理
- * 持久化与目录选择流程都在这里，Setting.vue 只负责模板接线。
+ * 应用配置的集中管理：下载目录的状态与读写在这里，Setting.vue 只负责模板接线。
+ * FFmpeg 目录涉及「就绪状态 + 一键下载 + 校验修复」，已独立到 use-ffmpeg-setup.ts，
+ * 此处不再掺入，避免同一份环境判定出现两套实现。
  *
- * ★ 跨进程：本文件的 getConfig / setConfig / selectDirectory / openPath /
- * checkFfmpegBinaries 全部经 preload/index.ts 转到主进程
- * （配置读写对端 main/ipc/register-database-ipc.ts，目录与文件操作对端 main/app.ts）。
+ * ★ 跨进程：本文件的 getConfig / setConfig / selectDirectory / openPath 全部经
+ * preload/index.ts 转到主进程（配置读写对端 main/ipc/register-database-ipc.ts，
+ * 目录与文件操作对端 main/ipc/register-system-ipc.ts）。
  */
-export function useAppConfig() {
-  // 下载目录 / ffmpeg 目录
-  const downloadDirectory = ref('')
-  const ffmpegDirectory = ref('')
 
-  /** 挂载时读取两项配置（init() 已补齐默认值，恒为生效值） */
+/**
+ * 打开目录：空值与主进程报错都要给出可见反馈。
+ * 主进程 openPath 以 reject 报失败（路径越界 / 目录已不存在），
+ * 直接 void 掉 Promise 会让点击毫无反应，故这里统一兜住。下载目录与 FFmpeg 目录共用。
+ */
+export async function openDirectoryWithFeedback(dir: string, label: string) {
+  if (!dir) {
+    ElMessage.warning(`请先点击「选择」设置${label}`)
+    return
+  }
+  try {
+    await window.mainAPI.openPath(dir)
+  }
+  catch (e) {
+    console.error(`[useAppConfig] 打开${label}失败:`, e)
+    ElMessage.error(`打开${label}失败：${String(e instanceof Error ? e.message : e)}`)
+  }
+}
+
+export function useAppConfig() {
+  // 下载目录
+  const downloadDirectory = ref('')
+
+  /** 挂载时读取配置（init() 已补齐默认值，恒为生效值） */
   async function loadAppConfig() {
     downloadDirectory.value = await window.mainAPI.getConfig('downloadDirectory')
-    ffmpegDirectory.value = await window.mainAPI.getConfig('ffmpegDirectory')
   }
 
   /** 通用保存：写盘 + 成功提示 */
@@ -36,68 +55,14 @@ export function useAppConfig() {
     }
   }
 
-  /**
-   * 打开已配置目录：空值与主进程报错都要给出可见反馈。
-   * 主进程 openPath 以 reject 报失败（路径越界 / 目录已不存在），
-   * 直接 void 掉 Promise 会让点击毫无反应，故这里统一兜住。
-   */
-  async function openDirectory(dir: string, label: string) {
-    if (!dir) {
-      ElMessage.warning(`请先点击「选择」设置${label}`)
-      return
-    }
-    try {
-      await window.mainAPI.openPath(dir)
-    }
-    catch (e) {
-      console.error(`[useAppConfig] 打开${label}失败:`, e)
-      ElMessage.error(`打开${label}失败：${String(e instanceof Error ? e.message : e)}`)
-    }
-  }
-
   function openDownloadDirectory() {
-    return openDirectory(downloadDirectory.value, '下载目录')
-  }
-
-  /** 选择 ffmpeg 目录：校验 ffmpeg 可执行文件存在后保存，校验失败询问是否重选 */
-  async function setFfmpegDirectory() {
-    const dir = await window.mainAPI.selectDirectory()
-    if (!dir) {
-      return
-    }
-    try {
-      await window.mainAPI.checkFfmpegBinaries(dir)
-      ffmpegDirectory.value = dir
-      await saveConfig('ffmpegDirectory', dir)
-    }
-    catch (e) {
-      console.error('[useAppConfig] 设置ffmpeg目录失败:', e)
-      confirmFfmpegDir()
-    }
-  }
-
-  function confirmFfmpegDir() {
-    ElMessageBox.confirm('选择的目录下没有 ffmpeg', {
-      confirmButtonText: '重新选择',
-      cancelButtonText: '取消',
-    }).then(() => {
-      setFfmpegDirectory()
-    }).catch(() => {
-      // 用户取消操作
-    })
-  }
-
-  function openFfmpegDirectory() {
-    return openDirectory(ffmpegDirectory.value, 'FFmpeg 目录')
+    return openDirectoryWithFeedback(downloadDirectory.value, '下载目录')
   }
 
   return {
     downloadDirectory,
-    ffmpegDirectory,
     loadAppConfig,
     setDownloadDirectory,
     openDownloadDirectory,
-    setFfmpegDirectory,
-    openFfmpegDirectory,
   }
 }

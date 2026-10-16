@@ -8,6 +8,7 @@ import { app, net } from 'electron'
 import { sendIpc } from '../ipc/send'
 import { handleTraced } from '../ipc/trace'
 import { log, warn } from '../logger'
+import { inspectFfmpegDir } from './ffmpeg-process'
 
 /**
  * ffmpeg 在线下载：按当前平台从 ffmpeg-static 的 npmmirror 镜像拉取预编译二进制，
@@ -15,7 +16,7 @@ import { log, warn } from '../logger'
  *
  * - 选 npmmirror：与 electron-builder.yml 的 electronDownload.mirror 同源，国内可直连；
  *   ffmpeg-static 不含 ffplay，而应用只使用 ffmpeg（stream.ts 拉流 / ffmpeg-process.ts 任务），
- *   checkFfmpegBinaries 已相应放宽为只检查 ffmpeg
+ *   inspectFfmpegDir 已相应只检查 ffmpeg
  * - 产物是 gzip 单文件（.gz），用 Node 内置 zlib 解压，不依赖系统解压工具
  * - 进度经 ffmpegDownloadProgress 通道回推发起方（webContents 销毁后静默丢弃）
  */
@@ -158,9 +159,10 @@ async function runDownload(sender: WebContents): Promise<string> {
   const source = pickFfmpegSource(process.platform, process.arch)
   const dir = ffmpegTargetDir()
   const targetPath = path.join(dir, source.filename)
-  // 已存在则直接复用（重复发起不重复下载）；半成品写 .download 临时名，不会误判
-  if (fs.existsSync(targetPath)) {
-    log('[ffmpeg-download]ffmpeg 已存在，跳过下载:', targetPath)
+  // 已存在且校验通过才复用（重复发起不重复下载）；半成品写 .download 临时名不会被误判，
+  // 但历史残留的截断文件、或换平台后落下的同名文件必须重下，否则会把损坏环境当成可用
+  if (inspectFfmpegDir(dir).ok) {
+    log('[ffmpeg-download]ffmpeg 已存在且校验通过，跳过下载:', targetPath)
     return dir
   }
   await fs.promises.mkdir(dir, { recursive: true })
@@ -187,7 +189,7 @@ async function runDownload(sender: WebContents): Promise<string> {
 
 /**
  * ffmpeg 在线下载通道（对端：preload/index.ts 的 downloadFfmpeg / onFfmpegDownloadProgress）。
- * 返回 ffmpeg 所在目录，渲染层据此 checkFfmpegBinaries 并写入 ffmpegDirectory 配置。
+ * 返回 ffmpeg 所在目录，渲染层据此 getFfmpegStatus 校验通过后写入 ffmpegDirectory 配置。
  */
 export function registerFfmpegDownloadIPC(): void {
   handleTraced('downloadFfmpeg', async (event: IpcMainInvokeEvent): Promise<string> => {

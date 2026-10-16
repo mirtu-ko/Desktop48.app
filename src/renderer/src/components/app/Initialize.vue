@@ -1,176 +1,143 @@
 <script setup lang="ts">
-import type { FfmpegDownloadProgress } from '@preload/ipc-contract'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
+import { computed, onMounted, ref } from 'vue'
 
 const emit = defineEmits(['initialized'])
 
-type InitStatus = 'boot' | 'setup' | 'downloading' | 'validating' | 'ready' | 'error'
+/**
+ * 启动门禁的阶段机：
+ * - checking：正在判定环境
+ * - ready：环境可用，即将放行
+ * - blocked：环境不可用（未配置 / 目录失效 / 缺二进制），停在修复页
+ * - error：判定流程本身失败（IPC 未注入、配置读取中断），非环境问题
+ */
+type InitPhase = 'checking' | 'ready' | 'blocked' | 'error'
 
-/** 当前初始化阶段：模板据此区分等待态、用户引导态与错误态 */
-const status = ref<InitStatus>('boot')
-const initText = ref('正在初始化')
-const initHint = ref('正在检查本地 FFmpeg 环境…')
-/** 自动初始化期间隐藏操作区，避免用户在检查尚未完成时误点 */
-const showActions = ref(false)
-const checking = ref(false)
-const downloading = ref(false)
-const receivedBytes = ref(0)
-const totalBytes = ref(0)
+const {
+  checking,
+  downloading,
+  busy,
+  directory,
+  problem,
+  downloadPercent,
+  downloadLabel,
+  refresh: refreshFfmpeg,
+  download: downloadFfmpeg,
+  choose: chooseFfmpegDir,
+} = useFfmpegSetup()
 
-let unsubscribeProgress: (() => void) | null = null
+const phase = ref<InitPhase>('checking')
+/** 单次操作的即时反馈（下载失败、误选目录），显示在修复引导下方 */
+const actionError = ref('')
+/** error 阶段的文案：判定流程中断，与环境判定结果无关 */
+const fatalText = ref('')
+const fatalHint = ref('')
 
-/** 检查/下载/校验期间都属于忙态，两个环境修复入口互斥禁用 */
-const busy = computed(() => downloading.value || checking.value)
-const isError = computed(() => status.value === 'error')
+const isError = computed(() => phase.value === 'error')
+const showActions = computed(() => phase.value === 'blocked' || phase.value === 'error')
 
-/** 已知 total 时显示真实进度；未知 total 时进度条走轻量流动动画 */
-const downloadPercent = computed(() => {
-  if (totalBytes.value <= 0)
-    return null
-  return Math.min(99, Math.floor((receivedBytes.value / totalBytes.value) * 100))
+/**
+ * 仅「已配置但失效」允许跳过：目录被移动/删除属于环境需修复，拦死会让用户连成员都浏览不了；
+ * 未配置时不给跳过，否则又会退回到「使用时才发现缺 FFmpeg」的老问题。
+ */
+const canSkip = computed(() => phase.value === 'blocked' && problem.value !== 'unset')
+
+/** 文案统一由 describeFfmpegProblem 产出，与设置页保持同一说法 */
+const copy = computed(() => describeFfmpegProblem(problem.value, directory.value))
+
+const initText = computed(() => {
+  if (downloading.value)
+    return '正在下载 FFmpeg'
+  if (phase.value === 'checking')
+    return '正在初始化'
+  if (phase.value === 'ready')
+    return 'FFmpeg 环境就绪'
+  if (phase.value === 'error')
+    return fatalText.value
+  return copy.value.title
 })
 
-const downloadLabel = computed(() => {
-  const received = formatSize(receivedBytes.value)
-  if (totalBytes.value <= 0)
-    return received
-  return `${received} / ${formatSize(totalBytes.value)} · ${downloadPercent.value ?? 0}%`
+const initHint = computed(() => {
+  if (downloading.value)
+    return '请保持网络连接，下载完成后会自动校验'
+  if (phase.value === 'checking')
+    return '正在检查本地 FFmpeg 环境…'
+  if (phase.value === 'ready')
+    return '即将进入应用…'
+  if (phase.value === 'error')
+    return fatalHint.value
+  return copy.value.hint
 })
-
-function formatSize(bytes: number): string {
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
 
 onMounted(() => {
-  init()
-  // 订阅 ffmpeg 下载进度（★ 跨进程：对端 main/ffmpeg/ffmpeg-download.ts）
-  unsubscribeProgress = window.mainAPI.onFfmpegDownloadProgress(onFfmpegDownloadProgress)
-})
-
-onUnmounted(() => {
-  unsubscribeProgress?.()
-  unsubscribeProgress = null
+  void init()
 })
 
 /**
- * 首屏环境自检：ffmpeg 目录未配置则引导用户选择或在线下载。
+ * 首屏环境自检：判定的是「目录里的 ffmpeg 是否真的可用」，而不是「配置是否非空」。
+ * 后者会让目录被删除/移动后的用户一路进入应用，直到发起下载或播放才撞上报错。
  *
- * ★ 跨进程：本文件的 getConfig / setConfig 对端是 main/ipc/register-database-ipc.ts，
- * selectDirectory / checkFfmpegBinaries 对端是 main/ipc/register-system-ipc.ts，
- * downloadFfmpeg 对端是 main/ffmpeg/ffmpeg-download.ts。
+ * ★ 跨进程：getFfmpegStatus / setConfig 经 preload/index.ts 转到主进程，
+ * 判定口径见 main/ffmpeg/ffmpeg-process.ts 的 inspectFfmpegDir。
  */
 async function init() {
-  status.value = 'boot'
-  showActions.value = false
-  initText.value = '正在初始化'
-  initHint.value = '正在检查本地 FFmpeg 环境…'
-  try {
-    // preload 注入失败时（打包异常/contextBridge 未生效）整个应用不可用，这里给出可读提示
-    if (!window.mainAPI || typeof window.mainAPI.getConfig !== 'function') {
-      initText.value = 'Electron API 未注入，无法获取平台信息'
-      initHint.value = '请重启应用；如果仍然出现，说明安装包可能已损坏'
-      status.value = 'error'
-      console.error('window.mainAPI 未定义或 getConfig 方法不存在')
-      return
-    }
-    // 本地已保存过 ffmpeg 目录，说明环境已就绪，直接放行
-    const ffmpegDir = await window.mainAPI.getConfig('ffmpegDirectory')
-    if (ffmpegDir) {
-      status.value = 'ready'
-      initText.value = 'FFmpeg 环境就绪'
-      initHint.value = '即将进入应用…'
-      emit('initialized')
-      return
-    }
-
-    // 环境未就绪才暴露操作入口，普通自动检查不给用户可点按钮
-    status.value = 'setup'
-    showActions.value = true
-    // 未配置 ffmpeg：提示用户在线下载或手动选择
-    initText.value = '请下载或选择 ffmpeg 目录'
-    initHint.value = '播放直播/回放和媒体下载都需要 FFmpeg。可一键下载，也可以手动指定已有目录。'
+  phase.value = 'checking'
+  actionError.value = ''
+  // preload 注入失败时（打包异常/contextBridge 未生效）整个应用不可用，这里给出可读提示
+  if (!window.mainAPI || typeof window.mainAPI.getFfmpegStatus !== 'function') {
+    fatalText.value = 'Electron API 未注入，无法获取平台信息'
+    fatalHint.value = '请重启应用；如果仍然出现，说明安装包可能已损坏'
+    phase.value = 'error'
+    console.error('window.mainAPI 未定义或 getFfmpegStatus 方法不存在')
+    return
   }
-  catch (error) {
-    // 配置读取走 IPC，数据库损坏等异常会让初始化中断，必须给用户可见的失败态
-    console.error('[Initialize.vue]初始化失败:', error)
-    initText.value = '初始化失败，请重启应用重试'
-    initHint.value = '配置读取中断。重启应用通常可以恢复，也可以重新配置 FFmpeg。'
-    status.value = 'error'
-    showActions.value = true
-  }
-}
 
-function onFfmpegDownloadProgress(progress: FfmpegDownloadProgress) {
-  status.value = 'downloading'
-  receivedBytes.value = progress.received
-  totalBytes.value = progress.total
-  initText.value = '正在下载 FFmpeg'
-  initHint.value = progress.total > 0 ? '请保持网络连接，下载完成后会自动校验' : '正在获取 FFmpeg 二进制文件…'
+  const status = await refreshFfmpeg()
+  if (!status) {
+    fatalText.value = '初始化失败，请重启应用重试'
+    fatalHint.value = 'FFmpeg 环境检查中断。重启应用通常可以恢复，也可以直接重新下载或选择 FFmpeg 目录。'
+    phase.value = 'error'
+    return
+  }
+  if (status.ok) {
+    phase.value = 'ready'
+    emit('initialized')
+    return
+  }
+  // 未配置 / 已失效：停在修复页，下载与选择两个入口都给出
+  phase.value = 'blocked'
 }
 
 /** 一键下载：主进程按当前系统拉取 ffmpeg 二进制并解压到应用数据目录（userData/ffmpeg） */
-async function downloadFfmpeg() {
-  if (busy.value)
-    return
-  receivedBytes.value = 0
-  totalBytes.value = 0
-  status.value = 'downloading'
-  initText.value = '正在下载 FFmpeg'
-  initHint.value = '请保持网络连接，下载完成后会自动校验'
-  downloading.value = true
-  try {
-    const dir = await window.mainAPI.downloadFfmpeg()
-    status.value = 'validating'
-    initText.value = '正在校验 ffmpeg 环境…'
-    initHint.value = '正在确认 FFmpeg 可执行文件是否完整可用'
-    await window.mainAPI.checkFfmpegBinaries(dir)
-    await window.mainAPI.setConfig('ffmpegDirectory', dir)
-    status.value = 'ready'
-    initText.value = 'ffmpeg 环境就绪'
-    initHint.value = '即将进入应用…'
+async function onDownload() {
+  actionError.value = ''
+  if (await downloadFfmpeg()) {
+    phase.value = 'ready'
     emit('initialized')
+    return
   }
-  catch (e) {
-    console.error('[Initialize.vue]下载 ffmpeg 失败:', e)
-    status.value = 'error'
-    showActions.value = true
-    initText.value = '下载失败，请检查网络后重试，或手动选择 ffmpeg 目录'
-    initHint.value = '网络恢复后可重新下载；如果你本机已有 FFmpeg，也可以直接选择目录。'
-  }
-  finally {
-    downloading.value = false
-  }
+  actionError.value = '下载失败：请检查网络后重试，或手动选择本机已有的 FFmpeg 目录。'
 }
 
-async function selectFfmpegDir() {
-  if (busy.value)
-    return
-
-  checking.value = true
-  try {
-    const dir = await window.mainAPI.selectDirectory()
-    if (!dir)
-      return
-
-    status.value = 'validating'
-    initText.value = '正在校验 ffmpeg 环境…'
-    initHint.value = '正在确认所选目录中是否包含 FFmpeg 可执行文件'
-
-    // 校验目录下是否存在 ffmpeg 可执行文件
-    await window.mainAPI.checkFfmpegBinaries(dir)
-    await window.mainAPI.setConfig('ffmpegDirectory', dir)
-    initText.value = '保存目录成功'
+async function onChooseDir() {
+  actionError.value = ''
+  const result = await chooseFfmpegDir()
+  if (result.outcome === 'ok') {
+    phase.value = 'ready'
     emit('initialized')
+    return
   }
-  catch (e) {
-    console.error(e)
-    status.value = 'error'
-    initText.value = '该目录下未找到 ffmpeg 可执行文件，请重新选择'
-    initHint.value = '请选择包含 ffmpeg 可执行文件的目录，或改用一键下载。'
+  if (result.outcome === 'invalid') {
+    actionError.value = describeFfmpegProblem(result.status.problem, result.status.directory).hint
+    return
   }
-  finally {
-    checking.value = false
-  }
+  if (result.outcome === 'failed')
+    actionError.value = '设置 FFmpeg 目录失败，请重试或改用手动选择。'
+}
+
+/** 环境待修复时的临时放行：功能入口仍有各自的校验与提示兜底（见 use-download-guard.ts） */
+function skipSetup() {
+  emit('initialized')
 }
 </script>
 
@@ -204,21 +171,31 @@ async function selectFfmpegDir() {
           :loading="downloading"
           :disabled="checking"
           type="primary"
-          @click="downloadFfmpeg"
+          @click="onDownload"
         >
           {{ downloading ? '下载中' : '下载 FFmpeg' }}
         </el-button>
         <el-button
           :loading="checking"
           :disabled="downloading"
-          @click="selectFfmpegDir"
+          @click="onChooseDir"
         >
           {{ checking ? '校验中' : '手动选择目录' }}
         </el-button>
       </div>
 
-      <p class="init-note">
-        FFmpeg 用于播放直播/回放与媒体下载
+      <el-button
+        v-if="canSkip"
+        class="init-skip"
+        link
+        :disabled="busy"
+        @click="skipSetup"
+      >
+        暂时跳过，稍后在「设置」中修复
+      </el-button>
+
+      <p class="init-note" :class="{ 'is-warning': !!actionError }">
+        {{ actionError || 'FFmpeg 用于播放直播/回放与媒体下载' }}
       </p>
     </section>
   </main>
@@ -367,6 +344,18 @@ async function selectFfmpegDir() {
   border-top: 1px solid color-mix(in srgb, var(--el-border-color) 48%, transparent);
   font-size: 12px;
   color: var(--el-text-color-placeholder);
+}
+
+/* 操作失败提示复用同一行位置，仅换配色，避免卡片布局跳动 */
+.init-note.is-warning {
+  color: var(--color-lives);
+}
+
+/* 待修复态的临时放行入口：弱化为主链接，不与两个修复动作争夺注意力 */
+.init-skip {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 @keyframes init-card-in {

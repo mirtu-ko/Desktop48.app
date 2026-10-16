@@ -9,12 +9,12 @@
 import type { IpcMainInvokeEvent } from 'electron'
 import type { NetRequestOptions } from '../../preload/ipc-contract'
 import { Buffer } from 'node:buffer'
-import fs from 'node:fs'
 import path from 'node:path'
 import { app, dialog, net, shell } from 'electron'
 import { isAllowedUrl } from '../allowed-hosts'
 import { isPathInAllowedRoots } from '../allowed-path'
 import { Database } from '../database'
+import { inspectFfmpegDir } from '../ffmpeg/ffmpeg-process'
 import { handleTraced } from './trace'
 
 // 网络请求 - 域名白名单校验
@@ -127,13 +127,8 @@ export function registerSystemIPC(): void {
     })
   })
 
-  // ffmpeg 相关
-  handleTraced('checkFfmpegBinaries', async (_event: IpcMainInvokeEvent, dir: string) => {
-    // 应用只依赖 ffmpeg（stream.ts 拉流 / ffmpeg-process.ts 任务），
-    // ffplay 不参与就绪判断；在线下载的 ffmpeg-static 构建也不包含 ffplay。
-    const ffmpegPath = path.join(dir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
-    if (!fs.existsSync(ffmpegPath))
-      throw new Error('ffmpeg 不存在')
-    return true
-  })
+  // ffmpeg 环境：不传 dir 时校验当前生效配置，传 dir 时校验指定目录
+  // （初始化页/设置页在「选择目录」「一键下载」之后的即时校验）。
+  // 判定口径统一在 inspectFfmpegDir，此处只负责取配置。
+  handleTraced('getFfmpegStatus', (_event: IpcMainInvokeEvent, dir?: string) => inspectFfmpegDir(dir ?? Database.instance().getConfig('ffmpegDirectory')))
 }

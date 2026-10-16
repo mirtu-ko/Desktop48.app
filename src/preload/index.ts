@@ -62,7 +62,8 @@ const api = {
   pathJoin: (...paths: string[]) => invokeIpc('pathJoin', ...paths),
 
   // ===== FFmpeg 环境 =====
-  checkFfmpegBinaries: (dir: string) => invokeIpc('checkFfmpegBinaries', dir),
+  // 对端：main/ipc/register-system-ipc.ts（判定口径在 main/ffmpeg/ffmpeg-process.ts 的 inspectFfmpegDir）
+  getFfmpegStatus: (dir?: string) => invokeIpc('getFfmpegStatus', dir),
   // 对端：main/ffmpeg/ffmpeg-download.ts，下载进度经 ffmpegDownloadProgress 回推
   downloadFfmpeg: () => invokeIpc('downloadFfmpeg'),
   onFfmpegDownloadProgress: (callback: (_progress: FfmpegDownloadProgress) => void) =>
