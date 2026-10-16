@@ -8,14 +8,14 @@ import { SafeJSONFileSync } from '../safe-json-file-sync'
 /**
  * 口袋系客户端的设备身份与请求特征，**唯一来源**（pocket-auth 与 nim-chatroom 共用）。
  *
- * 平台分档现状（2026-10-17）：seine / 云信为 **Android** 档；口袋主 App 的 HTTP 头
- * 因 Android 档下 v1 验证码登录被服务端拒绝而回退 iOS 档（详见 pocket-auth.ts 的
- * iOS 档说明），待 v2 app_login 迁移后再统一切回：
+ * 平台分档现状（2026-10-17）：口袋主 App 已切到 v2 登录域并与 seine / 云信统一为
+ * **Android** 档，v2 验证码登录实测成功：
  * - `pa` 由官方 Android APK 抽出的 wasm 现算（resources/pocket48/2.wasm）；
  * - 云信聊天室只能以移动端身份登录（Web SDK 被服务端 403 拒），现有实现本就是 Android 报文；
- * - 口袋 HTTP 头：iOS 档（pocket-auth.ts 内维护）；seine48 为 Android 档。
+ * - 口袋 HTTP 头：Android 档（pocket-auth.ts 复用本文件）；seine48 为 Android 档。
  *
- * 字段名与版本号照抄参考实现 yaya_msg 的真实设备模拟。切换平台前逐接口做过 A/B：
+ * 字段名照抄参考实现 yaya_msg 的真实设备模拟；主 App 版本号取官方 7.1.44 APK。
+ * 切换平台前逐接口做过 A/B：
  * 同 token、同 pa，只换 iOS 档与 Android 档对比——关注名单、用户域（登录态校验）、登录发码、
  * 房间频道 jump、批量预览、房间消息、频道归属、频道名、IM 凭据，全部 HTTP 200 且
  * success / status / 关键字段集一致（脚本 D:/DEV/48/probe-profile.mjs，属分析目录不入库）。
@@ -114,18 +114,16 @@ const UA_DEVICE
   = `(${ANDROID_DEVICE.model}:Android ${ANDROID_DEVICE.osVersion};${ANDROID_DEVICE.brand} ${ANDROID_DEVICE.buildId} ${ANDROID_DEVICE.buildTags})`
 
 /**
- * 口袋主 App（pocket48）Android 档：**当前未启用**——2026-10-17 实测该档下 v1
- * 验证码登录被服务端拒绝（详见 pocket-auth.ts 的 iOS 档说明），登录/用户域已回退
- * iOS 档；v2 `login/app/app_login` 迁移完成后再启用本档。
+ * 口袋主 App（pocket48）Android 档：v2 登录域已启用并实测登录成功。
  */
 export const POCKET48_ANDROID: PocketClientProfile = {
   contentType: 'application/json; charset=UTF-8',
-  userAgent: `PocketFans201807/7.1.43_26082801 ${UA_DEVICE}`,
+  userAgent: `PocketFans201807/7.1.44_26092001 ${UA_DEVICE}`,
   appInfo: deviceId => ({
     IMEI: deviceId,
-    appBuild: '26082801',
+    appBuild: '26092001',
     appName: 'pocket48',
-    appVersion: '7.1.43',
+    appVersion: '7.1.44',
     deviceId,
     deviceName: ANDROID_DEVICE.model,
     osType: 'android',

@@ -2,7 +2,7 @@
  * 口袋48账号登录与凭证存储。
  *
  * 登录链路（均为主进程直连 pocketapi.48.cn，不经渲染层 netRequest）：
- * 1. 短信验证码：sms/send2 发送 → login/app/mobile/code 换 token。
+ * 1. 短信验证码：v2 sms/send_sms 发送 → v2 login/app/app_login 换 token（实测成功）。
  *    服务端偶发返回 status 2001 反爬问答题（message 内嵌 JSON），需把题目透传给用户作答。
  * 2. Token 粘贴：user/info/reload 校验 token 并取回用户资料。
  *
@@ -12,7 +12,6 @@
  * 调用方收到 401005 等失效状态码时引导用户重新登录，本模块不自动重登。
  */
 import { Buffer } from 'node:buffer'
-import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -36,7 +35,7 @@ import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
-import { clientHeaders, SEINE48_ANDROID } from './client-profile'
+import { clientHeaders, POCKET48_ANDROID, SEINE48_ANDROID } from './client-profile'
 import { currentPa, ensurePaWasm } from './pa-sign'
 
 // ===== 接口常量：统一在 common/pocket-api-urls.ts（与渲染层同源），见文件头 import =====
@@ -46,8 +45,7 @@ const REQUEST_TIMEOUT_MS = 20 * 1000
 /**
  * `pa` 请求头兜底静态值：正常由官方 Android APK 抽出的 wasm 现算（见 pa-sign.ts），
  * 仅 wasm 加载/生成失败时使用（2021 年签名，实测服务端不拦请求）。
- * 请求头身份当前是 iOS 档（见下方 iOS 档说明），与 pa 的 Android 来源混用——
- * 5c073cc 统一档之前长期如此，实测不影响各接口行为。
+ * 主 App HTTP 头也统一为 Android 档（与 pa 同源）；v2 登录端点已对齐 7.1.44 APK。
  */
 const POCKET_PA = 'MTYzNjAxNzMxNTAwMCw3NjkyNzVkNTliZWU0MmQ0OGVjOWIyYTMwY2FkOWQzOSw3NzFhY2QwY2JiZDhkZDUzZDdjZGY3YTcxNGYzNmVlOCwyMDIxMDYwOTAx'
 
@@ -58,37 +56,11 @@ const TOKEN_INVALID_STATUSES = new Set([401003, 401004, 401005])
 const CAPTCHA_STATUS = 2001
 
 /**
- * 口袋主 App 伪装头（iOS 档）。
- *
- * ⚠️ 2026-10-17 实测（登录打点 + A/B）：Android 档（5c073cc 统一档）下 send2 正常、
- * `login/app/mobile/code` 恒报「验证码错误」，换回本 iOS 档立即恢复。7.1.44 官方
- * APK 的 dex 字符串里登录端点已是 `v2/login/app/app_login`，疑为服务端按客户端
- * 版本把新版 Android 引流到 v2、v1 端点拒绝且文案误导。在逆向 v2 并切换前，
- * 登录/用户域链路维持本 iOS 档；`pa` 仍由 Android wasm 现算，混用不影响行为。
- * 字段与 5c073cc 前实现逐字一致，勿顺手「统一」格式或增删字段。
+ * v2 信封：v2 登录域的 HttpData 只有 status/message/content，不一定带 success。
+ * status=200 即成功；保留 success 的旧接口也用同一判断（显式 false 才视为失败）。
  */
-const POCKET_USER_AGENT = 'PocketFans201807/7.0.41 (iPhone; iOS 16.3.1; Scale/2.00)'
-
-let pocketDeviceUuid = ''
-
-/** iOS 档设备 ID：进程内随机 UUID（与 5c073cc 前行为一致；不持久化） */
-function deviceUuid(): string {
-  if (!pocketDeviceUuid)
-    pocketDeviceUuid = randomUUID().toUpperCase()
-  return pocketDeviceUuid
-}
-
-function pocketAppInfo(): string {
-  return JSON.stringify({
-    vendor: 'apple',
-    deviceId: deviceUuid(),
-    appVersion: '7.0.41',
-    appBuild: '24011601',
-    osVersion: '16.3.1',
-    osType: 'ios',
-    deviceName: 'iPhone XR',
-    os: 'ios',
-  })
+function isEnvelopeOk(envelope: PocketEnvelope<unknown>): boolean {
+  return envelope.status === 200 && envelope.success !== false
 }
 
 // ===== 持久化结构 =====
@@ -173,15 +145,10 @@ function summarizeEnvelope(envelope: PocketEnvelope<unknown> | null | undefined)
   })
 }
 
-/** 组装口袋主 App 的请求头：iOS 档身份（见上方 iOS 档说明），只补 `pa` 与 `token` */
+/** 组装口袋主 App 的请求头：统一 Android 档身份，只补 `pa` 与 `token` */
 function pocketHeaders(token?: string, pa?: string): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json;charset=utf-8',
-    'User-Agent': POCKET_USER_AGENT,
-    'appInfo': pocketAppInfo(),
-    'Accept-Language': 'zh-Hans-CN;q=1',
-    'pa': pa ?? POCKET_PA,
-  }
+  const headers = clientHeaders(POCKET48_ANDROID)
+  headers.pa = pa ?? POCKET_PA
   if (token)
     headers.token = token
   return headers
@@ -368,11 +335,17 @@ export async function sendSms(mobile: string, area?: string, answer?: string): P
   const trimmed = mobile.trim()
   if (!isValidMobile(trimmed, normalizedArea))
     throw new Error(normalizedArea === '86' ? '请输入 11 位手机号' : '请输入有效的手机号')
-  const payload: Record<string, string> = { mobile: trimmed, area: normalizedArea }
-  if (answer)
-    payload.answer = answer
+  // 7.1.44 APK：无答题时带业务码（登录注册=1）与空风控 token；有答题时只带 answer。
+  const payload: Record<string, unknown> = answer
+    ? { mobile: trimmed, area: normalizedArea, answer }
+    : {
+        mobile: trimmed,
+        area: normalizedArea,
+        businessCode: 1,
+        intelligenceToken: '',
+      }
   debug('[pocket-auth] → 发送验证码：', JSON.stringify({
-    profile: 'ios',
+    profile: 'android-v2',
     mobile: maskMobile(trimmed) || '***',
     hasCaptchaAnswer: !!answer,
   }))
@@ -396,7 +369,7 @@ export async function sendSms(mobile: string, area?: string, answer?: string): P
     }))
     return { needCaptcha: true, question, options, message: '需要完成验证' }
   }
-  if (envelope.success)
+  if (isEnvelopeOk(envelope))
     return { needCaptcha: false, question: '', options: [], message: '验证码已发送' }
   throw new Error(envelope.message || '验证码发送失败')
 }
@@ -422,17 +395,22 @@ export async function loginByCode(mobile: string, code: string, area?: string): 
   if (!trimmedCode)
     throw new Error('请输入验证码')
   debug('[pocket-auth] → 验证码登录：', JSON.stringify({
-    profile: 'ios',
+    profile: 'android-v2',
     mobile: maskMobile(trimmedMobile) || '***',
     codeLength: trimmedCode.length,
   }))
+  // 7.1.44 APK：mobileCodeLogin setter 还会补 loginType=MOBILE_SMS_CODE；deviceToken 允许空串。
   const envelope = await postPocket<{ token?: string }>(SMS_LOGIN_URL, {
-    mobile: trimmedMobile,
-    code: trimmedCode,
-    area: normalizedArea,
+    mobileCodeLogin: {
+      mobile: trimmedMobile,
+      code: trimmedCode,
+      area: normalizedArea,
+    },
+    loginType: 'MOBILE_SMS_CODE',
+    deviceToken: '',
   })
   const token = envelope.content?.token
-  if (!envelope.success || !token) {
+  if (!isEnvelopeOk(envelope) || !token) {
     debug('[pocket-auth] ✕ 验证码登录失败：', JSON.stringify({
       status: envelope.status,
       success: envelope.success,

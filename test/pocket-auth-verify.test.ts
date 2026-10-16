@@ -494,7 +494,7 @@ describe('pocket-auth checkRoomAnswer', () => {
   })
 })
 
-describe('pocket-auth 客户端身份（主 App iOS 档 + seine Android 档）', () => {
+describe('pocket-auth 客户端身份（主 App Android 档 + seine Android 档）', () => {
   /** 取某个已发出请求的请求头；找不到即抛（比非空断言给出更清楚的失败原因） */
   function headersOf(urlPart: string): Record<string, string> {
     const found = env.requests.find(item => item.url.includes(urlPart))
@@ -503,27 +503,27 @@ describe('pocket-auth 客户端身份（主 App iOS 档 + seine Android 档）',
     return found.headers
   }
 
-  it('主 App 走 iOS 档头（登录被拒回退），seine 保持独立 Android 特征', async () => {
+  it('主 App 统一走 Android 档头，seine 保持独立 Android 特征', async () => {
     await getRoomChannel(10001)
     await getServerChannels('1213951')
 
-    // 主 App（pocket48）档：iOS UA + 紧写 UTF-8 Content-Type。
-    // 2026-10-17 实测：Android 档下 v1 验证码登录被服务端拒（详见 pocket-auth.ts 的
-    // iOS 档说明），登录/用户域回退 iOS 档；v2 app_login 迁移后再恢复 Android 断言。
+    // 主 App（pocket48）档：Android UA + 带空格 UTF-8 Content-Type。
     const main = headersOf('im/api/v1/im/server/jump')
-    expect(main['User-Agent']).toBe('PocketFans201807/7.0.41 (iPhone; iOS 16.3.1; Scale/2.00)')
-    expect(main['Content-Type']).toBe('application/json;charset=utf-8')
+    expect(main['User-Agent'])
+      .toBe('PocketFans201807/7.1.44_26092001 (23013RK75C:Android 14;Xiaomi UKQ1.231003.002 release-keys)')
+    expect(main['Content-Type']).toBe('application/json; charset=UTF-8')
     const mainAppInfo = JSON.parse(main.appInfo)
     expect(mainAppInfo).toMatchObject({
-      vendor: 'apple',
-      appVersion: '7.0.41',
-      appBuild: '24011601',
-      osType: 'ios',
-      os: 'ios',
-      deviceName: 'iPhone XR',
+      vendor: 'Xiaomi',
+      appName: 'pocket48',
+      appVersion: '7.1.44',
+      appBuild: '26092001',
+      osType: 'android',
+      osVersion: '14',
+      deviceName: '23013RK75C',
     })
-    // iOS 档设备 ID 是进程内随机 UUID（大写带连字符），非持久化
-    expect(mainAppInfo.deviceId).toMatch(/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/)
+    // Android 档设备 ID 持久化为 16 位小写 IMEI 形状
+    expect(mainAppInfo.deviceId).toMatch(/^[0-9a-f]{16}$/)
 
     // seine 档：独立 Android 客户端特征 + 专属 Device-Type 头（extraHeaders 全量覆盖主档）
     const seine = headersOf('im/api/seine/server/detail')
@@ -556,21 +556,21 @@ describe('pocket-auth 客户端身份（主 App iOS 档 + seine Android 档）',
  */
 describe('pocket-auth 区号处理', () => {
   it('发码缺省区号时按 86 提交', async () => {
-    env.replies['sms/send2'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
+    env.replies['sms/send_sms'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
     await sendSms('13800138000')
-    const request = env.requests.find(r => r.url.includes('sms/send2'))
-    expect(request?.body).toEqual({ mobile: '13800138000', area: '86' })
+    const request = env.requests.find(r => r.url.includes('sms/send_sms'))
+    expect(request?.body).toEqual({ mobile: '13800138000', area: '86', businessCode: 1, intelligenceToken: '' })
   })
 
   it('发码区号带 + 前缀时归一化为纯数字', async () => {
-    env.replies['sms/send2'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
+    env.replies['sms/send_sms'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
     await sendSms('23000000', '+852')
-    const request = env.requests.find(r => r.url.includes('sms/send2'))
-    expect(request?.body).toEqual({ mobile: '23000000', area: '852' })
+    const request = env.requests.find(r => r.url.includes('sms/send_sms'))
+    expect(request?.body).toEqual({ mobile: '23000000', area: '852', businessCode: 1, intelligenceToken: '' })
   })
 
   it('发码对 86 坚持 11 位，其他区号放宽到 4-15 位', async () => {
-    env.replies['sms/send2'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
+    env.replies['sms/send_sms'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
     await expect(sendSms('1380013800', '86')).rejects.toThrow('请输入 11 位手机号')
     await expect(sendSms('138001380000', '86')).rejects.toThrow('请输入 11 位手机号')
     await expect(sendSms('230', '852')).rejects.toThrow('请输入有效的手机号')
@@ -582,13 +582,17 @@ describe('pocket-auth 区号处理', () => {
   })
 
   it('登录请求体带区号，凭证落盘记录同一区号', async () => {
-    env.replies['login/app/mobile/code'] = {
+    env.replies['login/app/app_login'] = {
       status: 200,
       body: { status: 200, success: true, content: { token: 'tok-1' } },
     }
     await loginByCode('23000000', '432613', '+852')
-    const request = env.requests.find(r => r.url.includes('login/app/mobile/code'))
-    expect(request?.body).toEqual({ mobile: '23000000', code: '432613', area: '852' })
+    const request = env.requests.find(r => r.url.includes('login/app/app_login'))
+    expect(request?.body).toEqual({
+      mobileCodeLogin: { mobile: '23000000', code: '432613', area: '852' },
+      loginType: 'MOBILE_SMS_CODE',
+      deviceToken: '',
+    })
     expect(env.written).toMatchObject({ mobile: '23000000', area: '852', tokenPlain: 'tok-1' })
     // 落盘内容回读即为登录态展示（mock 的 write 不同步 stored，手动回灌；头 2 尾 2 脱敏）
     env.stored = { ...env.written } as Record<string, unknown>

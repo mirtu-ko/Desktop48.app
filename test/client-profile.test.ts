@@ -89,15 +89,15 @@ describe('client-profile / 公共头', () => {
   it('主 App（pocket48）Android 档：UA / Content-Type / appInfo 与真实客户端一致', () => {
     const headers = clientHeaders(POCKET48_ANDROID)
     expect(headers['User-Agent'])
-      .toBe('PocketFans201807/7.1.43_26082801 (23013RK75C:Android 14;Xiaomi UKQ1.231003.002 release-keys)')
+      .toBe('PocketFans201807/7.1.44_26092001 (23013RK75C:Android 14;Xiaomi UKQ1.231003.002 release-keys)')
     // Android 档的写法带空格且 UTF-8 大写，勿「顺手统一」成 iOS 档的紧写形式
     expect(headers['Content-Type']).toBe('application/json; charset=UTF-8')
     expect(headers['Accept-Language']).toBe('zh-Hans-CN;q=1')
     expect(headers.appInfo).toBe(JSON.stringify({
       IMEI: pocketDeviceId(),
-      appBuild: '26082801',
+      appBuild: '26092001',
       appName: 'pocket48',
-      appVersion: '7.1.43',
+      appVersion: '7.1.44',
       deviceId: pocketDeviceId(),
       deviceName: '23013RK75C',
       osType: 'android',

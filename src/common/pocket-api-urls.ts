@@ -3,7 +3,7 @@
  *
  * 同一批地址被两个请求层共用：地址相同，但两端的**身份**不同——
  * - 渲染层站点请求：`renderer/src/services/api-urls.ts` → `Request`（移动端浏览器 UA）
- * - 主进程 App 域请求：`main/pocket48/pocket-auth.ts` → `postPocket`（Android 客户端伪装头 + pa + token）
+ * - 主进程 App 域请求：`main/pocket48/pocket-auth.ts` → `postPocket`（Android 档客户端伪装头 + pa + token）
  *
  * 此前两边各写一份（`getLiveOne` 即为重复项），端点变更需同时改两处；现集中于此。
  * 边界：h5.48.cn 的成员 jsonp 与 cgt48.com 的曲库属**其它域名**，留在渲染层 api-urls.ts；
@@ -28,8 +28,10 @@ export const UPDATE_INFO_URL = `${ORIGIN}/user/api/v1/client/update/group_team_s
 
 // ===== 账号 / 登录（主进程 pocket-auth 调用） =====
 
-export const SMS_SEND_URL = `${ORIGIN}/user/api/v1/sms/send2`
-export const SMS_LOGIN_URL = `${ORIGIN}/user/api/v1/login/app/mobile/code`
+/** v2 发码：来源 7.1.44 APK `LoginViewModel → api/v2/sms/send_sms` */
+export const SMS_SEND_URL = `${ORIGIN}/user/api/v2/sms/send_sms`
+/** v2 手机验证码登录：来源 7.1.44 APK Retrofit 接口注解 */
+export const SMS_LOGIN_URL = `${ORIGIN}/user/api/v2/login/app/app_login`
 export const TOKEN_CHECK_URL = `${ORIGIN}/user/api/v1/user/info/reload`
 /** 口袋钱包余额：验证登录态时顺带展示，接口失败不影响登录态判定 */
 export const USER_MONEY_URL = `${ORIGIN}/user/api/v1/user/money`
