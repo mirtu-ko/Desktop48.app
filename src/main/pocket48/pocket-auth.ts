@@ -12,6 +12,7 @@
  * 调用方收到 401005 等失效状态码时引导用户重新登录，本模块不自动重登。
  */
 import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -35,7 +36,7 @@ import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
-import { clientHeaders, POCKET48_ANDROID, SEINE48_ANDROID } from './client-profile'
+import { clientHeaders, SEINE48_ANDROID } from './client-profile'
 import { currentPa, ensurePaWasm } from './pa-sign'
 
 // ===== 接口常量：统一在 common/pocket-api-urls.ts（与渲染层同源），见文件头 import =====
@@ -43,12 +44,10 @@ import { currentPa, ensurePaWasm } from './pa-sign'
 const REQUEST_TIMEOUT_MS = 20 * 1000
 
 /**
- * 口袋 App 伪装头（Android 档）。客户端特征与设备身份全部来自 `client-profile.ts`——
- * 那是唯一来源，本文件只负责往公共头上补 `pa` 与 `token` 两项。
- *
- * 平台曾长期是 iOS（抄参考实现默认档），而 `pa` 来自 Android APK 抽出的 wasm，
- * 属「Android 签名 + iOS 头」的平台错配；现已统一到 Android 档（见 client-profile 的
- * 文件头与实测记录）。`POCKET_PA` 保留为 wasm 不可用时的静态兜底值。
+ * `pa` 请求头兜底静态值：正常由官方 Android APK 抽出的 wasm 现算（见 pa-sign.ts），
+ * 仅 wasm 加载/生成失败时使用（2021 年签名，实测服务端不拦请求）。
+ * 请求头身份当前是 iOS 档（见下方 iOS 档说明），与 pa 的 Android 来源混用——
+ * 5c073cc 统一档之前长期如此，实测不影响各接口行为。
  */
 const POCKET_PA = 'MTYzNjAxNzMxNTAwMCw3NjkyNzVkNTliZWU0MmQ0OGVjOWIyYTMwY2FkOWQzOSw3NzFhY2QwY2JiZDhkZDUzZDdjZGY3YTcxNGYzNmVlOCwyMDIxMDYwOTAx'
 
@@ -57,6 +56,40 @@ const TOKEN_INVALID_STATUSES = new Set([401003, 401004, 401005])
 
 /** 反爬问答题状态码：message 字段为内嵌 JSON（{question, answer:[...]}) */
 const CAPTCHA_STATUS = 2001
+
+/**
+ * 口袋主 App 伪装头（iOS 档）。
+ *
+ * ⚠️ 2026-10-17 实测（登录打点 + A/B）：Android 档（5c073cc 统一档）下 send2 正常、
+ * `login/app/mobile/code` 恒报「验证码错误」，换回本 iOS 档立即恢复。7.1.44 官方
+ * APK 的 dex 字符串里登录端点已是 `v2/login/app/app_login`，疑为服务端按客户端
+ * 版本把新版 Android 引流到 v2、v1 端点拒绝且文案误导。在逆向 v2 并切换前，
+ * 登录/用户域链路维持本 iOS 档；`pa` 仍由 Android wasm 现算，混用不影响行为。
+ * 字段与 5c073cc 前实现逐字一致，勿顺手「统一」格式或增删字段。
+ */
+const POCKET_USER_AGENT = 'PocketFans201807/7.0.41 (iPhone; iOS 16.3.1; Scale/2.00)'
+
+let pocketDeviceUuid = ''
+
+/** iOS 档设备 ID：进程内随机 UUID（与 5c073cc 前行为一致；不持久化） */
+function deviceUuid(): string {
+  if (!pocketDeviceUuid)
+    pocketDeviceUuid = randomUUID().toUpperCase()
+  return pocketDeviceUuid
+}
+
+function pocketAppInfo(): string {
+  return JSON.stringify({
+    vendor: 'apple',
+    deviceId: deviceUuid(),
+    appVersion: '7.0.41',
+    appBuild: '24011601',
+    osVersion: '16.3.1',
+    osType: 'ios',
+    deviceName: 'iPhone XR',
+    os: 'ios',
+  })
+}
 
 // ===== 持久化结构 =====
 
@@ -109,10 +142,44 @@ interface PocketEnvelope<T = unknown> {
   content?: T
 }
 
-/** 组装口袋主 App 的请求头：特征取自 client-profile，本函数只补 `pa` 与 `token` */
+/** 日志用：接口地址只保留 pathname，避免把 query 里的参数带进日志 */
+function logPath(url: string): string {
+  try {
+    return new URL(url).pathname
+  }
+  catch {
+    return url
+  }
+}
+
+/** 日志用：非 JSON 回包截断，防止日志被整页 HTML / 超长正文淹没 */
+function clipForLog(text: string, max = 500): string {
+  return text.length > max ? `${text.slice(0, max)}…（共 ${text.length} 字符）` : text
+}
+
+/** 日志用：信封摘要只保留状态、message 与 content 字段名，避免 token 等敏感值落日志 */
+function summarizeEnvelope(envelope: PocketEnvelope<unknown> | null | undefined): string {
+  const content = envelope?.content
+  const contentSummary = content && typeof content === 'object' && !Array.isArray(content)
+    ? Object.keys(content as Record<string, unknown>)
+    : typeof content
+  return JSON.stringify({
+    status: envelope?.status,
+    success: envelope?.success,
+    message: typeof envelope?.message === 'string' ? clipForLog(envelope.message) : envelope?.message,
+    content: contentSummary,
+  })
+}
+
+/** 组装口袋主 App 的请求头：iOS 档身份（见上方 iOS 档说明），只补 `pa` 与 `token` */
 function pocketHeaders(token?: string, pa?: string): Record<string, string> {
-  const headers = clientHeaders(POCKET48_ANDROID)
-  headers.pa = pa ?? POCKET_PA
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json;charset=utf-8',
+    'User-Agent': POCKET_USER_AGENT,
+    'appInfo': pocketAppInfo(),
+    'Accept-Language': 'zh-Hans-CN;q=1',
+    'pa': pa ?? POCKET_PA,
+  }
   if (token)
     headers.token = token
   return headers
@@ -128,6 +195,8 @@ async function postPocket<T>(
   // pa 每次请求现算（内嵌当下时间戳）；wasm 加载失败时退回静态值，不影响请求发出
   await ensurePaWasm()
   const pa = currentPa(POCKET_PA)
+  const startedAt = performance.now()
+  const apiPath = logPath(url)
   return new Promise<PocketEnvelope<T>>((resolve, reject) => {
     const request = net.request({ url, method: 'POST' })
     const headers = { ...pocketHeaders(token, pa), ...extraHeaders }
@@ -140,6 +209,7 @@ async function postPocket<T>(
         return
       settled = true
       request.abort()
+      debug(`[pocket-auth] ✕ POST ${apiPath} 超时 ${REQUEST_TIMEOUT_MS}ms`)
       reject(new Error('请求超时，请检查网络'))
     }, REQUEST_TIMEOUT_MS)
 
@@ -148,6 +218,7 @@ async function postPocket<T>(
         return
       settled = true
       clearTimeout(timer)
+      debug(`[pocket-auth] ✕ POST ${apiPath} 网络错误 ${(performance.now() - startedAt).toFixed(1)}ms:`, err)
       reject(err)
     }
 
@@ -160,14 +231,19 @@ async function postPocket<T>(
         settled = true
         clearTimeout(timer)
         const status = response.statusCode
+        const body = Buffer.concat(chunks).toString('utf8')
         if (status < 200 || status >= 300) {
+          debug(`[pocket-auth] ✕ POST ${apiPath} HTTP ${status} ${(performance.now() - startedAt).toFixed(1)}ms:`, clipForLog(body))
           reject(new Error(`接口异常（HTTP ${status}）`))
           return
         }
         try {
-          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as PocketEnvelope<T>)
+          const envelope = JSON.parse(body) as PocketEnvelope<T>
+          debug(`[pocket-auth] ← POST ${apiPath} HTTP ${status} ${(performance.now() - startedAt).toFixed(1)}ms`, summarizeEnvelope(envelope))
+          resolve(envelope)
         }
         catch {
+          debug(`[pocket-auth] ✕ POST ${apiPath} HTTP ${status} 返回非 JSON ${(performance.now() - startedAt).toFixed(1)}ms:`, clipForLog(body))
           reject(new Error('接口返回数据异常'))
         }
       })
@@ -272,7 +348,13 @@ export async function sendSms(mobile: string, answer?: string): Promise<PocketSm
   const payload: Record<string, string> = { mobile: trimmed, area: '86' }
   if (answer)
     payload.answer = answer
+  debug('[pocket-auth] → 发送验证码：', JSON.stringify({
+    profile: 'ios',
+    mobile: maskMobile(trimmed) || '***',
+    hasCaptchaAnswer: !!answer,
+  }))
   const envelope = await postPocket(SMS_SEND_URL, payload)
+  debug('[pocket-auth] ← 发送验证码：', summarizeEnvelope(envelope))
   if (envelope.status === CAPTCHA_STATUS) {
     // message 内嵌 JSON：{question: string, answer: string[]}
     let question = ''
@@ -285,6 +367,10 @@ export async function sendSms(mobile: string, answer?: string): Promise<PocketSm
     catch {
       question = envelope.message || ''
     }
+    debug('[pocket-auth] 发送验证码命中反爬问答题：', JSON.stringify({
+      question,
+      optionCount: options.length,
+    }))
     return { needCaptcha: true, question, options, message: '需要完成验证' }
   }
   if (envelope.success)
@@ -311,13 +397,26 @@ export async function loginByCode(mobile: string, code: string): Promise<PocketA
     throw new Error('请输入 11 位手机号')
   if (!trimmedCode)
     throw new Error('请输入验证码')
+  debug('[pocket-auth] → 验证码登录：', JSON.stringify({
+    profile: 'ios',
+    mobile: maskMobile(trimmedMobile) || '***',
+    codeLength: trimmedCode.length,
+  }))
   const envelope = await postPocket<{ token?: string }>(SMS_LOGIN_URL, {
     mobile: trimmedMobile,
     code: trimmedCode,
   })
   const token = envelope.content?.token
-  if (!envelope.success || !token)
+  if (!envelope.success || !token) {
+    debug('[pocket-auth] ✕ 验证码登录失败：', JSON.stringify({
+      status: envelope.status,
+      success: envelope.success,
+      message: envelope.message || null,
+      hasToken: !!token,
+      shownToUser: envelope.message || '验证码错误或已过期',
+    }))
     throw new Error(envelope.message || '验证码错误或已过期')
+  }
   // 登录响应的 content 里未必带资料，再校验一次顺手取昵称头像（失败不阻断，资料只是展示用）
   let info: PocketUserInfo = { nickname: '', avatar: '', userId: '' }
   try {
@@ -337,9 +436,19 @@ export async function loginByToken(token: string, mobile = ''): Promise<PocketAu
   const trimmed = token.trim()
   if (!trimmed)
     throw new Error('请输入 token')
+  debug('[pocket-auth] → token 登录：', JSON.stringify({
+    mobile: maskMobile(mobile.trim()) || '***',
+    tokenLength: trimmed.length,
+  }))
   const envelope = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, trimmed)
   if (!envelope.success) {
     const invalid = envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status)
+    debug('[pocket-auth] ✕ token 登录失败：', JSON.stringify({
+      status: envelope.status,
+      success: envelope.success,
+      message: envelope.message || null,
+      invalid,
+    }))
     throw new Error(invalid ? 'token 无效或已过期' : envelope.message || 'token 校验失败')
   }
   const info = pickUserInfo(envelope.content)
