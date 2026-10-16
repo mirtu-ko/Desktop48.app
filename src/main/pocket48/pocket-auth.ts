@@ -12,44 +12,44 @@
  * 调用方收到 401005 等失效状态码时引导用户重新登录，本模块不自动重登。
  */
 import { Buffer } from 'node:buffer'
-import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import {
+  FRIEND_ADD_URL,
+  FRIEND_REMOVE_URL,
+  FRIENDS_IDS_URL,
+  IM_USER_INFO_URL,
+  LIVE_ONE_URL,
+  ROOM_ANSWER_VERIFY_URL,
+  ROOM_INFO_URL,
+  ROOM_LAST_MESSAGE_URL,
+  ROOM_MESSAGE_URLS,
+  SEINE_SERVER_DETAIL_URL,
+  SERVER_JUMP_URL,
+  SMS_LOGIN_URL,
+  SMS_SEND_URL,
+  TOKEN_CHECK_URL,
+  USER_MONEY_URL,
+} from '@common/pocket-api-urls'
+import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app, net, safeStorage } from 'electron'
-import { ROOM_MESSAGE_LIMIT } from '../../common/pocket-rooms'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
+import { clientHeaders, POCKET48_ANDROID, SEINE48_ANDROID } from './client-profile'
 import { currentPa, ensurePaWasm } from './pa-sign'
 
-// ===== 接口常量（与渲染层 services/api-urls.ts 保持同源；此域暂无渲染层调用，独立维护） =====
-
-const SMS_SEND_URL = 'https://pocketapi.48.cn/user/api/v1/sms/send2'
-const SMS_LOGIN_URL = 'https://pocketapi.48.cn/user/api/v1/login/app/mobile/code'
-const TOKEN_CHECK_URL = 'https://pocketapi.48.cn/user/api/v1/user/info/reload'
-/** 网易云信 IM 凭据（直播聊天室连接用）：需登录 token，额外带 P-Sign-Type 头 */
-const IM_USER_INFO_URL = 'https://pocketapi.48.cn/im/api/v1/im/userinfo'
-/** 口袋钱包余额：验证登录态时顺带展示，接口失败不影响登录态判定 */
-const USER_MONEY_URL = 'https://pocketapi.48.cn/user/api/v1/user/money'
-/** 关注成员 ID 列表（账号维度，一次性返回无分页；只给 ID，详情由本地成员树解析） */
-const FRIENDS_IDS_URL = 'https://pocketapi.48.cn/user/api/v1/friendships/friends/id'
-/** 关注 / 取消关注成员（桌面端 toggle 双写用） */
-const FRIEND_ADD_URL = 'https://pocketapi.48.cn/user/api/v2/friendships/friends/add'
-const FRIEND_REMOVE_URL = 'https://pocketapi.48.cn/user/api/v2/friendships/friends/remove'
-/** 直播详情：仅带 token 的请求才返回 chatroomId（实测无 token 时 roomId 恒 0 且无 chatroomId 字段） */
-const LIVE_ONE_URL = 'https://pocketapi.48.cn/live/api/v1/live/getLiveOne'
+// ===== 接口常量：统一在 common/pocket-api-urls.ts（与渲染层同源），见文件头 import =====
 
 const REQUEST_TIMEOUT_MS = 20 * 1000
 
 /**
- * 口袋 App 伪装头。对齐 yaya_msg 的真实设备模拟（全程 iOS 客户端特征）：
- * - UA / appInfo 声称 iPhone XR / iOS 16.3.1 / 7.0.41(24011601)；
- * - appInfo.deviceId 每安装随机生成（UUID，对齐 yaya 的 getDeviceId 行为），持久化复用；
- * - pa 为设备签名字段，见 POCKET_PA 与 pa-sign.ts——wasm 动态生成（内嵌当下时间戳），
- *   wasm 不可用时退回该静态值（2021 年签名，服务端可能降级回包，但不拦截请求）。
- * 实测服务端对请求特征分级：特征对不齐时部分接口（如 lastMsgList）只回降级字段，
- * 缺 unreadCount / msgTime / msgidClient。
+ * 口袋 App 伪装头（Android 档）。客户端特征与设备身份全部来自 `client-profile.ts`——
+ * 那是唯一来源，本文件只负责往公共头上补 `pa` 与 `token` 两项。
+ *
+ * 平台曾长期是 iOS（抄参考实现默认档），而 `pa` 来自 Android APK 抽出的 wasm，
+ * 属「Android 签名 + iOS 头」的平台错配；现已统一到 Android 档（见 client-profile 的
+ * 文件头与实测记录）。`POCKET_PA` 保留为 wasm 不可用时的静态兜底值。
  */
-const POCKET_USER_AGENT = 'PocketFans201807/7.0.41 (iPhone; iOS 16.3.1; Scale/2.00)'
 const POCKET_PA = 'MTYzNjAxNzMxNTAwMCw3NjkyNzVkNTliZWU0MmQ0OGVjOWIyYTMwY2FkOWQzOSw3NzFhY2QwY2JiZDhkZDUzZDdjZGY3YTcxNGYzNmVlOCwyMDIxMDYwOTAx'
 
 /** token 失效的服务端状态码（与 pocket48_api 社区实现一致） */
@@ -109,37 +109,10 @@ interface PocketEnvelope<T = unknown> {
   content?: T
 }
 
-/**
- * 伪装设备 UUID：进程内生成一次、本次会话内复用（对齐 yaya 的 getDeviceId 原行为）。
- * 不落盘——存档与登录凭证强耦合，混写会污染 verifyLogin 的「无变化不写盘」语义（踩过）；
- * 每次启动换新设备 ID 对服务端而言等价于重装 App，yaya 同样如此且链路正常。
- */
-let pocketDeviceId = ''
-
-function deviceUuid(): string {
-  if (!pocketDeviceId)
-    pocketDeviceId = randomUUID().toUpperCase()
-  return pocketDeviceId
-}
-
+/** 组装口袋主 App 的请求头：特征取自 client-profile，本函数只补 `pa` 与 `token` */
 function pocketHeaders(token?: string, pa?: string): Record<string, string> {
-  const appInfo = JSON.stringify({
-    vendor: 'apple',
-    deviceId: deviceUuid(),
-    appVersion: '7.0.41',
-    appBuild: '24011601',
-    osVersion: '16.3.1',
-    osType: 'ios',
-    deviceName: 'iPhone XR',
-    os: 'ios',
-  })
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json;charset=utf-8',
-    'User-Agent': POCKET_USER_AGENT,
-    'appInfo': appInfo,
-    'Accept-Language': 'zh-Hans-CN;q=1',
-    'pa': pa ?? POCKET_PA,
-  }
+  const headers = clientHeaders(POCKET48_ANDROID)
+  headers.pa = pa ?? POCKET_PA
   if (token)
     headers.token = token
   return headers
@@ -628,43 +601,13 @@ export async function getChatroomId(liveId: string): Promise<string> {
 
 // ===== 成员房间（口袋 App「房间」频道的留言流，与直播间弹幕是两套体系） =====
 
-/** 成员 userId → 房间频道（team server + channel）解析：starId 即成员 userId */
-const SERVER_JUMP_URL = 'https://pocketapi.48.cn/im/api/v1/im/server/jump'
-const ROOM_INFO_URL = 'https://pocketapi.48.cn/im/api/v1/im/team/room/info'
 /**
- * 答案校验端点：小房间暗号唯一的真实校验入口，见 checkRoomAnswer 的实测记录。
- * 来源：塞纳河48 客户端（com.seine48.app）jadx 反编译——Retrofit 接口
- * `com.meta.module_base.network.api.ApiIM#questionAnswer`
- * `@POST("im/api/v1/team/channel/question/answer/verify")`，
- * 请求体由 `ChannelSwitchViewModel.submitQuestionAnswer` 构造：`{ answer, questionId }`。
- */
-const ROOM_ANSWER_VERIFY_URL = 'https://pocketapi.48.cn/im/api/v1/team/channel/question/answer/verify'
-/**
- * 频道详情（seine 服务）：给定 team server 返回其下全部频道，含服务端给的 channelName。
- * 房间页「房间 / 小房间」切换要显示真实频道名，而 jump 与 lastMsgList 都不带频道名，
- * 被暗号拦下的 room/info 也拿不到 channelInfo——名称只能从这里取。
- * 参考实现 yaya_msg 同款；seine 有独立的客户端特征，见 seineHeaderOverrides。
- */
-const SEINE_SERVER_DETAIL_URL = 'https://pocketapi.48.cn/im/api/seine/server/detail'
-/**
- * 房间频道历史消息（HTTP 拉取）。
- * 参考实现 yaya_msg 的实时消息走 QChat 长连接（另一套 NIM 协议），
+ * 房间消息以 HTTP 轮询拉取：参考实现 yaya_msg 的实时消息走 QChat 长连接（另一套 NIM 协议），
  * 本版本以轮询替代实时推送，覆盖「查看房间消息」场景。
  */
-/**
- * 房间消息列表接口：同一频道两档口径（参考实现 yaya_msg 同款切换）。
- * homeowner 仅房主（成员）发言（会混入官方系统账号 121569667，由渲染层过滤）；
- * all 全员发言。
- */
-const ROOM_MESSAGE_URLS = {
-  member: 'https://pocketapi.48.cn/im/api/v1/team/message/list/homeowner',
-  all: 'https://pocketapi.48.cn/im/api/v1/team/message/list/all',
-} as const
 
 /** 消息范围：member = 只看房主发言，all = 全部用户发言 */
 export type RoomMessageScope = keyof typeof ROOM_MESSAGE_URLS
-/** 批量取各 server 下每个频道的最后一条消息（左侧列表预览用；参考实现 yaya_msg 同款） */
-const ROOM_LAST_MESSAGE_URL = 'https://pocketapi.48.cn/im/api/v1/team/classic/last/message/get'
 
 export interface PocketRoomChannel {
   serverId: string
@@ -761,24 +704,12 @@ export interface PocketServerChannel {
 }
 
 /**
- * seine 服务的伪装头覆盖项：客户端特征与主 App 不同（appName = seine48、Alamofire UA、
- * appVersion 1.2.0），其余字段（token / pa / Accept-Language）沿用 pocketHeaders。
- * 只返回需要覆盖的键，pa 仍由 postPocket 统一现算，避免两处签名不一致。
+ * seine 服务的伪装头覆盖项：seine48 有独立的客户端特征（appName、UA、appVersion 与
+ * 主 App 不同，且带 `X-Custom-Device-Type: ANDROID`），全部来自 client-profile。
+ * 返回完整公共头由 postPocket 覆盖合并；`pa` 仍由其统一现算，避免两处签名不一致。
  */
 function seineHeaderOverrides(): Record<string, string> {
-  return {
-    'appInfo': JSON.stringify({
-      vendor: 'apple',
-      deviceId: deviceUuid(),
-      appVersion: '1.2.0',
-      appBuild: '26072902',
-      osVersion: '27.0',
-      osType: 'ios',
-      deviceName: 'iPhone 16 Pro',
-      appName: 'seine48',
-    }),
-    'User-Agent': 'Seina/1.2.0 (com.seine48.app; build:26072902; iOS 27.0.0) Alamofire/5.8.0',
-  }
+  return clientHeaders(SEINE48_ANDROID)
 }
 
 /**
@@ -1027,7 +958,8 @@ export interface PocketRoomLastMessage {
   msgContent: string
   /**
    * 消息身份键（msgidClient 优先，msgid 系列兜底，最后退到 msgTime:msgContent）。
-   * 降级回包无 msgidClient 系列字段，键退到 msgTime:msgContent。
+   * ⚠️ 该接口实测只回 4 个字段，msgidClient 系列与 msgTime 都拿不到，
+   * 键实际恒退到 `0:正文`——同一频道连发两条相同文本会漏判一次（接口信息上限）。
    * 未读检测只用它判断「该频道是否来了新消息」（触发），不参与计数。
    */
   msgKey: string
@@ -1085,7 +1017,7 @@ export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRo
         item.msgidClient || item.msgIdClient || item.msgIdServer || item.msgId || item.messageId || '',
       ).trim() || `${msgTime}:${msgContent}`,
       msgTime,
-      // 只认字段真实存在的情况：降级回包没有该字段，0 与「未读 0 条」必须可区分
+      // 只认字段真实存在的情况：该接口不回该字段，0 与「未读 0 条」必须可区分
       unreadCount: typeof item.unreadCount === 'number' && Number.isFinite(item.unreadCount)
         ? item.unreadCount
         : null,

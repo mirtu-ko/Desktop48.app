@@ -2,21 +2,27 @@
 // 口袋「房间」页：左栏关注成员房间列表，右栏房间消息流（成员在房间频道的留言，非直播间弹幕）。
 // 数据与连接编排见 composables/use-pocket-rooms.ts（本页只做展示与交互）。
 
-import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
+import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
+import type { Component } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
-import { ArrowRight, ChatDotRound, Lock, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import { ArrowRight, ChatDotRound, Close, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import ImageViewerToolbar from '@renderer/components/rooms/ImageViewerToolbar.vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
+import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
 import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
+import { copyText } from '@renderer/utils/clipboard'
 import { debugLog } from '@renderer/utils/debug'
-import { liveShareTitle } from '@renderer/utils/pocket-room-message'
+import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
 import Tools from '@renderer/utils/tools'
+import { useDebounceFn, useEventListener } from '@vueuse/core'
 import dayjs from 'dayjs'
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { computed, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 const {
   rooms,
@@ -46,6 +52,8 @@ const {
   selectRoom,
   setViewMode,
   unlockSmall,
+  openTemporaryRoom,
+  closeTemporaryRoom,
 
   loadMoreHistory,
   openSharedLive,
@@ -53,6 +61,7 @@ const {
 } = usePocketRooms()
 
 const router = useRouter()
+const route = useRoute()
 
 /** 未读数字角标文案：计数按列表一页封顶，触顶即「至少这么多」，收敛为 50+ */
 function unreadText(count: number): string {
@@ -60,15 +69,16 @@ function unreadText(count: number): string {
 }
 
 /**
- * 频道切换（页签）：切到大房间视同「点进大房间」，清其未读（有未读则回底）；
- * 切到小房间不清——小房间走自己的入口语义（暗号解锁 + 贴底即读）。
+ * 频道切换（页签）：切到哪个频道就清当前频道的未读。
  */
 async function onViewModeChange(mode: 'room' | 'small') {
+  const userId = selectedUserId.value
   if (mode !== 'room') {
     void setViewMode(mode)
+    if (userId !== null && unreadChannelOf(userId).small > 0)
+      void markRoomRead(userId, 'small')
     return
   }
-  const userId = selectedUserId.value
   const hadUnread = userId !== null && unreadChannelOf(userId).big > 0
   await setViewMode(mode)
   if (userId !== null)
@@ -252,12 +262,37 @@ async function enterRoom(userId: number) {
   await settleBigRoomEnter(userId, hadUnread)
 }
 
+/**
+ * 临时房间的边界就是这条路由 query：成员详情卡底栏入口 push `/rooms?member=<userId>`，
+ * query 一旦消失（Dock 切回房间页、走别的入口）即撤掉临时条目——离开页面就不再保留。
+ * 成员不在关注名单里也照样打开，这正是「临时」的用途（不写关注名单、不落盘）。
+ */
+watch(() => route.query.member, async (value) => {
+  const userId = Number(Array.isArray(value) ? value[0] : value)
+  if (!Number.isFinite(userId) || userId <= 0) {
+    closeTemporaryRoom()
+    return
+  }
+  const result = await openTemporaryRoom(userId)
+  if (!result.ok)
+    ElMessage.warning(result.message || '未能打开该成员的大房间')
+}, { immediate: true })
+
+/** 左列关掉临时房间：一并清掉 query。否则 URL 还留着这个成员，下次点同一个入口不触发 watch */
+function closeTempRoom() {
+  closeTemporaryRoom()
+  if (route.query.member)
+    void router.replace({ path: '/rooms' })
+}
+
 watch(selectedUserId, () => {
   atBottom.value = true
   newCount.value = 0
   // 重置滚动基线：切房清空旧内容时浏览器钳制 scrollTop，会触发一次「向上」的
   // scroll 事件 —— 不是用户上滚，不能据此退钉
   lastSeenScrollTop = -1
+  // 折叠 / 到达高亮都是「这一屏」的状态，换房即复位
+  resetCardState()
 })
 
 watch(() => messages.value.length, async (len, oldLen) => {
@@ -318,9 +353,181 @@ function avatarUrl(avatar: string) {
   return avatar ? Tools.sourceUrl(avatar) : ''
 }
 
+// ===== 长文折叠：成员小作文超过 10 行先收起来 =====
+/** 折叠行数：注入 CSS 变量 --collapse-lines，由 .msg-text.is-clamped 按行高换算成 max-height */
+const COLLAPSE_LINES = 10
+
+/**
+ * 判定为超长的消息 id。只登记不撤销：展开态没有高度截断，再量一次会「量不到溢出」，
+ * 把刚点开的「收起」按钮判没。登记表每轮整体重建，顺带清掉已不在列表里的旧 id。
+ */
+const longTextIds = ref<Set<string>>(new Set())
+/** 已展开全文的消息 id：只在内存，切房即复位（换个人没必要继承上一位的阅读状态） */
+const expandedTextIds = ref<Set<string>>(new Set())
+
+/** 该条正文是否处于收起态（超长且未展开） */
+function isLongTextClamped(id: string): boolean {
+  return longTextIds.value.has(id) && !expandedTextIds.value.has(id)
+}
+
+function toggleLongText(id: string) {
+  const next = new Set(expandedTextIds.value)
+  if (next.has(id))
+    next.delete(id)
+  else
+    next.add(id)
+  expandedTextIds.value = next
+}
+
+/**
+ * 量一遍已渲染的正文高度，超出折叠行数的登记为超长。
+ * 收起态用 max-height 截断，scrollHeight 仍是完整内容高度 —— 反复量结果稳定，
+ * 不会「量一次收起来、再量就不是超长」地来回抖。
+ */
+function measureLongText() {
+  const root = listRef.value
+  if (!root)
+    return
+  const next = new Set<string>()
+  root.querySelectorAll<HTMLElement>('.msg-text').forEach((el) => {
+    const id = el.dataset.msgId
+    if (!id)
+      return
+    if (longTextIds.value.has(id) || el.scrollHeight > el.clientHeight + 1)
+      next.add(id)
+  })
+  if (next.size === longTextIds.value.size && [...next].every(id => longTextIds.value.has(id)))
+    return
+  longTextIds.value = next
+}
+
+// 列宽变化会改变折行数，只有窗口缩放会把列宽改掉（右栏固定宽、聊天区自适应）；
+// 内容变化走 messages 的 length 监听，两条触发点覆盖全部「需要重量」的时机
+const measureLongTextDebounced = useDebounceFn(measureLongText, 150)
+useEventListener(window, 'resize', measureLongTextDebounced)
+watch(() => messages.value.length, () => void nextTick(measureLongText))
+
+// ===== 新消息到达高亮（只贴底时）=====
+/** 时长同时注入 CSS 变量：动画与类移除同一节拍，不会闪到一半被掐 */
+const ARRIVE_FLASH_MS = 1200
+/** 待高亮的消息 id */
+const arrivingIds = ref<Set<string>>(new Set())
+let arrivingTimer: ReturnType<typeof setTimeout> | undefined
+
+function flashArrivals(ids: string[]) {
+  const next = new Set(arrivingIds.value)
+  for (const id of ids)
+    next.add(id)
+  arrivingIds.value = next
+  if (arrivingTimer)
+    clearTimeout(arrivingTimer)
+  arrivingTimer = setTimeout(() => {
+    arrivingIds.value = new Set()
+    arrivingTimer = undefined
+  }, ARRIVE_FLASH_MS)
+}
+
+/**
+ * 上一条消息 id：只有「它仍在列表里」才把其后的消息当作新到。
+ * 切房与换消息范围都先 clearChat（列表清空 → 记为 null），翻更早历史插在头部，
+ * 三者都不会误判成「新到」；上翻浏览历史时不打扰阅读，交给浮标计数。
+ */
+let tailMessageId: string | null = null
+
+watch(messages, (list) => {
+  const prevTail = tailMessageId
+  tailMessageId = list.length ? list[list.length - 1].id : null
+  if (!prevTail || !atBottom.value)
+    return
+  const index = list.findIndex(item => item.id === prevTail)
+  if (index < 0)
+    return
+  const appended = list.slice(index + 1)
+  if (appended.length)
+    flashArrivals(appended.map(item => item.id))
+}, { flush: 'post' })
+
+// ===== 复制（hover 按钮 + 右键菜单）=====
+/** 右键菜单的定位与目标消息；null = 未打开 */
+const menu = ref<{ x: number, y: number, message: PocketRoomMessageView } | null>(null)
+
+/** 复制项的文案与图标：清单本身（有哪些可复制）在归一层，这里只贴 UILabel */
+const COPY_ITEMS: Record<PocketRoomCopyKey, { label: string, icon: Component }> = {
+  text: { label: '复制文字', icon: DocumentCopy },
+  image: { label: '复制图片链接', icon: Picture },
+  audio: { label: '复制语音链接', icon: Microphone },
+  video: { label: '复制视频链接', icon: VideoCamera },
+}
+
+function copyMenuItems(message: PocketRoomMessageView) {
+  return pocketRoomCopyTargets(message).map(item => ({ key: item.key, ...COPY_ITEMS[item.key] }))
+}
+
+const menuItems = computed(() => (menu.value ? copyMenuItems(menu.value.message) : []))
+
+/** hover 复制按钮的文案；空串 = 这条没有可复制内容，按钮不渲染（如系统通知、投票） */
+function copyHint(message: PocketRoomMessageView): string {
+  const first = pocketRoomCopyTargets(message)[0]
+  return first ? COPY_ITEMS[first.key].label : ''
+}
+
+/** 复制并如实反馈：剪贴板被拒时静默会让人以为按钮坏了 */
+async function runCopy(key: PocketRoomCopyKey, message: PocketRoomMessageView) {
+  const target = pocketRoomCopyTargets(message).find(item => item.key === key)
+  if (!target)
+    return
+  const ok = await copyText(target.text)
+  if (ok)
+    ElMessage.success(`已${COPY_ITEMS[key].label}`)
+  else
+    ElMessage.error(`${COPY_ITEMS[key].label}失败`)
+}
+
+/** hover 按钮：复制该条的首选内容（有正文复制正文，媒体消息退化为直链） */
+function copyPrimary(message: PocketRoomMessageView) {
+  const first = pocketRoomCopyTargets(message)[0]
+  if (first)
+    void runCopy(first.key, message)
+}
+
+function openMessageMenu(event: MouseEvent, message: PocketRoomMessageView) {
+  if (!pocketRoomCopyTargets(message).length)
+    return
+  menu.value = { x: event.clientX, y: event.clientY, message }
+}
+
+function closeMenu() {
+  menu.value = null
+}
+
+function onMenuPick(key: string) {
+  const target = menu.value
+  menu.value = null
+  if (target)
+    void runCopy(key as PocketRoomCopyKey, target.message)
+}
+
+// 页面切走（keep-alive 只停用不销毁）：右键菜单挂在 body 上，不关会盖住别的页面
+onDeactivated(resetCardState)
+
+/**
+ * 折叠 / 到达高亮 / 右键菜单的整块复位：换房与页面切走共用。
+ * 待高亮的定时器一并清掉，避免它在新房间的列表上把 id 撞亮。
+ */
+function resetCardState() {
+  longTextIds.value = new Set()
+  expandedTextIds.value = new Set()
+  arrivingIds.value = new Set()
+  if (arrivingTimer) {
+    clearTimeout(arrivingTimer)
+    arrivingTimer = undefined
+  }
+  closeMenu()
+}
+
 // ===== 引用块 =====
-// 引用块只读展示「被回复者：被回复内容」摘要，不做点击跳转（被引用消息
-// 往往不在当前列表，跳转价值有限）。
+// 引用块只读展示「谁 + 说了什么」摘要：回复类是被回复者 + 被引用内容，翻牌是被翻提问
+// （昵称位固定「提问」）。不做点击跳转——被引用消息往往不在当前列表，跳转价值有限。
 
 /**
  * 图片占位样式：归一层解析到原始尺寸时按 aspect-ratio 预留空间，
@@ -474,37 +681,59 @@ onMounted(() => {
         </div>
 
         <div v-else-if="rooms.length" class="room-list detail-scroll">
-          <button
+          <!-- 关闭钮是条目的兄弟节点而非子节点：条目本体是 <button>，嵌套交互元素会破坏语义 -->
+          <div
             v-for="room in rooms"
             :key="room.userId"
-            type="button"
-            class="room-item"
-            :class="{ 'is-active': selectedRoom?.userId === room.userId, 'is-live': !!room.live }"
-            @click="enterRoom(room.userId)"
+            class="room-wrap"
+            :class="{ 'is-temp': room.temporary }"
           >
-            <span class="room-avatar">
-              <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
-              <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
-              <span v-if="room.live" class="room-live-badge">LIVE</span>
-              <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角，与右下 LIVE 点错开 -->
-              <span
-                v-if="unreadCountOf(room.userId)"
-                class="unread-badge room-unread"
-              >{{ unreadText(unreadCountOf(room.userId)) }}</span>
-            </span>
-            <span class="room-meta">
-              <span class="room-name-row">
-                <span class="room-name ellipsis">{{ room.nickname }}</span>
+            <button
+              type="button"
+              class="room-item"
+              :class="{ 'is-active': selectedRoom?.userId === room.userId, 'is-live': !!room.live }"
+              @click="enterRoom(room.userId)"
+            >
+              <span class="room-avatar">
+                <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
+                <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
+                <span v-if="room.live" class="room-live-badge">LIVE</span>
+                <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角，与右下 LIVE 点错开 -->
                 <span
-                  v-if="room.teamName"
-                  class="room-team"
-                  :style="Tools.colorVarStyle('--tb-color', room.teamColor)"
-                >{{ Tools.shortTeamName(room.teamName) }}</span>
+                  v-if="unreadCountOf(room.userId)"
+                  class="unread-badge room-unread"
+                >{{ unreadText(unreadCountOf(room.userId)) }}</span>
               </span>
+              <span class="room-meta">
+                <span class="room-name-row">
+                  <span class="room-name ellipsis">{{ room.nickname }}</span>
+                  <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
+                  <span v-if="room.temporary" class="room-temp-tag">临时</span>
+                  <span
+                    v-if="room.teamName"
+                    class="room-team"
+                    :style="Tools.colorVarStyle('--tb-color', room.teamColor)"
+                  >{{ Tools.shortTeamName(room.teamName) }}</span>
+                </span>
 
-              <span v-if="room.preview" class="room-preview ellipsis">{{ room.preview }}</span>
-            </span>
-          </button>
+                <span v-if="room.preview" class="room-preview ellipsis">{{ room.preview }}</span>
+              </span>
+            </button>
+
+            <!-- 关闭临时房间（悬浮显示；正看着时常驻，否则鼠标移开就找不到出口） -->
+            <button
+              v-if="room.temporary"
+              type="button"
+              class="room-temp-close"
+              :aria-label="`关闭「${room.nickname}」的临时房间`"
+              title="关闭临时房间"
+              @click="closeTempRoom"
+            >
+              <el-icon :size="12">
+                <Close />
+              </el-icon>
+            </button>
+          </div>
         </div>
 
         <div v-else-if="!loading" class="side-empty">
@@ -550,6 +779,7 @@ onMounted(() => {
                   class="room-team"
                   :style="Tools.colorVarStyle('--tb-color', selectedRoom.teamColor)"
                 >{{ Tools.shortTeamName(selectedRoom.teamName) }}</span>
+                <span v-if="selectedRoom.temporary" class="room-temp-tag">临时</span>
                 <span v-if="selectedRoom.live" class="main-live-tag">直播中</span>
               </div>
               <p class="main-head-sub ellipsis">
@@ -619,6 +849,7 @@ onMounted(() => {
                 v-if="messages.length"
                 ref="listRef"
                 class="msg-scroll detail-scroll"
+                :style="{ '--arrive-flash': `${ARRIVE_FLASH_MS}ms`, '--collapse-lines': COLLAPSE_LINES }"
                 @scroll="onListScroll"
               >
                 <div class="msg-more">
@@ -635,7 +866,8 @@ onMounted(() => {
                   </div>
                   <div
                     class="msg-row"
-                    :class="[`msg-row--${message.kind}`, { 'msg-row--member': message.isMember }]"
+                    :class="[`msg-row--${message.kind}`, { 'msg-row--member': message.isMember, 'is-arriving': arrivingIds.has(message.id) }]"
+                    @contextmenu.prevent="openMessageMenu($event, message)"
                   >
                     <template v-if="message.kind === 'system'">
                       <div class="msg-system-pill">
@@ -658,11 +890,25 @@ onMounted(() => {
                           <!-- 等级徽章：房主标签与等级互斥展示，语义对齐弹幕气泡的 Lv 徽章 -->
                           <span v-else-if="message.level > 0" class="msg-level">Lv{{ message.level }}</span>
                           <span class="msg-time">{{ messageTime(message.msgTime) }}</span>
+                          <!-- hover 复制：压在时间戳上（绝对定位不占位），键盘可达；右键菜单是完整入口 -->
+                          <button
+                            v-if="copyHint(message)"
+                            type="button"
+                            class="msg-copy"
+                            :title="copyHint(message)"
+                            :aria-label="`${copyHint(message)}：${message.nick || '用户'}的消息`"
+                            @click="copyPrimary(message)"
+                          >
+                            <el-icon :size="12">
+                              <DocumentCopy />
+                            </el-icon>
+                          </button>
                         </div>
 
-                        <!-- 引用块：被回复消息的摘要（昵称 + 内容），只读展示 -->
+                        <!-- 引用块：被回复消息的摘要（昵称 + 内容），只读展示。
+                             翻牌不走这里——翻牌不是回复某条消息，而是一张问答卡（见 .msg-flip） -->
                         <div
-                          v-if="message.quote"
+                          v-if="message.quote && message.kind !== 'flip'"
                           class="msg-quote"
                           :class="{ 'msg-quote--gift': message.quote.isGift }"
                         >
@@ -670,7 +916,39 @@ onMounted(() => {
                           <span class="msg-quote-text">{{ message.quote.text || '引用了一条消息' }}</span>
                         </div>
 
+                        <!-- 翻牌卡：上「回答」下「提问」，中间一条分隔线。
+                             翻牌不引用某条消息，而是成员对粉丝提问的公开回答，所以不复用引用块：
+                             回答是主内容（文字 / 语音条 / 视频），提问是被翻原文，完整展开不截断 -->
                         <div
+                          v-if="message.kind === 'flip' && message.quote"
+                          class="msg-flip"
+                        >
+                          <div class="msg-flip-answer">
+                            <RoomVoiceBar v-if="message.audioUrl" :src="message.audioUrl" />
+                            <video
+                              v-else-if="message.videoUrl"
+                              class="msg-video"
+                              :style="videoBoxStyle(message)"
+                              :src="message.videoUrl"
+                              :poster="message.videoPoster || undefined"
+                              controls
+                              preload="metadata"
+                              @loadedmetadata="onMediaLoad"
+                            />
+                            <p v-else class="msg-flip-answer-text">
+                              {{ message.text }}
+                            </p>
+                          </div>
+                          <div class="msg-flip-ask">
+                            <span class="msg-flip-ask-tag">{{ message.quote.nick }}</span>
+                            <p class="msg-flip-ask-text">
+                              {{ message.quote.text }}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div
+                          v-else
                           class="msg-bubble"
                           :class="{
                             'msg-bubble--media': message.imageUrl || message.audioUrl || message.videoUrl,
@@ -691,10 +969,21 @@ onMounted(() => {
                             hide-on-click-modal
                             @load="onMediaLoad"
                             @error="onMediaLoad"
-                          />
+                          >
+                            <!-- 预览工具条：EP 默认那排没有下载，整排自绘后追加一项（见 ImageViewerToolbar） -->
+                            <template #toolbar="{ actions, reset, activeIndex }">
+                              <ImageViewerToolbar
+                                :actions="actions"
+                                :reset="reset"
+                                :urls="[message.imageUrl]"
+                                :active-index="activeIndex"
+                              />
+                            </template>
+                          </el-image>
                           <template v-else-if="message.audioUrl">
                             <RoomVoiceBar :src="message.audioUrl" />
-                            <p v-if="message.text && message.text !== '[语音回复消息]'" class="msg-media-text">
+                            <!-- 语音条本身就是内容，类型占位文案不再补一行；回复消息的真实正文（非占位）仍要展示 -->
+                            <p v-if="!isPlaceholderText(message.text)" class="msg-media-text">
                               {{ message.text }}
                             </p>
                           </template>
@@ -770,7 +1059,22 @@ onMounted(() => {
                             </span>
                           </button>
                           <template v-else>
-                            {{ message.text }}
+                            <!-- 正文：超长的先收起（由 measureLongText 量出高度登记），末行渐隐提示还有内容 -->
+                            <div
+                              class="msg-text"
+                              :class="{ 'is-clamped': isLongTextClamped(message.id) }"
+                              :data-msg-id="message.id"
+                            >
+                              {{ message.text }}
+                            </div>
+                            <button
+                              v-if="longTextIds.has(message.id)"
+                              type="button"
+                              class="msg-text-toggle"
+                              @click="toggleLongText(message.id)"
+                            >
+                              {{ isLongTextClamped(message.id) ? '展开全文' : '收起' }}
+                            </button>
                           </template>
                         </div>
                       </div>
@@ -866,6 +1170,16 @@ onMounted(() => {
                 </el-icon>
                 {{ newCount }} 条新消息
               </button>
+
+              <!-- 消息右键菜单（Teleport 到 body 定位在光标处）：复制正文 / 媒体直链 -->
+              <RoomMessageMenu
+                v-if="menu"
+                :x="menu.x"
+                :y="menu.y"
+                :items="menuItems"
+                @pick="onMenuPick"
+                @close="closeMenu"
+              />
             </section>
 
             <aside class="rooms-aside detail-scroll">
@@ -1029,6 +1343,56 @@ onMounted(() => {
   padding: 0 8px 12px;
 }
 
+/* 条目外层：关闭钮的定位基准（关闭钮不能嵌在 <button> 条目里） */
+.room-wrap {
+  position: relative;
+
+  /* 临时条目右侧留出关闭钮的位置，昵称与预览不会压到按钮底下 */
+  &.is-temp .room-meta {
+    padding-right: 18px;
+  }
+}
+
+/* 关闭临时房间：压在条目右上，悬浮显示、正看着时常驻。
+ * 用 visibility 而非只靠 opacity：不可见时同时屏蔽命中，不留点得到的隐形按钮 */
+.room-temp-close {
+  position: absolute;
+  top: 7px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: var(--el-text-color-secondary);
+  background: var(--el-bg-color);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.18s ease,
+    visibility 0s linear 0.18s,
+    color 0.15s ease,
+    background-color 0.15s ease;
+
+  .room-wrap:hover &,
+  .room-wrap:focus-within &,
+  .room-item.is-active ~ & {
+    opacity: 1;
+    visibility: visible;
+    transition-delay: 0s;
+  }
+
+  &:hover {
+    color: #fff;
+    background: var(--el-color-danger);
+  }
+}
+
 .room-item {
   display: flex;
   align-items: center;
@@ -1136,6 +1500,20 @@ onMounted(() => {
   line-height: 16px;
   color: var(--tb-color, var(--brand-primary));
   background: color-mix(in srgb, var(--tb-color, var(--brand-primary)) 12%, transparent);
+}
+
+/* 「临时」标记（左列条目与右栏头部共用）：造型与 .room-team 同规格，换房间主题青 + 描边，
+ * 一眼与「关注房间」区分开——它不会在下次进页面时还在 */
+.room-temp-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--color-rooms);
+  background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 34%, transparent);
 }
 
 /* 左列预览：频道最新一条消息（批量接口一次拉全，选中房间轮询到时本地即时补） */
@@ -1497,6 +1875,12 @@ onMounted(() => {
   --msg-radius: 14px;
   --msg-radius-sm: 6px;
   --msg-radius-inner: calc(var(--msg-radius) - 4px);
+
+  /* 礼物金：底色保持淡金，文字压深一半 —— 原 #ffd479 / #e8b84b 是深底弹幕沿用的亮金，
+   * 叠在浅色底上只有 1.4:1 / 1.9:1，粉丝送礼的昵称与正文基本读不出来 */
+  --msg-gift-ink: color-mix(in srgb, var(--el-color-warning) 50%, #000);
+  /* 到达高亮时长由页面按 ARRIVE_FLASH_MS 注入：动画与类的移除同一节拍 */
+  --arrive-flash: 1200ms;
 }
 
 /* 加载更早历史：贴在消息流顶部的状态行（滚动到顶自动触发，不再有按钮） */
@@ -1516,10 +1900,12 @@ onMounted(() => {
 
 /* ===== 聊天气泡卡片 ===== */
 .msg-row {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;
   padding: 5px 2px;
+  border-radius: var(--radius-sm);
 }
 
 .msg-avatar {
@@ -1548,6 +1934,7 @@ onMounted(() => {
 }
 
 .msg-meta {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1565,7 +1952,7 @@ onMounted(() => {
 
 /* 作者名色调按消息类型区分（与浮窗气泡层同语义）：礼物 → 金；系统（禁言/关闭通知）→ 弱化 */
 .msg-row--gift .msg-nick {
-  color: #ffd479;
+  color: var(--msg-gift-ink);
 }
 
 .msg-row--system .msg-nick {
@@ -1594,6 +1981,56 @@ onMounted(() => {
   color: var(--el-text-color-placeholder);
 }
 
+/* hover 复制按钮：绝对定位压在时间戳上，不占位（否则每行的时刻都会向左缩一格）；
+ * 自身有底色与描边，盖住时刻仍看得清。默认不可点，避免点到隐形按钮 */
+.msg-copy {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-xs);
+  color: var(--el-text-color-secondary);
+  background: var(--el-bg-color);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+
+  &:hover {
+    color: var(--brand-primary);
+    border-color: color-mix(in srgb, var(--brand-primary) 40%, var(--el-border-color-lighter));
+  }
+}
+
+.msg-row:hover .msg-copy,
+.msg-copy:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 按钮正好铺在时刻那一格上：显示时把时刻让开（保留占位），
+ * 否则会从按钮边上露出半截时间戳，看着像渲染坏了 */
+.msg-row:hover .msg-time,
+.msg-row:focus-within .msg-time {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-copy {
+    transition: none;
+  }
+}
+
 .msg-bubble {
   display: inline-block;
   max-width: 100%;
@@ -1608,8 +2045,8 @@ onMounted(() => {
 }
 
 .msg-row--gift .msg-bubble {
-  color: #e8b84b;
-  background: rgba(255, 212, 121, 0.12);
+  color: var(--msg-gift-ink);
+  background: color-mix(in srgb, var(--el-color-warning) 14%, transparent);
 }
 
 /* 成员（xox）消息整卡提亮：房间页的主角是成员发言，与普通用户气泡拉开层级。
@@ -1628,6 +2065,33 @@ onMounted(() => {
     color: var(--el-text-color-primary);
     background: color-mix(in srgb, var(--color-rooms) 12%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 30%, transparent);
+  }
+}
+
+/* ===== 长文折叠：成员小作文超过 10 行先收起来 ===== */
+/* 收起态用 max-height 截断（而非 line-clamp）：scrollHeight 仍报完整内容高度，
+ * measureLongText 才能反复量出「超长」而不来回抖动。行数由页面按 COLLAPSE_LINES 注入 */
+.msg-text.is-clamped {
+  max-height: calc(1.6em * var(--collapse-lines, 10));
+  overflow: hidden;
+  /* 末行渐隐，提示下面还有内容 */
+  mask-image: linear-gradient(180deg, #000 74%, transparent);
+}
+
+.msg-text-toggle {
+  display: block;
+  padding: 2px 0 0;
+  border: none;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  /* 房间青在浅底上太浅，压深才够读（与礼物金同一套处理） */
+  color: color-mix(in srgb, var(--color-rooms) 60%, #000);
+  background: none;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
   }
 }
 
@@ -1670,7 +2134,82 @@ onMounted(() => {
 
 /* 被引用的是礼物消息：摘要文案用礼物金（与礼物气泡同色系） */
 .msg-quote--gift .msg-quote-text {
-  color: #e8b84b;
+  color: var(--msg-gift-ink);
+}
+
+/* ===== 翻牌卡：成员回答（上）+ 粉丝提问（下），中间一条分隔线 =====
+   翻牌不是回复某条消息，而是成员对粉丝提问的公开回答，所以不复用引用块：
+   自带卡片外壳，回答在上（主内容）、被翻提问在下（完整展开）。 */
+.msg-flip {
+  display: flex;
+  flex-direction: column;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  /* 收角一侧与头像同向，其余三面取气泡大档——与同层级的消息气泡对齐 */
+  border-radius: var(--radius-xs) var(--msg-radius) var(--msg-radius) var(--msg-radius);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+  background: var(--el-fill-color-lighter);
+  /* 描边用 inset 阴影而非 border：配合 overflow 裁圆角不会在四角留缺口 */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 24%, transparent);
+}
+
+/* 上半：成员的回答（文字 / 语音条 / 视频），整宽展示 */
+.msg-flip-answer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 8px 12px;
+  color: var(--el-text-color-primary);
+
+  /* 卡片宽度由内容决定（fit-content），媒体块按百分比铺满时不能再向外撑 */
+  video {
+    max-width: 100%;
+    /* 与卡片同心：外角取同心内角，否则画面圆角会贴着卡片圆角"各转各的" */
+    border-radius: var(--msg-radius-inner);
+  }
+}
+
+.msg-flip-answer-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 下半：被翻的粉丝提问。原样完整展示，不截断；底衬压一档读起来是「背景信息」 */
+.msg-flip-ask {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 12px;
+  /* 分隔线同样走 inset 阴影：border 会在卡片圆角处被裁出缺口。
+   * 颜色取「房间色混进主题描边」，和卡片外圈、提问药丸同一套强调色，明暗主题都稳 */
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-rooms) 30%, var(--el-border-color-lighter));
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light);
+}
+
+.msg-flip-ask-tag {
+  flex: none;
+  /* 提问可能占多行，标签始终贴在首行 */
+  margin-top: 3px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  color: var(--color-rooms);
+  background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
+}
+
+.msg-flip-ask-text {
+  min-width: 0;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ===== 直播/回放分享卡：竖排小卡（LiveItem 同构）——16:9 封面 + 角标叠封面 + 标题 + 时间/动作 ===== */
@@ -1914,6 +2453,58 @@ onMounted(() => {
   color: var(--el-color-warning);
   background: var(--el-color-warning-light-9);
   box-shadow: inset 0 0 0 1px var(--el-color-warning-light-5);
+}
+
+/* ===== 新消息到达：一次性高亮（只贴底时挂上）=====
+ * 底色渐隐 + 左侧细条，一眼看出「刚进来这几条」；上翻浏览时不挂，交给浮标计数。
+ * prefers-reduced-motion 下动画关掉、退化为静态细条 —— 不用动效也仍有位置提示 */
+.msg-row.is-arriving {
+  animation: msg-arrive-flash var(--arrive-flash) ease-out both;
+}
+
+.msg-row.is-arriving::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: -7px;
+  width: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--color-rooms);
+  animation: msg-arrive-bar var(--arrive-flash) ease-out both;
+}
+
+@keyframes msg-arrive-flash {
+  from {
+    background-color: color-mix(in srgb, var(--color-rooms) 13%, transparent);
+  }
+
+  to {
+    background-color: transparent;
+  }
+}
+
+@keyframes msg-arrive-bar {
+  0% {
+    opacity: 0;
+    transform: scaleY(0.4);
+  }
+
+  22% {
+    opacity: 1;
+    transform: none;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-row.is-arriving,
+  .msg-row.is-arriving::before {
+    animation: none;
+  }
 }
 
 /* 上翻历史时收到新消息的浮标：悬在聊天区右下角 */

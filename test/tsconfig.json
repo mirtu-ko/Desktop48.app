@@ -1,0 +1,12 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
+  "compilerOptions": {
+    "paths": {
+      "@renderer/*": ["../src/renderer/src/*"],
+      "@common/*": ["../src/common/*"],
+      "@preload/*": ["../src/preload/*"]
+    },
+    "types": ["node"]
+  },
+  "include": ["**/*", "../src/renderer/src/env.d.ts"]
+}

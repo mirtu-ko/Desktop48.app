@@ -22,8 +22,8 @@ vi.mock('node:fs', () => ({ existsSync: existsSyncMock }))
 
 // 纯 Node 环境没有 process.resourcesPath（Electron 才注入），
 // 而 resolveUpdaterSupport 会拿它拼 app-update.yml 路径 —— path.join(undefined) 直接抛。
-// 补一个非空值即可，真实取值与断言语义无关。
-process.resourcesPath = 'C:\\fake\\resources'
+// 补一个非空值即可，真实取值与断言语义无关；该属性只读，与下面的 platform 一样走 defineProperty。
+Object.defineProperty(process, 'resourcesPath', { value: 'C:\\fake\\resources', configurable: true })
 
 // resolveUpdaterSupport 对 darwin 有一票否决（macOS 未签名/公证，整条链路直接判不支持），
 // 在 mac 上跑会让下面所有用例短路成 unsupported、checkForUpdates 一次都不发生。

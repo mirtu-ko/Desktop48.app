@@ -9,10 +9,11 @@
  * 成员数据见 main/data.ts，任务快照见 main/ffmpeg/task-registry.ts，
  * 成员树见 main/domain/member-tree.ts（buildMemberTree）。
  */
-import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { LiveDanmaku } from '../common/live-danmaku'
-import type { MemberFlag, MemberFlagKind } from '../common/member-flags'
+import type { AppConfig, ConfigKey } from '@common/app-config'
+import type { LiveDanmaku } from '@common/live-danmaku'
+import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
 import type { AllMemberItem, MemberDataContent, StarAdjunctItem, StarInfoItem } from '../main/data'
+import type { FfmpegProblem, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
 
 // 网络请求参数（对端：main/ipc/register-system-ipc.ts；body 为序列化后的字符串）
@@ -323,6 +324,8 @@ export type TaskChannelPrefix = 'downloadTask' | 'recordTask'
 
 // 类型随契约一起暴露：preload 的事件订阅签名与渲染端 stores/tasks.ts 都要用它
 export type { TaskSnapshot }
+// FFmpeg 环境状态与原因枚举随契约暴露：渲染层的启动门禁/设置页/下载前校验共用同一判定结果
+export type { FfmpegProblem, FfmpegStatus }
 
 interface StaticIpcInvokeMap {
   netRequest: InvokeSpec<[options: NetRequestOptions], string>
@@ -342,7 +345,8 @@ interface StaticIpcInvokeMap {
   openPath: InvokeSpec<[filePath: string], void>
   selectDirectory: InvokeSpec<[], string | null>
   pathJoin: InvokeSpec<[...paths: string[]], string>
-  checkFfmpegBinaries: InvokeSpec<[dir: string], boolean>
+  /** FFmpeg 环境状态：省略 dir 时校验当前生效配置，传入时校验指定目录（选择/下载后的即时校验） */
+  getFfmpegStatus: InvokeSpec<[dir?: string], FfmpegStatus>
   downloadFfmpeg: InvokeSpec<[], string>
   createLiveStream: InvokeSpec<[rtmpUrl: string, liveId: string], LiveStreamSession>
   stopLiveStream: InvokeSpec<[liveId: string], void>

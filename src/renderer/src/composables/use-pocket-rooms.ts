@@ -4,6 +4,8 @@
  * 数据来源（与参考实现 yk1z/yaya_msg 同思路，落地在 desktop48 既有管道上）：
  * - 关注名单：口袋账号关注 ID（friendships/friends/id，只给 ID）∪ 本地关注名单，
  *   成员详情（头像/昵称/队伍）由本地成员目录反查——接口本身不返回这些；
+ *   被屏蔽的成员从这份并集里整体剔除（屏蔽优先，见 loadFollowedIds），
+ *   屏蔽名单变化时左列条目就地摘除、右侧消息流一并收起（见 watch(blockedMembers)）；
  * - 房间频道：im/server/jump（starId=成员 userId）解析出 team server + channel，
  *   即口袋 App「房间」tab 里该成员的留言频道。解析不出频道 = 成员没有房间
  *   （含房间已关闭/被回收：同样解析不出频道，一并过滤，进不了列表）；
@@ -12,6 +14,9 @@
  *   对应「只看房主 / 全部消息」两档范围；homeowner 会混入官方系统账号，已过滤。
  *   参考实现的实时推送走 QChat 长连接（另一套 NIM 协议），本版本以轮询替代，
  *   覆盖「查看房间消息」场景——注意与浮窗播放器的直播间弹幕是两套体系。
+ * - 临时房间：成员详情卡底栏入口经 `/rooms?member=<userId>` 带进来的成员，可能不在关注
+ *   名单里，只活在本次会话内存中（见 openTemporaryRoom / closeTemporaryRoom），
+ *   频道解析缓存见 services/room-channel.ts。
  *
  * 失败一律静默降级：频道解析/消息拉取失败只影响右侧消息区，左侧列表照常可用；
  * 唯一例外是 token 失效（重新登录才能恢复），直接上抛让整页报错。
@@ -20,17 +25,20 @@ import type { PocketRoomChannel, PocketRoomLastMessage, PocketRoomQuestion } fro
 import type { LiveListItem } from '@renderer/services/api-types'
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import { OFFICIAL_POCKET_USER_ID } from '@common/pocket-rooms'
+import { resolveMemberRoomChannel } from '@renderer/services/room-channel'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
-import { useFollowedMembersStore } from '@renderer/stores/member-flags'
+import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { pocketAuthState, refreshPocketAuthState } from '@renderer/stores/pocket-auth'
+import { unreadCountOf, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import { debugLog } from '@renderer/utils/debug'
 
 import { liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview } from '@renderer/utils/pocket-room-message'
+import { isSmallRoomUnlocked, markSmallRoomUnlocked } from '@renderer/utils/small-room-unlock'
 import Tools from '@renderer/utils/tools'
 import { useIntervalFn } from '@vueuse/core'
-import { computed, getCurrentInstance, onActivated, onDeactivated, onScopeDispose, reactive, ref, watch } from 'vue'
+import { computed, getCurrentInstance, onActivated, onDeactivated, onScopeDispose, ref, watch } from 'vue'
 
 /** 左侧房间条目 */
 export interface PocketRoom {
@@ -51,6 +59,11 @@ export interface PocketRoom {
   previewTime: number
   /** 匹配到的在直播；null = 未开播（房间留言流与直播与否无关，仍可查看） */
   live: LiveListItem | null
+  /**
+   * 临时房间（成员详情卡入口带过来的）：成员不在关注名单里，只活在本次会话内存中，
+   * 不写关注名单、不落盘，撤掉条目即消失。见 openTemporaryRoom。
+   */
+  temporary?: boolean
 }
 
 /** 右侧消息区状态 */
@@ -99,7 +112,11 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: 
 
 export function usePocketRooms() {
   const { refreshFollowedMembers, followedMembers } = useFollowedMembersStore()
+  /** 屏蔽名单（本地可见性偏好，与关注正交）：左列过滤 + 条目的就地摘除都读这一份 */
+  const { blockedMembers, ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
   const { findMemberByUserId } = useMemberDirectoryStore()
+  /** 未读镜像（主进程唯一真相）：左列排序与角标共用同一判据，见 sortRooms */
+  const { unreadRooms } = usePocketUnreadStore()
   const {
     liveByUserId,
     liveIdSet,
@@ -125,6 +142,11 @@ export function usePocketRooms() {
   const hiddenRoomCount = ref(0)
   /** 是否已登录（登录态镜像；未登录时页面展示登录引导） */
   const loggedIn = computed(() => pocketAuthState.value.loggedIn)
+  /**
+   * 临时房间：成员详情卡底栏入口经路由 query 带过来的成员（可能不在关注名单里）。
+   * 只活在本次会话的内存中，不进关注名单、不落盘；撤掉条目即消失（见 closeTemporaryRoom）。
+   */
+  const temporaryRoom = ref<PocketRoom | null>(null)
 
   const selectedUserId = ref<number | null>(null)
   const messages = ref<PocketRoomMessageView[]>([])
@@ -156,28 +178,20 @@ export function usePocketRooms() {
   const channelNames = ref<{ serverId: string, map: Map<string, string> }>({ serverId: '', map: new Map() })
   /** serverId → 频道名表缓存（含空表：接口通了但没给名字，不重复打接口） */
   const serverChannelNameCache = new Map<string, Map<string, string>>()
-  /**
-   * 本次会话内已通过暗号的小房间（channelId 为键）；解锁状态只存客户端内存，
-   * 重启后重新校验一次。
-   *
-   * 必须是 reactive 而非裸 Set：`smallRequiresAnswer` 是 computed，靠 `.has()` 收集依赖，
-   * 裸 Set 的增删不触发重算——解锁后页签上的锁与消息范围开关会一直停在锁定态
-   * （消息区分支在模板里靠前，把锁定层盖住了，所以现象只露在页签的锁上）。
-   */
-  const unlockedSmallChannels = reactive(new Set<string>())
   /** 当前小房间的暗号问题（channelId → 问题缓存，含 null：room/info 未被拦，即无门禁） */
   const smallQuestion = ref<PocketRoomQuestion | null>(null)
   const smallQuestionLoading = ref(false)
   const smallQuestionCache = new Map<string, PocketRoomQuestion | null>()
   /**
-   * 小房间是否需要暗号：已发现频道 + 确认被暗号拦下（拿到问题）+ 本次会话未解锁。
+   * 小房间是否需要暗号：已发现频道 + 确认被暗号拦下（拿到问题）+ 本进程未解锁。
+   * 解锁态在 utils/small-room-unlock.ts（模块级，页面层重建不丢）；
    * 刻意与当前视图解耦——页签上的锁要在大房间视图下同样可见，
    * 否则「需要暗号」这件事只在切过去之后才暴露。
    */
   const smallRequiresAnswer = computed(() =>
     !!smallChannel.value
     && smallQuestion.value !== null
-    && !unlockedSmallChannels.has(smallChannel.value.channelId),
+    && !isSmallRoomUnlocked(smallChannel.value.channelId),
   )
   /** 暗号输入层是否展示：当前在小房间视图且该频道仍被暗号拦着 */
   const smallLocked = computed(() => viewMode.value === 'small' && smallRequiresAnswer.value)
@@ -222,8 +236,15 @@ export function usePocketRooms() {
     }
   }
 
-  /** 口袋关注 ID ∪ 本地关注 ID（本地含桌面端手动关注与历史合并结果） */
+  /**
+   * 左列成员：口袋关注 ID ∪ 本地关注 ID − 屏蔽名单。
+   *
+   * 减去屏蔽名单是「屏蔽优先」在房间页的落点：关注与屏蔽正交（见 composables/use-member-actions），
+   * 账号关注照旧存在，但被屏蔽的成员不进左列——也就不必为它解析房间频道。
+   */
   async function loadFollowedIds(): Promise<number[]> {
+    // 屏蔽名单必须先就位：isBlocked 在未加载的空名单上恒为 false，漏加载等于放行被屏蔽成员
+    await ensureBlockedLoaded()
     // 首灌走 refresh 而非 ensureLoaded：store 是模块级单例，ensureLoaded 命中后
     // 不再重拉，页面首灌要的是「此刻」的名单（设置页/成员页改过关注后开页即生效）
     const [pocketIds, localEntries] = await Promise.all([
@@ -233,7 +254,7 @@ export function usePocketRooms() {
     const ids = new Set<number>()
     for (const id of [...pocketIds, ...localEntries.map(entry => entry.userId)]) {
       const userId = Tools.normalizeUserId(id)
-      if (Number.isFinite(userId) && userId > 0)
+      if (Number.isFinite(userId) && userId > 0 && !isBlocked(userId))
         ids.add(userId)
     }
     return [...ids]
@@ -245,11 +266,40 @@ export function usePocketRooms() {
     return liveByUserId.value
   }
 
-  /** 在直播的排前面，其余按昵称排序——「谁的房间开着」是第一眼信息 */
+  /**
+   * 上次排序时「有未读」的成员集合：未读快照变化时据此判断要不要重排，
+   * 见下方 watch(unreadRooms)。
+   */
+  let sortedUnreadIds = new Set<number>()
+
+  /** 取列表中「有未读」的成员；判据与左列角标一致（大房间 + 小房间合计 > 0） */
+  function collectUnreadIds(list: PocketRoom[]): Set<number> {
+    const ids = new Set<number>()
+    for (const room of list) {
+      if (unreadCountOf(room.userId) > 0)
+        ids.add(room.userId)
+    }
+    return ids
+  }
+
+  /**
+   * 左列排序，四级判据：
+   * 1. 临时房间恒置顶（用户刚点进来的那个，要第一眼看到）；
+   * 2. 有未读的排在没未读的前面——「谁的房间有新消息」是第一眼信息；
+   * 3. 其次是在直播的——「谁的房间开着」是第二眼信息；
+   * 4. 同档按昵称 localeCompare('zh')。
+   *
+   * 未读判据取大房间 + 小房间合计（与左列角标同源），不是只看大房间：
+   * 左列条目上只有一个角标，排序与它不一致会自相矛盾。
+   */
   function sortRooms(list: PocketRoom[]) {
     list.sort((a, b) =>
-      Number(!!b.live) - Number(!!a.live) || a.nickname.localeCompare(b.nickname, 'zh'),
+      Number(!!b.temporary) - Number(!!a.temporary)
+      || Number(unreadCountOf(b.userId) > 0) - Number(unreadCountOf(a.userId) > 0)
+      || Number(!!b.live) - Number(!!a.live)
+      || a.nickname.localeCompare(b.nickname, 'zh'),
     )
+    sortedUnreadIds = collectUnreadIds(list)
   }
 
   // 共享 store 更新后同步到当前房间列表；页面不再自己持有直播轮询定时器。
@@ -260,6 +310,47 @@ export function usePocketRooms() {
       room.live = liveMap.get(room.userId) ?? null
     sortRooms(rooms.value)
   }, { immediate: true })
+
+  /**
+   * 未读变化 → 重排左列（新消息浮上来），但**只在「新出现未读」时**重排。
+   *
+   * 读掉未读（进房即 markRead，本地乐观清零 + 主进程广播）不重排：那条正是用户刚点的，
+   * 当场把它从顶部抽走会让人以为点错了。条目的下沉留给下一次自然排序
+   * （重新进入页面 / 手动刷新 / 直播状态刷新），与「回到列表时名单已归位」的观感一致。
+   *
+   * 临时房间不在主进程未读检测范围内，对它这条 watch 是空转。
+   */
+  watch(unreadRooms, () => {
+    if (!rooms.value.length)
+      return
+    const next = collectUnreadIds(rooms.value)
+    if ([...next].some(userId => !sortedUnreadIds.has(userId)))
+      sortRooms(rooms.value)
+    else
+      sortedUnreadIds = next
+  })
+
+  /**
+   * 屏蔽名单变化 → 就地摘掉对应条目，不等下一次首灌。
+   *
+   * 屏蔽入口在成员页卡片与三处详情抽屉（成员 / 直播 / 回放），都可能在房间页挂在
+   * keep-alive 后台时发生；只在 load() 里过滤的话，用户切回来看到的仍是旧列表。
+   * 临时条目除外：那是用户从成员详情卡主动打开的，显式意图压过屏蔽。
+   */
+  watch(blockedMembers, () => {
+    if (!rooms.value.length)
+      return
+    const next = rooms.value.filter(room => room.temporary || !isBlocked(room.userId))
+    if (next.length === rooms.value.length)
+      return
+    rooms.value = next
+    sortedUnreadIds = collectUnreadIds(next)
+    // 正看着的成员被屏蔽：右侧消息流一并收起
+    if (selectedUserId.value !== null && !next.some(room => room.userId === selectedUserId.value)) {
+      selectedUserId.value = null
+      clearChat()
+    }
+  })
 
   /** 批量最新消息 → channelId → 消息；失败返回空 Map（预览静默降级，不影响房间可用） */
   async function fetchLastMessageMap(serverIds: string[]): Promise<Map<string, PocketRoomLastMessage>> {
@@ -396,6 +487,9 @@ export function usePocketRooms() {
 
       sortRooms(nextRooms)
       rooms.value = nextRooms
+      // 临时房间不在关注名单里，重建列表会把它的条目一起冲掉：这里重新并入。
+      // 必须早于下面的选中复核 —— 用户正看着的可能就是它
+      insertTemporaryRoom()
       // 选中项已不在列表（取关/刷新/房间被过滤）时清空右侧；仍在则保持选中（消息流不动）
       const stillSelected = rooms.value.some(room => room.userId === selectedUserId.value)
       if (!stillSelected && selectedUserId.value !== null) {
@@ -639,7 +733,7 @@ export function usePocketRooms() {
       const result = await window.mainAPI.pocketCheckRoomAnswer(channel.channelId, question?.questionId ?? '', answer)
       if (!result.ok)
         return { ok: false, message: result.message || '暗号不正确' }
-      unlockedSmallChannels.add(channel.channelId)
+      markSmallRoomUnlocked(channel.channelId)
       clearChat()
       await openChannel(userId, channel)
       return { ok: true }
@@ -722,6 +816,82 @@ export function usePocketRooms() {
     void ensureChannelNames(channel.serverId)
 
     await openChannel(userId, channel)
+  }
+
+  /**
+   * 把临时房间并入左列：置顶（见 sortRooms），已在关注列表里则就地撤掉临时条目
+   * ——同一成员两条会重复，关注条目已覆盖它。
+   */
+  function insertTemporaryRoom() {
+    const temp = temporaryRoom.value
+    if (!temp)
+      return
+    if (rooms.value.some(room => room.userId === temp.userId)) {
+      temporaryRoom.value = null
+      return
+    }
+    rooms.value = [temp, ...rooms.value]
+    sortRooms(rooms.value)
+  }
+
+  /** 撤掉临时房间（左列关掉按钮 / 路由 query 消失）：正看着它就一并清空右侧消息区 */
+  function closeTemporaryRoom() {
+    const temp = temporaryRoom.value
+    if (!temp)
+      return
+    temporaryRoom.value = null
+    rooms.value = rooms.value.filter(room => room !== temp)
+    if (selectedUserId.value === temp.userId) {
+      selectedUserId.value = null
+      clearChat()
+    }
+  }
+
+  /**
+   * 临时打开某成员的大房间（成员详情卡入口 → 路由 query 的唯一入口）。
+   *
+   * 与关注房间的区别只在「条目从哪来」：不改关注名单、不落盘。频道经
+   * services/room-channel 解析（与入口显隐共用同一份缓存），拿到后并入列表并走
+   * selectRoom 的同一条链路（小房间发现 / 频道名 / 首屏 / 轮询）。
+   * 已关注成员不建临时条目——左列本来就有它。
+   */
+  async function openTemporaryRoom(userId: number): Promise<{ ok: boolean, message?: string }> {
+    // 必须等登录态落库：否则冷启动首帧会被误判成「未登录」而拒绝打开
+    await refreshPocketAuthState()
+    if (!pocketAuthState.value.loggedIn)
+      return { ok: false, message: '登录口袋48账号后才能查看房间' }
+
+    const channel = await resolveMemberRoomChannel(userId)
+    if (!channel)
+      return { ok: false, message: '未查询到该成员的大房间' }
+
+    // 频道入册：selectRoom 命中缓存即不再打一次 jump
+    channelCache.set(userId, channel)
+
+    if (rooms.value.some(room => room.userId === userId)) {
+      temporaryRoom.value = null
+      await selectRoom(userId)
+      return { ok: true }
+    }
+
+    // 成员详情由本地名录反查（与关注房间同口径）；查不到降级为口袋昵称，不阻断打开
+    const member = await findMemberByUserId(userId).catch(() => null)
+    temporaryRoom.value = {
+      userId,
+      nickname: member?.realName || member?.nickname || `口袋用户 ${userId}`,
+      avatar: member?.avatar || '',
+      teamName: member?.teamName || '',
+      teamColor: member?.teamColor || '',
+      serverId: channel.serverId,
+      channelId: channel.channelId,
+      preview: '',
+      previewTime: 0,
+      live: liveByUserId.value.get(userId) ?? null,
+      temporary: true,
+    }
+    insertTemporaryRoom()
+    await selectRoom(userId)
+    return { ok: true }
   }
 
   /**
@@ -920,6 +1090,7 @@ export function usePocketRooms() {
     loggedIn,
     selectedUserId,
     selectedRoom,
+    temporaryRoom,
     messages,
     messageScope,
     viewMode,
@@ -941,6 +1112,8 @@ export function usePocketRooms() {
     selectRoom,
     setViewMode,
     unlockSmall,
+    openTemporaryRoom,
+    closeTemporaryRoom,
 
     loadMoreHistory,
     openSharedLive,

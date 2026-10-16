@@ -1,16 +1,16 @@
+import type { WindowSize } from '@common/float-window'
+import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 /**
  * 独立播放窗口（直播 / 回放）的生命周期管理：
  * 按 `kind:liveId` 去重，窗口引用与载荷在此集中持有，渲染端经 floatPlayerGetPayload 回取。
  * 窗口控制通道由 register-window-ipc.ts 按 event.sender 定位，本模块不重复注册。
  */
 import type { WebContents } from 'electron'
-import type { WindowSize } from '../common/float-window'
-import type { FloatPlayerKind, FloatPlayerPayload } from '../preload/ipc-contract'
 import { fileURLToPath } from 'node:url'
+import { computeInitialWindowSize, decideAutoFit, FLOAT_DEFAULT_ASPECT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, FLOAT_WINDOW_HASH_PATH, resolveFloatWindowPosition } from '@common/float-window'
 import { is } from '@electron-toolkit/utils'
 import { BrowserWindow, screen, shell } from 'electron'
 import icon from '../../resources/icon.png?asset'
-import { computeInitialWindowSize, decideAutoFit, FLOAT_DEFAULT_ASPECT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, FLOAT_WINDOW_HASH_PATH, resolveFloatWindowPosition } from '../common/float-window'
 import { log } from './logger'
 import { wireWindowMaximizeEvents } from './window-events'
 

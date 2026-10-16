@@ -5,8 +5,8 @@
  * 同一聊天室多个窗口共用一条连接，渲染层按 chatroomId 过滤事件批次。
  * 凭据（accid + imToken）由主进程内部取用，渲染层接触不到。
  */
+import type { PocketDanmakuStatus, PocketRawChatMessage } from '@preload/ipc-contract'
 import type { WebContents } from 'electron'
-import type { PocketDanmakuStatus, PocketRawChatMessage } from '../../preload/ipc-contract'
 import { sendIpc } from '../ipc/send'
 import { debug, error } from '../logger'
 import { NimChatroomClient } from './nim-chatroom'

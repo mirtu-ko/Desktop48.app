@@ -205,17 +205,20 @@ onUnmounted(() => {
 
     <div class="live-main">
       <!-- 空态灵动岛：脱离滚动流，固定在页面顶部 -->
-      <div v-if="liveList.length === 0 && !loading" class="idle-head" role="status">
+      <div v-if="liveList.length === 0 && !loading" class="idle-head frosted-surface" role="status">
         <span class="idle-dot" aria-hidden="true" />
         <div class="idle-head-main">
           <p class="idle-title">
             当前没有直播
           </p>
           <p class="idle-sub">
-            {{ waitedText }} · 每 120 秒自动检查，一开播立刻出现在这里
+            监控中，每 120 秒自动刷新检查
           </p>
         </div>
-        <span class="idle-check">上次检查 {{ lastCheckText }}</span>
+        <div class="idle-meta">
+          <span class="idle-waited">{{ waitedText }}</span>
+          <span class="idle-check">上次检查 {{ lastCheckText }}</span>
+        </div>
       </div>
       <!-- 首屏骨架：比全屏 loading 蒙层更稳定，能预先表达卡片布局和即将出现的内容 -->
       <el-scrollbar
@@ -352,6 +355,9 @@ onUnmounted(() => {
   padding: var(--page-pad);
 }
 
+/* 空态灵动岛：与左上 FloatingTabBar / 右上 FloatingRefreshDock 同用 .frosted-surface
+ * 浅色玻璃，三件套同在顶部才是一套观感；这里只负责布局、文字层级与直播语义色点缀。
+ * 定位脱离滚动流：列表为空时居中悬浮，不占文档流 */
 .idle-head {
   position: absolute;
   top: 12px;
@@ -360,25 +366,30 @@ onUnmounted(() => {
   transform: translateX(-50%);
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   max-width: calc(100% - 32px);
-  padding: 8px 16px;
+  padding: 10px 18px;
   border-radius: var(--radius-pill);
-  background: rgba(18, 18, 22, 0.68);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-    0 14px 30px -18px rgba(0, 0, 0, 0.42);
-  backdrop-filter: blur(20px) saturate(170%);
+  animation: idle-head-in 0.32s ease-out;
 
+  /* 直播语义色呼吸点：静态柔光底 + 雷达扩散圈，表达「正在自动检查开播」而非纯装饰 */
   .idle-dot {
+    position: relative;
     flex: none;
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
-    background: #8ee7a6;
-    box-shadow: 0 0 10px rgba(142, 231, 166, 0.55);
-    animation: idle-dot-pulse 2.4s ease-in-out infinite;
+    background: var(--color-lives);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-lives) 14%, transparent);
+
+    &::after {
+      content: '';
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--color-lives) 32%, transparent);
+      animation: idle-dot-ping 2.4s ease-out infinite;
+    }
   }
 
   .idle-head-main {
@@ -387,43 +398,78 @@ onUnmounted(() => {
 
   .idle-title {
     margin: 0;
-    font-size: 14px;
-    font-weight: 500;
+    font-size: 13px;
+    font-weight: 600;
     line-height: 1.4;
-    color: rgba(255, 255, 255, 0.94);
+    color: var(--el-text-color-primary);
   }
 
   .idle-sub {
-    margin: 1px 0 0;
-    font-size: 10px;
+    margin: 2px 0 0;
+    font-size: 11px;
     line-height: 1.5;
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--el-text-color-secondary);
+  }
+
+  /* 右侧动态信息区：两行右对齐，与左侧标题/副题的高度节奏对齐，发丝线分隔 */
+  .idle-meta {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    padding-left: 14px;
+    border-left: 1px solid var(--el-border-color-lighter);
+  }
+
+  /* 已等待时长是唯一随时间跳动的值，用加深的直播玫红提亮：原色直接做文字对比度不足，混黑压深一档 */
+  .idle-waited {
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: color-mix(in srgb, var(--color-lives) 72%, #000);
+    white-space: nowrap;
   }
 
   .idle-check {
-    flex: none;
-    margin-left: 4px;
-    padding-left: 14px;
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.44);
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--el-text-color-placeholder);
+    white-space: nowrap;
   }
 }
 
-@keyframes idle-dot-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1.1);
+@keyframes idle-head-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
   }
-  50% {
-    opacity: 0.62;
-    transform: scale(0.9);
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes idle-dot-ping {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.6);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.9);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .idle-dot {
+  .idle-head {
+    animation: none;
+  }
+
+  .idle-dot::after {
+    opacity: 0;
     animation: none;
   }
 }

@@ -8,6 +8,7 @@ import {
   getRoomChannel,
   getRoomLastMessages,
   getRoomMessages,
+  getServerChannels,
   MASTER_PASSCODE,
   unfollowMember,
   verifyLogin,
@@ -20,14 +21,14 @@ import {
 
 /** 假 net 的响应分派表：key 为 URL 匹配串；networkError=true 时触发 request error */
 interface Env {
-  requests: Array<{ url: string, body: Record<string, unknown> }>
+  requests: Array<{ url: string, body: Record<string, unknown>, headers: Record<string, string> }>
   stored: Record<string, unknown> | null
   written: Record<string, unknown> | null
   replies: Record<string, { status?: number, body?: unknown, networkError?: boolean }>
 }
 
 const env = vi.hoisted(() => ({
-  requests: [] as Array<{ url: string, body: Record<string, unknown> }>,
+  requests: [] as Array<{ url: string, body: Record<string, unknown>, headers: Record<string, string> }>,
   stored: null as Record<string, unknown> | null,
   written: null as Record<string, unknown> | null,
   replies: {} as Record<string, { status?: number, body?: unknown, networkError?: boolean }>,
@@ -38,19 +39,20 @@ vi.mock('electron', () => {
   const request = (options: { url: string }) => {
     const responseHandlers: Array<(response: unknown) => void> = []
     const errorHandlers: Array<(error: Error) => void> = []
+    const headers: Record<string, string> = {}
     let body = ''
     return {
-      setHeader: vi.fn(),
+      setHeader: (key: string, value: string) => { headers[key] = value },
       write: (chunk: string) => { body += chunk },
       abort: vi.fn(),
-      on: (event: string, callback: (argument: never) => void) => {
+      on: (event: string, callback: (argument: unknown) => void) => {
         if (event === 'response')
           responseHandlers.push(callback)
         else if (event === 'error')
           errorHandlers.push(callback)
       },
       end: () => {
-        env.requests.push({ url: options.url, body: JSON.parse(body || '{}') })
+        env.requests.push({ url: options.url, body: JSON.parse(body || '{}'), headers: { ...headers } })
         const reply = Object.entries(env.replies).find(([key]) => options.url.includes(key))?.[1]
           ?? { status: 200, body: { success: true } }
         setTimeout(() => {
@@ -486,5 +488,61 @@ describe('pocket-auth checkRoomAnswer', () => {
   it('token 失效上抛，不吞成校验失败', async () => {
     env.replies[VERIFY] = { status: 200, body: { status: 401005, success: false } }
     await expect(checkRoomAnswer('40948216', '986', 'zzz9')).rejects.toThrow('登录已过期')
+  })
+})
+
+describe('pocket-auth 客户端身份（Android 档）', () => {
+  /** 取某个已发出请求的请求头；找不到即抛（比非空断言给出更清楚的失败原因） */
+  function headersOf(urlPart: string): Record<string, string> {
+    const found = env.requests.find(item => item.url.includes(urlPart))
+    if (!found)
+      throw new Error(`未发出请求：${urlPart}`)
+    return found.headers
+  }
+
+  it('主 App 与 seine 各取自己那份特征，平台均为 Android、设备 ID 同源同格式', async () => {
+    await getRoomChannel(10001)
+    await getServerChannels('1213951')
+
+    // 主 App（pocket48）档：Android UA + 带空格的 UTF-8 Content-Type（与 iOS 档的紧写形式不同）
+    const main = headersOf('im/api/v1/im/server/jump')
+    expect(main['User-Agent'])
+      .toBe('PocketFans201807/7.1.43_26082801 (23013RK75C:Android 14;Xiaomi UKQ1.231003.002 release-keys)')
+    expect(main['Content-Type']).toBe('application/json; charset=UTF-8')
+    const mainAppInfo = JSON.parse(main.appInfo)
+    expect(mainAppInfo).toMatchObject({
+      osType: 'android',
+      osVersion: '14',
+      appName: 'pocket48',
+      deviceName: '23013RK75C',
+    })
+    // Android 档设备 ID 是 16 位小写 hex，且与 IMEI 同值
+    expect(mainAppInfo.deviceId).toBe(mainAppInfo.IMEI)
+    expect(mainAppInfo.deviceId).toMatch(/^[0-9a-f]{16}$/)
+
+    // seine 档：独立客户端特征 + 专属 Device-Type 头
+    const seine = headersOf('im/api/seine/server/detail')
+    expect(seine['X-Custom-Device-Type']).toBe('ANDROID')
+    expect(seine['User-Agent'])
+      .toBe('PocketFans201807/1.3.4_26092001 (23013RK75C:Android 14;Xiaomi UKQ1.231003.002 release-keys)')
+    const seineAppInfo = JSON.parse(seine.appInfo)
+    expect(seineAppInfo).toMatchObject({
+      osType: 'android',
+      appName: 'seine48',
+      appVersion: '1.3.4',
+    })
+    // 同一台设备：两档共用一个设备 ID（身份唯一来源的意义所在）
+    expect(seineAppInfo.deviceId).toBe(mainAppInfo.deviceId)
+  })
+
+  it('两档特征都不自带 pa / token，由 postPocket 统一补（避免签名被覆盖）', async () => {
+    await getRoomChannel(10001)
+    await getServerChannels('1213951')
+    // 两个请求都带上了签名与 token（由调用方补）
+    for (const urlPart of ['im/api/v1/im/server/jump', 'im/api/seine/server/detail']) {
+      const headers = headersOf(urlPart)
+      expect(headers.pa).toBeTruthy()
+      expect(headers.token).toBe('test-token')
+    }
   })
 })

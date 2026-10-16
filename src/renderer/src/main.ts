@@ -4,6 +4,7 @@ import { createApp } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import FloatWindowApp from './components/floats/FloatWindowApp.vue'
+import { installSettingsRouter } from './composables/use-settings-nav'
 import routes from './routes'
 import { installFloatPlayers } from './stores/float-players'
 import { installTasks } from './stores/tasks'
@@ -33,6 +34,10 @@ else {
   })
 
   app.use(router).use(ElementPlus)
+
+  // 设置页跳转的全局 Router：开播校验等在组件之外触发（stores/float-players.ts 的
+  // openLive），拿不到组件实例上的 $router，只能由这里安装一次
+  installSettingsRouter(router)
 
   // 显式安装任务系统（早于任何组件 setup 订阅事件并恢复一次任务快照）：
   // 副作用集中在唯一入口，避免"import use-tasks 即触发"的隐式行为

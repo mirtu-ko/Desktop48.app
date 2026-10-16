@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { PocketVerifyResult } from '@preload/ipc-contract'
-import { Connection, Cpu, Document, Folder, Hide, Refresh, User, WarningFilled } from '@element-plus/icons-vue'
+import { Cpu, Document, Folder, Hide, Refresh, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
+import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
 import { useUpdater } from '@renderer/composables/use-updater'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
@@ -23,18 +24,30 @@ import { useRouter } from 'vue-router'
 
 const router = useRouter()
 
-// 配置三项（下载目录 / ffmpeg 目录 / User-Agent）的状态与读写集中在 use-app-config.ts
+// 下载目录的状态与读写集中在 use-app-config.ts
 const {
   downloadDirectory,
-  ffmpegDirectory,
-  userAgent,
   loadAppConfig,
   setDownloadDirectory,
   openDownloadDirectory,
-  setFfmpegDirectory,
-  openFfmpegDirectory,
-  setUserAgent,
 } = useAppConfig()
+
+// FFmpeg 环境：就绪状态、一键下载与选择修复集中在 use-ffmpeg-setup.ts
+// （与启动门禁同一判定口径与文案，见 components/app/Initialize.vue）
+const {
+  status: ffmpegStatus,
+  checking: ffmpegChecking,
+  downloading: ffmpegDownloading,
+  busy: ffmpegBusy,
+  directory: ffmpegDirectory,
+  copy: ffmpegCopy,
+  downloadPercent: ffmpegDownloadPercent,
+  downloadLabel: ffmpegDownloadLabel,
+  refresh: refreshFfmpeg,
+  download: downloadFfmpeg,
+  choose: chooseFfmpegDir,
+  openDirectory: openFfmpegDirectory,
+} = useFfmpegSetup()
 
 /** 屏蔽名单：模块级共享状态，机制见 stores/member-flags.ts */
 const { blockedMembers, refreshBlockedMembers, unblockMember, clearBlockedMembers } = useBlockedMembersStore()
@@ -53,11 +66,50 @@ const {
 
 onMounted(async () => {
   await loadAppConfig()
+  // FFmpeg 就绪状态每次都重新判定：目录可能在应用之外被删除或移动
+  await refreshFfmpeg()
   await refreshBlockedMembers()
   await refreshPocketAuthState()
   // 已登录则静默同步一次口袋关注（friends/id 一次性返回，无分页成本）
   syncPocketFollowIfStale(5 * 60 * 1000)
 })
+
+/** FFmpeg 行状态徽章：可用 / 未配置 / 目录不存在 / 缺少 ffmpeg */
+const ffmpegStateLabel = computed(() => {
+  if (!ffmpegStatus.value)
+    return ffmpegChecking.value ? '检测中…' : '状态未知'
+  return ffmpegCopy.value.label
+})
+
+const ffmpegStateClass = computed(() => {
+  if (!ffmpegStatus.value)
+    return 'is-checking'
+  return ffmpegStatus.value.ok ? 'is-ready' : 'is-broken'
+})
+
+/** 一键下载 FFmpeg：成功即已写入配置，无需再点保存 */
+async function handleDownloadFfmpeg() {
+  if (await downloadFfmpeg()) {
+    ElMessage({ message: 'FFmpeg 已就绪', type: 'success' })
+    return
+  }
+  ElMessage.error('下载 FFmpeg 失败：请检查网络后重试，或手动选择已有目录')
+}
+
+/** 手动选择目录：校验通过才落盘，校验失败说明错在哪（目录不存在 / 目录内缺 ffmpeg） */
+async function handleChooseFfmpegDir() {
+  const result = await chooseFfmpegDir()
+  if (result.outcome === 'ok') {
+    ElMessage({ message: '设置成功', type: 'success' })
+    return
+  }
+  if (result.outcome === 'invalid') {
+    ElMessage.error(describeFfmpegProblem(result.status.problem, result.status.directory).title)
+    return
+  }
+  if (result.outcome === 'failed')
+    ElMessage.error('设置 FFmpeg 目录失败，请重试')
+}
 
 /** 更新行的描述文案：一行说清当前处于什么状态、下一步该做什么 */
 const updaterDesc = computed(() => {
@@ -382,6 +434,18 @@ const friendLinks: FriendLink[] = [
   },
 ]
 
+/** 参考项目致谢 */
+interface ReferenceProject {
+  name: string
+  url: string
+  role: string
+}
+
+const referenceProjects: ReferenceProject[] = [
+  { name: 'Jarvay/desktop48', url: 'https://github.com/Jarvay/desktop48', role: '参考项目' },
+  { name: 'yk1z/yaya_msg', url: 'https://github.com/yk1z/yaya_msg', role: '房间消息' },
+]
+
 /** 展示链接域名 */
 function linkHost(url: string) {
   try {
@@ -479,38 +543,6 @@ function hideLogo(event: Event) {
         </div>
       </section>
 
-      <!-- User-Agent -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-setting)' }"
-          >
-            <el-icon><Connection /></el-icon>
-          </span>
-          <div class="row-text">
-            <div class="row-title">
-              User-Agent
-            </div>
-            <div class="row-desc">
-              访问直播 / 回放接口时使用的浏览器标识
-            </div>
-          </div>
-          <el-input
-            v-model="userAgent"
-            class="row-control"
-            placeholder="设置 User-Agent"
-          />
-          <el-button
-            type="primary"
-            class="row-action"
-            @click="setUserAgent"
-          >
-            保存
-          </el-button>
-        </div>
-      </section>
-
       <!-- 默认下载目录 -->
       <section class="setting-card glass-card">
         <div class="setting-row">
@@ -566,15 +598,15 @@ function hideLogo(event: Event) {
               FFmpeg 目录
             </div>
             <div class="row-desc">
-              录制功能依赖的 ffmpeg 程序所在位置
+              播放直播与录制下载依赖的程序
             </div>
           </div>
           <el-input
-            v-model="ffmpegDirectory"
+            :model-value="ffmpegDirectory"
             class="row-control"
             readonly
-            placeholder="点击输入框选择目录"
-            @click="setFfmpegDirectory"
+            placeholder="未配置，可一键下载或手动选择"
+            @click="handleChooseFfmpegDir"
           />
           <div class="row-actions">
             <el-button
@@ -584,12 +616,54 @@ function hideLogo(event: Event) {
               打开目录
             </el-button>
             <el-button
-              type="primary"
-              @click="setFfmpegDirectory"
+              :disabled="ffmpegBusy"
+              @click="handleChooseFfmpegDir"
             >
               选择
             </el-button>
+            <el-button
+              type="primary"
+              :disabled="ffmpegBusy"
+              :loading="ffmpegDownloading"
+              @click="handleDownloadFfmpeg"
+            >
+              {{ ffmpegDownloading ? '下载中' : '下载' }}
+            </el-button>
           </div>
+        </div>
+
+        <!-- 就绪状态：目录可能在应用之外被删除或移动，这里给出可直接照做的修复说明 -->
+        <div class="row-body">
+          <div
+            class="ffmpeg-state"
+            :class="ffmpegStateClass"
+          >
+            <span class="state-dot" />
+            <span class="state-label">{{ ffmpegStateLabel }}</span>
+            <span
+              v-if="ffmpegStatus && !ffmpegStatus.ok"
+              class="state-hint"
+            >{{ ffmpegCopy.hint }}</span>
+          </div>
+          <el-progress
+            v-if="ffmpegDownloading && ffmpegDownloadPercent !== null"
+            class="ffmpeg-progress"
+            :percentage="ffmpegDownloadPercent"
+            :stroke-width="8"
+            :show-text="false"
+          />
+          <p
+            v-if="ffmpegDownloading"
+            class="ffmpeg-progress-label"
+          >
+            {{ ffmpegDownloadLabel }}
+          </p>
+          <p
+            v-else-if="ffmpegStatus && !ffmpegStatus.ok"
+            class="ffmpeg-fix-hint"
+          >
+            下一步：点击「下载」自动获取，或点击「选择」指定本机已有的 FFmpeg 目录。
+          </p>
         </div>
       </section>
 
@@ -602,12 +676,12 @@ function hideLogo(event: Event) {
           >
             <el-icon><Hide /></el-icon>
           </span>
-          <div class="row-text">
+          <div class="row-text row-text--fluid">
             <div class="row-title">
               屏蔽成员
             </div>
             <div class="row-desc">
-              已屏蔽 {{ blockedMembers.length }} 名成员，其直播与回放将不再展示
+              已屏蔽 {{ blockedMembers.length }} 名成员，其直播、回放与房间消息将不再展示
             </div>
           </div>
           <div class="row-actions">
@@ -763,6 +837,41 @@ function hideLogo(event: Event) {
             <p class="legal-text">
               任何因使用本应用而产生的版权纠纷或法律责任，均由用户自行承担。本应用不承担任何责任。
             </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 参考项目致谢 -->
+      <section class="setting-card glass-card">
+        <div class="setting-row">
+          <span
+            class="row-icon icon-tile"
+            style="--tile-color: var(--el-color-success)"
+          >
+            <el-icon><Document /></el-icon>
+          </span>
+          <div class="row-text row-text--fluid">
+            <div class="row-title">
+              参考项目致谢
+            </div>
+            <div class="row-desc">
+              感谢以下项目提供的实现参考
+            </div>
+          </div>
+        </div>
+        <div class="row-body">
+          <div class="credits-grid">
+            <a
+              v-for="project in referenceProjects"
+              :key="project.name"
+              class="credit-link"
+              :href="project.url"
+              target="_blank"
+              rel="noopener"
+            >
+              <span class="credit-name">{{ project.name }}</span>
+              <span class="credit-role ellipsis">{{ project.role }}</span>
+            </a>
           </div>
         </div>
       </section>
@@ -967,7 +1076,7 @@ function hideLogo(event: Event) {
         </div>
 
         <div class="verify-local">
-          凭证保存：{{ pocketAuthState.plainFallback ? '明文（当前系统无加密能力）' : '本机安全加密' }}<template v-if="savedDays > 0">
+          登录凭证：{{ pocketAuthState.plainFallback ? '明文（当前系统无加密能力）保存' : '本机安全加密保存' }}<template v-if="savedDays > 0">
             ，已保存 {{ savedDays }} 天
           </template>
         </div>
@@ -1025,7 +1134,7 @@ function hideLogo(event: Event) {
 
 .row-text {
   flex-shrink: 0;
-  width: 190px;
+  width: 180px;
 
   .row-title {
     font-size: 14px;
@@ -1078,6 +1187,50 @@ function hideLogo(event: Event) {
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px dashed var(--el-border-color-lighter);
+}
+
+/* FFmpeg 就绪状态：圆点 + 结论 + 原因说明，broken 态再补一条可直接照做的修复提示 */
+.ffmpeg-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.ffmpeg-state .state-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--el-text-color-placeholder);
+}
+
+.ffmpeg-state.is-ready .state-dot {
+  background: var(--el-color-success);
+}
+
+.ffmpeg-state.is-broken .state-dot {
+  background: var(--el-color-danger);
+}
+
+.ffmpeg-state .state-hint {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
+}
+
+.ffmpeg-progress {
+  margin-top: 12px;
+}
+
+.ffmpeg-progress-label,
+.ffmpeg-fix-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
 }
 
 /* 屏蔽名单：队伍色标签（:color 内联样式优先级高，需 !important 覆盖） */
@@ -1252,6 +1405,49 @@ function hideLogo(event: Event) {
     font-size: 11px;
     color: var(--el-text-color-secondary);
   }
+}
+
+/* 参考项目致谢：轻量文字卡，避免和右侧声明区抢视觉 */
+.credits-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+}
+
+.credit-link {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--brand-primary) 45%, transparent);
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-2px);
+
+    .credit-name {
+      color: var(--brand-primary);
+    }
+  }
+}
+
+.credit-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  transition: color 0.18s ease;
+}
+
+.credit-role {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
 }
 
 /* 品牌渐变主按钮已全局统一，见 app.scss */

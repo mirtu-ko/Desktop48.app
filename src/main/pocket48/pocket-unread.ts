@@ -1,4 +1,4 @@
-import type { PocketUnreadBatch } from '../../preload/ipc-contract'
+import type { PocketUnreadBatch } from '@preload/ipc-contract'
 import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
 /**
  * 房间未读检测服务（主进程唯一真相）。
@@ -7,6 +7,10 @@ import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
  * （定时器在主进程，不受 Chromium 对失焦窗口的节流影响）；
  * 渲染层（stores/pocket-unread.ts）只做镜像与展示，经 pocketUnreadBatch 全量广播保持一致，
  * 与任务列表（task-registry → stores/tasks）是同一套「主进程真相 + 各窗镜像」的模式。
+ *
+ * 成员范围 = 账号关注名单（friends/id）**减去本地屏蔽名单**：屏蔽是本地可见性偏好，
+ * 与关注正交（接线见 renderer 的 use-member-actions），被屏蔽的成员既不计未读，
+ * 也不占频道解析名额；剔除后其频道缓存与未读按「取关清理」同一条路径一并清掉。
  *
  * 计数链路分两步（60s 一轮）：
  * 1. **触发**：批量预览接口 im/team/classic/last/message/get 一次覆盖全部关注房间，
@@ -33,8 +37,9 @@ import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
  * 未登录（凭证文件不存在）：清空未读与账号相关水位/计数并广播，重登按首见重新锚定。
  */
 import path from 'node:path'
+import { OFFICIAL_POCKET_USER_ID, ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app } from 'electron'
-import { OFFICIAL_POCKET_USER_ID, ROOM_MESSAGE_LIMIT } from '../../common/pocket-rooms'
+import { Database } from '../database'
 import { broadcastIpc } from '../ipc/send'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
@@ -534,8 +539,12 @@ async function tick(): Promise<void> {
       }
       return
     }
-    const followedIds = await getFollowedIds()
-    debug('[pocket-unread] 本轮关注名单', followedIds.length, '人：', followedIds.join(','))
+    // 屏蔽优先：屏蔽是本地可见性偏好（与关注正交，接线见 renderer 的 use-member-actions），
+    // 未读检测按同一条口径把被屏蔽成员从关注名单里剔除 —— 它们既不该计数，也不该占频道解析名额。
+    // 剔除后 ensureChannels 会顺带清掉它们的频道缓存与未读，走的正是「取关清理」那条路径。
+    const blockedIds = new Set(Database.instance().getMemberFlagIds('blocked'))
+    const followedIds = (await getFollowedIds()).filter(id => !blockedIds.has(id))
+    debug('[pocket-unread] 本轮关注名单', followedIds.length, '人（已剔除屏蔽', blockedIds.size, '人）：', followedIds.join(','))
     const { dirty: channelDirty, unreadChanged: unfollowChanged } = await ensureChannels(followedIds)
     let dirty = channelDirty
 

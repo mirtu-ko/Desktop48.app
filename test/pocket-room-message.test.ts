@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
  * 左列最新消息预览（lastMsgList.msgContent → 文案）与消息流共用同一套类型分发。
  */
 
-import { liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview } from '../src/renderer/src/utils/pocket-room-message'
+import { isPlaceholderText, liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview, pocketRoomCopyTargets } from '../src/renderer/src/utils/pocket-room-message'
 
 /** 构造一条房间消息：extInfo.bodys 可传对象（自动 JSON 化） */
 function roomMessage(msgType: string, options: {
@@ -203,6 +203,8 @@ describe('pocket-room-message / 回复与翻牌', () => {
     }))!
     expect(view.kind).toBe('flip')
     expect(view.text).toBe('今天也要加油')
+    // 无 question 时不渲染空引用块
+    expect(view.quote).toBeNull()
   })
 
   it('flipCard 答案为对象时兜底占位', () => {
@@ -210,6 +212,45 @@ describe('pocket-room-message / 回复与翻牌', () => {
       bodys: { flipCardVideoInfo: { answer: { nested: true } } },
     }))!
     expect(view.text).toBe('[翻牌回复]')
+  })
+
+  it('三类翻牌：被翻提问进引用块，昵称位固定「提问」', () => {
+    const text = normalizePocketRoomMessage(roomMessage('FLIPCARD', {
+      bodys: { flipCardInfo: { question: '今晚几点睡', answer: '不睡' } },
+    }))!
+    expect(text.text).toBe('不睡')
+    expect(text.quote).toEqual({ nick: '提问', text: '今晚几点睡', isGift: false })
+
+    // 语音/视频翻牌：正文只剩占位（内容在语音条 / 视频里），提问就是唯一的文字上下文
+    const audio = normalizePocketRoomMessage(roomMessage('FLIPCARD_AUDIO', {
+      bodys: { flipCardAudioInfo: { question: '点歌', answer: JSON.stringify({ url: '/MediaSource/Voice/f.m4a' }) } },
+    }))!
+    expect(audio.text).toBe('[翻牌回复]')
+    expect(audio.audioUrl).toBe('https://mp4.48.cn/MediaSource/Voice/f.m4a')
+    expect(audio.quote?.text).toBe('点歌')
+
+    const video = normalizePocketRoomMessage(roomMessage('FLIPCARD_VIDEO', {
+      bodys: { flipCardVideoInfo: { question: '看看猫', answer: JSON.stringify({ url: '/MediaSource/Video/c.mp4' }) } },
+    }))!
+    expect(video.text).toBe('[翻牌回复]')
+    expect(video.videoUrl).toBe('https://mp4.48.cn/MediaSource/Video/c.mp4')
+    expect(video.quote?.text).toBe('看看猫')
+  })
+
+  it('翻牌缺 question：quote 为 null，不渲染空引用块', () => {
+    expect(normalizePocketRoomMessage(roomMessage('FLIPCARD', {
+      bodys: { flipCardInfo: { answer: '好' } },
+    }))!.quote).toBeNull()
+    expect(normalizePocketRoomMessage(roomMessage('FLIPCARD_AUDIO', {
+      bodys: { flipCardAudioInfo: { answer: JSON.stringify({ url: '/a.m4a' }) } },
+    }))!.quote).toBeNull()
+  })
+
+  it('翻牌提问是用户原文，表情照常还原', () => {
+    const view = normalizePocketRoomMessage(roomMessage('FLIPCARD', {
+      bodys: { flipCardInfo: { question: '晚安[爱心]', answer: '晚安' } },
+    }))!
+    expect(view.quote?.text).toBe('晚安❤️')
   })
 })
 
@@ -387,10 +428,121 @@ describe('pocket-room-message / 左列最新消息预览', () => {
     }))).toBe('[回复 甲] 翻个牌')
   })
 
+  it('翻牌预览：「[提问 xxx]」前缀带被翻提问，后面接答案正文', () => {
+    expect(normalizePocketRoomPreview(JSON.stringify({
+      messageType: 'FLIPCARD',
+      flipCardInfo: { question: '今晚几点睡', answer: '不睡' },
+    }))).toBe('[提问 今晚几点睡] 不睡')
+  })
+
+  it('翻牌预览：答案无正文（语音/视频翻牌）时只留提问', () => {
+    expect(normalizePocketRoomPreview(JSON.stringify({
+      messageType: 'FLIPCARD_AUDIO',
+      flipCardAudioInfo: { question: '点歌', answer: '{"url":"/MediaSource/Voice/f.m4a"}' },
+    }))).toBe('[提问 点歌]')
+    // 无 question 时退回答案正文，不凭空拼前缀
+    expect(normalizePocketRoomPreview(JSON.stringify({
+      messageType: 'FLIPCARD',
+      flipCardInfo: { answer: '答好了' },
+    }))).toBe('答好了')
+  })
+
   it('空输入返回空串（UI 决定占位）', () => {
     expect(normalizePocketRoomPreview(null)).toBe('')
     expect(normalizePocketRoomPreview(undefined)).toBe('')
     expect(normalizePocketRoomPreview('')).toBe('')
     expect(normalizePocketRoomPreview('{}')).toBe('[新消息]')
+  })
+})
+
+describe('pocket-room-message / 表情占位符还原', () => {
+  it('正文里的表情占位符换成 emoji，其余文字不动', () => {
+    const view = normalizePocketRoomMessage(roomMessage('TEXT', { bodys: '大家晚安[爱心][玫瑰]' }))!
+    expect(view.text).toBe('大家晚安❤️🌹')
+  })
+
+  it('未收录的占位符原样保留（不吞字、不报错）', () => {
+    const view = normalizePocketRoomMessage(roomMessage('TEXT', { bodys: '[新表情来了] 在吗' }))!
+    expect(view.text).toBe('[新表情来了] 在吗')
+  })
+
+  it('归一化自己拼的占位文案不过表情表（[礼物] 前缀不能被换成 🎁）', () => {
+    expect(normalizePocketRoomMessage(roomMessage('IMAGE'))!.text).toBe('[图片消息]')
+    expect(normalizePocketRoomMessage(roomMessage('GIFT_TEXT', {
+      bodys: { giftInfo: { giftName: '荧光棒', giftNum: 3 } },
+    }))!.text).toBe('[礼物] 荧光棒 x3')
+  })
+
+  it('引用摘要与回复正文里的表情都要还原', () => {
+    const view = normalizePocketRoomMessage(roomMessage('REPLY', {
+      bodys: { replyInfo: { replyName: '甲', replyText: '送你[玫瑰]', text: '[爱心]收到' } },
+    }))!
+    expect(view.text).toBe('❤️收到')
+    expect(view.quote?.text).toBe('送你🌹')
+  })
+
+  it('翻牌答案是用户原文，同样还原表情', () => {
+    const view = normalizePocketRoomMessage(roomMessage('FLIPCARD', {
+      bodys: { flipCardInfo: { answer: '加油[强]' } },
+    }))!
+    expect(view.text).toBe('加油👍')
+  })
+
+  it('左列预览与消息流口径一致', () => {
+    expect(normalizePocketRoomPreview(JSON.stringify({ messageType: 'TEXT', text: '[爱心]晚安' }))).toBe('❤️晚安')
+    expect(normalizePocketRoomPreview(JSON.stringify({
+      messageType: 'REPLY',
+      replyInfo: { replyName: '甲', replyText: '原话', text: '[亲亲]' },
+    }))).toBe('[回复 甲] 😚')
+  })
+})
+
+/**
+ * 消息卡「复制」的取材清单（pocketRoomCopyTargets）：正文优先、媒体退化为直链。
+ * 关键约束是「只复制用户原文」——归一化自己拼的占位文案与礼物 / 分享文案都不能进清单。
+ */
+describe('pocket-room-message / 可复制内容', () => {
+  it('占位文案判定：拼出来的类型文案算占位，空串同判', () => {
+    expect(isPlaceholderText('[图片消息]')).toBe(true)
+    expect(isPlaceholderText('[语音回复消息]')).toBe(true)
+    expect(isPlaceholderText('[新消息]')).toBe(true)
+    expect(isPlaceholderText('')).toBe(true)
+    expect(isPlaceholderText('大家晚安')).toBe(false)
+    // 还原后的表情属于用户原文，不是占位
+    expect(isPlaceholderText('❤️晚安')).toBe(false)
+  })
+
+  it('文本消息：只有正文一项，复制的是用户原文', () => {
+    const view = normalizePocketRoomMessage(roomMessage('TEXT', { bodys: '[爱心]晚安' }))!
+    expect(pocketRoomCopyTargets(view)).toEqual([{ key: 'text', text: '❤️晚安' }])
+  })
+
+  it('图片消息：占位正文不进清单，只给图片直链', () => {
+    const view = normalizePocketRoomMessage(roomMessage('IMAGE', {
+      bodys: { url: '/img/a.jpg', w: 800, h: 600 },
+    }))!
+    expect(view.text).toBe('[图片消息]')
+    expect(pocketRoomCopyTargets(view)).toEqual([{ key: 'image', text: view.imageUrl }])
+  })
+
+  it('语音回复：正文与语音直链都给（语音条下的真实回复语同样可复制）', () => {
+    const view = normalizePocketRoomMessage(roomMessage('AUDIO_REPLY', {
+      bodys: {
+        replyInfo: { replyName: '甲', replyText: '原话', text: '这条是回复语', voiceUrl: '/audio/a.mp3' },
+      },
+    }))!
+    expect(view.audioUrl).toBe('https://mp4.48.cn/audio/a.mp3')
+    expect(pocketRoomCopyTargets(view).map(item => item.key)).toEqual(['text', 'audio'])
+  })
+
+  it('礼物与直播分享的合成文案不进清单，且本身无媒体时清单为空', () => {
+    const gift = normalizePocketRoomMessage(roomMessage('GIFT_TEXT', {
+      bodys: { giftInfo: { giftName: '荧光棒', giftNum: 3 } },
+    }))!
+    expect(gift.text).toBe('[礼物] 荧光棒 x3')
+    expect(pocketRoomCopyTargets(gift)).toEqual([])
+
+    const system = normalizePocketRoomMessage(roomMessage('DISABLE_SPEAK'))!
+    expect(pocketRoomCopyTargets(system)).toEqual([])
   })
 })

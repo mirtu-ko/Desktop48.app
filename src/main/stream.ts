@@ -25,13 +25,20 @@ function getStreamRoute(liveId: string) {
   return `/live/${encodeURIComponent(getSafeLiveId(liveId))}.flv`
 }
 
-/** 播放和录制都复用用户配置的 FFmpeg，可避免在项目里额外捆绑二进制。 */
+/**
+ * 播放和录制都复用用户配置的 FFmpeg，可避免在项目里额外捆绑二进制。
+ * 判定与文案来自 resolveFfmpegBinary（inspectFfmpegDir），此处只补一句修复引导：
+ * 这条链路的错误会经 IPC 抛到渲染层直接展示，必须是用户能照着做的说法。
+ */
 function getFfmpegPath() {
   const ffmpegDir = Database.instance().getConfig('ffmpegDirectory')
-  if (!ffmpegDir)
-    throw new Error('尚未设置 ffmpeg 目录')
-
-  return resolveFfmpegBinary(ffmpegDir)
+  try {
+    return resolveFfmpegBinary(ffmpegDir)
+  }
+  catch (err) {
+    const reason = err instanceof Error ? err.message : 'FFmpeg 不可用'
+    throw new Error(`${reason}，请在「设置」中下载或重新选择 FFmpeg 目录`)
+  }
 }
 
 function registerActiveProcess(sessionId: string, process: ReturnType<typeof spawn>) {
@@ -168,6 +175,9 @@ export async function handleCreateLiveStream(rtmpUrl: string, liveId: string) {
   // rtmpUrl 直接交给 ffmpeg 拉流，必须过白名单，否则渲染层被攻破即可诱导主进程连任意地址
   if (!isAllowedStreamUrl(rtmpUrl))
     throw new Error(`直播流地址不在允许范围内: ${rtmpUrl}`)
+  // FFmpeg 缺失在此提前失败：真正 spawn 发生在播放器 GET 本地地址时（http-server.ts），
+  // 不提前拦截的话渲染层只会看到播放器静默连不上，拿不到「去设置里修复」的引导
+  getFfmpegPath()
   const sessionId = getSafeLiveId(liveId)
   const existingSession = streamSessions.get(sessionId)
   const publicPath = getStreamRoute(liveId)

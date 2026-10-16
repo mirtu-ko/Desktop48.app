@@ -1,3 +1,4 @@
+import type { IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn } from '@preload/ipc-contract'
 /**
  * IPC invoke 通道的 verbose 追踪包装器。
  *
@@ -9,7 +10,6 @@
  * 仅覆盖 invoke（请求-响应）通道；send/once 类单向通知由各业务模块自行记日志。
  */
 import type { IpcMainInvokeEvent } from 'electron'
-import type { IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn } from '../../preload/ipc-contract'
 import { ipcMain } from 'electron'
 import { debug, isVerboseEnabled } from '../logger'
 

@@ -48,6 +48,20 @@ const topRank = computed(() => {
   return rank > 0 && rank <= 3
 })
 
+/**
+ * 屏蔽优先：已屏蔽时关注按钮按「未关注」呈现。
+ *
+ * 关注与屏蔽正交（见 composables/use-member-actions），数据上可以同时成立；
+ * 但两个按钮一起点亮会让人以为「既关注又屏蔽」。屏蔽是更强的负面状态，让它盖过关注态，
+ * 点击语义随之变成「解除屏蔽并关注」，与 toggleFollowMember 的接线一致。
+ */
+const followOn = computed(() => !!props.followed && !props.blocked)
+const followTitle = computed(() => {
+  if (props.blocked)
+    return '已屏蔽，点击解除屏蔽并关注'
+  return props.followed ? '取消关注' : '关注 TA，直播列表优先展示'
+})
+
 /** 皇冠边长：紧凑档同步收小（MediaIcon 的 size 走内联 style，CSS 覆盖不了） */
 const crownSize = computed(() => (props.compact ? 22 : 30))
 
@@ -93,20 +107,20 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
         <div v-if="actionable" class="quick-actions">
           <button
             class="quick-btn quick-btn--follow"
-            :class="{ 'is-on': followed }"
-            :title="followed ? '取消关注' : '关注 TA，直播列表优先展示'"
+            :class="{ 'is-on': followOn }"
+            :title="followTitle"
             type="button"
             @click.stop="emit('toggleFollow', member)"
           >
             <el-icon>
-              <StarFilled v-if="followed" />
+              <StarFilled v-if="followOn" />
               <Star v-else />
             </el-icon>
           </button>
           <button
             class="quick-btn quick-btn--block"
             :class="{ 'is-on': blocked }"
-            :title="blocked ? '解除屏蔽' : '屏蔽 TA 的直播与回放'"
+            :title="blocked ? '解除屏蔽' : '屏蔽 TA 的直播、回放与房间消息'"
             type="button"
             @click.stop="emit('toggleBlock', member)"
           >

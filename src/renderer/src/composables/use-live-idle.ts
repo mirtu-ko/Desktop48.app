@@ -14,8 +14,8 @@ const MAX_PREVIEW_SHOWS = 4
 /** 「看看回放」最多展示几条 */
 const MAX_PREVIEW_PLAYBACKS = 5
 
-/** 关注成员回放探测并发上限。 */
-const MAX_FOLLOWED_PROBE = 6
+/** 关注成员回放最多向后扫描的页数。 */
+const MAX_FOLLOWED_PLAYBACK_PAGES = 5
 
 export interface UseLiveIdleOptions {
   /** 列表是否处于空态（已加载完且无数据）：只有空态才需要轮询与公演预告 */
@@ -29,7 +29,7 @@ export interface UseLiveIdleOptions {
  * 仅页面可见且空态时运行；由 keep-alive 生命周期驱动启停。
  */
 export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
-  const { followedMembers, ensureFollowedLoaded } = useFollowedMembersStore()
+  const { followedMembers, ensureFollowedLoaded, isFollowed } = useFollowedMembersStore()
   const { ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
   const { liveItems, refreshLiveStatus, acquireLiveStatusPolling } = useLiveStatusStore()
 
@@ -103,15 +103,48 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
     }
   }
 
-  /** 并发探测关注成员的最近回放。 */
+  /**
+   * 逐页扫描全站回放，筛出关注成员的回放。
+   * 每页过滤后累计，拿满预览条数或扫描满 5 页即停。
+   */
   async function fetchFollowedPlaybacks(): Promise<LiveListItem[]> {
-    const userIds = followedMembers.value.slice(0, MAX_FOLLOWED_PROBE).map(member => String(member.userId))
-    if (userIds.length === 0)
+    if (followedMembers.value.length === 0)
       return []
-    const pages = await Promise.all(userIds.map(userId =>
-      Apis.playbackList({ next: '0', userId, teamId: '0', groupId: '0' }, { silent: true }).catch(() => null),
-    ))
-    return pages.flatMap(page => page?.liveList ?? [])
+
+    await ensureBlockedLoaded()
+    const picked: LiveListItem[] = []
+    const seen = new Set<string>()
+    let next = '0'
+
+    for (let page = 0; page < MAX_FOLLOWED_PLAYBACK_PAGES && picked.length < MAX_PREVIEW_PLAYBACKS; page += 1) {
+      const content = await Apis.playbackList({
+        next,
+        userId: '0',
+        teamId: '0',
+        groupId: '0',
+      }, { silent: true }).catch((e: any) => {
+        debugLog('list', `空态回放：关注成员扫描第 ${page + 1} 页失败（静默停止）: ${e?.message || e}`)
+        return null
+      })
+      if (!content)
+        break
+
+      const items = content.liveList ?? []
+      for (const item of items) {
+        if (picked.length >= MAX_PREVIEW_PLAYBACKS)
+          break
+        if (seen.has(item.liveId) || isBlocked(item.userInfo?.userId) || !isFollowed(item.userInfo?.userId))
+          continue
+        seen.add(item.liveId)
+        picked.push(item)
+      }
+
+      if (!items.length || !content.next || content.next === '0' || content.next === next)
+        break
+      next = content.next
+    }
+
+    return picked
   }
 
   /** 全站最新回放兜底。 */
@@ -148,6 +181,7 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
         raw = await fetchLatestPlaybacks()
         source = 'latest'
       }
+      debugLog('list', `空态回放：拉取 ${source}`, raw)
       playbacks.value = await pickRecentPlaybacks(raw)
       playbackSource.value = source
       debugLog('list', `空态回放：来源=${source}，展示 ${playbacks.value.length} 条（候选 ${raw.length} 条）`)

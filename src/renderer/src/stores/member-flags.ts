@@ -21,7 +21,7 @@ interface MemberFlagMessages {
 const messages: Record<MemberFlagKind, MemberFlagMessages> = {
   blocked: {
     invalidId: '该成员缺少有效的 userId，无法屏蔽',
-    added: realName => `已屏蔽 ${realName}，其直播与回放将不再展示`,
+    added: realName => `已屏蔽 ${realName}，其直播、回放与房间消息将不再展示`,
     removed: realName => `已解除屏蔽 ${realName}`,
     failure: '屏蔽操作失败，请稍后重试',
     updateError: '更新屏蔽状态失败:',

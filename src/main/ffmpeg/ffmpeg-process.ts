@@ -36,12 +36,59 @@ export function hasFfmpegSlot(): boolean {
   return activeProcesses.size < MAX_CONCURRENT_FFMPEG_TASKS
 }
 
-/** 校验 ffmpeg 二进制并返回完整路径（Windows 下补 .exe） */
+/** FFmpeg 不可用的原因分类：渲染层据此外化不同的修复引导，不要用错误文案反向判断 */
+export type FfmpegProblem = 'unset' | 'missing-dir' | 'missing-binary'
+
+/**
+ * FFmpeg 就绪状态：主进程是唯一判定方。
+ * 渲染层（启动门禁 / 设置页 / 下载前校验）只消费该结构，不再各自 existsSync 一遍，
+ * 避免「启动认为就绪、使用时才发现二进制缺失」这类口径分歧。
+ */
+export interface FfmpegStatus {
+  ok: boolean
+  /** ok 为 true 时恒为 null */
+  problem: FfmpegProblem | null
+  /** 当前生效的目录；未配置时为空串 */
+  directory: string
+  /** 校验通过时的可执行文件完整路径；未通过时为空串 */
+  binaryPath: string
+}
+
+/** 平台相关的可执行文件名拼装，唯一取值点（状态判定 / 二进制解析 / 下载落盘共用） */
+export function ffmpegBinaryPath(ffmpegDir: string): string {
+  return path.join(ffmpegDir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
+}
+
+/**
+ * 判定目录是否构成可用的 FFmpeg 环境（纯函数，可单测）。
+ * 逐层区分「未配置 / 目录不存在 / 目录内缺二进制」，因为三者的修复动作不同：
+ * 前者需要配置，中者多因目录被移动或删除，后者多是手动选错了目录。
+ */
+export function inspectFfmpegDir(ffmpegDir: string): FfmpegStatus {
+  const directory = ffmpegDir?.trim() ?? ''
+  if (!directory)
+    return { ok: false, problem: 'unset', directory: '', binaryPath: '' }
+  if (!fs.existsSync(directory))
+    return { ok: false, problem: 'missing-dir', directory, binaryPath: '' }
+  const binaryPath = ffmpegBinaryPath(directory)
+  if (!fs.existsSync(binaryPath))
+    return { ok: false, problem: 'missing-binary', directory, binaryPath: '' }
+  return { ok: true, problem: null, directory, binaryPath }
+}
+
+/** 各类不可用原因对应的失败信息：与 inspectFfmpegDir 同一口径 */
+const RESOLVE_ERROR_MESSAGE: Record<FfmpegProblem, string> = {
+  'unset': '尚未设置 ffmpeg 目录',
+  'missing-dir': 'ffmpeg 目录不存在',
+  'missing-binary': 'ffmpeg 二进制文件不存在',
+}
+
+/** 校验 ffmpeg 二进制并返回完整路径（Windows 下补 .exe）；不可用时抛错，供任务/拉流链路快速失败 */
 export function resolveFfmpegBinary(ffmpegDir: string): string {
-  const ffmpegPath = path.join(ffmpegDir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
-  if (!fs.existsSync(ffmpegPath))
-    throw new Error('ffmpeg 二进制文件不存在')
-  return ffmpegPath
+  const status = inspectFfmpegDir(ffmpegDir)
+  if (!status.ok)
+    throw new Error(RESOLVE_ERROR_MESSAGE[status.problem ?? 'missing-binary'])
+  return status.binaryPath
 }
 
 const TIME_REGEX = /time=(\d+:\d+:\d+\.\d+)/

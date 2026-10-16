@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
+import ImageViewerToolbar from '@renderer/components/rooms/ImageViewerToolbar.vue'
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -35,7 +36,17 @@ const urls = computed(() => photos.value.map(photo => photo.url))
         lazy
         fit="cover"
         hide-on-click-modal
-      />
+      >
+        <!-- 预览时可按需下载当前这张（工具条由 rooms 共用组件提供） -->
+        <template #toolbar="{ actions, reset, activeIndex }">
+          <ImageViewerToolbar
+            :actions="actions"
+            :reset="reset"
+            :urls="urls"
+            :active-index="activeIndex"
+          />
+        </template>
+      </el-image>
     </div>
     <p v-else class="album-empty">
       已加载的消息里还没有图片

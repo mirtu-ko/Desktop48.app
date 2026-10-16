@@ -1,5 +1,5 @@
-import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { MemberFlag, MemberFlagKind } from '../common/member-flags'
+import type { AppConfig, ConfigKey } from '@common/app-config'
+import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
 import type {
   AllMemberItem,
   DomainInfoItem,
@@ -16,9 +16,9 @@ import type {
 import type { MemberTreeGroupNode } from './domain/member-tree'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { CONFIG_DEFAULTS } from '@common/app-config'
+import { assertMemberFlagKind } from '@common/member-flags'
 import { app } from 'electron'
-import { CONFIG_DEFAULTS } from '../common/app-config'
-import { assertMemberFlagKind } from '../common/member-flags'
 import data from './data'
 import { addMemberFlagId, addMemberFlagIds, removeMemberFlagId, resolveMemberFlags } from './domain/member-flags'
 import { buildMemberTree, teamColorOf } from './domain/member-tree'
@@ -112,7 +112,11 @@ class Database {
     return this.database
   }
 
-  public init() {
+  /**
+   * init 支持注入运行时默认值：某些默认路径来自 Electron 的系统标准目录，
+   * 不能放进共享 CONFIG_DEFAULTS（纯 Node 测试无法提供 app.getPath）。
+   */
+  public init(runtimeDefaults: Partial<AppConfig> = {}) {
     if (!existsSync(dirname(this.dbPath))) {
       mkdirSync(dirname(this.dbPath), { recursive: true })
     }
@@ -143,6 +147,10 @@ class Database {
     // 补齐未设置的配置并写盘：「未设置」= 缺失 / 空串 / 非字符串
     const stored = this.db.config as Partial<Record<ConfigKey, unknown>> | undefined
     const config: AppConfig = { ...CONFIG_DEFAULTS }
+    for (const [key, value] of Object.entries(runtimeDefaults)) {
+      if (Object.hasOwn(CONFIG_DEFAULTS, key) && typeof value === 'string' && value)
+        config[key as ConfigKey] = value
+    }
     for (const key of Object.keys(CONFIG_DEFAULTS) as ConfigKey[]) {
       const value = stored?.[key]
       if (typeof value === 'string' && value !== '')
@@ -242,6 +250,16 @@ class Database {
       realName: member.realName || '',
       teamColor: this.resolveTeamColor(member),
     }))
+  }
+
+  /**
+   * 名单 id 的轻量读法：只归一出数字 id，不解析成员详情。
+   * 给主进程未读检测用（每轮都要读屏蔽名单，没必要为几百条成员记录建一次表）。
+   */
+  public getMemberFlagIds(kind: MemberFlagKind): number[] {
+    return this.memberFlagIds(kind)
+      .map(id => Number(id))
+      .filter(id => Number.isFinite(id))
   }
 
   public setMemberFlags(kind: MemberFlagKind, ids: Array<number | string>) {

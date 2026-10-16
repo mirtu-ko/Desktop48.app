@@ -42,48 +42,67 @@ describe('database 配置读写', () => {
     expect(readConfigFile(dbPath)).toEqual(CONFIG_DEFAULTS)
   })
 
+  it('init 注入的平台默认值会作为未设置配置的初值', () => {
+    const instance = new Database(dbPath)
+    instance.init({ downloadDirectory: '/System/Downloads' })
+
+    expect(instance.getConfig('downloadDirectory')).toBe('/System/Downloads')
+    expect(readConfigFile(dbPath).downloadDirectory).toBe('/System/Downloads')
+  })
+
+  it('重启时用户设置的下载目录优先于平台默认值', () => {
+    const instance = new Database(dbPath)
+    instance.init({ downloadDirectory: '/System/Downloads' })
+    instance.setConfig('downloadDirectory', '/tmp/downloads')
+
+    const reopened = new Database(dbPath)
+    reopened.init({ downloadDirectory: '/System/Downloads' })
+
+    expect(reopened.getConfig('downloadDirectory')).toBe('/tmp/downloads')
+  })
+
   it('init 保留用户设置的非空值', () => {
     const instance = new Database(dbPath)
     instance.init()
     instance.setConfig('downloadDirectory', '/tmp/downloads')
-    instance.setConfig('userAgent', 'custom-ua')
+    instance.setConfig('ffmpegDirectory', '/tmp/ffmpeg')
 
     const reopened = new Database(dbPath) // 模拟重启
     reopened.init()
 
     expect(reopened.getConfig('downloadDirectory')).toBe('/tmp/downloads')
-    expect(reopened.getConfig('userAgent')).toBe('custom-ua')
+    expect(reopened.getConfig('ffmpegDirectory')).toBe('/tmp/ffmpeg')
   })
 
   it('空串视为未设置：读时按默认值生效，重启后落盘成默认值', () => {
     const instance = new Database(dbPath)
     instance.init()
-    instance.setConfig('userAgent', '')
+    instance.setConfig('ffmpegDirectory', '')
 
-    // 会话内即生效，不让空 UA 漏给 request.ts
-    expect(instance.getConfig('userAgent')).toBe(CONFIG_DEFAULTS.userAgent)
+    // 会话内即生效，不让空值漏给 use-app-config
+    expect(instance.getConfig('ffmpegDirectory')).toBe(CONFIG_DEFAULTS.ffmpegDirectory)
 
     const reopened = new Database(dbPath)
     reopened.init()
-    expect(reopened.getConfig('userAgent')).toBe(CONFIG_DEFAULTS.userAgent)
-    expect(readConfigFile(dbPath).userAgent).toBe(CONFIG_DEFAULTS.userAgent)
+    expect(reopened.getConfig('ffmpegDirectory')).toBe(CONFIG_DEFAULTS.ffmpegDirectory)
+    expect(readConfigFile(dbPath).ffmpegDirectory).toBe(CONFIG_DEFAULTS.ffmpegDirectory)
   })
 
   it('init 把非字符串的脏值回填成默认值', () => {
     const instance = new Database(dbPath)
     instance.init()
-    instance.setConfig('userAgent', 'custom-ua')
+    instance.setConfig('ffmpegDirectory', '/tmp/ffmpeg')
 
     // 手改库文件造脏值
     const raw = JSON.parse(readFileSync(dbPath, 'utf-8')) as { config: Record<string, unknown> }
-    raw.config.userAgent = null
+    raw.config.ffmpegDirectory = null
     raw.config.downloadDirectory = 42
     writeFileSync(dbPath, JSON.stringify(raw))
 
     const reopened = new Database(dbPath)
     reopened.init()
 
-    expect(reopened.getConfig('userAgent')).toBe(CONFIG_DEFAULTS.userAgent)
+    expect(reopened.getConfig('ffmpegDirectory')).toBe(CONFIG_DEFAULTS.ffmpegDirectory)
     expect(reopened.getConfig('downloadDirectory')).toBe(CONFIG_DEFAULTS.downloadDirectory)
   })
 
@@ -117,5 +136,20 @@ describe('database 旧库残留字段清理', () => {
     const raw = JSON.parse(readFileSync(dbPath, 'utf-8')) as Record<string, unknown>
     expect('allmembersSimple' in raw).toBe(false)
     expect(raw.allmembers).toEqual([{ sid: '10337', sname: '曹可甜' }])
+  })
+
+  it('init 丢弃已废弃的 config.userAgent（该配置项与设置页入口已移除）', () => {
+    const dbPath = tempDatabaseFile()
+    writeFileSync(dbPath, JSON.stringify({
+      config: { downloadDirectory: '/tmp/downloads', ffmpegDirectory: '', userAgent: 'legacy-ua' },
+    }))
+
+    const instance = new Database(dbPath)
+    instance.init()
+
+    const config = readConfigFile(dbPath)
+    expect('userAgent' in config).toBe(false)
+    // 其余配置项照常保留
+    expect(config.downloadDirectory).toBe('/tmp/downloads')
   })
 })

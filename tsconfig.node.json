@@ -3,6 +3,10 @@
   "compilerOptions": {
     "composite": true,
     "moduleResolution": "bundler",
+    "paths": {
+      "@common/*": ["./src/common/*"],
+      "@preload/*": ["./src/preload/*"]
+    },
     "types": ["electron-vite/node"]
   },
   "include": ["electron.vite.config.*", "src/common/**/*", "src/main/**/*", "src/preload/**/*", "src/renderer/src/services/api-urls.ts"]

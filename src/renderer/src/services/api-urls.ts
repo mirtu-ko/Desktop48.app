@@ -1,43 +1,31 @@
 /**
- * 全部接口地址（无状态常量）。
+ * 站点请求的接口地址（渲染层 `Apis.*` 使用，无状态常量）。
+ *
+ * pocketapi 域地址统一由 `src/common/pocket-api-urls.ts` 提供（与主进程同源，说明见该文件）；
+ * 这里只保留**其它域名**的两条：成员名单 jsonp（h5.48.cn）与曲库静态 JSON（cgt48.com）。
+ *
+ * 登录 / 发码 / 关注 / 签到 / 行程 / 消息 / IM 会话等地址不在本层——那些功能早已迁到主进程
+ * （`main/pocket48/pocket-auth.ts`）。
+ *
+ * 注意：本文件被 `tsconfig.node.json` 的 include 显式收录（历史遗留：主进程曾直接引用它，
+ * 现已无引用）。它同时属于 node / web 两个工程，引用 `src/common` 必须用 `@common/...`——
+ * 两个 tsconfig 都配了同名 paths，别再退回相对路径（曾因此被迫用 `../../../common/...`）。
  */
+import { LIVE_LIST_URL, LIVE_ONE_URL, OPEN_LIVE_LIST_URL, OPEN_LIVE_URL, UPDATE_INFO_URL } from '@common/pocket-api-urls'
+
 const ApiUrls = {
-  OPEN_LIVE_LIST_URL: 'https://pocketapi.48.cn/live/api/v1/live/getOpenLiveList',
-  OPEN_LIVE_URL: 'https://pocketapi.48.cn/live/api/v1/live/getOpenLiveOne',
-  LIVE_LIST_URL: 'https://pocketapi.48.cn/live/api/v1/live/getLiveList',
-  LIVE_ONE_URL: 'https://pocketapi.48.cn/live/api/v1/live/getLiveOne',
-  MUSIC_LIST_URL: 'https://www.cgt48.com/json/music_snh.json',
-  B50_ALBUMS_URL: 'https://b50.ckg48.com/resource/json/albums.json',
-  B50_SONGS_URL: 'https://b50.ckg48.com/resource/json/songs.json',
+  // 直播 / 回放：getLiveList 为在播列表，getOpenLiveList 为公演排期
+  LIVE_LIST_URL,
+  LIVE_ONE_URL,
+  OPEN_LIVE_LIST_URL,
+  OPEN_LIVE_URL,
 
-  UPDATE_INFO_URL: 'https://pocketapi.48.cn/user/api/v1/client/update/group_team_star',
-  SET_COOKIE_URL: 'https://live.48.cn/Server/do_ajax_setcookie',
+  // 成员数据同步（starInfo / teamInfo 等分节的全量拉取）
+  UPDATE_INFO_URL,
 
-  MESSAGE_BOX_URL: 'https://pocketapi.48.cn/message/api/v1/user/message/list',
-  MESSAGE_INFO_URL: 'https://pocketapi.48.cn/message/api/v1/user/message/info',
-
-  MOBILE_LOGIN_URL: 'https://pocketapi.48.cn/user/api/v1/login/app/mobile',
-  VERIFY_CODE_LOGIN_URL: 'https://pocketapi.48.cn/user/api/v1/login/app/mobile/code',
-  SEND_SMS_URL: 'https://pocketapi.48.cn/user/api/v1/sms/send2',
-
-  USER_INFO_URL: 'https://pocketapi.48.cn/user/api/v1/user/info/reload',
-
-  JUJU_LIST_URL: 'https://pocketapi.48.cn/im/api/v1/conversation/page',
-  JUJU_SOURCE_URL: 'https://pocketapi.48.cn/im/api/v1/im/room/info/type/source',
-  JUJU_OWNER_URL: 'https://pocketapi.48.cn/im/api/v1/chatroom/msg/list/homeowner',
-  JUJU_ALL_URL: 'https://pocketapi.48.cn/im/api/v1/chatroom/msg/list/all',
-  IM_USER_INFO: 'https://pocketapi.48.cn/im/api/v1/im/userinfo',
-
-  ADD_SINGLE_ATTENTION_URL: 'https://pocketapi.48.cn/user/api/v1/friendships/friends/add',
-  REMOVE_SINGLE_ATTENTION_URL: 'https://pocketapi.48.cn/user/api/v1/friendships/friends/remove',
-  FOLLOW_MEMBERS_URL: 'https://pocketapi.48.cn/user/api/v1/friendships/friends',
-
-  CHECK_IN_URL: 'https://pocketapi.48.cn/user/api/v1/checkin',
-
-  TRIP_LIST_URL: 'https://pocketapi.48.cn/trip/api/trip/v1/list',
-
+  // 成员名单 jsonp 与曲库静态 JSON
   ALL_MEMBER_URL: 'https://h5.48.cn/resource/jsonp/allmembers.php?gid=00',
-  ALL_MEMBER_SIMPLE_URL: 'https://h5.48.cn/resource/jsonp/allmembers_simple.php?gid=00',
+  MUSIC_LIST_URL: 'https://www.cgt48.com/json/music_snh.json',
 }
 
 export default ApiUrls

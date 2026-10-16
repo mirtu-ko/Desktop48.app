@@ -10,7 +10,8 @@ describe('domain/member-flags', () => {
     })
 
     it('字符串数字 id 与数字 id 视为同一人，不重复落库', () => {
-      const merged = addMemberFlagIds(['1'], [1, '1', 2])
+      // 入参名义上是 number[]，但口袋历史上回过字符串 id：这里刻意塞进去验证归一化
+      const merged = addMemberFlagIds(['1'], [1, '1', 2] as unknown as number[])
       expect(merged).toEqual(['1', 2])
     })
 

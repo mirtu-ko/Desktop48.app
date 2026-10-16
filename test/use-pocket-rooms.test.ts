@@ -1,6 +1,7 @@
+import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 import type { PocketRoomMessageView } from '../src/renderer/src/utils/pocket-room-message'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { effectScope } from 'vue'
+import { effectScope, nextTick } from 'vue'
 
 /**
  * use-pocket-rooms 编排层：关注名单合并、房间遍历（过滤无房间）、
@@ -93,12 +94,19 @@ function roomMsg(msgIdClient: string, msgTime: number, text: string, nick = '粉
  * 被 afterEach 的 setLoggedIn(true) 唤醒，打出 window is not defined 噪音。
  */
 let activeScope: ReturnType<typeof effectScope> | null = null
+/**
+ * 同一个假主进程下临时多开的 composable 实例（模拟 <KeepAlive :key> 重建后 Rooms 重挂载）：
+ * 同样要在 afterEach 停掉，理由同上。
+ */
+const extraScopes: Array<ReturnType<typeof effectScope>> = []
 
 interface SetupOptions {
   /** 口袋账号关注 ID */
   pocketIds?: number[]
   /** 本地关注名单（主进程 getMemberFlags 解析结果） */
   localFlags?: Array<{ userId: number, realName: string, teamColor: string }>
+  /** 本地屏蔽名单（同为 getMemberFlags，kind='blocked'）：进左列前会被剔除 */
+  blockedFlags?: Array<{ userId: number, realName: string, teamColor: string }>
   /** getLiveList 分页：数组元素为一页 */
   livePages?: Array<{ next: string, liveList: LiveItem[] }>
   /** true = pocketGetFollowedIds 抛错（过期/网络） */
@@ -115,6 +123,8 @@ interface SetupOptions {
   smallChannels?: Record<number, { serverId: string, channelId: string }>
   /** channelId → 暗号问题；未设置 = room/info 未被拦（无门禁，切进去直接拉消息） */
   roomQuestions?: Record<string, { questionId: string, question: string }>
+  /** channelId → 正确暗号；不设置则该频道的提交一律判错 */
+  roomAnswers?: Record<string, string>
 }
 
 async function setup(options: SetupOptions = {}) {
@@ -125,7 +135,8 @@ async function setup(options: SetupOptions = {}) {
     lastMessageFetched: [] as string[][],
     messageFetched: [] as Array<{ channelId: string, nextTime: number, scope: 'member' | 'all' }>,
     serverChannelsFetched: [] as string[],
-    openFloatWindow: [] as unknown[],
+    answerChecks: [] as Array<{ channelId: string, answer: string }>,
+    openFloatWindow: [] as Array<[FloatPlayerKind, FloatPlayerPayload]>,
   }
   roomMock.channelFail = new Set()
   roomMock.messageFail = new Set()
@@ -138,7 +149,8 @@ async function setup(options: SetupOptions = {}) {
           throw new Error('登录已过期')
         return options.pocketIds ?? []
       }),
-      getMemberFlags: vi.fn(async () => options.localFlags ?? []),
+      getMemberFlags: vi.fn(async (kind: string) =>
+        (kind === 'blocked' ? options.blockedFlags : options.localFlags) ?? []),
       pocketGetAuthState: vi.fn(async () => authMock.state.value),
       pocketGetRoomChannel: vi.fn(async (userId: number) => {
         calls.channelFetched.push(userId)
@@ -167,10 +179,24 @@ async function setup(options: SetupOptions = {}) {
       pocketGetSmallChannel: vi.fn(async (userId: number) => options.smallChannels?.[userId] ?? null),
       // 默认无门禁（room/info 未被拦）；给了问题即视为被暗号拦下
       pocketGetRoomQuestion: vi.fn(async (channelId: string) => options.roomQuestions?.[channelId] ?? null),
-      pocketCheckRoomAnswer: vi.fn(async () => ({ ok: false, reason: 'unverified' as const })),
-      openFloatWindow: vi.fn(async (kind: string, payload: unknown) => {
+      pocketCheckRoomAnswer: vi.fn(async (channelId: string, _questionId: string, answer: string) => {
+        calls.answerChecks.push({ channelId, answer })
+        return options.roomAnswers?.[channelId] === answer
+          ? { ok: true, via: 'server' as const }
+          : { ok: false, reason: 'wrong' as const, message: '暗号不正确' }
+      }),
+      openFloatWindow: vi.fn(async (kind: FloatPlayerKind, payload: FloatPlayerPayload) => {
         calls.openFloatWindow.push([kind, payload])
       }),
+      // 标记房间已读（进房 / 贴底时由页面层调用）：未读真相在主进程，这里只收下调用
+      pocketMarkRead: vi.fn(async () => {}),
+      // 开直播窗前会做 FFmpeg 校验（use-live-guard）：给就绪态，选中直播的用例才开得出窗
+      getFfmpegStatus: vi.fn(async () => ({
+        ok: true,
+        problem: null,
+        directory: '/opt/ffmpeg',
+        binaryPath: '/opt/ffmpeg/ffmpeg',
+      })),
     },
   })
 
@@ -185,6 +211,24 @@ async function setup(options: SetupOptions = {}) {
   }
 
   const { usePocketRooms } = await import('@renderer/composables/use-pocket-rooms')
+  // 解锁表是模块级单例，跨用例存活：每个用例开头清空，还原成「进程刚起来」的状态
+  const { clearSmallRoomUnlocks } = await import('@renderer/utils/small-room-unlock')
+  clearSmallRoomUnlocks()
+  // 大房间频道解析缓存同理（详情卡入口与临时房间共用，见 test/room-channel.test.ts）
+  const { clearRoomChannelCache, resolveMemberRoomChannel } = await import('@renderer/services/room-channel')
+  clearRoomChannelCache()
+  for (const extra of extraScopes.splice(0))
+    extra.stop()
+  // 未读镜像也是模块级单例：清空后才建新实例，免得上个用例的未读影响本次排序
+  const { markRoomRead, unreadCountOf, usePocketUnreadStore } = await import('@renderer/stores/pocket-unread')
+  const { unreadRooms } = usePocketUnreadStore()
+  unreadRooms.value = {}
+  // 关注 / 屏蔽名单 store 同样是模块级单例，且 ensureLoaded 只灌一次：显式重灌，
+  // 还原成「进程刚起来」的状态（否则上个用例的屏蔽名单会漏到本次）
+  const { useBlockedMembersStore, useFollowedMembersStore } = await import('@renderer/stores/member-flags')
+  const blockedStore = useBlockedMembersStore()
+  await blockedStore.refreshBlockedMembers()
+  await useFollowedMembersStore().refreshFollowedMembers()
   const scope = effectScope()
   const api = scope.run(() => usePocketRooms())!
   activeScope = scope
@@ -192,6 +236,36 @@ async function setup(options: SetupOptions = {}) {
     api,
     calls,
     scope,
+    unreadCountOf,
+    markRoomRead,
+    /** 模拟主进程未读广播（快照里只含 count > 0 的房间） */
+    setUnread: (counts: Record<number, number>) => {
+      unreadRooms.value = Object.fromEntries(
+        Object.entries(counts).map(([userId, count]) => [
+          userId,
+          { count, bigCount: count, smallCount: 0, latestTime: 0 },
+        ]),
+      )
+    },
+    /** 详情卡入口显隐用的那条解析路径（与临时房间共用缓存） */
+    resolveRoomChannel: resolveMemberRoomChannel,
+    /**
+     * 直接改屏蔽名单单例：模拟「在本页挂在 keep-alive 后台时，于成员页 / 直播页屏蔽了某人」。
+     * 走 store 的响应式名单，watch(blockedMembers) 据此就地摘条目。
+     */
+    setBlocked: (userIds: number[]) => {
+      blockedStore.blockedMembers.value = userIds.map(userId => ({
+        userId,
+        realName: `成员${userId}`,
+        teamColor: '',
+      }))
+    },
+    /** 再开一个 composable 实例：模拟页面层重建（实例换了，模块级单例状态应当留着） */
+    newInstance: () => {
+      const extra = effectScope()
+      extraScopes.push(extra)
+      return extra.run(() => usePocketRooms())!
+    },
     /** 当前房间消息流的 [昵称, 正文, 时刻] 摘要 */
     digest: () => api.messages.value.map(item => [item.nick, item.text, item.msgTime]),
   }
@@ -205,6 +279,8 @@ afterEach(() => {
   vi.useRealTimers()
   activeScope?.stop()
   activeScope = null
+  for (const extra of extraScopes.splice(0))
+    extra.stop()
   vi.unstubAllGlobals()
   vi.clearAllMocks()
   authMock.setLoggedIn(true)
@@ -276,6 +352,139 @@ describe('use-pocket-rooms / 房间列表构建', () => {
 
     expect(api.pocketFollowError.value).toBe('登录已过期')
     expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+  })
+})
+
+describe('use-pocket-rooms / 屏蔽优先', () => {
+  function blockFixture(blockedFlags: SetupOptions['blockedFlags']): SetupOptions {
+    return {
+      pocketIds: [10001, 10002],
+      blockedFlags,
+      directory: {
+        10001: { realName: '甲', avatar: '', teamName: '', teamColor: '' },
+        10002: { realName: '乙', avatar: '', teamName: '', teamColor: '' },
+      },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '甲的留言')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('b', 200, '乙的留言')] } },
+      },
+    }
+  }
+
+  // 关注与屏蔽正交（见 use-member-actions）：账号关注照旧存在，但屏蔽的成员不进左列——
+  // 顺带也就不必为它解析房间频道
+  it('被屏蔽的成员不进左列，也不为它解析频道', async () => {
+    const { api, calls } = await setup(blockFixture([{ userId: 10002, realName: '乙', teamColor: '' }]))
+    await api.load()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+    expect(calls.channelFetched).toEqual([10001])
+  })
+
+  // 屏蔽入口在成员页 / 直播页 / 回放页，本页常挂在 keep-alive 后台：
+  // 只靠 load() 过滤的话，切回来看到的还是旧列表
+  it('屏蔽名单变化：条目就地摘除，正看着的成员右侧一并收起', async () => {
+    const { api, setBlocked } = await setup(blockFixture([]))
+    await api.load()
+    await api.selectRoom(10002)
+    expect(api.chatStatus.value).toBe('ready')
+
+    setBlocked([10002])
+    await nextTick()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+    expect(api.selectedUserId.value).toBeNull()
+    expect(api.chatStatus.value).toBe('idle')
+  })
+
+  // 临时条目是用户从成员详情卡主动打开的，显式意图压过屏蔽
+  it('临时房间不受屏蔽影响', async () => {
+    const { api, setBlocked } = await setup({
+      pocketIds: [10001],
+      blockedFlags: [{ userId: 10001, realName: '甲', teamColor: '' }],
+      directory: { 10002: { realName: '乙', avatar: '', teamName: '', teamColor: '' } },
+    })
+    await api.load()
+    expect(api.rooms.value).toEqual([])
+
+    setBlocked([10001, 10002])
+    await nextTick()
+    expect(await api.openTemporaryRoom(10002)).toEqual({ ok: true })
+
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary])).toEqual([[10002, true]])
+  })
+})
+
+describe('use-pocket-rooms / 左列排序', () => {
+  /**
+   * 三个关注成员：昵称取「成员N」保证 localeCompare('zh') 结果确定（成员1 < 成员2 < 成员3），
+   * 其中 10001 在直播 —— 用来验证未读能压过「正在直播」这一档。
+   */
+  function sortFixture(): SetupOptions {
+    return {
+      pocketIds: [10001, 10002, 10003],
+      livePages: [{ next: '0', liveList: [live('L1', 10001, '成员1开播了')] }],
+      directory: {
+        10001: { realName: '成员1', avatar: '', teamName: '', teamColor: '' },
+        10002: { realName: '成员2', avatar: '', teamName: '', teamColor: '' },
+        10003: { realName: '成员3', avatar: '', teamName: '', teamColor: '' },
+      },
+    }
+  }
+
+  it('有未读的排最前，压过「正在直播」；该档内仍按 直播 → 昵称', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+    // 无未读：在直播的排前，其余按昵称
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+
+    setUnread({ 10003: 5 })
+    await nextTick()
+
+    // 10003 有未读 → 置顶；10001 虽在直播也不越位
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+  })
+
+  it('新消息到达：该房间浮到最前', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+
+    setUnread({ 10002: 1 })
+    await nextTick()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10002, 10001, 10003])
+  })
+
+  // 回归：进房即 markRead（本地乐观清零 + 主进程广播）。若未读变化一律重排，
+  // 用户刚点的那一条会在他眼皮底下被抽走，观感是「列表在躲我」。
+  it('读掉未读不重排：条目留在原位，下一次自然排序才归位', async () => {
+    const { api, markRoomRead, setUnread } = await setup(sortFixture())
+    await api.load()
+    setUnread({ 10003: 2 })
+    await nextTick()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+
+    await markRoomRead(10003)
+    await nextTick()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+
+    // 手动刷新 = 一次自然排序：按当下未读归位
+    await api.refreshRoomStatus()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+  })
+
+  it('临时房间的置顶优先于未读：带未读的关注房间也不越位', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+    setUnread({ 10001: 9 })
+    await nextTick()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+
+    await api.openTemporaryRoom(10004)
+
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary]))
+      .toEqual([[10004, true], [10001, false], [10002, false], [10003, false]])
   })
 })
 
@@ -402,7 +611,7 @@ describe('use-pocket-rooms / 左列最新消息预览', () => {
     await api.selectRoom(10001)
 
     vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(async () => [
-      { channelId: 'ch-10002', starName: '乙', msgContent: '乙的新消息', msgTime: 500 },
+      { channelId: 'ch-10002', starName: '乙', msgContent: '乙的新消息', msgTime: 500, unreadCount: null },
     ])
     await api.refreshRoomPreviews()
 
@@ -438,7 +647,7 @@ describe('use-pocket-rooms / 左列最新消息预览', () => {
 
     // 然后批量回包到位：文案不同（滞后快照），也不得回写选中房间
     vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(async () => [
-      { channelId: 'ch-10001', starName: '甲', msgContent: '迟到的旧快照', msgTime: 0 },
+      { channelId: 'ch-10001', starName: '甲', msgContent: '迟到的旧快照', msgTime: 0, unreadCount: null },
     ])
     await api.refreshRoomPreviews()
 
@@ -473,7 +682,7 @@ describe('use-pocket-rooms / 左列最新消息预览', () => {
     await api.selectRoom(10002)
 
     vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(async () => [
-      { channelId: 'ch-10001', starName: '甲', msgContent: '更新的新消息', msgTime: 0 },
+      { channelId: 'ch-10001', starName: '甲', msgContent: '更新的新消息', msgTime: 0, unreadCount: null },
     ])
     await api.refreshRoomPreviews()
 
@@ -720,6 +929,204 @@ describe('use-pocket-rooms / 选中连房与消息流', () => {
     // 锁定态本来就不拉小房间消息；切范围同样不该回落大房间重拉
     expect(calls.messageFetched.map(item => item.channelId)).toEqual(['ch-10001'])
   })
+
+  /** 小房间暗号用例的公共假环境：10001 的小房间被暗号拦着（答案 open-sesame），10002 另有暗号 */
+  function smallRoomAnswerFixture() {
+    return {
+      pocketIds: [10001, 10002],
+      smallChannels: {
+        10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' },
+        10002: { serverId: 'srv-10002', channelId: 'ch-10002-small' },
+      },
+      roomQuestions: {
+        'ch-10001-small': { questionId: 'q1', question: '暗号是什么？' },
+        'ch-10002-small': { questionId: 'q2', question: '暗号是什么？' },
+      },
+      roomAnswers: { 'ch-10001-small': 'open-sesame' },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '大房间留言')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('b', 110, '另一人留言')] } },
+        'ch-10001-small': { 0: { nextTime: 0, messages: [roomMsg('s', 300, '小房间密语')] } },
+      },
+    } satisfies SetupOptions
+  }
+
+  it('解锁一次后同会话内免校验：判错不放行、切走成员再回来不重锁', async () => {
+    const { api, calls, digest } = await setup(smallRoomAnswerFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.setViewMode('small')
+    expect(api.smallLocked.value).toBe(true)
+
+    // 判错不放行，也不写进解锁表
+    expect((await api.unlockSmall('乱猜')).ok).toBe(false)
+    expect(api.smallLocked.value).toBe(true)
+    // 判对即解锁并当场拉出小房间消息
+    expect((await api.unlockSmall('open-sesame')).ok).toBe(true)
+    expect(api.smallLocked.value).toBe(false)
+    expect(digest()).toEqual([['粉丝甲', '小房间密语', 300]])
+
+    // 切到别的成员（其小房间另有暗号）再切回来：仍免校验，不该再要一次
+    await api.selectRoom(10002)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.setViewMode('small')
+    expect(api.smallLocked.value).toBe(false)
+    expect(calls.answerChecks.map(item => item.answer)).toEqual(['乱猜', 'open-sesame'])
+  })
+
+  it('页面层重建（Rooms 实例重挂载）后仍免校验：解锁态活在模块级单例', async () => {
+    const { api, calls, newInstance } = await setup(smallRoomAnswerFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.setViewMode('small')
+    expect((await api.unlockSmall('open-sesame')).ok).toBe(true)
+
+    // App.vue 捕获渲染错误会 pageLayerKey += 1 重建整棵 <KeepAlive>：实例是新的，进程没重启
+    const fresh = newInstance()
+    await fresh.load()
+    await fresh.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await fresh.setViewMode('small')
+    expect(fresh.smallLocked.value).toBe(false)
+    expect(fresh.messages.value.map(item => [item.nick, item.text, item.msgTime]))
+      .toEqual([['粉丝甲', '小房间密语', 300]])
+    // 全程只有第一次那一声校验
+    expect(calls.answerChecks.map(item => item.answer)).toEqual(['open-sesame'])
+  })
+})
+
+describe('use-pocket-rooms / 临时房间（成员详情卡入口）', () => {
+  /** 详情卡入口带进来的成员：10002 未关注、有大房间；10001 是已关注的且在直播 */
+  function tempFixture(pocketIds: number[] = [10001]): SetupOptions {
+    return {
+      pocketIds,
+      livePages: [{ next: '0', liveList: [live('L1', 10001, '甲开播了')] }],
+      directory: {
+        10001: { realName: '甲', avatar: '/a.jpg', teamName: 'TEAM SII', teamColor: '88ccff' },
+        10002: { realName: '乙', avatar: '/b.jpg', teamName: 'TEAM NII', teamColor: 'ffcc88' },
+      },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '甲的留言')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('t', 300, '乙的留言')] } },
+      },
+    }
+  }
+
+  it('打开未关注成员的大房间：左列插入标记临时的条目并置顶、自动选中，不写关注名单', async () => {
+    const { api, calls, digest } = await setup(tempFixture())
+    await api.load()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+
+    const result = await api.openTemporaryRoom(10002)
+
+    expect(result).toEqual({ ok: true })
+    // 置顶：临时房间排在「正在直播的关注房间」前面
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary, room.nickname]))
+      .toEqual([[10002, true, '乙'], [10001, false, '甲']])
+    expect(api.selectedRoom.value?.userId).toBe(10002)
+    expect(api.chatStatus.value).toBe('ready')
+    expect(digest()).toEqual([['粉丝甲', '乙的留言', 300]])
+    // 关注的那位在首灌遍历时解析，临时这位按需解析
+    expect(calls.channelFetched).toEqual([10001, 10002])
+  })
+
+  it('已在关注名单里的成员：不建第二条条目，直接选中关注房间', async () => {
+    const { api } = await setup(tempFixture())
+    await api.load()
+
+    expect(await api.openTemporaryRoom(10001)).toEqual({ ok: true })
+
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary])).toEqual([[10001, false]])
+    expect(api.temporaryRoom.value).toBeNull()
+    expect(api.selectedRoom.value?.userId).toBe(10001)
+  })
+
+  it('与详情卡入口共用频道解析：先探测过的成员打开时不再重复请求', async () => {
+    const { api, calls, resolveRoomChannel } = await setup(tempFixture())
+    await api.load()
+
+    // 详情卡打开该成员时已探过一次（入口显隐用）
+    await resolveRoomChannel(10002)
+    await api.openTemporaryRoom(10002)
+
+    expect(calls.channelFetched.filter(id => id === 10002)).toHaveLength(1)
+  })
+
+  it('查不到大房间：如实返回失败，不插入条目', async () => {
+    const { api } = await setup(tempFixture([]))
+    await api.load()
+    vi.mocked(window.mainAPI.pocketGetRoomChannel)
+      .mockImplementationOnce(async () => ({ serverId: '', channelId: '' }))
+
+    const result = await api.openTemporaryRoom(10002)
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('未查询到该成员的大房间')
+    expect(api.rooms.value).toEqual([])
+    expect(api.selectedRoom.value).toBeNull()
+  })
+
+  it('未登录：拒绝打开且不发频道请求', async () => {
+    authMock.setLoggedIn(false)
+    const { api, calls } = await setup(tempFixture())
+
+    const result = await api.openTemporaryRoom(10002)
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('登录口袋48账号后才能查看房间')
+    expect(calls.channelFetched).toEqual([])
+    expect(api.rooms.value).toEqual([])
+  })
+
+  it('刷新重建列表后临时条目仍在，选中不被打断', async () => {
+    const { api, digest } = await setup(tempFixture())
+    await api.load()
+    await api.openTemporaryRoom(10002)
+
+    await api.load()
+
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary])).toEqual([[10002, true], [10001, false]])
+    expect(api.temporaryRoom.value?.userId).toBe(10002)
+    expect(api.selectedRoom.value?.userId).toBe(10002)
+    expect(digest()).toEqual([['粉丝甲', '乙的留言', 300]])
+  })
+
+  it('关闭临时房间：撤掉条目并清空右侧，之后刷新也不会补回来', async () => {
+    const { api } = await setup(tempFixture())
+    await api.load()
+    await api.openTemporaryRoom(10002)
+
+    api.closeTemporaryRoom()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+    expect(api.temporaryRoom.value).toBeNull()
+    expect(api.selectedRoom.value).toBeNull()
+    expect(api.messages.value).toEqual([])
+
+    await api.load()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+  })
+
+  it('临时房间的成员随后被关注：临时条目就地撤掉，只留关注条目且选中不断', async () => {
+    const pocketIds = [10001]
+    const { api } = await setup(tempFixture(pocketIds))
+    await api.load()
+    await api.openTemporaryRoom(10002)
+    expect(api.temporaryRoom.value?.userId).toBe(10002)
+
+    // 在别的页面关注了 TA：口袋关注名单变化，房间页重新首灌
+    pocketIds.push(10002)
+    await api.load()
+
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary]))
+      .toEqual([[10001, false], [10002, false]])
+    expect(api.temporaryRoom.value).toBeNull()
+    expect(api.selectedRoom.value?.userId).toBe(10002)
+  })
 })
 
 describe('use-pocket-rooms / 刷新与卸载', () => {
@@ -736,7 +1143,7 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
     apisMock.lives = async () => ({ next: '0', liveList: [live('L1', 10002, '乙开播了')] })
     const lastMessagesMock = vi.mocked(window.mainAPI.pocketGetRoomLastMessages)
     lastMessagesMock.mockImplementationOnce(async () => [
-      { channelId: 'ch-10002', starName: '乙', msgContent: '乙的最新消息', msgTime: 500 },
+      { channelId: 'ch-10002', starName: '乙', msgContent: '乙的最新消息', msgTime: 500, unreadCount: null },
     ])
     await api.refreshRoomStatus()
 
@@ -761,9 +1168,13 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
     expect(calls.livePages).toHaveLength(1)
   })
 
-  /** 直播分享卡视图模型（只挑 openSharedLive 会读的字段） */
+  /**
+   * 直播分享卡视图模型（只挑 openSharedLive 会读的字段）。
+   * 中间对象显式标注而不是直接 return 字面量：展开 Partial 会把未写出的必填字段
+   * （imageWidth / imageHeight / videoWidth / videoHeight）退化成可选。
+   */
   function shareMsg(overrides: Partial<PocketRoomMessageView> = {}): PocketRoomMessageView {
-    return {
+    const base: PocketRoomMessageView = {
       id: 'm1',
       kind: 'live',
       text: '[直播分享] 小猫咪来了',
@@ -775,9 +1186,13 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
       msgTime: 1728000000000,
       quote: null,
       imageUrl: '',
+      imageWidth: 0,
+      imageHeight: 0,
       audioUrl: '',
       videoUrl: '',
       videoPoster: '',
+      videoWidth: 0,
+      videoHeight: 0,
 
       liveId: 'L9',
       liveType: 2,
@@ -785,8 +1200,8 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
       liveStartTime: 1728000000000,
       liveCover: '',
       liveIsPlayback: false,
-      ...overrides,
     }
+    return { ...base, ...overrides }
   }
 
   it('openSharedLive：liveId 在播 → 直播播放窗（kind=live）', async () => {
@@ -797,6 +1212,8 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
     })
     await api.load()
     api.openSharedLive(shareMsg())
+    // openLive 保持同步签名，开窗前的 FFmpeg 校验在内部异步完成，这里等它跑完
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(calls.openFloatWindow).toHaveLength(1)
     expect(calls.openFloatWindow[0][0]).toBe('live')
