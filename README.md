@@ -1,31 +1,31 @@
 # Desktop48.app
 
-A cross-platform desktop application for Pocket48.
+A cross-platform desktop application for Pocket48（口袋48）.
 
-## Attribution
+## 📌 Attribution
 
-本项目基于原 Vue 2 版本项目 [desktop48](https://github.com/Jarvay/desktop48)（原作者 [@Jarvay](https://github.com/Jarvay)）重构与升级至 Vue 3。
+This project is based on the original Vue 2 project [desktop48](https://github.com/Jarvay/desktop48) by [@Jarvay](https://github.com/Jarvay), rebuilt and upgraded to Vue 3.
 
-房间消息的数据结构与协议解析参考 [@yk1z](https://github.com/yk1z) 的项目 [yaya_msg](https://github.com/yk1z/yaya_msg)。
+The room message data structures and protocol parsing were implemented with reference to [@yk1z](https://github.com/yk1z)'s project [yaya_msg](https://github.com/yk1z/yaya_msg).
 
-## Project Setup
+## 🛠️ Project Setup
 
-### Install
+### 📦 Install
 
 ```bash
 $ npm install
 ```
 
-### Development
+### 💻 Development
 
 ```bash
 $ npm run dev
 ```
 
-### Build
+### 🏗️ Build
 
 ```bash
-# For windows
+# For Windows
 $ npm run build:win
 
 # For macOS
@@ -35,11 +35,11 @@ $ npm run build:mac
 $ npm run build:linux
 ```
 
-## Screenshot
+## 📷 Screenshot
 
 ![Desktop48 截图](docs/screenshot.png)
 
-## macOS 常见问题
+## 🍎 macOS 常见问题
 
 ### 打开提示"已损坏，无法打开"
 
@@ -50,8 +50,6 @@ $ npm run build:linux
 sudo xattr -rd com.apple.quarantine /Applications/Desktop48.app
 ```
 
-或者在访达中右键应用 → 选择「打开」（而非双击），在弹出的对话框中点击「打开」。
-
-## License
+## 📄 License
 
 [MIT License](LICENSE)
