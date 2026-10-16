@@ -8,9 +8,10 @@
  * （`main/pocket48/pocket-auth.ts`）。
  *
  * 注意：本文件被 `tsconfig.node.json` 的 include 显式收录（历史遗留：主进程曾直接引用它，
- * 现已无引用），而 node 工程没有 `@common` 路径映射，故此处用相对路径引入 common。
+ * 现已无引用）。它同时属于 node / web 两个工程，引用 `src/common` 必须用 `@common/...`——
+ * 两个 tsconfig 都配了同名 paths，别再退回相对路径（曾因此被迫用 `../../../common/...`）。
  */
-import { LIVE_LIST_URL, LIVE_ONE_URL, OPEN_LIVE_LIST_URL, OPEN_LIVE_URL, UPDATE_INFO_URL } from '../../../common/pocket-api-urls'
+import { LIVE_LIST_URL, LIVE_ONE_URL, OPEN_LIVE_LIST_URL, OPEN_LIVE_URL, UPDATE_INFO_URL } from '@common/pocket-api-urls'
 
 const ApiUrls = {
   // 直播 / 回放：getLiveList 为在播列表，getOpenLiveList 为公演排期

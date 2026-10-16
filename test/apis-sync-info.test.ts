@@ -1,3 +1,4 @@
+import type { MemberDataContent } from '@preload/ipc-contract'
 import ApiUrls from '@renderer/services/api-urls'
 import Apis from '@renderer/services/apis'
 import EventBus from '@renderer/services/event-bus'
@@ -26,7 +27,9 @@ const updateOkBody = JSON.stringify({
 const wafHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head></html>'
 
 function stubNet(options: { update?: string, allMembers?: string, allMembersError?: Error } = {}) {
-  const saveMemberData = vi.fn(async () => ({ ok: true }))
+  // 形参类型对齐真实契约（preload 的 saveMemberData）：否则 mock.calls 是空元组，
+  // 取第 0 个实参在类型上不成立
+  const saveMemberData = vi.fn(async (_content: Partial<MemberDataContent>) => ({ ok: true }))
   const netRequest = vi.fn(async (payload: { url: string }) => {
     if (payload.url === ApiUrls.ALL_MEMBER_URL) {
       if (options.allMembersError)
@@ -43,7 +46,7 @@ function stubNet(options: { update?: string, allMembers?: string, allMembersErro
 
 /** 取本次上送给主进程的载荷（缺 key = 跳过该分节，主进程保留旧值） */
 function savedPayload(saveMemberData: ReturnType<typeof stubNet>['saveMemberData']) {
-  return saveMemberData.mock.calls[0][0] as Record<string, unknown>
+  return saveMemberData.mock.calls[0][0]
 }
 
 beforeEach(() => {

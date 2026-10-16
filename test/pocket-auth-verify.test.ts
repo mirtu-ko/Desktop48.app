@@ -45,7 +45,7 @@ vi.mock('electron', () => {
       setHeader: (key: string, value: string) => { headers[key] = value },
       write: (chunk: string) => { body += chunk },
       abort: vi.fn(),
-      on: (event: string, callback: (argument: never) => void) => {
+      on: (event: string, callback: (argument: unknown) => void) => {
         if (event === 'response')
           responseHandlers.push(callback)
         else if (event === 'error')

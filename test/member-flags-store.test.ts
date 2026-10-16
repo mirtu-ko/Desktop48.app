@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { makeMember } from './fixtures/member'
 
 /**
  * stores/member-flags 的口袋关注合并（mergeFromPocket）与
@@ -8,10 +9,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
  */
 
 const { ElMessageMock } = vi.hoisted(() => {
-  const mock = vi.fn()
-  mock.error = vi.fn()
-  mock.success = vi.fn()
-  mock.warning = vi.fn()
+  // ElMessage 既可调用、又挂着 error/success/warning 静态方法：Object.assign 一次给全，
+  // 逐个赋值不成立（vi.fn() 的函数类型上写这些属性属于新增属性）
+  const mock = Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), warning: vi.fn() })
   return { ElMessageMock: mock }
 })
 vi.mock('element-plus', () => ({ ElMessage: ElMessageMock }))
@@ -124,7 +124,7 @@ describe('mergeFromPocket（口袋关注合并，只增不删）', () => {
 describe('toggleFollowMember 双写口袋关注', () => {
   it('新关注：本地落库 + pocketFollowMember', async () => {
     const { actions, calls } = await setup({ loggedIn: true })
-    await actions.toggleFollowMember({ userId: 10001, realName: '甲' })
+    await actions.toggleFollowMember(makeMember({ userId: 10001, realName: '甲' }))
     expect(calls.addMemberFlag).toEqual([['followed', 10001]])
     expect(calls.pocketFollow).toEqual([10001])
     expect(calls.pocketUnfollow).toEqual([])
@@ -136,7 +136,7 @@ describe('toggleFollowMember 双写口袋关注', () => {
       flags: [{ userId: 10001, realName: '甲', teamColor: '' }],
     })
     await store.refreshFollowedMembers()
-    await actions.toggleFollowMember({ userId: 10001, realName: '甲' })
+    await actions.toggleFollowMember(makeMember({ userId: 10001, realName: '甲' }))
     expect(calls.removeMemberFlag).toEqual([['followed', 10001]])
     expect(calls.pocketUnfollow).toEqual([10001])
     expect(calls.pocketFollow).toEqual([])
@@ -144,14 +144,14 @@ describe('toggleFollowMember 双写口袋关注', () => {
 
   it('未登录：只操作本地，不双写', async () => {
     const { actions, calls } = await setup({ loggedIn: false })
-    await actions.toggleFollowMember({ userId: 10001, realName: '甲' })
+    await actions.toggleFollowMember(makeMember({ userId: 10001, realName: '甲' }))
     expect(calls.addMemberFlag).toEqual([['followed', 10001]])
     expect(calls.pocketFollow).toEqual([])
   })
 
   it('双写失败静默降级：本地状态已生效，不向调用方抛错', async () => {
     const { actions, calls } = await setup({ loggedIn: true, followWriteFails: true })
-    await expect(actions.toggleFollowMember({ userId: 10001, realName: '甲' })).resolves.toBeUndefined()
+    await expect(actions.toggleFollowMember(makeMember({ userId: 10001, realName: '甲' }))).resolves.toBeUndefined()
     expect(calls.addMemberFlag).toEqual([['followed', 10001]])
     expect(ElMessageMock).toHaveBeenCalled()
   })
@@ -162,9 +162,9 @@ describe('toggleFollowMember 双写口袋关注', () => {
       flags: [{ userId: 10001, realName: '甲', teamColor: '' }],
     })
     // 先造成「已屏蔽」状态，再关注应解除屏蔽
-    await actions.toggleBlockMember({ userId: 10001, realName: '甲' })
+    await actions.toggleBlockMember(makeMember({ userId: 10001, realName: '甲' }))
     expect(calls.addMemberFlag).toContainEqual(['blocked', 10001])
-    await actions.toggleFollowMember({ userId: 10001, realName: '甲' })
+    await actions.toggleFollowMember(makeMember({ userId: 10001, realName: '甲' }))
     expect(calls.removeMemberFlag).toContainEqual(['blocked', 10001])
     expect(calls.pocketFollow).toEqual([10001])
     expect(store.isFollowed(10001)).toBe(true)

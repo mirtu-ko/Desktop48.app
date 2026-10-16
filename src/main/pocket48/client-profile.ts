@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { ANDROID_DEVICE } from '@common/android-device'
 import { app } from 'electron'
-import { ANDROID_DEVICE } from '../../common/android-device'
 import { log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
 

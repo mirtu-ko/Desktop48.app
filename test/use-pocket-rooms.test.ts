@@ -1,3 +1,4 @@
+import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 import type { PocketRoomMessageView } from '../src/renderer/src/utils/pocket-room-message'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope } from 'vue'
@@ -133,7 +134,7 @@ async function setup(options: SetupOptions = {}) {
     messageFetched: [] as Array<{ channelId: string, nextTime: number, scope: 'member' | 'all' }>,
     serverChannelsFetched: [] as string[],
     answerChecks: [] as Array<{ channelId: string, answer: string }>,
-    openFloatWindow: [] as unknown[],
+    openFloatWindow: [] as Array<[FloatPlayerKind, FloatPlayerPayload]>,
   }
   roomMock.channelFail = new Set()
   roomMock.messageFail = new Set()
@@ -181,7 +182,7 @@ async function setup(options: SetupOptions = {}) {
           ? { ok: true, via: 'server' as const }
           : { ok: false, reason: 'wrong' as const, message: '暗号不正确' }
       }),
-      openFloatWindow: vi.fn(async (kind: string, payload: unknown) => {
+      openFloatWindow: vi.fn(async (kind: FloatPlayerKind, payload: FloatPlayerPayload) => {
         calls.openFloatWindow.push([kind, payload])
       }),
       // 开直播窗前会做 FFmpeg 校验（use-live-guard）：给就绪态，选中直播的用例才开得出窗
@@ -435,7 +436,7 @@ describe('use-pocket-rooms / 左列最新消息预览', () => {
     await api.selectRoom(10001)
 
     vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(async () => [
-      { channelId: 'ch-10002', starName: '乙', msgContent: '乙的新消息', msgTime: 500 },
+      { channelId: 'ch-10002', starName: '乙', msgContent: '乙的新消息', msgTime: 500, unreadCount: null },
     ])
     await api.refreshRoomPreviews()
 
@@ -471,7 +472,7 @@ describe('use-pocket-rooms / 左列最新消息预览', () => {
 
     // 然后批量回包到位：文案不同（滞后快照），也不得回写选中房间
     vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(async () => [
-      { channelId: 'ch-10001', starName: '甲', msgContent: '迟到的旧快照', msgTime: 0 },
+      { channelId: 'ch-10001', starName: '甲', msgContent: '迟到的旧快照', msgTime: 0, unreadCount: null },
     ])
     await api.refreshRoomPreviews()
 
@@ -506,7 +507,7 @@ describe('use-pocket-rooms / 左列最新消息预览', () => {
     await api.selectRoom(10002)
 
     vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(async () => [
-      { channelId: 'ch-10001', starName: '甲', msgContent: '更新的新消息', msgTime: 0 },
+      { channelId: 'ch-10001', starName: '甲', msgContent: '更新的新消息', msgTime: 0, unreadCount: null },
     ])
     await api.refreshRoomPreviews()
 
@@ -837,7 +838,7 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
     apisMock.lives = async () => ({ next: '0', liveList: [live('L1', 10002, '乙开播了')] })
     const lastMessagesMock = vi.mocked(window.mainAPI.pocketGetRoomLastMessages)
     lastMessagesMock.mockImplementationOnce(async () => [
-      { channelId: 'ch-10002', starName: '乙', msgContent: '乙的最新消息', msgTime: 500 },
+      { channelId: 'ch-10002', starName: '乙', msgContent: '乙的最新消息', msgTime: 500, unreadCount: null },
     ])
     await api.refreshRoomStatus()
 
@@ -862,9 +863,13 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
     expect(calls.livePages).toHaveLength(1)
   })
 
-  /** 直播分享卡视图模型（只挑 openSharedLive 会读的字段） */
+  /**
+   * 直播分享卡视图模型（只挑 openSharedLive 会读的字段）。
+   * 中间对象显式标注而不是直接 return 字面量：展开 Partial 会把未写出的必填字段
+   * （imageWidth / imageHeight / videoWidth / videoHeight）退化成可选。
+   */
   function shareMsg(overrides: Partial<PocketRoomMessageView> = {}): PocketRoomMessageView {
-    return {
+    const base: PocketRoomMessageView = {
       id: 'm1',
       kind: 'live',
       text: '[直播分享] 小猫咪来了',
@@ -876,9 +881,13 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
       msgTime: 1728000000000,
       quote: null,
       imageUrl: '',
+      imageWidth: 0,
+      imageHeight: 0,
       audioUrl: '',
       videoUrl: '',
       videoPoster: '',
+      videoWidth: 0,
+      videoHeight: 0,
 
       liveId: 'L9',
       liveType: 2,
@@ -886,8 +895,8 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
       liveStartTime: 1728000000000,
       liveCover: '',
       liveIsPlayback: false,
-      ...overrides,
     }
+    return { ...base, ...overrides }
   }
 
   it('openSharedLive：liveId 在播 → 直播播放窗（kind=live）', async () => {

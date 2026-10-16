@@ -1,3 +1,4 @@
+import type { LiveDanmaku } from '@common/live-danmaku'
 /**
  * B 站直播弹幕会话：一个房间一条长连接，按订阅者（播放窗）批量下发。
  * 协议解析在 danmaku-protocol.ts、签名在 wbi.ts，这里只管连接生命周期。
@@ -7,7 +8,6 @@
  */
 import type { WebContents } from 'electron'
 import type { Buffer } from 'node:buffer'
-import type { LiveDanmaku } from '../../common/live-danmaku'
 import WebSocket from 'ws'
 import { isAllowedBilibiliApiUrl, isAllowedBilibiliSocketUrl } from '../allowed-hosts'
 import { sendIpc } from '../ipc/send'

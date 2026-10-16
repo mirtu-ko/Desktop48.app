@@ -1,3 +1,4 @@
+import type { NetRequestOptions } from '@preload/ipc-contract'
 /**
  * 系统服务类 IPC 通道注册：路径/对话框/网络请求/ffmpeg 二进制检查。
  *
@@ -7,7 +8,6 @@
  * 通道清单与渲染端 preload/index.ts 的 mainAPI 契约一一对应，两边改动请同步。
  */
 import type { IpcMainInvokeEvent } from 'electron'
-import type { NetRequestOptions } from '../../preload/ipc-contract'
 import { Buffer } from 'node:buffer'
 import path from 'node:path'
 import { app, dialog, net, shell } from 'electron'

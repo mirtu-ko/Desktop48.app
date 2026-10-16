@@ -1,4 +1,4 @@
-import type { PocketRawChatMessage } from '../../preload/ipc-contract'
+import type { PocketRawChatMessage } from '@preload/ipc-contract'
 /**
  * 网易云信聊天室 TCP 协议客户端（只收弹幕的最小实现）。
  *

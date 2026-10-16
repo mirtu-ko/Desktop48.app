@@ -1,3 +1,4 @@
+import type { NetRequestOptions } from '@preload/ipc-contract'
 import Apis from '@renderer/services/apis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ANDROID_DEVICE } from '../src/common/android-device'
@@ -14,7 +15,8 @@ vi.mock('@renderer/utils/debug', () => ({ debugLog: vi.fn() }))
 
 /** 捕获跨进程网络载荷，返回本次请求的请求头 */
 function stubNet(body = '{}') {
-  const netRequest = vi.fn(async () => body)
+  // 形参类型对齐真实契约（preload 的 netRequest），mock.calls 才能取到第 0 个实参
+  const netRequest = vi.fn(async (_options: NetRequestOptions) => body)
   vi.stubGlobal('window', { mainAPI: { netRequest } })
   return (index = 0) => netRequest.mock.calls[index][0].headers as Record<string, string>
 }

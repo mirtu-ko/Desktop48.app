@@ -2,9 +2,9 @@
  * B 站官方直播间信息拉取。公演条目缺团体信息时，渲染层以在播房间标题做公演名兜底匹配。
  * get_info 匿名可访问；结果缓存 5 分钟，单房间失败以空标题占位。
  */
-import type { BilibiliRoomInfo } from '../../common/bilibili-rooms'
-import { GROUP_ROOMS } from '../../common/bilibili-rooms'
-import { debugLog } from '../../common/log'
+import type { BilibiliRoomInfo } from '@common/bilibili-rooms'
+import { GROUP_ROOMS } from '@common/bilibili-rooms'
+import { debugLog } from '@common/log'
 import { BILIBILI_REFERER, BILIBILI_USER_AGENT } from './browser-headers'
 
 const ROOM_INFO_URL = 'https://api.live.bilibili.com/room/v1/Room/get_info'

@@ -2,7 +2,7 @@
  * 独立播放窗口的 IPC 通道注册；窗口状态与生命周期归 main/float-window.ts 管理。
  * 通道清单与 preload/index.ts 的 mainAPI 契约一一对应，两边改动请同步。
  */
-import type { FloatPlayerKind, FloatPlayerPayload } from '../../preload/ipc-contract'
+import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 import { activeWindow } from '../app'
 import { fitFloatWindowAspect, getFloatWindowPayload, openFloatWindow, setFloatWindowPlaying } from '../float-window'
 import { sendIpc } from './send'

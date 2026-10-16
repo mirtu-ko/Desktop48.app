@@ -1,4 +1,4 @@
-import type { PocketUnreadBatch } from '../../preload/ipc-contract'
+import type { PocketUnreadBatch } from '@preload/ipc-contract'
 import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
 /**
  * 房间未读检测服务（主进程唯一真相）。
@@ -33,8 +33,8 @@ import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
  * 未登录（凭证文件不存在）：清空未读与账号相关水位/计数并广播，重登按首见重新锚定。
  */
 import path from 'node:path'
+import { OFFICIAL_POCKET_USER_ID, ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app } from 'electron'
-import { OFFICIAL_POCKET_USER_ID, ROOM_MESSAGE_LIMIT } from '../../common/pocket-rooms'
 import { broadcastIpc } from '../ipc/send'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'

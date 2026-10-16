@@ -19,6 +19,7 @@ function makeMembers(count: number) {
     rank: i + 1,
     name: `成员${i + 1}`,
     group: 'SNH48',
+    userId: i + 1,
   }))
 }
 

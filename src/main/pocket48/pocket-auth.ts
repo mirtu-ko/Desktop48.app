@@ -14,7 +14,6 @@
 import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, net, safeStorage } from 'electron'
 import {
   FRIEND_ADD_URL,
   FRIEND_REMOVE_URL,
@@ -31,8 +30,9 @@ import {
   SMS_SEND_URL,
   TOKEN_CHECK_URL,
   USER_MONEY_URL,
-} from '../../common/pocket-api-urls'
-import { ROOM_MESSAGE_LIMIT } from '../../common/pocket-rooms'
+} from '@common/pocket-api-urls'
+import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
+import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
 import { clientHeaders, POCKET48_ANDROID, SEINE48_ANDROID } from './client-profile'

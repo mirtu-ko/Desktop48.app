@@ -1,4 +1,4 @@
-import type { TaskChannelPrefix } from '../../preload/ipc-contract'
+import type { TaskChannelPrefix } from '@preload/ipc-contract'
 import type { TaskSnapshot } from './task-registry'
 import fs from 'node:fs'
 import path from 'node:path'

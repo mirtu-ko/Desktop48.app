@@ -2,7 +2,7 @@
  * B 站直播弹幕的二进制包协议（web 端 /sub 长连接）。全部纯函数，不碰网络 / IPC / 日志。
  * 协议未公开且变过版，故拆包与字段提取单独隔离，变更时只改这里。
  */
-import type { DanmakuEmote, DanmakuEmoteMap, LiveDanmaku } from '../../common/live-danmaku'
+import type { DanmakuEmote, DanmakuEmoteMap, LiveDanmaku } from '@common/live-danmaku'
 import { Buffer } from 'node:buffer'
 import { brotliDecompressSync, inflateSync } from 'node:zlib'
 

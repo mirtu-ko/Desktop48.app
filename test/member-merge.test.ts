@@ -1,4 +1,4 @@
-import type { AllMemberItem } from '../src/preload/ipc-contract'
+import type { AllMemberItem } from '@preload/ipc-contract'
 import type { MemberTreeLike } from '../src/renderer/src/utils/member-merge'
 import { describe, expect, it } from 'vitest'
 import { buildAdjuncts, mergeMembers } from '../src/renderer/src/utils/member-merge'

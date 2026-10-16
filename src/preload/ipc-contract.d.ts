@@ -9,9 +9,9 @@
  * 成员数据见 main/data.ts，任务快照见 main/ffmpeg/task-registry.ts，
  * 成员树见 main/domain/member-tree.ts（buildMemberTree）。
  */
-import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { LiveDanmaku } from '../common/live-danmaku'
-import type { MemberFlag, MemberFlagKind } from '../common/member-flags'
+import type { AppConfig, ConfigKey } from '@common/app-config'
+import type { LiveDanmaku } from '@common/live-danmaku'
+import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
 import type { AllMemberItem, MemberDataContent, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { FfmpegProblem, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'

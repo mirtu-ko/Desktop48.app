@@ -1,4 +1,4 @@
-import type { AppConfig, ConfigKey } from '../common/app-config'
+import type { AppConfig, ConfigKey } from '@common/app-config'
 import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketDanmakuBatch, PocketUnreadBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 

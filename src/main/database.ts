@@ -1,5 +1,5 @@
-import type { AppConfig, ConfigKey } from '../common/app-config'
-import type { MemberFlag, MemberFlagKind } from '../common/member-flags'
+import type { AppConfig, ConfigKey } from '@common/app-config'
+import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
 import type {
   AllMemberItem,
   DomainInfoItem,
@@ -16,9 +16,9 @@ import type {
 import type { MemberTreeGroupNode } from './domain/member-tree'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { CONFIG_DEFAULTS } from '@common/app-config'
+import { assertMemberFlagKind } from '@common/member-flags'
 import { app } from 'electron'
-import { CONFIG_DEFAULTS } from '../common/app-config'
-import { assertMemberFlagKind } from '../common/member-flags'
 import data from './data'
 import { addMemberFlagId, addMemberFlagIds, removeMemberFlagId, resolveMemberFlags } from './domain/member-flags'
 import { buildMemberTree, teamColorOf } from './domain/member-tree'

@@ -44,7 +44,7 @@ describe('computeInitialWindowSize', () => {
 
   it('两个方向各自的比例都不受对方影响', () => {
     // 横屏吃宽度上限，竖屏吃高度上限；同一块屏幕上两者互不干扰
-    const small = { width: 1366, height: 768 }
+    const small = { x: 0, y: 0, width: 1366, height: 768 }
     // 竖屏：高度封顶 502，宽度回缩到 282
     expect(computeInitialWindowSize(9 / 16, small)).toEqual({ w: 282, h: 502 + FLOAT_BAR_HEIGHT })
     // 横屏：宽度 615 未被高度封顶，直接铺满
@@ -52,7 +52,7 @@ describe('computeInitialWindowSize', () => {
   })
 
   it('分辨率翻倍时窗口同步翻倍，占屏比保持一致', () => {
-    const uhd = computeInitialWindowSize(9 / 16, { width: 3840, height: 2160 })
+    const uhd = computeInitialWindowSize(9 / 16, { x: 0, y: 0, width: 3840, height: 2160 })
     expect(uhd.h).toBe(2 * (720 + FLOAT_BAR_HEIGHT))
     // 宽度取整会带来零点几个百分点的偏差，占屏比应当基本重合
     const hdRatio = 405 / HD.width
@@ -62,17 +62,17 @@ describe('computeInitialWindowSize', () => {
 
   it('横屏占屏宽比在各分辨率下恒定', () => {
     expect(computeInitialWindowSize(16 / 9, HD).w / HD.width).toBeCloseTo(0.45, 2)
-    expect(computeInitialWindowSize(16 / 9, { width: 3840, height: 2160 }).w / 3840).toBeCloseTo(0.45, 2)
+    expect(computeInitialWindowSize(16 / 9, { x: 0, y: 0, width: 3840, height: 2160 }).w / 3840).toBeCloseTo(0.45, 2)
   })
 
   it('小屏不会占掉半个屏幕', () => {
-    const small = computeInitialWindowSize(9 / 16, { width: 1366, height: 768 })
+    const small = computeInitialWindowSize(9 / 16, { x: 0, y: 0, width: 1366, height: 768 })
     expect(small.h).toBeLessThanOrEqual(Math.round(768 * 0.7))
     expect(small.w).toBeLessThan(small.h)
   })
 
   it('极小工作区退化为最小尺寸而非负数', () => {
-    expect(computeInitialWindowSize(9 / 16, { width: 200, height: 100 })).toEqual({ w: 240, h: 160 })
+    expect(computeInitialWindowSize(9 / 16, { x: 0, y: 0, width: 200, height: 100 })).toEqual({ w: 240, h: 160 })
   })
 })
 
