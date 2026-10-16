@@ -6,6 +6,8 @@ A cross-platform desktop application for Pocket48.
 
 本项目基于原 Vue 2 版本项目 [desktop48](https://github.com/Jarvay/desktop48)（原作者 [@Jarvay](https://github.com/Jarvay)）重构与升级至 Vue 3。
 
+房间消息的数据结构与协议解析参考 [@yk1z](https://github.com/yk1z) 的项目 [yaya_msg](https://github.com/yk1z/yaya_msg)。
+
 ## Project Setup
 
 ### Install

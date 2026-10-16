@@ -434,6 +434,18 @@ const friendLinks: FriendLink[] = [
   },
 ]
 
+/** 参考项目致谢 */
+interface ReferenceProject {
+  name: string
+  url: string
+  role: string
+}
+
+const referenceProjects: ReferenceProject[] = [
+  { name: 'Jarvay/desktop48', url: 'https://github.com/Jarvay/desktop48', role: '参考项目' },
+  { name: 'yk1z/yaya_msg', url: 'https://github.com/yk1z/yaya_msg', role: '房间消息' },
+]
+
 /** 展示链接域名 */
 function linkHost(url: string) {
   try {
@@ -825,6 +837,41 @@ function hideLogo(event: Event) {
             <p class="legal-text">
               任何因使用本应用而产生的版权纠纷或法律责任，均由用户自行承担。本应用不承担任何责任。
             </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 参考项目致谢 -->
+      <section class="setting-card glass-card">
+        <div class="setting-row">
+          <span
+            class="row-icon icon-tile"
+            style="--tile-color: var(--el-color-success)"
+          >
+            <el-icon><Document /></el-icon>
+          </span>
+          <div class="row-text row-text--fluid">
+            <div class="row-title">
+              参考项目致谢
+            </div>
+            <div class="row-desc">
+              感谢以下项目提供的实现参考
+            </div>
+          </div>
+        </div>
+        <div class="row-body">
+          <div class="credits-grid">
+            <a
+              v-for="project in referenceProjects"
+              :key="project.name"
+              class="credit-link"
+              :href="project.url"
+              target="_blank"
+              rel="noopener"
+            >
+              <span class="credit-name">{{ project.name }}</span>
+              <span class="credit-role ellipsis">{{ project.role }}</span>
+            </a>
           </div>
         </div>
       </section>
@@ -1358,6 +1405,49 @@ function hideLogo(event: Event) {
     font-size: 11px;
     color: var(--el-text-color-secondary);
   }
+}
+
+/* 参考项目致谢：轻量文字卡，避免和右侧声明区抢视觉 */
+.credits-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+}
+
+.credit-link {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--brand-primary) 45%, transparent);
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-2px);
+
+    .credit-name {
+      color: var(--brand-primary);
+    }
+  }
+}
+
+.credit-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  transition: color 0.18s ease;
+}
+
+.credit-role {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
 }
 
 /* 品牌渐变主按钮已全局统一，见 app.scss */
