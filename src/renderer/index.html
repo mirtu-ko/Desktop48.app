@@ -5,10 +5,14 @@
     <title>Desktop48</title>
     <!-- 参考：https://developer.mozilla.org/zh-CN/docs/Web/HTTP/CSP -->
     <meta http-equiv="Content-Security-Policy" />
+    <!-- 关闭自动采集（data-auto-track），
+         改由 use-umami.ts 的 trackPage 上报清洗后的 hash 路由。
+         注意 script 本身仍会上报语言 / 分辨率 / UA，完整数据范围见 use-umami.ts 头注释 -->
     <script
       defer
       src="https://cloud.umami.is/script.js"
       data-website-id="6a5198f5-45be-4ce8-a2f9-6503322ed838"
+      data-auto-track="false"
     ></script>
   </head>
 

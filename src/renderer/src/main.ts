@@ -5,6 +5,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import FloatWindowApp from './components/floats/FloatWindowApp.vue'
 import { installSettingsRouter } from './composables/use-settings-nav'
+import { trackPage } from './composables/use-umami'
 import routes from './routes'
 import { installFloatPlayers } from './stores/float-players'
 import { installTasks } from './stores/tasks'
@@ -24,6 +25,8 @@ if (window.location.hash.slice(1).startsWith(FLOAT_WINDOW_HASH_PATH)) {
   // silent：播放窗只静默镜像，完成提示留给发起窗口弹，避免两个窗口各弹一次。
   installTasks({ silent: true })
   createApp(FloatWindowApp).use(ElementPlus).mount('#app')
+  // 播放窗没有 router，打开即视作一次页面访问（记到 /#/float 下，便于看播放窗打开量）
+  trackPage(window.location.hash.slice(1) || FLOAT_WINDOW_HASH_PATH)
 }
 else {
   const app = createApp(App)
@@ -34,6 +37,10 @@ else {
   })
 
   app.use(router).use(ElementPlus)
+
+  // Umami 上报：
+  // hash 路由（数据范围详见 use-umami.ts 头注释）；afterEach 对首次导航同样触发
+  router.afterEach(to => trackPage(to.fullPath))
 
   // 设置页跳转的全局 Router：开播校验等在组件之外触发（stores/float-players.ts 的
   // openLive），拿不到组件实例上的 $router，只能由这里安装一次
