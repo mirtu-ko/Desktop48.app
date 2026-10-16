@@ -50,6 +50,10 @@ $ npm run build:linux
 sudo xattr -rd com.apple.quarantine /Applications/Desktop48.app
 ```
 
+## 📊 Telemetry
+
+This app includes anonymous usage stats via [Umami](https://umami.is) (open source, cookie-free). Collected: in-app page routes (e.g. `/#/setting`) and generic device fields (OS, screen, language). Never collected: account credentials, chat or room content, or anything that can identify you. No cookies, no cross-app tracking.
+
 ## 📄 License
 
 [MIT License](LICENSE)
