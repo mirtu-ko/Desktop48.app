@@ -22,7 +22,10 @@ interface Umami {
   // 必须用回调形式：props 是 script 自身算好的默认字段（含 /api/send 必填的
   // website、language、screen 等），返回值覆盖默认值。
   // 不能用 track(obj) 对象形式——那会整体替换上报内容、丢掉 website，服务端 400
-  track: (callback: (props: UmamiTrackProps) => UmamiTrackProps) => void
+  track: {
+    (callback: (props: UmamiTrackProps) => UmamiTrackProps): void
+    (name: string, data?: Record<string, string | number>): void
+  }
 }
 
 declare global {
