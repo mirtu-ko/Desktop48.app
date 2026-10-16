@@ -119,6 +119,13 @@ const experienceLines = computed(() => toExperienceLines(props.member?.experienc
 const actionable = computed(() => typeof props.member?.userId === 'number')
 
 /**
+ * 屏蔽优先：已屏蔽时关注按钮按「未关注」呈现（与 MemberCard 同一条口径）。
+ * 关注与屏蔽正交、数据上可同时成立，但两个按钮一起点亮会误导；点击语义随之
+ * 变成「解除屏蔽并关注」，见 composables/use-member-actions 的 toggleFollowMember。
+ */
+const followOn = computed(() => !!props.followed && !props.blocked)
+
+/**
  * ===== 大房间入口：只对「能查询到大房间」的成员展示 =====
  * 频道解析与房间页的临时条目共用同一份缓存（services/room-channel），
  * 未登录、成员没有大房间、接口故障三种情形一律不给入口，免得点进去扑空。
@@ -441,14 +448,14 @@ function openRoom() {
           </el-icon>
           <span>看 TA 的房间</span>
         </button>
-        <button class="act act--follow" :class="{ 'is-on': followed }" @click="onFollow">
+        <button class="act act--follow" :class="{ 'is-on': followOn }" @click="onFollow">
           <span :key="followPulse" class="act-icon" :class="{ 'is-pulse': followPulse > 0 }">
             <el-icon :size="15">
-              <StarFilled v-if="followed" />
+              <StarFilled v-if="followOn" />
               <Star v-else />
             </el-icon>
           </span>
-          <span>{{ followed ? '取消关注' : '关注' }}</span>
+          <span>{{ followOn ? '取消关注' : '关注' }}</span>
         </button>
         <button class="act act--block" :class="{ 'is-on': blocked }" @click="onBlock">
           <span :key="blockPulse" class="act-icon" :class="{ 'is-pulse': blockPulse > 0 }">

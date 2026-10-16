@@ -1,9 +1,9 @@
 /**
  * 房间未读检测（main/pocket48/pocket-unread.ts）核心规则单测：
  * 首见锚定已读水位 / 按消息列表数条数 / 预览身份键只作触发 / 一页封顶 /
- * 每轮探测名额轮转 / markRead 推水位（已读不复活）/ 未登录清空 / 取关清理 /
+ * 每轮探测名额轮转 / markRead 推水位（已读不复活）/ 未登录清空 / 取关清理 / 屏蔽剔除 /
  * 归属自愈 / 小房间归属 / 快照持久化。
- * electron、pocket-auth、ipc/send、logger 全部 mock，状态落盘指向临时目录；
+ * electron、pocket-auth、database、ipc/send、logger 全部 mock，状态落盘指向临时目录；
  * 每个用例经 vi.resetModules 重新加载被测模块，模拟「同一份持久化、全新会话」。
  */
 import fs from 'node:fs'
@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 let tmpUserData = ''
 let broadcasts: Array<{ rooms: Record<string, unknown>, total: number }> = []
+/** 本地屏蔽名单：被测模块每轮读它把成员从未读检测范围里剔除（见 tick） */
+let blockedIds: number[] = []
 
 vi.mock('electron', () => ({
   app: {
@@ -39,6 +41,12 @@ vi.mock('../src/main/pocket48/pocket-auth', () => ({
   getRoomChannelOwner: vi.fn(),
   getRoomLastMessages: vi.fn(),
   getRoomMessages: vi.fn(),
+}))
+
+vi.mock('../src/main/database', () => ({
+  Database: {
+    instance: () => ({ getMemberFlagIds: () => blockedIds }),
+  },
 }))
 
 interface AuthMock {
@@ -114,6 +122,7 @@ function settle() {
 
 beforeEach(() => {
   tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'pocket-unread-test-'))
+  blockedIds = []
 })
 
 afterEach(() => {
@@ -349,6 +358,33 @@ describe('pocket-unread（房间未读检测）', () => {
 
     // 重新关注：频道缓存与水位已清，首轮重新解析 + 重新锚定，历史不算未读
     auth.getFollowedIds.mockResolvedValue([1])
+    auth.getRoomMessages.mockResolvedValue(pageOf('m4', 'm3', 'm2', 'm1'))
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(auth.getRoomChannel).toHaveBeenCalledTimes(2))
+    await settle()
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+  })
+
+  it('屏蔽成员：剔除出检测范围，未读与频道缓存按取关同一条路径清理', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    await runTick(auth, mod)
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k2'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m3', 'm2', 'm1'))
+    await runTick(auth, mod)
+    expect(mod.getState().total).toBe(2)
+
+    // 屏蔽：账号关注照旧存在（关注与屏蔽正交），检测范围里剔除该成员，未读随之清零并广播
+    blockedIds = [1]
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 }))
+    await settle()
+    mod.stopPocketUnread()
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+
+    // 解除屏蔽：频道缓存已清，重新解析 + 重新锚定，历史不算未读
+    blockedIds = []
     auth.getRoomMessages.mockResolvedValue(pageOf('m4', 'm3', 'm2', 'm1'))
     await runTick(auth, mod)
     await vi.waitFor(() => expect(auth.getRoomChannel).toHaveBeenCalledTimes(2))

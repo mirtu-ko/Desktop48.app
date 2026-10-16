@@ -669,7 +669,7 @@ function hideLogo(event: Event) {
               屏蔽成员
             </div>
             <div class="row-desc">
-              已屏蔽 {{ blockedMembers.length }} 名成员，其直播与回放将不再展示
+              已屏蔽 {{ blockedMembers.length }} 名成员，其直播、回放与房间消息将不再展示
             </div>
           </div>
           <div class="row-actions">

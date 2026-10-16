@@ -4,6 +4,8 @@
  * 数据来源（与参考实现 yk1z/yaya_msg 同思路，落地在 desktop48 既有管道上）：
  * - 关注名单：口袋账号关注 ID（friendships/friends/id，只给 ID）∪ 本地关注名单，
  *   成员详情（头像/昵称/队伍）由本地成员目录反查——接口本身不返回这些；
+ *   被屏蔽的成员从这份并集里整体剔除（屏蔽优先，见 loadFollowedIds），
+ *   屏蔽名单变化时左列条目就地摘除、右侧消息流一并收起（见 watch(blockedMembers)）；
  * - 房间频道：im/server/jump（starId=成员 userId）解析出 team server + channel，
  *   即口袋 App「房间」tab 里该成员的留言频道。解析不出频道 = 成员没有房间
  *   （含房间已关闭/被回收：同样解析不出频道，一并过滤，进不了列表）；
@@ -27,7 +29,7 @@ import { resolveMemberRoomChannel } from '@renderer/services/room-channel'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
-import { useFollowedMembersStore } from '@renderer/stores/member-flags'
+import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { pocketAuthState, refreshPocketAuthState } from '@renderer/stores/pocket-auth'
 import { unreadCountOf, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import { debugLog } from '@renderer/utils/debug'
@@ -110,6 +112,8 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: 
 
 export function usePocketRooms() {
   const { refreshFollowedMembers, followedMembers } = useFollowedMembersStore()
+  /** 屏蔽名单（本地可见性偏好，与关注正交）：左列过滤 + 条目的就地摘除都读这一份 */
+  const { blockedMembers, ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
   const { findMemberByUserId } = useMemberDirectoryStore()
   /** 未读镜像（主进程唯一真相）：左列排序与角标共用同一判据，见 sortRooms */
   const { unreadRooms } = usePocketUnreadStore()
@@ -232,8 +236,15 @@ export function usePocketRooms() {
     }
   }
 
-  /** 口袋关注 ID ∪ 本地关注 ID（本地含桌面端手动关注与历史合并结果） */
+  /**
+   * 左列成员：口袋关注 ID ∪ 本地关注 ID − 屏蔽名单。
+   *
+   * 减去屏蔽名单是「屏蔽优先」在房间页的落点：关注与屏蔽正交（见 composables/use-member-actions），
+   * 账号关注照旧存在，但被屏蔽的成员不进左列——也就不必为它解析房间频道。
+   */
   async function loadFollowedIds(): Promise<number[]> {
+    // 屏蔽名单必须先就位：isBlocked 在未加载的空名单上恒为 false，漏加载等于放行被屏蔽成员
+    await ensureBlockedLoaded()
     // 首灌走 refresh 而非 ensureLoaded：store 是模块级单例，ensureLoaded 命中后
     // 不再重拉，页面首灌要的是「此刻」的名单（设置页/成员页改过关注后开页即生效）
     const [pocketIds, localEntries] = await Promise.all([
@@ -243,7 +254,7 @@ export function usePocketRooms() {
     const ids = new Set<number>()
     for (const id of [...pocketIds, ...localEntries.map(entry => entry.userId)]) {
       const userId = Tools.normalizeUserId(id)
-      if (Number.isFinite(userId) && userId > 0)
+      if (Number.isFinite(userId) && userId > 0 && !isBlocked(userId))
         ids.add(userId)
     }
     return [...ids]
@@ -317,6 +328,28 @@ export function usePocketRooms() {
       sortRooms(rooms.value)
     else
       sortedUnreadIds = next
+  })
+
+  /**
+   * 屏蔽名单变化 → 就地摘掉对应条目，不等下一次首灌。
+   *
+   * 屏蔽入口在成员页卡片与三处详情抽屉（成员 / 直播 / 回放），都可能在房间页挂在
+   * keep-alive 后台时发生；只在 load() 里过滤的话，用户切回来看到的仍是旧列表。
+   * 临时条目除外：那是用户从成员详情卡主动打开的，显式意图压过屏蔽。
+   */
+  watch(blockedMembers, () => {
+    if (!rooms.value.length)
+      return
+    const next = rooms.value.filter(room => room.temporary || !isBlocked(room.userId))
+    if (next.length === rooms.value.length)
+      return
+    rooms.value = next
+    sortedUnreadIds = collectUnreadIds(next)
+    // 正看着的成员被屏蔽：右侧消息流一并收起
+    if (selectedUserId.value !== null && !next.some(room => room.userId === selectedUserId.value)) {
+      selectedUserId.value = null
+      clearChat()
+    }
   })
 
   /** 批量最新消息 → channelId → 消息；失败返回空 Map（预览静默降级，不影响房间可用） */

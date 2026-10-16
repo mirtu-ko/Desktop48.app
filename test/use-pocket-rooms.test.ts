@@ -105,6 +105,8 @@ interface SetupOptions {
   pocketIds?: number[]
   /** 本地关注名单（主进程 getMemberFlags 解析结果） */
   localFlags?: Array<{ userId: number, realName: string, teamColor: string }>
+  /** 本地屏蔽名单（同为 getMemberFlags，kind='blocked'）：进左列前会被剔除 */
+  blockedFlags?: Array<{ userId: number, realName: string, teamColor: string }>
   /** getLiveList 分页：数组元素为一页 */
   livePages?: Array<{ next: string, liveList: LiveItem[] }>
   /** true = pocketGetFollowedIds 抛错（过期/网络） */
@@ -147,7 +149,8 @@ async function setup(options: SetupOptions = {}) {
           throw new Error('登录已过期')
         return options.pocketIds ?? []
       }),
-      getMemberFlags: vi.fn(async () => options.localFlags ?? []),
+      getMemberFlags: vi.fn(async (kind: string) =>
+        (kind === 'blocked' ? options.blockedFlags : options.localFlags) ?? []),
       pocketGetAuthState: vi.fn(async () => authMock.state.value),
       pocketGetRoomChannel: vi.fn(async (userId: number) => {
         calls.channelFetched.push(userId)
@@ -220,6 +223,12 @@ async function setup(options: SetupOptions = {}) {
   const { markRoomRead, unreadCountOf, usePocketUnreadStore } = await import('@renderer/stores/pocket-unread')
   const { unreadRooms } = usePocketUnreadStore()
   unreadRooms.value = {}
+  // 关注 / 屏蔽名单 store 同样是模块级单例，且 ensureLoaded 只灌一次：显式重灌，
+  // 还原成「进程刚起来」的状态（否则上个用例的屏蔽名单会漏到本次）
+  const { useBlockedMembersStore, useFollowedMembersStore } = await import('@renderer/stores/member-flags')
+  const blockedStore = useBlockedMembersStore()
+  await blockedStore.refreshBlockedMembers()
+  await useFollowedMembersStore().refreshFollowedMembers()
   const scope = effectScope()
   const api = scope.run(() => usePocketRooms())!
   activeScope = scope
@@ -240,6 +249,17 @@ async function setup(options: SetupOptions = {}) {
     },
     /** 详情卡入口显隐用的那条解析路径（与临时房间共用缓存） */
     resolveRoomChannel: resolveMemberRoomChannel,
+    /**
+     * 直接改屏蔽名单单例：模拟「在本页挂在 keep-alive 后台时，于成员页 / 直播页屏蔽了某人」。
+     * 走 store 的响应式名单，watch(blockedMembers) 据此就地摘条目。
+     */
+    setBlocked: (userIds: number[]) => {
+      blockedStore.blockedMembers.value = userIds.map(userId => ({
+        userId,
+        realName: `成员${userId}`,
+        teamColor: '',
+      }))
+    },
     /** 再开一个 composable 实例：模拟页面层重建（实例换了，模块级单例状态应当留着） */
     newInstance: () => {
       const extra = effectScope()
@@ -332,6 +352,66 @@ describe('use-pocket-rooms / 房间列表构建', () => {
 
     expect(api.pocketFollowError.value).toBe('登录已过期')
     expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+  })
+})
+
+describe('use-pocket-rooms / 屏蔽优先', () => {
+  function blockFixture(blockedFlags: SetupOptions['blockedFlags']): SetupOptions {
+    return {
+      pocketIds: [10001, 10002],
+      blockedFlags,
+      directory: {
+        10001: { realName: '甲', avatar: '', teamName: '', teamColor: '' },
+        10002: { realName: '乙', avatar: '', teamName: '', teamColor: '' },
+      },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '甲的留言')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('b', 200, '乙的留言')] } },
+      },
+    }
+  }
+
+  // 关注与屏蔽正交（见 use-member-actions）：账号关注照旧存在，但屏蔽的成员不进左列——
+  // 顺带也就不必为它解析房间频道
+  it('被屏蔽的成员不进左列，也不为它解析频道', async () => {
+    const { api, calls } = await setup(blockFixture([{ userId: 10002, realName: '乙', teamColor: '' }]))
+    await api.load()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+    expect(calls.channelFetched).toEqual([10001])
+  })
+
+  // 屏蔽入口在成员页 / 直播页 / 回放页，本页常挂在 keep-alive 后台：
+  // 只靠 load() 过滤的话，切回来看到的还是旧列表
+  it('屏蔽名单变化：条目就地摘除，正看着的成员右侧一并收起', async () => {
+    const { api, setBlocked } = await setup(blockFixture([]))
+    await api.load()
+    await api.selectRoom(10002)
+    expect(api.chatStatus.value).toBe('ready')
+
+    setBlocked([10002])
+    await nextTick()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+    expect(api.selectedUserId.value).toBeNull()
+    expect(api.chatStatus.value).toBe('idle')
+  })
+
+  // 临时条目是用户从成员详情卡主动打开的，显式意图压过屏蔽
+  it('临时房间不受屏蔽影响', async () => {
+    const { api, setBlocked } = await setup({
+      pocketIds: [10001],
+      blockedFlags: [{ userId: 10001, realName: '甲', teamColor: '' }],
+      directory: { 10002: { realName: '乙', avatar: '', teamName: '', teamColor: '' } },
+    })
+    await api.load()
+    expect(api.rooms.value).toEqual([])
+
+    setBlocked([10001, 10002])
+    await nextTick()
+    expect(await api.openTemporaryRoom(10002)).toEqual({ ok: true })
+
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary])).toEqual([[10002, true]])
   })
 })
 

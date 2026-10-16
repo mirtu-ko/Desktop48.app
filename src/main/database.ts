@@ -252,6 +252,16 @@ class Database {
     }))
   }
 
+  /**
+   * 名单 id 的轻量读法：只归一出数字 id，不解析成员详情。
+   * 给主进程未读检测用（每轮都要读屏蔽名单，没必要为几百条成员记录建一次表）。
+   */
+  public getMemberFlagIds(kind: MemberFlagKind): number[] {
+    return this.memberFlagIds(kind)
+      .map(id => Number(id))
+      .filter(id => Number.isFinite(id))
+  }
+
   public setMemberFlags(kind: MemberFlagKind, ids: Array<number | string>) {
     assertMemberFlagKind(kind)
     this.db[memberFlagKey(kind)] = ids
