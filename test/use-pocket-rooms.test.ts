@@ -1,7 +1,7 @@
 import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 import type { PocketRoomMessageView } from '../src/renderer/src/utils/pocket-room-message'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { effectScope } from 'vue'
+import { effectScope, nextTick } from 'vue'
 
 /**
  * use-pocket-rooms 编排层：关注名单合并、房间遍历（过滤无房间）、
@@ -185,6 +185,8 @@ async function setup(options: SetupOptions = {}) {
       openFloatWindow: vi.fn(async (kind: FloatPlayerKind, payload: FloatPlayerPayload) => {
         calls.openFloatWindow.push([kind, payload])
       }),
+      // 标记房间已读（进房 / 贴底时由页面层调用）：未读真相在主进程，这里只收下调用
+      pocketMarkRead: vi.fn(async () => {}),
       // 开直播窗前会做 FFmpeg 校验（use-live-guard）：给就绪态，选中直播的用例才开得出窗
       getFfmpegStatus: vi.fn(async () => ({
         ok: true,
@@ -214,6 +216,10 @@ async function setup(options: SetupOptions = {}) {
   clearRoomChannelCache()
   for (const extra of extraScopes.splice(0))
     extra.stop()
+  // 未读镜像也是模块级单例：清空后才建新实例，免得上个用例的未读影响本次排序
+  const { markRoomRead, unreadCountOf, usePocketUnreadStore } = await import('@renderer/stores/pocket-unread')
+  const { unreadRooms } = usePocketUnreadStore()
+  unreadRooms.value = {}
   const scope = effectScope()
   const api = scope.run(() => usePocketRooms())!
   activeScope = scope
@@ -221,6 +227,17 @@ async function setup(options: SetupOptions = {}) {
     api,
     calls,
     scope,
+    unreadCountOf,
+    markRoomRead,
+    /** 模拟主进程未读广播（快照里只含 count > 0 的房间） */
+    setUnread: (counts: Record<number, number>) => {
+      unreadRooms.value = Object.fromEntries(
+        Object.entries(counts).map(([userId, count]) => [
+          userId,
+          { count, bigCount: count, smallCount: 0, latestTime: 0 },
+        ]),
+      )
+    },
     /** 详情卡入口显隐用的那条解析路径（与临时房间共用缓存） */
     resolveRoomChannel: resolveMemberRoomChannel,
     /** 再开一个 composable 实例：模拟页面层重建（实例换了，模块级单例状态应当留着） */
@@ -315,6 +332,79 @@ describe('use-pocket-rooms / 房间列表构建', () => {
 
     expect(api.pocketFollowError.value).toBe('登录已过期')
     expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+  })
+})
+
+describe('use-pocket-rooms / 左列排序', () => {
+  /**
+   * 三个关注成员：昵称取「成员N」保证 localeCompare('zh') 结果确定（成员1 < 成员2 < 成员3），
+   * 其中 10001 在直播 —— 用来验证未读能压过「正在直播」这一档。
+   */
+  function sortFixture(): SetupOptions {
+    return {
+      pocketIds: [10001, 10002, 10003],
+      livePages: [{ next: '0', liveList: [live('L1', 10001, '成员1开播了')] }],
+      directory: {
+        10001: { realName: '成员1', avatar: '', teamName: '', teamColor: '' },
+        10002: { realName: '成员2', avatar: '', teamName: '', teamColor: '' },
+        10003: { realName: '成员3', avatar: '', teamName: '', teamColor: '' },
+      },
+    }
+  }
+
+  it('有未读的排最前，压过「正在直播」；该档内仍按 直播 → 昵称', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+    // 无未读：在直播的排前，其余按昵称
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+
+    setUnread({ 10003: 5 })
+    await nextTick()
+
+    // 10003 有未读 → 置顶；10001 虽在直播也不越位
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+  })
+
+  it('新消息到达：该房间浮到最前', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+
+    setUnread({ 10002: 1 })
+    await nextTick()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10002, 10001, 10003])
+  })
+
+  // 回归：进房即 markRead（本地乐观清零 + 主进程广播）。若未读变化一律重排，
+  // 用户刚点的那一条会在他眼皮底下被抽走，观感是「列表在躲我」。
+  it('读掉未读不重排：条目留在原位，下一次自然排序才归位', async () => {
+    const { api, markRoomRead, setUnread } = await setup(sortFixture())
+    await api.load()
+    setUnread({ 10003: 2 })
+    await nextTick()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+
+    await markRoomRead(10003)
+    await nextTick()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+
+    // 手动刷新 = 一次自然排序：按当下未读归位
+    await api.refreshRoomStatus()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+  })
+
+  it('临时房间的置顶优先于未读：带未读的关注房间也不越位', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+    setUnread({ 10001: 9 })
+    await nextTick()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+
+    await api.openTemporaryRoom(10004)
+
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary]))
+      .toEqual([[10004, true], [10001, false], [10002, false], [10003, false]])
   })
 })
 

@@ -29,6 +29,7 @@ import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { pocketAuthState, refreshPocketAuthState } from '@renderer/stores/pocket-auth'
+import { unreadCountOf, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import { debugLog } from '@renderer/utils/debug'
 
 import { liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview } from '@renderer/utils/pocket-room-message'
@@ -110,6 +111,8 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: 
 export function usePocketRooms() {
   const { refreshFollowedMembers, followedMembers } = useFollowedMembersStore()
   const { findMemberByUserId } = useMemberDirectoryStore()
+  /** 未读镜像（主进程唯一真相）：左列排序与角标共用同一判据，见 sortRooms */
+  const { unreadRooms } = usePocketUnreadStore()
   const {
     liveByUserId,
     liveIdSet,
@@ -253,15 +256,39 @@ export function usePocketRooms() {
   }
 
   /**
-   * 临时房间恒置顶（用户刚点进来的那个，要第一眼看到），其余按「在直播的排前面、
-   * 再按昵称」——「谁的房间开着」是第一眼信息。
+   * 上次排序时「有未读」的成员集合：未读快照变化时据此判断要不要重排，
+   * 见下方 watch(unreadRooms)。
+   */
+  let sortedUnreadIds = new Set<number>()
+
+  /** 取列表中「有未读」的成员；判据与左列角标一致（大房间 + 小房间合计 > 0） */
+  function collectUnreadIds(list: PocketRoom[]): Set<number> {
+    const ids = new Set<number>()
+    for (const room of list) {
+      if (unreadCountOf(room.userId) > 0)
+        ids.add(room.userId)
+    }
+    return ids
+  }
+
+  /**
+   * 左列排序，四级判据：
+   * 1. 临时房间恒置顶（用户刚点进来的那个，要第一眼看到）；
+   * 2. 有未读的排在没未读的前面——「谁的房间有新消息」是第一眼信息；
+   * 3. 其次是在直播的——「谁的房间开着」是第二眼信息；
+   * 4. 同档按昵称 localeCompare('zh')。
+   *
+   * 未读判据取大房间 + 小房间合计（与左列角标同源），不是只看大房间：
+   * 左列条目上只有一个角标，排序与它不一致会自相矛盾。
    */
   function sortRooms(list: PocketRoom[]) {
     list.sort((a, b) =>
       Number(!!b.temporary) - Number(!!a.temporary)
+      || Number(unreadCountOf(b.userId) > 0) - Number(unreadCountOf(a.userId) > 0)
       || Number(!!b.live) - Number(!!a.live)
       || a.nickname.localeCompare(b.nickname, 'zh'),
     )
+    sortedUnreadIds = collectUnreadIds(list)
   }
 
   // 共享 store 更新后同步到当前房间列表；页面不再自己持有直播轮询定时器。
@@ -272,6 +299,25 @@ export function usePocketRooms() {
       room.live = liveMap.get(room.userId) ?? null
     sortRooms(rooms.value)
   }, { immediate: true })
+
+  /**
+   * 未读变化 → 重排左列（新消息浮上来），但**只在「新出现未读」时**重排。
+   *
+   * 读掉未读（进房即 markRead，本地乐观清零 + 主进程广播）不重排：那条正是用户刚点的，
+   * 当场把它从顶部抽走会让人以为点错了。条目的下沉留给下一次自然排序
+   * （重新进入页面 / 手动刷新 / 直播状态刷新），与「回到列表时名单已归位」的观感一致。
+   *
+   * 临时房间不在主进程未读检测范围内，对它这条 watch 是空转。
+   */
+  watch(unreadRooms, () => {
+    if (!rooms.value.length)
+      return
+    const next = collectUnreadIds(rooms.value)
+    if ([...next].some(userId => !sortedUnreadIds.has(userId)))
+      sortRooms(rooms.value)
+    else
+      sortedUnreadIds = next
+  })
 
   /** 批量最新消息 → channelId → 消息；失败返回空 Map（预览静默降级，不影响房间可用） */
   async function fetchLastMessageMap(serverIds: string[]): Promise<Map<string, PocketRoomLastMessage>> {
