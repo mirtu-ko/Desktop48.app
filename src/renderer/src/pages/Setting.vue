@@ -17,6 +17,7 @@ import {
   verifyPocketLogin,
 } from '@renderer/stores/pocket-auth'
 import Constants from '@renderer/utils/constants'
+import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
@@ -205,6 +206,11 @@ const tokenForm = reactive({
   loggingIn: false,
 })
 
+/** 日志用：手机号脱敏，避免验证码链路打点泄露完整号码 */
+function maskMobileForLog(mobile: string): string {
+  return /^\d{11}$/.test(mobile) ? `${mobile.slice(0, 3)}****${mobile.slice(-4)}` : '***'
+}
+
 function openLoginDialog() {
   smsForm.code = ''
   smsForm.captcha = null
@@ -302,11 +308,20 @@ async function sendSmsCode() {
   if (smsForm.sending || smsForm.countdown > 0)
     return
   smsForm.sending = true
+  debugLog('pocket-auth', '发送验证码：', JSON.stringify({
+    mobile: maskMobileForLog(smsForm.mobile),
+    hasCaptchaAnswer: !!smsForm.captcha?.answer,
+  }))
   try {
     const result = await window.mainAPI.pocketSendSms(
       smsForm.mobile,
       smsForm.captcha?.answer || undefined,
     )
+    debugLog('pocket-auth', '发送验证码结果：', JSON.stringify({
+      needCaptcha: result.needCaptcha,
+      optionCount: result.options.length,
+      message: result.message,
+    }))
     if (result.needCaptcha) {
       smsForm.captcha = { question: result.question, options: result.options, answer: '' }
       ElMessage.warning('需要先完成下方验证')
@@ -317,6 +332,7 @@ async function sendSmsCode() {
     startCountdown()
   }
   catch (error) {
+    debugLog('pocket-auth', '发送验证码失败：', error)
     ElMessage.error(pocketAuthErrorMessage(error))
   }
   finally {
@@ -353,6 +369,10 @@ async function submitSmsLogin() {
   if (smsForm.loggingIn)
     return
   smsForm.loggingIn = true
+  debugLog('pocket-auth', '提交验证码登录：', JSON.stringify({
+    mobile: maskMobileForLog(smsForm.mobile),
+    codeLength: smsForm.code.trim().length,
+  }))
   try {
     const state = await loginBySmsCode(smsForm.mobile, smsForm.code)
     loginDialogVisible.value = false
@@ -360,6 +380,7 @@ async function submitSmsLogin() {
     void syncPocketFollow()
   }
   catch (error) {
+    debugLog('pocket-auth', '验证码登录失败：', error)
     ElMessage.error(pocketAuthErrorMessage(error))
   }
   finally {
@@ -371,6 +392,10 @@ async function submitTokenLogin() {
   if (tokenForm.loggingIn)
     return
   tokenForm.loggingIn = true
+  debugLog('pocket-auth', '提交 token 登录：', JSON.stringify({
+    mobile: maskMobileForLog(tokenForm.mobile),
+    tokenLength: tokenForm.token.trim().length,
+  }))
   try {
     const state = await loginByPastedToken(tokenForm.token, tokenForm.mobile)
     loginDialogVisible.value = false
@@ -378,6 +403,7 @@ async function submitTokenLogin() {
     void syncPocketFollow()
   }
   catch (error) {
+    debugLog('pocket-auth', 'token 登录失败：', error)
     ElMessage.error(pocketAuthErrorMessage(error))
   }
   finally {

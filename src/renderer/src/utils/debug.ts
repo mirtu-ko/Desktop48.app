@@ -18,6 +18,7 @@
  * | list       | 列表数据旅程       | use-paged-list（拉取→过滤→补全→去重）→ Lives.vue |
  * |            |                    | （③收下架广播，与 live 链的首尾呼应）           |
  * | net        | 所有链路共用的网络 | apis.ts → request.ts → 主进程 netRequest          |
+ * | pocket-auth | 账号登录链（渲染层打点） | Setting.vue → stores/pocket-auth → 主进程 pocket-auth |
  * | pocket-rooms | 房间消息链（编排） | use-pocket-rooms → 频道解析/消息拉取/轮询/翻历史  |
  * | rooms-page | 房间页（展示）     | Rooms.vue → 列表加载/选中/滚底/媒体加载          |
  * ────────────────────────────────────────────────────────────────

@@ -491,7 +491,7 @@ describe('pocket-auth checkRoomAnswer', () => {
   })
 })
 
-describe('pocket-auth 客户端身份（Android 档）', () => {
+describe('pocket-auth 客户端身份（主 App iOS 档 + seine Android 档）', () => {
   /** 取某个已发出请求的请求头；找不到即抛（比非空断言给出更清楚的失败原因） */
   function headersOf(urlPart: string): Record<string, string> {
     const found = env.requests.find(item => item.url.includes(urlPart))
@@ -500,27 +500,29 @@ describe('pocket-auth 客户端身份（Android 档）', () => {
     return found.headers
   }
 
-  it('主 App 与 seine 各取自己那份特征，平台均为 Android、设备 ID 同源同格式', async () => {
+  it('主 App 走 iOS 档头（登录被拒回退），seine 保持独立 Android 特征', async () => {
     await getRoomChannel(10001)
     await getServerChannels('1213951')
 
-    // 主 App（pocket48）档：Android UA + 带空格的 UTF-8 Content-Type（与 iOS 档的紧写形式不同）
+    // 主 App（pocket48）档：iOS UA + 紧写 UTF-8 Content-Type。
+    // 2026-10-17 实测：Android 档下 v1 验证码登录被服务端拒（详见 pocket-auth.ts 的
+    // iOS 档说明），登录/用户域回退 iOS 档；v2 app_login 迁移后再恢复 Android 断言。
     const main = headersOf('im/api/v1/im/server/jump')
-    expect(main['User-Agent'])
-      .toBe('PocketFans201807/7.1.43_26082801 (23013RK75C:Android 14;Xiaomi UKQ1.231003.002 release-keys)')
-    expect(main['Content-Type']).toBe('application/json; charset=UTF-8')
+    expect(main['User-Agent']).toBe('PocketFans201807/7.0.41 (iPhone; iOS 16.3.1; Scale/2.00)')
+    expect(main['Content-Type']).toBe('application/json;charset=utf-8')
     const mainAppInfo = JSON.parse(main.appInfo)
     expect(mainAppInfo).toMatchObject({
-      osType: 'android',
-      osVersion: '14',
-      appName: 'pocket48',
-      deviceName: '23013RK75C',
+      vendor: 'apple',
+      appVersion: '7.0.41',
+      appBuild: '24011601',
+      osType: 'ios',
+      os: 'ios',
+      deviceName: 'iPhone XR',
     })
-    // Android 档设备 ID 是 16 位小写 hex，且与 IMEI 同值
-    expect(mainAppInfo.deviceId).toBe(mainAppInfo.IMEI)
-    expect(mainAppInfo.deviceId).toMatch(/^[0-9a-f]{16}$/)
+    // iOS 档设备 ID 是进程内随机 UUID（大写带连字符），非持久化
+    expect(mainAppInfo.deviceId).toMatch(/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/)
 
-    // seine 档：独立客户端特征 + 专属 Device-Type 头
+    // seine 档：独立 Android 客户端特征 + 专属 Device-Type 头（extraHeaders 全量覆盖主档）
     const seine = headersOf('im/api/seine/server/detail')
     expect(seine['X-Custom-Device-Type']).toBe('ANDROID')
     expect(seine['User-Agent'])
@@ -531,8 +533,6 @@ describe('pocket-auth 客户端身份（Android 档）', () => {
       appName: 'seine48',
       appVersion: '1.3.4',
     })
-    // 同一台设备：两档共用一个设备 ID（身份唯一来源的意义所在）
-    expect(seineAppInfo.deviceId).toBe(mainAppInfo.deviceId)
   })
 
   it('两档特征都不自带 pa / token，由 postPocket 统一补（避免签名被覆盖）', async () => {
