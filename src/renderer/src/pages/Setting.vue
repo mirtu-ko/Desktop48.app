@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { PocketVerifyResult } from '@preload/ipc-contract'
-import { Connection, Cpu, Document, Folder, Hide, Refresh, User, WarningFilled } from '@element-plus/icons-vue'
+import { Cpu, Document, Folder, Hide, Refresh, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
 import { useUpdater } from '@renderer/composables/use-updater'
@@ -23,17 +23,15 @@ import { useRouter } from 'vue-router'
 
 const router = useRouter()
 
-// 配置三项（下载目录 / ffmpeg 目录 / User-Agent）的状态与读写集中在 use-app-config.ts
+// 配置两项（下载目录 / ffmpeg 目录）的状态与读写集中在 use-app-config.ts
 const {
   downloadDirectory,
   ffmpegDirectory,
-  userAgent,
   loadAppConfig,
   setDownloadDirectory,
   openDownloadDirectory,
   setFfmpegDirectory,
   openFfmpegDirectory,
-  setUserAgent,
 } = useAppConfig()
 
 /** 屏蔽名单：模块级共享状态，机制见 stores/member-flags.ts */
@@ -479,38 +477,6 @@ function hideLogo(event: Event) {
         </div>
       </section>
 
-      <!-- User-Agent -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-setting)' }"
-          >
-            <el-icon><Connection /></el-icon>
-          </span>
-          <div class="row-text">
-            <div class="row-title">
-              User-Agent
-            </div>
-            <div class="row-desc">
-              访问直播 / 回放接口时使用的浏览器标识
-            </div>
-          </div>
-          <el-input
-            v-model="userAgent"
-            class="row-control"
-            placeholder="设置 User-Agent"
-          />
-          <el-button
-            type="primary"
-            class="row-action"
-            @click="setUserAgent"
-          >
-            保存
-          </el-button>
-        </div>
-      </section>
-
       <!-- 默认下载目录 -->
       <section class="setting-card glass-card">
         <div class="setting-row">
@@ -602,7 +568,7 @@ function hideLogo(event: Event) {
           >
             <el-icon><Hide /></el-icon>
           </span>
-          <div class="row-text">
+          <div class="row-text row-text--fluid">
             <div class="row-title">
               屏蔽成员
             </div>

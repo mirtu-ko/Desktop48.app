@@ -6,6 +6,8 @@ import type { PocketRawChatMessage } from '../../preload/ipc-contract'
  * Web SDK 登录聊天室直接被服务端拒（403「非法操作或没有权限」）。
  * 本实现按云信移动端 TCP 协议直连：LBS 取地址 → RSA 握手交换 RC4 密钥
  * → 以安卓客户端身份登录进入聊天室 → 接收消息流。
+ * 其中的包名、SDK 版本与设备 ID 取自 `client-profile.ts`（与口袋 HTTP 同平台同一台设备，
+ * 不再各写一份；设备 ID 由 UUID 抽 16 位小写 hex，仅作登录属性，不参与签名）。
  *
  * 协议要点：
  * - 帧：varint(总长) + header{serviceId, commandId, serial:i16LE, tag} + body；
@@ -17,16 +19,14 @@ import type { PocketRawChatMessage } from '../../preload/ipc-contract'
  * - 心跳（1_2，15s）；消息（13_7）；属性 38='1' 的消息需回执（13_35）
  */
 import { Buffer } from 'node:buffer'
-import { createPublicKey, publicEncrypt, randomBytes, randomUUID } from 'node:crypto'
+import { createPublicKey, publicEncrypt, randomBytes } from 'node:crypto'
 import net from 'node:net'
 import zlib from 'node:zlib'
 
 import { debug } from '../logger'
+import { NIM_ANDROID, pocketDeviceId } from './client-profile'
 
 const LBS_URL = 'https://lbs.netease.im/lbs/chat.jsp'
-/** 云信安卓 SDK 版本号与包名：登录身份必须伪装成移动端，Web 端被服务端封禁 */
-const ANDROID_SDK_VERSION = 92110
-const ANDROID_PACKAGE_NAME = 'com.seine48.app'
 /** 云信握手 RSA 公钥（SPKI DER，base64；密钥版本 0） */
 const RSA_KEY_VERSION = 0
 const RSA_PUBLIC_KEY_DER
@@ -290,7 +290,7 @@ export class NimChatroomClient {
       k: this.options.appKey,
       id: this.options.account,
       rid: this.options.roomId,
-      v: String(ANDROID_SDK_VERSION),
+      v: String(NIM_ANDROID.sdkVersion),
       tp: '1',
       dt: '0',
       nt: '2',
@@ -320,12 +320,12 @@ export class NimChatroomClient {
     const authProperties = encodeProperties({
       3: 1,
       4: '8.0.0',
-      6: ANDROID_SDK_VERSION,
+      6: NIM_ANDROID.sdkVersion,
       9: 1,
       13: deviceId,
       18: this.options.appKey,
       19: this.options.account,
-      25: ANDROID_PACKAGE_NAME,
+      25: NIM_ANDROID.packageName,
       1000: this.options.token,
     })
     return makePacket(
@@ -359,7 +359,7 @@ export class NimChatroomClient {
   private async openConnection(): Promise<void> {
     const address = await this.requestAddress()
     const key = randomBytes(16)
-    const enterPacket = this.makeEnterPacket(randomUUID())
+    const enterPacket = this.makeEnterPacket(pocketDeviceId())
     const handshake = this.makeHandshake(key, enterPacket)
     this.encryptor = new Rc4Stream(key)
     this.decryptor = new Rc4Stream(key)

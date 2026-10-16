@@ -236,7 +236,7 @@ tick()（60s，重入护栏）
 
 **锁态与解锁**：解锁状态只存渲染层内存（`unlockedSmallChannels`，`channelId` 为键），重启后重新校验。锁图标由 `smallRequiresAnswer` 判定（与当前视图无关，大房间视图下也常显），输入层由 `smallLocked`（= 小房间视图 && 未解锁）判定；校验失败一律停在锁定层。`MASTER_PASSCODE` 为自用通道（客户端直通、不发起请求），界面不公开。
 
-**频道名**：`jump` 与 `lastMsgList` 均不带频道名，名称取自 seine 频道详情 `im/api/seine/server/detail`（`{ serverId }` → `channelInfoList[].channelName`），一次请求覆盖该 server 下全部频道；取不到时静默回退「房间 / 小房间」。seine 有独立的客户端特征，`seineHeaderOverrides()` 只覆盖 `appInfo` 与 `User-Agent`，`pa` 仍由 `postPocket` 现算。名称表连 `serverId` 一起存，读取时校验归属。
+**频道名**：`jump` 与 `lastMsgList` 均不带频道名，名称取自 seine 频道详情 `im/api/seine/server/detail`（`{ serverId }` → `channelInfoList[].channelName`），一次请求覆盖该 server 下全部频道；取不到时静默回退「房间 / 小房间」。seine 有独立的客户端特征，整档覆盖 `appInfo` / `User-Agent` / `Content-Type` 与 `X-Custom-Device-Type`，`pa` 仍由 `postPocket` 现算；两档特征同源于 `main/pocket48/client-profile.ts`（设备 ID 持久化，跨会话同一台设备；机型取自 `common/android-device.ts`，站点请求 UA 同源）。名称表连 `serverId` 一起存，读取时校验归属。
 
 **界面落点**：频道切换置于 header 右侧（`.room-tab`，激活态用房间青 `--color-rooms`，锁图标常显，未读走全局 `.unread-badge` 数字角标）；消息范围置于消息区右上角（`.chat-tools` / `.scope-tab`，中性配色）。仅剩一条频道时整条页签栏不渲染（`roomTabs.length > 1`）。
 

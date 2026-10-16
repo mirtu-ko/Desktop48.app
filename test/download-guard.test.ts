@@ -2,13 +2,17 @@ import Constants from '@renderer/utils/constants'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useDownloadGuard } from '../src/renderer/src/composables/use-download-guard'
 
-// useDownloadGuard 在 setup 内取 router、用 ElMessage 提示；Node 环境两者都不可用
+// useDownloadGuard 用 ElMessage 提示；主窗口 Router 直接注入替身，避免依赖组件上下文
 const { pushMock, messageMock } = vi.hoisted(() => ({ pushMock: vi.fn(), messageMock: vi.fn() }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: pushMock }) }))
 vi.mock('element-plus', () => ({ ElMessage: messageMock }))
 
-function stubConfig(getConfig: (_key: string) => Promise<string>) {
-  vi.stubGlobal('window', { mainAPI: { getConfig } })
+const fakeRouter = { push: pushMock } as any
+
+function stubConfig(
+  getConfig: (_key: string) => Promise<string>,
+  checkFfmpegBinaries: () => Promise<boolean> = async () => true,
+) {
+  vi.stubGlobal('window', { mainAPI: { getConfig, checkFfmpegBinaries } })
 }
 
 afterEach(() => {
@@ -16,29 +20,73 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe('useDownloadGuard（下载/录制前的目录校验）', () => {
-  it('目录已配置时放行，不提示也不跳转', async () => {
+describe('useDownloadGuard（下载/录制前的环境校验）', () => {
+  it('下载目录与 FFmpeg 都可用时放行，不提示也不跳转', async () => {
     const getConfig = vi.fn(async () => '/Users/z/Downloads')
-    stubConfig(getConfig)
+    const checkFfmpegBinaries = vi.fn(async () => true)
+    stubConfig(getConfig, checkFfmpegBinaries)
 
-    await expect(useDownloadGuard().checkDownloadDirectory()).resolves.toBe(true)
+    await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(true)
 
     expect(getConfig).toHaveBeenCalledWith('downloadDirectory')
+    expect(checkFfmpegBinaries).toHaveBeenCalledWith('/Users/z/Downloads')
     expect(messageMock).not.toHaveBeenCalled()
     expect(pushMock).not.toHaveBeenCalled()
   })
 
-  it('目录为空（未配置）时提示并跳设置页', async () => {
+  it('下载目录为空（未配置）时提示并跳设置页', async () => {
     stubConfig(async () => '')
 
-    await expect(useDownloadGuard().checkDownloadDirectory()).resolves.toBe(false)
+    await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(false)
 
     expect(messageMock).toHaveBeenCalledWith({
-      message: '下载目录不存在，请先配置下载目录',
+      message: '请先在「设置」中配置下载目录',
       type: 'warning',
     })
     // 跳转目标取常量而非硬编码字符串，改路由时这里跟着走
     expect(pushMock).toHaveBeenCalledWith(Constants.Menu.SETTING)
+  })
+
+  it('ffmpeg 目录为空时提示并跳设置页', async () => {
+    stubConfig(async key => (key === 'downloadDirectory' ? '/Users/z/Downloads' : ''))
+
+    await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(false)
+
+    expect(messageMock).toHaveBeenCalledWith({
+      message: '请先在「设置」中下载或选择 FFmpeg 目录',
+      type: 'warning',
+    })
+    expect(pushMock).toHaveBeenCalledWith(Constants.Menu.SETTING)
+  })
+
+  it('ffmpeg 目录失效时提示并跳设置页', async () => {
+    stubConfig(async () => '/Users/z/Downloads', async () => {
+      throw new Error('ffmpeg 不存在')
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(false)
+
+    expect(messageMock).toHaveBeenCalledWith({
+      message: 'FFmpeg 目录不可用，请到「设置」重新下载或选择 FFmpeg 目录',
+      type: 'warning',
+    })
+    expect(pushMock).toHaveBeenCalledWith(Constants.Menu.SETTING)
+  })
+
+  it('ffmpeg 目录失效时播放浮窗只提示主窗口设置，不跳转也不误报环境检查失败', async () => {
+    stubConfig(async () => '/Users/z/Downloads', async () => {
+      throw new Error('ffmpeg 不存在')
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await expect(useDownloadGuard().checkDownloadDirectory()).resolves.toBe(false)
+
+    expect(messageMock).toHaveBeenCalledWith({
+      message: 'FFmpeg 目录不可用，请到主窗口「设置」重新下载或选择 FFmpeg 目录',
+      type: 'warning',
+    })
+    expect(pushMock).not.toHaveBeenCalled()
   })
 
   it('查询失败时提示错误且不跳转（IPC 异常不该把人赶去设置页）', async () => {
@@ -47,9 +95,9 @@ describe('useDownloadGuard（下载/录制前的目录校验）', () => {
     })
     vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    await expect(useDownloadGuard().checkDownloadDirectory()).resolves.toBe(false)
+    await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(false)
 
-    expect(messageMock).toHaveBeenCalledWith({ message: '检查下载目录失败', type: 'error' })
+    expect(messageMock).toHaveBeenCalledWith({ message: '检查下载环境失败，请稍后重试', type: 'error' })
     expect(pushMock).not.toHaveBeenCalled()
   })
 })

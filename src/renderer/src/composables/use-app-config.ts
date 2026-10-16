@@ -11,16 +11,14 @@ import { ref } from 'vue'
  * （配置读写对端 main/ipc/register-database-ipc.ts，目录与文件操作对端 main/app.ts）。
  */
 export function useAppConfig() {
-  // 下载目录 / ffmpeg目录 / User-Agent
+  // 下载目录 / ffmpeg 目录
   const downloadDirectory = ref('')
   const ffmpegDirectory = ref('')
-  const userAgent = ref('')
 
-  /** 挂载时读取三项配置（init() 已补齐默认值，恒为生效值） */
+  /** 挂载时读取两项配置（init() 已补齐默认值，恒为生效值） */
   async function loadAppConfig() {
     downloadDirectory.value = await window.mainAPI.getConfig('downloadDirectory')
     ffmpegDirectory.value = await window.mainAPI.getConfig('ffmpegDirectory')
-    userAgent.value = await window.mainAPI.getConfig('userAgent')
   }
 
   /** 通用保存：写盘 + 成功提示 */
@@ -93,20 +91,13 @@ export function useAppConfig() {
     return openDirectory(ffmpegDirectory.value, 'FFmpeg 目录')
   }
 
-  /** 保存 User-Agent（输入框内容由模板双向绑定） */
-  async function setUserAgent() {
-    await saveConfig('userAgent', userAgent.value)
-  }
-
   return {
     downloadDirectory,
     ffmpegDirectory,
-    userAgent,
     loadAppConfig,
     setDownloadDirectory,
     openDownloadDirectory,
     setFfmpegDirectory,
     openFfmpegDirectory,
-    setUserAgent,
   }
 }

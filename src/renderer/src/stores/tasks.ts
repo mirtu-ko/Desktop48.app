@@ -96,6 +96,26 @@ function onTaskEnd(config: TaskKindConfig) {
 }
 
 /**
+ * Electron invoke 的失败会把原始异常包装成
+ * `Error invoking remote method 'xxx': Error: ...`；这里剥掉包装，只给用户业务原因。
+ */
+function extractIpcErrorMessage(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error)
+  const match = /Error invoking remote method '[^']+': Error: (.*)/s.exec(text)
+  return match?.[1] ?? text.replace(/^Error:\s*/, '')
+}
+
+/** 常见启动失败映射成可操作文案；未知错误仍保留主进程原因，便于排查。 */
+function startTaskErrorMessage(error: unknown): string {
+  const message = extractIpcErrorMessage(error)
+  if (message.includes('保存目录为空') || message.includes('保存目录不存在'))
+    return '下载目录不存在或已被移动，请到「设置」重新选择下载目录。'
+  if (message.includes('ffmpeg 目录不存在') || message.includes('ffmpeg 二进制文件不存在') || message.includes('ffmpeg 不存在'))
+    return 'FFmpeg 目录不可用，请到「设置」重新下载或选择 FFmpeg 目录。'
+  return message
+}
+
+/**
  * 入列 + 启动 + 提示。
  *
  * 先同步入列再异步启动：handleTask 查重与 isTaskRunning 都依赖列表，
@@ -119,7 +139,7 @@ async function launchTask(task: TaskState, config: TaskKindConfig, message: stri
         config.list.value.splice(index, 1)
     }
     console.error(`[stores/tasks] ${config.logTag} task start failed`, error)
-    ElMessage({ message: String(error), type: 'error' })
+    ElMessage({ message: startTaskErrorMessage(error), type: 'error' })
   }
 }
 

@@ -12,6 +12,7 @@ import WebSocket from 'ws'
 import { isAllowedBilibiliApiUrl, isAllowedBilibiliSocketUrl } from '../allowed-hosts'
 import { sendIpc } from '../ipc/send'
 import { debug, error, isVerboseEnabled } from '../logger'
+import { BILIBILI_REFERER, BILIBILI_USER_AGENT } from './browser-headers'
 import { BUVID_SPI_URL, createFallbackBuvid, pickBuvid } from './buvid'
 import {
   buildDanmakuAuthBody,
@@ -24,11 +25,6 @@ import {
   unpackDanmakuPackets,
 } from './danmaku-protocol'
 import { buildWbiKey, buildWbiQuery } from './wbi'
-
-/** B 站对非浏览器 UA 有风控，握手与长连接都用桌面浏览器标识 */
-const BILIBILI_USER_AGENT
-  = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-const BILIBILI_REFERER = 'https://live.bilibili.com/'
 
 /** 鉴权包里的设备标识，握手时填好（见 resolveBuvid） */
 let cachedBuvid = ''

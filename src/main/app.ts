@@ -16,8 +16,23 @@ import { initUpdater } from './updater'
 import { wireWindowMaximizeEvents } from './window-events'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
 
+/**
+ * 下载目录的系统默认值。Electron 的标准路径按当前平台解析：
+ * Windows 常见为 `C:\Users\<user>\Downloads`，macOS/Linux 也使用各自的用户下载目录。
+ * getPath 在个别早期环境可能不可用时返回空串，仍由启动前的环境校验兜底。
+ */
+function defaultDownloadDirectory(): string {
+  try {
+    return app.getPath('downloads')
+  }
+  catch (error) {
+    log('[app.ts] 读取系统下载目录失败，暂不写入默认值:', error)
+    return ''
+  }
+}
+
 // 数据库初始化与全部 IPC 通道注册（database.ts 模块本身无副作用，单例在此显式拉起）
-Database.instance().init()
+Database.instance().init({ downloadDirectory: defaultDownloadDirectory() })
 registerAllIPC()
 
 log('[app.ts] 主进程路径:', process.execPath)

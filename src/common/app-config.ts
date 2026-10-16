@@ -4,7 +4,7 @@
  */
 
 /** 配置的合法键（固定集合，IPC 侧以运行时校验防渲染端乱传） */
-export type ConfigKey = 'downloadDirectory' | 'ffmpegDirectory' | 'userAgent'
+export type ConfigKey = 'downloadDirectory' | 'ffmpegDirectory'
 
 /** 配置生效值类型：init() 补齐默认值后读取不会缺键 */
 export type AppConfig = Record<ConfigKey, string>
@@ -15,6 +15,4 @@ export const CONFIG_DEFAULTS: AppConfig = {
   downloadDirectory: '',
   /** 空串表示「未配置」：首次启动由 Initialize 引导下载/选择 ffmpeg */
   ffmpegDirectory: '',
-  /** 站点请求 UA */
-  userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36',
 }
