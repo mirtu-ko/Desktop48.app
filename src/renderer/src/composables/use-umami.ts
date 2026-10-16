@@ -12,8 +12,17 @@
 //   （Umami 服务端据此解析浏览器 / 操作系统）
 // - 服务端生成：基于 IP 哈希的匿名会话标识，用于去重访客，不存原始 IP
 // 另：CDN 拉取失败 / 离线时 window.umami 不存在，不会发送任何数据。
+interface UmamiTrackProps {
+  url?: string
+  referrer?: string
+  hostname?: string
+}
+
 interface Umami {
-  track: (props: { url: string, referrer?: string, hostname?: string }) => void
+  // 必须用回调形式：props 是 script 自身算好的默认字段（含 /api/send 必填的
+  // website、language、screen 等），返回值覆盖默认值。
+  // 不能用 track(obj) 对象形式——那会整体替换上报内容、丢掉 website，服务端 400
+  track: (callback: (props: UmamiTrackProps) => UmamiTrackProps) => void
 }
 
 declare global {
@@ -25,11 +34,18 @@ declare global {
 // 上报一次页面访问。path 不含 '#'，如 '/setting'、'/float?live=123'
 export function trackPage(path: string): void {
   // CDN 拉取失败 / 离线时 window.umami 不存在，静默跳过
-  window.umami?.track({
+  window.umami?.track(props => ({
+    ...props,
     url: `/#${path}`,
-    // referrer 同样是 file:// 路径，上报空串；hostname 固定为一个可读的应用名，
+    // referrer 同样是 file:// 路径，上报空串；hostname 固定为应用名，
     // 避免仪表盘里出现 file:// 或空主机名
     referrer: '',
     hostname: 'desktop48-app',
-  })
+  }))
+}
+
+// 上报一条自定义事件（Umami 仪表盘 Events 里看），data 里的属性会一起进库
+export function trackEvent(name: string, data: Record<string, string | number>): void {
+  // CDN 拉取失败 / 离线时 window.umami 不存在，静默跳过
+  window.umami?.track(name, data)
 }

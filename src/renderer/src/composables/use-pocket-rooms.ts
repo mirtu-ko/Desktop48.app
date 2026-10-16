@@ -285,8 +285,8 @@ export function usePocketRooms() {
   /**
    * 左列排序，四级判据：
    * 1. 临时房间恒置顶（用户刚点进来的那个，要第一眼看到）；
-   * 2. 有未读的排在没未读的前面——「谁的房间有新消息」是第一眼信息；
-   * 3. 其次是在直播的——「谁的房间开着」是第二眼信息；
+   * 2. 在直播的排在没直播的前面——「谁的房间开着」是第一眼信息；
+   * 3. 其次是有未读的——「谁的房间有新消息」是第二眼信息；
    * 4. 同档按昵称 localeCompare('zh')。
    *
    * 未读判据取大房间 + 小房间合计（与左列角标同源），不是只看大房间：
@@ -295,8 +295,8 @@ export function usePocketRooms() {
   function sortRooms(list: PocketRoom[]) {
     list.sort((a, b) =>
       Number(!!b.temporary) - Number(!!a.temporary)
-      || Number(unreadCountOf(b.userId) > 0) - Number(unreadCountOf(a.userId) > 0)
       || Number(!!b.live) - Number(!!a.live)
+      || Number(unreadCountOf(b.userId) > 0) - Number(unreadCountOf(a.userId) > 0)
       || a.nickname.localeCompare(b.nickname, 'zh'),
     )
     sortedUnreadIds = collectUnreadIds(list)
