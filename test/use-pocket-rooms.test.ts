@@ -418,7 +418,7 @@ describe('use-pocket-rooms / 屏蔽优先', () => {
 describe('use-pocket-rooms / 左列排序', () => {
   /**
    * 三个关注成员：昵称取「成员N」保证 localeCompare('zh') 结果确定（成员1 < 成员2 < 成员3），
-   * 其中 10001 在直播 —— 用来验证未读能压过「正在直播」这一档。
+   * 其中 10001 在直播 —— 用来验证「正在直播」压过未读这一档。
    */
   function sortFixture(): SetupOptions {
     return {
@@ -432,7 +432,7 @@ describe('use-pocket-rooms / 左列排序', () => {
     }
   }
 
-  it('有未读的排最前，压过「正在直播」；该档内仍按 直播 → 昵称', async () => {
+  it('「正在直播」压过未读排最前；未读只在非直播档内优先，再按昵称', async () => {
     const { api, setUnread } = await setup(sortFixture())
     await api.load()
     // 无未读：在直播的排前，其余按昵称
@@ -441,18 +441,19 @@ describe('use-pocket-rooms / 左列排序', () => {
     setUnread({ 10003: 5 })
     await nextTick()
 
-    // 10003 有未读 → 置顶；10001 虽在直播也不越位
-    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+    // 10001 在直播 → 仍居首；10003 有未读 → 在非直播档内压过 10002
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10003, 10002])
   })
 
-  it('新消息到达：该房间浮到最前', async () => {
+  it('新消息到达：该房间在非直播档内浮到最前，压不过在播成员', async () => {
     const { api, setUnread } = await setup(sortFixture())
     await api.load()
 
-    setUnread({ 10002: 1 })
+    setUnread({ 10003: 1 })
     await nextTick()
 
-    expect(api.rooms.value.map(room => room.userId)).toEqual([10002, 10001, 10003])
+    // 10001 在直播 → 仍居首；10003 新消息 → 非直播档内浮到 10002 之前
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10003, 10002])
   })
 
   // 回归：进房即 markRead（本地乐观清零 + 主进程广播）。若未读变化一律重排，
@@ -462,12 +463,12 @@ describe('use-pocket-rooms / 左列排序', () => {
     await api.load()
     setUnread({ 10003: 2 })
     await nextTick()
-    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10003, 10002])
 
     await markRoomRead(10003)
     await nextTick()
 
-    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10003, 10002])
 
     // 手动刷新 = 一次自然排序：按当下未读归位
     await api.refreshRoomStatus()
