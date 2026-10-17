@@ -1589,14 +1589,23 @@ onMounted(() => {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 34%, transparent);
 }
 
-/* 条目右缘竖排小标签列：口袋关注星标在上、队伍徽标在下 */
+/* 条目右缘竖排小标签列：口袋关注星标在上、队伍徽标在下。
+ * 固定列宽：队伍徽标宽窄不一时，各行星星仍横向对齐（过长的队名截断省略） */
 .room-side-tags {
   display: flex;
   flex: none;
   flex-direction: column;
   align-items: center;
   gap: 3px;
+  width: 38px;
   margin-left: 6px;
+}
+
+.room-side-tags .room-team {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 口袋关注星标：11px 品牌色（语义：已关注），详情看 tooltip 与资料卡 */
