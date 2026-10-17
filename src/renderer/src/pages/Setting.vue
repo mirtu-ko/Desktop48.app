@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { NetDiagnoseItem, PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
+import type { InputInstance } from 'element-plus'
 import { DEFAULT_POCKET_CLIENT_PROFILE, POCKET_CLIENT_PROFILE_OPTIONS, pocketClientProfileOption } from '@common/pocket-client-profile'
-import { Connection, Cpu, Document, Download, Folder, Hide, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
+import { Connection, Cpu, Document, Download, Folder, Hide, Lock, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
@@ -359,6 +360,11 @@ const AREA_OPTIONS = [
  * 档位随凭证落盘并对之后所有请求生效；换档需退出后重新登录。
  */
 const loginProfile = ref<PocketClientProfileId>(DEFAULT_POCKET_CLIENT_PROFILE)
+/** 登录身份档位的 APP 图标：与「推荐链接」里两个官方客户端的 logo 同源 */
+const profileLogos: Record<PocketClientProfileId, string> = {
+  pocket48: 'https://h5.48.cn/pocket48/image/logo.png',
+  seine48: 'https://www.ckg48.cn/favicon.ico',
+}
 /** 当前所选身份的说明文案（登录弹窗内随选择变化） */
 const loginProfileHint = computed(() => pocketClientProfileOption(loginProfile.value).hint)
 /** 已登录账号的身份标签：默认档（口袋48）不显示，仅非默认档在账号卡片上提示，避免噪声 */
@@ -616,6 +622,13 @@ async function submitTokenLogin() {
 /** 手机号是否可发送验证码：中国大陆仍按 11 位校验，其他区号只要求数字主体有效 */
 const smsSendable = computed(() =>
   smsForm.area === '86' ? /^\d{11}$/.test(smsForm.mobile) : /^\d{4,15}$/.test(smsForm.mobile))
+/** 短信登录手机号输入框：弹窗打开后自动聚焦，省一次点击 */
+const smsMobileRef = ref<InputInstance>()
+
+function focusSmsMobile() {
+  smsMobileRef.value?.focus()
+}
+
 /** 验证码登录按钮可用性 */
 const smsLoginable = computed(() => smsSendable.value && smsForm.code.trim().length > 0)
 /** token 登录按钮可用性 */
@@ -822,7 +835,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-shows)' }"
+            :style="{ '--tile-color': 'var(--color-lives)' }"
           >
             <el-icon><Cpu /></el-icon>
           </span>
@@ -905,7 +918,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-lives)' }"
+            :style="{ '--tile-color': 'var(--color-members)' }"
           >
             <el-icon><Hide /></el-icon>
           </span>
@@ -1042,7 +1055,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-members)' }"
+            :style="{ '--tile-color': 'var(--color-shows)' }"
           >
             <el-icon><Connection /></el-icon>
           </span>
@@ -1217,14 +1230,29 @@ function hideLogo(event: Event) {
     <!-- 口袋48登录弹窗：短信验证码 / Token 粘贴 两种方式 -->
     <el-dialog
       v-model="loginDialogVisible"
-      title="登录口袋48账号"
-      width="440px"
+      width="480px"
+      align-center
       :close-on-click-modal="false"
       append-to-body
+      @opened="focusSmsMobile"
     >
+      <template #header>
+        <div class="login-head">
+          <span class="login-head-icon icon-tile" :style="{ '--tile-color': 'var(--brand-primary)' }">
+            <el-icon :size="18"><Lock /></el-icon>
+          </span>
+          <div class="login-head-text">
+            <h3 class="login-head-title">
+              登录口袋48账号
+            </h3>
+            <p class="login-head-sub">
+              短信验证码或 Token 均可登录
+            </p>
+          </div>
+        </div>
+      </template>
       <div class="login-profile">
         <div class="login-profile-row">
-          <span class="login-profile-label">登录身份</span>
           <el-radio-group
             v-model="loginProfile"
             size="small"
@@ -1234,7 +1262,15 @@ function hideLogo(event: Event) {
               :key="option.id"
               :value="option.id"
             >
-              {{ option.label }}
+              <span class="profile-option">
+                <img
+                  class="profile-option-logo"
+                  :src="profileLogos[option.id]"
+                  alt=""
+                  @error="hideLogo"
+                >
+                {{ option.label }}
+              </span>
             </el-radio-button>
           </el-radio-group>
         </div>
@@ -1242,7 +1278,10 @@ function hideLogo(event: Event) {
           {{ loginProfileHint }}
         </div>
       </div>
-      <el-tabs v-model="loginTab">
+      <el-tabs
+        v-model="loginTab"
+        class="login-tabs"
+      >
         <el-tab-pane
           label="短信验证码"
           name="sms"
@@ -1262,6 +1301,7 @@ function hideLogo(event: Event) {
                 />
               </el-select>
               <el-input
+                ref="smsMobileRef"
                 v-model="smsForm.mobile"
                 class="login-mobile"
                 placeholder="手机号"
@@ -1274,6 +1314,7 @@ function hideLogo(event: Event) {
               class="login-captcha"
             >
               <div class="captcha-question">
+                <el-icon><WarningFilled /></el-icon>
                 {{ smsForm.captcha.question }}
               </div>
               <el-radio-group
@@ -1347,7 +1388,12 @@ function hideLogo(event: Event) {
         </el-tab-pane>
       </el-tabs>
       <div class="login-hint">
-        凭证仅保存在本机（safeStorage 加密），不会上传。token 由服务端掌控有效期，失效后需重新登录。
+        <el-icon class="login-hint-icon">
+          <Lock />
+        </el-icon>
+        <p>
+          凭证仅保存在本机（safeStorage 加密），不会上传。token 由服务端掌控有效期，失效后需重新登录。
+        </p>
       </div>
     </el-dialog>
 
@@ -1973,10 +2019,39 @@ function hideLogo(event: Event) {
 /* 品牌渐变主按钮已全局统一，见 app.scss */
 
 /* ===== 口袋48登录弹窗 ===== */
+/* 头部：品牌色图标磁贴 + 主副标题，替代默认的单行标题 */
+.login-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding-right: 24px;
+}
+
+.login-head-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
+
+.login-head-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--el-text-color-primary);
+}
+
+.login-head-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
+}
+
 /* 登录身份选择：口袋48 / 塞纳河48 两个官方客户端档位，同一账号可在两端并存 */
 .login-profile {
-  margin-bottom: 14px;
-  padding: 10px 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--brand-primary) 4%, transparent);
@@ -1986,11 +2061,40 @@ function hideLogo(event: Event) {
   display: flex;
   gap: 10px;
   align-items: center;
+
+  /* 身份档位分段拉满剩余宽度，两端选项等宽，视觉更稳 */
+  :deep(.el-radio-group) {
+    flex: 1;
+    display: flex;
+  }
+
+  :deep(.el-radio-button) {
+    flex: 1;
+
+    .el-radio-button__inner {
+      width: 100%;
+    }
+  }
 }
 
 .login-profile-label {
+  flex: none;
   font-size: 13px;
   color: var(--el-text-color-primary);
+}
+
+/* 档位按钮内 APP logo：16px 圆角小图，加载失败自动隐藏只留文字 */
+.profile-option {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.profile-option-logo {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: contain;
 }
 
 .login-profile-hint {
@@ -2000,11 +2104,30 @@ function hideLogo(event: Event) {
   color: var(--el-text-color-secondary);
 }
 
+/* 登录方式 Tab：等宽平分弹窗宽度，视觉重心稳定 */
+.login-tabs {
+  :deep(.el-tabs__nav) {
+    display: flex;
+    width: 100%;
+  }
+
+  :deep(.el-tabs__item) {
+    flex: 1;
+    justify-content: center;
+    font-size: 14px;
+    text-align: center;
+  }
+
+  :deep(.el-tabs__nav-wrap::after) {
+    background-color: var(--el-border-color-lighter);
+  }
+}
+
 .login-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-top: 4px;
+  gap: 14px;
+  padding-top: 6px;
 }
 
 /* 问答题卡片：服务端反爬（2001），题目 + 单选作答 */
@@ -2015,9 +2138,18 @@ function hideLogo(event: Event) {
   background: color-mix(in srgb, var(--brand-primary) 4%, transparent);
 
   .captcha-question {
+    display: flex;
+    gap: 6px;
+    align-items: center;
     margin-bottom: 6px;
     font-size: 13px;
     color: var(--el-text-color-primary);
+
+    .el-icon {
+      flex: none;
+      font-size: 15px;
+      color: var(--el-color-warning);
+    }
   }
 
   .captcha-options {
@@ -2052,7 +2184,11 @@ function hideLogo(event: Event) {
 }
 
 .login-submit {
-  margin-top: 4px;
+  width: 100%;
+  height: 38px;
+  margin-top: 2px;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .login-token-input {
@@ -2064,10 +2200,26 @@ function hideLogo(event: Event) {
 }
 
 .login-hint {
-  margin-top: 4px;
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--el-border-color-lighter);
   font-size: 12px;
   line-height: 1.5;
   color: var(--el-text-color-secondary);
+
+  p {
+    margin: 0;
+  }
+
+  .login-hint-icon {
+    flex: none;
+    margin-top: 2px;
+    font-size: 13px;
+    color: var(--el-text-color-placeholder);
+  }
 }
 
 /* 明文存储降级提示 */

@@ -705,20 +705,39 @@ onMounted(() => {
 
 <template>
   <div class="page-root rooms-page">
-    <!-- 未登录：整页登录引导（房间依赖账号关注关系） -->
+    <!-- 未登录：居中登录卡片（房间依赖账号关注关系） -->
     <div v-if="!loggedIn && !loading" class="gate">
-      <span class="gate-icon icon-tile" :style="{ '--tile-color': 'var(--color-rooms)' }">
-        <el-icon :size="26"><ChatDotRound /></el-icon>
-      </span>
-      <h2 class="gate-title">
-        登录后查看关注房间
-      </h2>
-      <p class="gate-sub">
-        房间列表来自口袋48账号的关注成员，右侧显示 TA 们房间里成员发送的消息（文字 / 图片 / 语音 / 回复等）。
-      </p>
-      <el-button type="primary" @click="router.push('/setting')">
-        去设置页登录
-      </el-button>
+      <div class="gate-card frosted-surface">
+        <span class="gate-icon icon-tile" :style="{ '--tile-color': 'var(--color-rooms)' }">
+          <el-icon :size="28"><ChatDotRound /></el-icon>
+        </span>
+        <h2 class="gate-title">
+          登录后查看关注房间
+        </h2>
+        <p class="gate-sub">
+          房间列表来自口袋48账号的关注成员，登录后可查看 TA 们房间里的消息（文字 / 图片 / 语音 / 回复等）。
+        </p>
+        <div class="gate-points">
+          <span class="gate-point">
+            <el-icon><StarFilled /></el-icon>
+            关注同步
+          </span>
+          <span class="gate-point">
+            <el-icon><ChatDotRound /></el-icon>
+            房间消息
+          </span>
+          <span class="gate-point">
+            <el-icon><VideoCamera /></el-icon>
+            直播回放
+          </span>
+        </div>
+        <el-button type="primary" round @click="router.push('/setting')">
+          去设置页登录
+          <el-icon class="el-icon--right">
+            <ArrowRight />
+          </el-icon>
+        </el-button>
+      </div>
     </div>
 
     <template v-else>
@@ -1387,38 +1406,123 @@ onMounted(() => {
   overflow: hidden;
 }
 
-/* ===== 登录引导（未登录整页占位） ===== */
+/* ===== 登录引导（未登录居中卡片） ===== */
 .gate {
+  position: relative;
   display: flex;
   flex: 1;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+
+  /* 背景氛围光斑：弱化空页面的「空」，把视线聚到卡片 */
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(72px);
+    opacity: 0.45;
+    pointer-events: none;
+  }
+
+  &::before {
+    top: -70px;
+    right: 10%;
+    width: 320px;
+    height: 320px;
+    background: color-mix(in srgb, var(--color-rooms) 32%, transparent);
+  }
+
+  &::after {
+    bottom: -50px;
+    left: 10%;
+    width: 260px;
+    height: 260px;
+    background: color-mix(in srgb, var(--el-color-primary) 24%, transparent);
+  }
+}
+
+.gate-card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 12px;
+  max-width: 460px;
+  padding: 40px 44px 34px;
+  border-radius: 22px;
   text-align: center;
+  animation: gate-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
 
-  .gate-icon {
-    width: 56px;
-    height: 56px;
+.gate-icon {
+  width: 60px;
+  height: 60px;
+}
 
-    .el-icon {
-      font-size: 26px;
-    }
-  }
+.gate-title {
+  margin: 2px 0 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
 
-  .gate-title {
-    margin: 4px 0 0;
-    font-size: 17px;
-    font-weight: 600;
-    color: var(--el-text-color-primary);
-  }
+.gate-sub {
+  max-width: 400px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
+}
 
-  .gate-sub {
-    max-width: 420px;
-    margin: 0 0 8px;
+/* 功能点提要：小药丸让用户一眼知道登录后能做什么 */
+.gate-points {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+
+.gate-point {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-lighter);
+  box-shadow: inset 0 0 0 1px var(--el-border-color-lighter);
+
+  .el-icon {
     font-size: 13px;
-    line-height: 1.7;
-    color: var(--el-text-color-secondary);
+    color: var(--color-rooms);
+  }
+}
+
+.gate-card .el-button {
+  padding: 12px 24px;
+  height: auto;
+}
+
+@keyframes gate-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gate-card {
+    animation: none;
   }
 }
 
