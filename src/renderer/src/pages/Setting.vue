@@ -167,7 +167,7 @@ function diagnoseNote(item: NetDiagnoseItem): string {
   if (item.status === null)
     return item.error || '连接失败'
   if (item.status === 403)
-    return '服务端可达但拒绝访问，多为地区限制或风控拦截'
+    return '服务端可达但拒绝访问：对比各身份行可区分地区策略与客户端身份限制'
   if (item.status >= 400 && item.status < 500)
     return '服务端可达（该状态码是探测路径的响应，不影响业务接口）'
   if (item.status >= 500)
@@ -181,7 +181,7 @@ async function handleCopyDiagnose() {
     const verdict = diagnoseVerdict(item)
     const status = item.status === null ? '无响应' : `HTTP ${item.status}`
     const note = diagnoseNote(item)
-    return `${item.label}（${item.url}）: ${status} · ${item.ms}ms · ${verdict.label}${note ? ` · ${note}` : ''}${item.error ? ` · ${item.error}` : ''}`
+    return `${item.label}（${item.url}）: ${status} · ${item.ms}ms · ${verdict.label}${note ? ` · ${note}` : ''}${item.error ? ` · ${item.error}` : ''}${item.detail ? ` · 响应体: ${item.detail}` : ''}`
   })
   const text = [
     `应用版本: ${appVersion.value}`,
@@ -1064,7 +1064,7 @@ function hideLogo(event: Event) {
               网络诊断（仅供参考）
             </div>
             <div class="row-desc">
-              检测核心服务域名的连通情况；接口报错（如 HTTP 403）时可能影响使用
+              检测核心服务域名与口袋客户端身份的连通情况；接口报错（如 HTTP 403）时可能影响使用
             </div>
           </div>
           <div class="row-actions">
@@ -1091,7 +1091,7 @@ function hideLogo(event: Event) {
           <div class="diagnose-grid">
             <div
               v-for="item in diagnoseResults"
-              :key="item.url"
+              :key="`${item.label}|${item.url}`"
               class="diagnose-item"
             >
               <div class="diagnose-head">
@@ -1109,6 +1109,10 @@ function hideLogo(event: Event) {
                   v-if="diagnoseNote(item)"
                   class="diagnose-note"
                 >{{ diagnoseNote(item) }}</span>
+                <span
+                  v-if="item.detail"
+                  class="diagnose-note diagnose-note--body"
+                >{{ item.detail }}</span>
               </div>
             </div>
           </div>
@@ -1720,6 +1724,13 @@ function hideLogo(event: Event) {
 
 .diagnose-item .diagnose-note {
   display: block;
+}
+
+/* 4xx/5xx 响应体摘要：比说明再低一档颜色，长串允许任意折行 */
+.diagnose-item .diagnose-note--body {
+  margin-top: 2px;
+  color: var(--el-text-color-placeholder);
+  word-break: break-all;
 }
 
 /* 新版本提示块：available 态展开版本对比与更新说明，downloading 态接棒显示进度 */

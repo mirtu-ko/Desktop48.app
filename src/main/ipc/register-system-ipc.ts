@@ -15,12 +15,38 @@ import { isAllowedUrl } from '../allowed-hosts'
 import { isPathInAllowedRoots } from '../allowed-path'
 import { Database } from '../database'
 import { inspectFfmpegDir } from '../ffmpeg/ffmpeg-process'
+import { log } from '../logger'
 import { diagnoseTargets } from '../net-diagnose'
+import { mergeAppIdentity, needsAppIdentity } from '../net-request-headers'
+import { pocketAppHeaders } from '../pocket48/pocket-auth'
 import { handleTraced } from './trace'
 
 // 网络请求 - 域名白名单校验
 const NET_REQUEST_TIMEOUT = 20 * 1000
 const NET_REQUEST_MAX_BYTES = 32 * 1024 * 1024
+
+/**
+ * 请求头收口：打口袋体系**业务接口**（pocketapi / h5）的请求改报 App 身份
+ * （UA / appInfo / pa），纯静态资源与媒体 CDN 沿用渲染层给的站点档请求头。
+ * 域名清单与判定理由见 `net-request-headers.ts`。
+ *
+ * 身份头生成失败（wasm / 凭证异常）不阻断请求：退回调用方的请求头照常发出，
+ * 让服务端的真实应答暴露问题，而不是在本地变形成一个与网络无关的错误。
+ */
+async function resolveNetRequestHeaders(
+  url: string,
+  headers?: Record<string, string>,
+): Promise<Record<string, string> | undefined> {
+  if (!needsAppIdentity(url))
+    return headers
+  try {
+    return mergeAppIdentity(headers, await pocketAppHeaders())
+  }
+  catch (error) {
+    log('[netRequest] App 身份头生成失败，本次沿用调用方请求头', error)
+    return headers
+  }
+}
 
 export function registerSystemIPC(): void {
   handleTraced('openPath', async (_event: IpcMainInvokeEvent, filePath: string) => {
@@ -63,13 +89,14 @@ export function registerSystemIPC(): void {
     if (!url || !isAllowedUrl(url)) {
       throw new Error(`请求被拒绝：域名不在白名单中 (${url})`)
     }
+    const requestHeaders = await resolveNetRequestHeaders(url, headers)
     return new Promise<string>((resolve, reject) => {
       // 逐字段构造而非整对象透传：net.request 会接受 ClientRequest 的全部选项，
       // 整对象透传等于让渲染层塞入 session / credentials 等我们并未打算开放的字段
       const request = net.request({ url, method: method || 'GET' })
-      if (headers) {
-        for (const key in headers)
-          request.setHeader(key, headers[key])
+      if (requestHeaders) {
+        for (const key in requestHeaders)
+          request.setHeader(key, requestHeaders[key])
       }
 
       let settled = false
