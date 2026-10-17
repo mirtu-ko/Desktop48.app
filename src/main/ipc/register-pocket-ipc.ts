@@ -57,6 +57,13 @@ export function registerPocketIPC(): void {
     nextTime?: number,
     scope?: 'member' | 'all',
   ) => pocketAuth.getRoomMessages(channelId, serverId, nextTime, scope))
+  // 房间精华消息（顶部置顶条与精华列表）：与消息范围无关，只在进房时拉一次
+  handleTraced('pocketGetRoomEssenceMessages', (
+    _event: IpcMainInvokeEvent,
+    channelId: string,
+    serverId: string,
+    nextTime?: number,
+  ) => pocketAuth.getRoomEssenceMessages(channelId, serverId, nextTime))
   // 批量最新消息（左侧列表预览）
   handleTraced('pocketGetRoomLastMessages', (_event: IpcMainInvokeEvent, serverIds: string[]) =>
     pocketAuth.getRoomLastMessages(serverIds))

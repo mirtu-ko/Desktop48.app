@@ -74,3 +74,11 @@ export const ROOM_MESSAGE_URLS = {
 } as const
 /** 批量取各 server 下每个频道的最后一条消息（左侧列表预览用；参考实现 yaya_msg 同款） */
 export const ROOM_LAST_MESSAGE_URL = `${ORIGIN}/im/api/v1/team/classic/last/message/get`
+/**
+ * 房间精华消息（口袋 App 房间顶部置顶展示的那批，房主 / 管理员设置）。
+ * 回包 `content.essenceMessageList`，元素与普通消息同构（msgId / msgType / bodys / extInfo 一致），
+ * 另带 `essenceInfo`（精华设置信息，本版本不消费）。
+ * 来源：官方 pocket48 7.1.44 APK 字符串池（端点、`essenceMessageList`、`essenceInfo` 三处同现），
+ * 与参考实现 yaya_msg 的请求体一致（`{ channelId, serverId, nextTime, limit }`）。
+ */
+export const ROOM_ESSENCE_MESSAGE_URL = `${ORIGIN}/im/api/v1/team/essence/message/list`

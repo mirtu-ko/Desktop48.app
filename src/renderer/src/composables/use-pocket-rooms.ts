@@ -165,6 +165,20 @@ export function usePocketRooms() {
   /** 加载更多中（按钮 loading 态） */
   const loadingMore = ref(false)
 
+  /**
+   * 房间精华消息（房主 / 管理员置顶的那批，口袋 App 房间顶部的「精华」）。
+   * 按 msgTime **倒序**存：[0] 是最新一条，顶部精华条直接取它；弹层按同一顺序列出。
+   * 只在进入房间 / 切频道时拉一页，不随 5s 消息轮询复查——精华是低频变更的内容，
+   * 复查会让每个房间每次停留都多打一个请求。
+   */
+  const essenceMessages = ref<PocketRoomMessageView[]>([])
+  /** 精华拉取中（弹层「加载更多」按钮的 loading 态；首屏拉取不阻塞任何界面） */
+  const essenceLoading = ref(false)
+  /** 精华是否已到头（弹层「加载更多」按钮的显隐） */
+  const essenceExhausted = ref(false)
+  /** 更早精华的游标；0 = 没有更多 */
+  let essenceCursor = 0
+
   /** 当前房间的频道（轮询/加载更多用）；null = 未选中或解析失败 */
   let activeChannel: { serverId: string, channelId: string } | null = null
   /** 已加载消息的去重键集合：轮增量与翻历史共用，防重复插入 */
@@ -603,6 +617,10 @@ export function usePocketRooms() {
     historyCursor = 0
     messages.value = []
     historyExhausted.value = false
+    essenceMessages.value = []
+    essenceCursor = 0
+    essenceExhausted.value = false
+    essenceLoading.value = false
     chatStatus.value = 'idle'
     chatStatusText.value = ''
   }
@@ -617,13 +635,16 @@ export function usePocketRooms() {
     const fresh = incoming.filter(item => !messageKeys.has(item.id))
     for (const item of fresh)
       messageKeys.add(item.id)
-    if (!fresh.length)
-      return
     if (mode === 'replace') {
+      // 首屏 / 换口径：以本页为准。空页也要落成空列表——换口径时旧内容不清、
+      // 若这里提前 return，会让上一档的消息留在新档位下
       // 接口按 msgTime 倒序（最新在前），聊天流是最新在下，翻转
       messages.value = fresh.slice().sort((a, b) => a.msgTime - b.msgTime)
+      return
     }
-    else if (mode === 'prepend') {
+    if (!fresh.length)
+      return
+    if (mode === 'prepend') {
       messages.value = [...fresh.sort((a, b) => a.msgTime - b.msgTime), ...messages.value]
     }
     else {
@@ -647,8 +668,13 @@ export function usePocketRooms() {
     nextTime: number,
     mode: 'replace' | 'prepend' | 'append',
   ): Promise<void> {
+    const requestId = selectRequestId
     const scope = messageScope.value
     const result = await window.mainAPI.pocketGetRoomMessages(channel.channelId, channel.serverId, nextTime, scope)
+    // 回包期间已切房 / 换了拉取口径：旧回包不得并入当前列表
+    // （翻历史与轮询都没有自己的取消机制，只能在这里拦）
+    if (requestId !== selectRequestId)
+      return
     const views = result.messages
       .map(normalizePocketRoomMessage)
       .filter((item): item is PocketRoomMessageView => item !== null)
@@ -661,6 +687,57 @@ export function usePocketRooms() {
     // 是否还有更早历史只认 nextTime：本页条数不满 limit 不代表到头（服务端分页策略不透明）
     if (!result.nextTime)
       historyExhausted.value = true
+  }
+
+  /**
+   * 拉取精华消息一页（mode=replace 首屏 / more 弹层加载更多）。
+   * 失败只记日志、不打断房间：精华是附加信息，拉不到时顶部条直接不出现。
+   * 接口按 msgTime 倒序返回，这里统一再排一次（[0] = 最新），不依赖服务端顺序。
+   */
+  async function fetchEssencePage(
+    channel: { serverId: string, channelId: string },
+    mode: 'replace' | 'more',
+  ): Promise<void> {
+    const requestId = selectRequestId
+    if (mode === 'replace') {
+      essenceMessages.value = []
+      essenceCursor = 0
+      essenceExhausted.value = false
+    }
+    essenceLoading.value = true
+    try {
+      const result = await window.mainAPI.pocketGetRoomEssenceMessages(
+        channel.channelId,
+        channel.serverId,
+        mode === 'more' ? essenceCursor : 0,
+      )
+      // 回包期间可能已切房 / 切频道：过期回包不得写进当前房间的状态
+      if (requestId !== selectRequestId)
+        return
+      const views = result.messages
+        .map(normalizePocketRoomMessage)
+        .filter((item): item is PocketRoomMessageView => item !== null)
+      const existing = new Set(essenceMessages.value.map(item => item.id))
+      const fresh = views.filter(item => !existing.has(item.id))
+      essenceMessages.value = [...essenceMessages.value, ...fresh].sort((a, b) => b.msgTime - a.msgTime)
+      essenceCursor = result.nextTime
+      essenceExhausted.value = !result.nextTime
+    }
+    catch (error) {
+      if (requestId === selectRequestId)
+        debugLog('pocket-rooms', '精华消息拉取失败（顶部精华条不展示）', error)
+    }
+    finally {
+      if (requestId === selectRequestId)
+        essenceLoading.value = false
+    }
+  }
+
+  /** 弹层里加载更早的精华（用户主动触发；加载中 / 已到头时 no-op） */
+  async function loadMoreEssence(): Promise<void> {
+    if (!activeChannel || essenceLoading.value || essenceExhausted.value)
+      return
+    await fetchEssencePage(activeChannel, 'more')
   }
 
   // 房间新消息轮询：仅选中房间就绪后由 selectRoom 启动，暂停/恢复随页面激活态。
@@ -772,12 +849,57 @@ export function usePocketRooms() {
     }
   }
 
+  /**
+   * 换拉取口径后重拉当前频道（切消息范围用）：只复位消息流自身，其余状态原样保留。
+   *
+   * 不走 clearChat + reopenActiveView —— 那条路径推倒的东西比换口径需要的多：
+   * 精华消息按频道取、与范围无关，却要被清空再拉一次（顶部条会闪一下）；
+   * activeChannel 置空后还得再走一遍 openChannel。这里保留频道与精华，只把
+   * 去重键 / 游标 / 到头标记复位，旧口径的消息先留在屏上
+   * （chatStatus=loading 由底部文案提示），回包后整体替换。
+   *
+   * 失败时清空消息：旧口径的内容留在新档位下会读成「这一档就这些」。
+   */
+  async function reloadMessagesForScope() {
+    const channel = activeChannel
+    if (!channel)
+      return
+    selectRequestId++
+    const requestId = selectRequestId
+    // 在途的精华翻页已作废（回包会因 requestId 不符被丢弃），别把按钮留在加载态
+    essenceLoading.value = false
+    messageKeys = new Set()
+    historyCursor = 0
+    historyExhausted.value = false
+    chatStatus.value = 'loading'
+    chatStatusText.value = ''
+    try {
+      await fetchRoomPage(channel, 0, 'replace')
+    }
+    catch (error) {
+      if (requestId !== selectRequestId)
+        return
+      messages.value = []
+      messageKeys = new Set()
+      chatStatus.value = 'error'
+      chatStatusText.value = error instanceof Error ? error.message : String(error)
+      return
+    }
+    if (requestId !== selectRequestId)
+      return
+    chatStatus.value = 'ready'
+    chatStatusText.value = ''
+    resumeMessagePoll()
+  }
+
   /** 在选中成员下打开指定频道（大房间或小房间）：首屏拉取 + 启动轮询 */
   async function openChannel(userId: number, channel: { serverId: string, channelId: string }) {
     const requestId = selectRequestId
     activeChannel = channel
     chatStatus.value = 'loading'
     chatStatusText.value = ''
+    // 精华与首屏消息并行：精华失败只影响顶部条，不拖垮消息流
+    void fetchEssencePage(channel, 'replace')
     try {
       await fetchRoomPage(channel, 0, 'replace')
     }
@@ -1089,14 +1211,22 @@ export function usePocketRooms() {
   // 登录态变化（在设置页登录/退出后回到本页）：重新首灌
   watch(loggedIn, () => void load())
 
-  // 切换消息范围：重拉**当前视图**的消息流（去重键/游标随 clearChat 复位；未选中时切了也无需动作）。
-  // 必须走 reopenActiveView —— selectRoom 会把 viewMode 复位到大房间，
-  // 在小房间里切范围会被弹回大房间（踩过）。
+  // 切换消息范围：接口按范围过滤，只能重拉当前频道最近一页（未选中时切了也无需动作）。
+  // 走 reloadMessagesForScope —— 频道没变，不必 clearChat + 重开（会连带清掉与范围无关的精华）。
+  // 小房间锁定态不拉消息（暗号层展示），只补一次题面；频道尚未打开时才回退到原重开路径。
   watch(messageScope, () => {
     if (selectedUserId.value === null)
       return
-    clearChat()
-    void reopenActiveView()
+    if (!activeChannel) {
+      if (smallLocked.value) {
+        void ensureSmallQuestion()
+        return
+      }
+      clearChat()
+      void reopenActiveView()
+      return
+    }
+    void reloadMessagesForScope()
   })
 
   // 卸载/作用域销毁：停轮询（消息区状态随页面销毁自然废弃）
@@ -1134,6 +1264,10 @@ export function usePocketRooms() {
     chatStatusText,
     historyExhausted,
     loadingMore,
+    essenceMessages,
+    essenceLoading,
+    essenceExhausted,
+    loadMoreEssence,
     load,
     refresh: load,
     refreshRoomStatus,

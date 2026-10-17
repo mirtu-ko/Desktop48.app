@@ -166,6 +166,8 @@ const api = {
   pocketGetRoomChannel: (userId: number) => invokeIpc('pocketGetRoomChannel', userId),
   pocketGetRoomMessages: (channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all') =>
     invokeIpc('pocketGetRoomMessages', channelId, serverId, nextTime, scope),
+  pocketGetRoomEssenceMessages: (channelId: string, serverId: string, nextTime?: number) =>
+    invokeIpc('pocketGetRoomEssenceMessages', channelId, serverId, nextTime),
   pocketGetRoomLastMessages: (serverIds: string[]) => invokeIpc('pocketGetRoomLastMessages', serverIds),
   pocketGetServerChannels: (serverId: string) => invokeIpc('pocketGetServerChannels', serverId),
   pocketDanmakuStart: (chatroomId: string, liveId: string) => invokeIpc('pocketDanmakuStart', chatroomId, liveId),

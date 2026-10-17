@@ -49,6 +49,10 @@ const {
   chatStatusText,
   historyExhausted,
   loadingMore,
+  essenceMessages,
+  essenceLoading,
+  essenceExhausted,
+  loadMoreEssence,
   load,
   selectRoom,
   setViewMode,
@@ -63,6 +67,19 @@ const {
 
 const router = useRouter()
 const route = useRoute()
+
+/** 精华消息弹层是否打开 */
+const essenceOpen = ref(false)
+/** 顶部精华条展示的那条：最新一条精华（列表已按 msgTime 倒序） */
+const newestEssence = computed(() => essenceMessages.value[0] ?? null)
+
+/** 精华条摘要：单行展示，正文优先；图片 / 语音等占位文案由归一化给出 */
+const essenceSummary = computed(() => {
+  const message = newestEssence.value
+  if (!message)
+    return ''
+  return message.text || '[消息]'
+})
 
 /** 未读数字角标文案：计数按列表一页封顶，触顶即「至少这么多」，收敛为 50+ */
 function unreadText(count: number): string {
@@ -891,6 +908,23 @@ onMounted(() => {
               <!-- 消息范围（只看房主 / 全部消息）：聊天区右上角。
                    与头部的频道页签分两层——频道是导航、范围是次级筛选，故用中性配色 -->
               <div v-if="!smallLocked" class="chat-tools">
+                <!-- 精华消息：房间顶部置顶条，展示最新一条精华；点击打开完整列表。
+                     房间没有精华时整条不渲染，不占位、不留空壳 -->
+                <button
+                  v-if="newestEssence"
+                  type="button"
+                  class="essence-bar"
+                  title="查看房间精华消息"
+                  @click="essenceOpen = true"
+                >
+                  <span class="essence-tag">
+                    <el-icon :size="11"><StarFilled /></el-icon>
+                    精华
+                  </span>
+                  <span class="essence-bar-nick">{{ newestEssence.nick }}：</span>
+                  <span class="essence-bar-text">{{ essenceSummary }}</span>
+                  <span v-if="essenceMessages.length > 1" class="essence-bar-count">{{ essenceMessages.length }}</span>
+                </button>
                 <div class="scope-tabs" role="tablist" aria-label="消息范围">
                   <button
                     type="button"
@@ -1267,6 +1301,61 @@ onMounted(() => {
               <RoomAlbum :messages="messages" />
             </aside>
           </div>
+
+          <!-- 精华消息弹层：完整列表（按时间倒序，最新在上），可继续加载更早的精华 -->
+          <el-dialog
+            v-model="essenceOpen"
+            class="essence-dialog"
+            :title="`精华消息${essenceMessages.length ? ` · ${essenceMessages.length}` : ''}`"
+            width="560px"
+            align-center
+            append-to-body
+          >
+            <div v-if="essenceMessages.length" class="essence-list">
+              <article v-for="item in essenceMessages" :key="item.id" class="essence-item">
+                <img
+                  v-if="item.avatar"
+                  class="essence-avatar"
+                  :src="avatarUrl(item.avatar)"
+                  :alt="item.nick"
+                  referrerpolicy="no-referrer"
+                >
+                <span v-else class="essence-avatar essence-avatar--fallback">{{ item.nick.slice(0, 1) }}</span>
+                <div class="essence-body">
+                  <div class="essence-meta">
+                    <span class="essence-nick" :class="{ 'is-member': item.isMember }">{{ item.nick }}</span>
+                    <span class="essence-time">
+                      {{ item.msgTime ? dayjs(item.msgTime).format('MM-DD HH:mm') : '' }}
+                    </span>
+                  </div>
+                  <p class="essence-text">
+                    {{ item.text }}
+                  </p>
+                  <img
+                    v-if="item.imageUrl"
+                    class="essence-image"
+                    :src="item.imageUrl"
+                    alt="精华图片"
+                    referrerpolicy="no-referrer"
+                  >
+                </div>
+              </article>
+              <div class="essence-more">
+                <el-button
+                  v-if="!essenceExhausted"
+                  size="small"
+                  :loading="essenceLoading"
+                  @click="loadMoreEssence"
+                >
+                  加载更多
+                </el-button>
+                <span v-else class="essence-end">没有更多了</span>
+              </div>
+            </div>
+            <p v-else class="essence-empty">
+              {{ essenceLoading ? '正在加载精华消息…' : '这个房间还没有精华消息' }}
+            </p>
+          </el-dialog>
         </template>
 
         <div v-else class="main-placeholder">
@@ -1679,8 +1768,170 @@ onMounted(() => {
 .chat-tools {
   display: flex;
   flex: none;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
   padding: 10px 16px 0;
+}
+
+/* 顶部精华条：房间置顶精华消息的入口，展示最新一条。
+ * 与右侧消息范围同一行——两者都是消息区的次级控件，不额外占一行高度。
+ * 整条可点，正文单行省略；没有精华时整条不渲染（见模板 v-if） */
+.essence-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: min(520px, 66%);
+  /* 独占左侧，把消息范围推到右边；无精华条时 scope-tabs 仍靠右（justify-content） */
+  margin-right: auto;
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--el-text-color-regular);
+  background: color-mix(in srgb, var(--color-follow) 14%, transparent);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+
+  &:hover {
+    background: color-mix(in srgb, var(--color-follow) 24%, transparent);
+  }
+}
+
+.essence-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  /* 鎏金在浅底上对比不足，压深后才可读（与礼物金 / 总选金字同一套处理） */
+  color: color-mix(in srgb, var(--color-follow) 62%, #000);
+}
+
+.essence-bar-nick {
+  flex: none;
+  color: var(--el-text-color-secondary);
+}
+
+.essence-bar-text {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.essence-bar-count {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  background: color-mix(in srgb, var(--el-bg-color) 70%, transparent);
+}
+
+/* ===== 精华消息弹层 ===== */
+.essence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(56vh, 520px);
+  overflow-y: auto;
+}
+
+.essence-item {
+  display: flex;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+
+  &:last-of-type {
+    border-bottom: none;
+  }
+}
+
+.essence-avatar {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--el-fill-color-light);
+}
+
+.essence-avatar--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 72%, #fff), var(--color-rooms));
+}
+
+.essence-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.essence-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.essence-nick {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+
+  &.is-member {
+    color: color-mix(in srgb, var(--color-rooms) 78%, #000);
+  }
+}
+
+.essence-time {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.essence-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.62;
+  color: var(--el-text-color-regular);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.essence-image {
+  display: block;
+  max-width: 100%;
+  max-height: 260px;
+  margin-top: 8px;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+
+.essence-more {
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+
+.essence-end {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+.essence-empty {
+  margin: 8px 0;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  text-align: center;
 }
 
 .scope-tabs {
@@ -2455,6 +2706,7 @@ onMounted(() => {
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   font-size: 13px;
   line-height: 1.5;
   word-break: break-word;

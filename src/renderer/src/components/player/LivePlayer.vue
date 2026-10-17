@@ -458,7 +458,12 @@ onUnmounted(() => {
             @error="failedRankAvatars.add(user.userId || String(index))"
           >
           <span v-else class="rank-panel__avatar rank-panel__avatar--fallback">{{ (user.userName || '神')[0] }}</span>
-          <span class="rank-panel__name">{{ user.userName || '神秘用户' }}</span>
+          <span class="rank-panel__name" :title="user.userName || '神秘用户'">{{ user.userName || '神秘用户' }}</span>
+          <!-- 等级 + 贡献值：右对齐贴尾，任一缺失时只展示另一项 -->
+          <span v-if="user.level || user.money" class="rank-panel__meta">
+            <span v-if="user.level" class="rank-panel__level">Lv.{{ user.level }}</span>
+            <span v-if="user.money" class="rank-panel__money">{{ user.money.toLocaleString() }}</span>
+          </span>
         </div>
       </div>
 
@@ -587,7 +592,7 @@ onUnmounted(() => {
   /* left / top 由脚本锚画面渲染区左上角（useDanmakuLayer.topLeft，与气泡层同一内缩量） */
   z-index: 29;
   min-width: 132px;
-  max-width: 200px;
+  max-width: 248px;
   max-height: 45%;
   overflow-y: auto;
   padding: 8px 10px;
@@ -652,10 +657,47 @@ onUnmounted(() => {
 }
 
 .rank-panel__name {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 尾部元信息（等级 + 贡献值）：flex:none 贴右，不随昵称伸缩 */
+.rank-panel__meta {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 等级徽标：小号胶囊（同 Setting.vue 的 verify-level 语言，尺寸收敛适配窄面板）；
+   min-width 定宽让各行徽标左缘纵向对齐，双位数/个位数不参差 */
+.rank-panel__level {
+  flex: none;
+  min-width: 32px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
+}
+
+/* 贡献值：金色与榜单主题色呼应；定宽右对齐成数字列，tabular-nums 保证刷新跳动时不抖动 */
+.rank-panel__money {
+  flex: none;
+  min-width: 34px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+  color: #f7ba2a;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 悬浮按钮（录制）与右上角容器样式为全局 .player-actions / .action-btn，见 app.scss */

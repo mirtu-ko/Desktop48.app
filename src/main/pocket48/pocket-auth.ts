@@ -28,6 +28,7 @@ import {
   IM_USER_INFO_URL,
   LIVE_ONE_URL,
   ROOM_ANSWER_VERIFY_URL,
+  ROOM_ESSENCE_MESSAGE_URL,
   ROOM_INFO_URL,
   ROOM_LAST_MESSAGE_URL,
   ROOM_MESSAGE_URLS,
@@ -1072,6 +1073,27 @@ function senderUserId(rawExtInfo: unknown): string {
 }
 
 /**
+ * 接口消息数组 → 归一前的原始消息（保留 bodys / extInfo 原文字符串）。
+ * 普通消息与精华消息同构，两处共用：字段名与兜底顺序改动只需改这一处。
+ */
+function toRoomMessages(list: unknown): PocketRoomMessage[] {
+  return (Array.isArray(list) ? list : [])
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map((item) => {
+      const extInfo = typeof item.extInfo === 'string' ? item.extInfo : JSON.stringify(item.extInfo ?? {})
+      return {
+        msgIdServer: String(item.msgIdServer ?? ''),
+        msgIdClient: String(item.msgIdClient ?? ''),
+        msgType: String(item.msgType ?? ''),
+        msgTime: Number(item.msgTime) || 0,
+        bodys: typeof item.bodys === 'string' ? item.bodys : JSON.stringify(item.bodys ?? ''),
+        extInfo,
+        userId: senderUserId(extInfo) || String(item.senderUserId ?? item.senderId ?? ''),
+      }
+    })
+}
+
+/**
  * 拉取房间频道消息（按 msgTime 倒序，最新在前；nextTime 为更早历史的游标）。
  * nextTime 传 0 拉最近一页——轮询新消息同样传 0，由调用方按 msgTime 增量过滤。
  */
@@ -1102,22 +1124,45 @@ export async function getRoomMessages(
     throw new Error(envelope.message || '获取房间消息失败')
   const content = (envelope.content || {}) as Record<string, unknown>
   const list = content.message ?? content.messageList
-  const messages: PocketRoomMessage[] = (Array.isArray(list) ? list : [])
-    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-    .map((item) => {
-      const extInfo = typeof item.extInfo === 'string' ? item.extInfo : JSON.stringify(item.extInfo ?? {})
-      return {
-        msgIdServer: String(item.msgIdServer ?? ''),
-        msgIdClient: String(item.msgIdClient ?? ''),
-        msgType: String(item.msgType ?? ''),
-        msgTime: Number(item.msgTime) || 0,
-        bodys: typeof item.bodys === 'string' ? item.bodys : JSON.stringify(item.bodys ?? ''),
-        extInfo,
-        userId: senderUserId(extInfo) || String(item.senderUserId ?? item.senderId ?? ''),
-      }
-    })
+  const messages = toRoomMessages(list)
   const result = { messages, nextTime: Number(content.nextTime) || 0 }
   return result
+}
+
+/**
+ * 拉取房间精华消息（房间页顶部置顶条 + 精华列表）。
+ * 回包 `content.essenceMessageList` 与普通消息同构，故原始消息映射与归一化全部复用；
+ * nextTime 同为分页游标（0 = 没有更多）。
+ * 与消息列表不同，精华是房主 / 管理员挑选的**房间级**内容，与「只看房主 / 全部消息」无关。
+ */
+export async function getRoomEssenceMessages(
+  channelId: string,
+  serverId: string,
+  nextTime = 0,
+): Promise<PocketRoomMessages> {
+  const token = getToken()
+  if (!token)
+    throw new Error('未登录口袋48账号')
+  const request = {
+    channelId: Number(channelId),
+    serverId: Number(serverId),
+    nextTime: Number(nextTime) || 0,
+    limit: ROOM_MESSAGE_LIMIT,
+  }
+  debug('[pocket-auth] 获取房间精华消息请求：', JSON.stringify(request))
+  const envelope = await postPocket<Record<string, unknown>>(
+    ROOM_ESSENCE_MESSAGE_URL,
+    request,
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throw new Error('登录已过期，请重新登录口袋48账号')
+  if (!envelope.success)
+    throw new Error(envelope.message || '获取精华消息失败')
+  const content = (envelope.content || {}) as Record<string, unknown>
+  // 字段名两候选兜底：`essenceMessageList` 已由 APK 字符串池确认，message/list 防服务端换壳
+  const list = content.essenceMessageList ?? content.message ?? content.messageList
+  return { messages: toRoomMessages(list), nextTime: Number(content.nextTime) || 0 }
 }
 
 /** 频道最后一条消息（左侧房间列表预览；msgContent 与房间消息 bodys 同构） */

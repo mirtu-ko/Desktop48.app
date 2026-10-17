@@ -33,6 +33,10 @@ export interface PocketRankUser {
   userName: string
   /** 头像 URL（相对/完整路径，Tools.sourceUrl 归一）；服务端未给时为空串 */
   avatar: string
+  /** 用户等级（条目 user.level）；服务端未给或为 0 时不携带 */
+  level?: number
+  /** 贡献值（条目顶层 money）；服务端未给或为 0 时不携带 */
+  money?: number
 }
 
 const BARRAGE_PREFIX = 'BARRAGE_'
@@ -56,8 +60,11 @@ export function extractRankUsers(extension: Record<string, unknown>): PocketRank
     const avatar = str(profile.userAvatar) || str(profile.avatar) || str(profile.headerUrl)
       || str(profile.uImg) || str(profile.userImg) || str(profile.imgUrl)
       || str(profile.headImg) || str(profile.avatarUrl)
+    // level 在条目的 user 里，money 在条目顶层（2026-10 报文：{"user":{...,"level":13},"money":20}）
+    const level = Number(profile.level ?? 0) || 0
+    const money = Number((entry as Record<string, unknown>).money ?? 0) || 0
     if (userName || userId)
-      users.push({ userId, userName, avatar })
+      users.push({ userId, userName, avatar, level: level || undefined, money: money || undefined })
   }
   return users
 }

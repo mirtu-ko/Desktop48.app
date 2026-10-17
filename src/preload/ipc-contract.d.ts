@@ -414,6 +414,8 @@ interface StaticIpcInvokeMap {
   pocketGetRoomChannel: InvokeSpec<[userId: number], PocketRoomChannel>
   /** 拉取房间频道消息（msgTime 倒序最新在前；nextTime 为更早历史游标，轮询传 0 拉最新） */
   pocketGetRoomMessages: InvokeSpec<[channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all'], PocketRoomMessages>
+  /** 拉取房间精华消息（房主/管理员置顶的那批；与消息范围无关，nextTime 0 = 没有更多） */
+  pocketGetRoomEssenceMessages: InvokeSpec<[channelId: string, serverId: string, nextTime?: number], PocketRoomMessages>
   /** 批量拉取各 server 频道的最后一条消息（左侧列表预览） */
   pocketGetRoomLastMessages: InvokeSpec<[serverIds: string[]], PocketRoomLastMessage[]>
   /** 拉取 team server 下全部频道的 id 与名称（房间页 tab 显示真实频道名；失败返回空数组） */

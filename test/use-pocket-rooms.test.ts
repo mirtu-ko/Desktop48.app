@@ -122,6 +122,12 @@ interface SetupOptions {
   officials?: Record<number, { name: string, avatar: string }>
   /** channelId → { 请求 nextTime: 响应页 }；响应页 nextTime 即更早历史的游标 */
   roomPages?: Record<string, Record<number, { nextTime: number, messages: ReturnType<typeof roomMsg>[] }>>
+  /** 该范围的消息请求一律失败（用来验证换口径失败时不留旧口径内容） */
+  messageFailScope?: 'member' | 'all'
+  /** 按范围分开配置的回包（用来验证换口径后列表以新一页为准）；优先于 roomPages */
+  roomPagesByScope?: Record<'member' | 'all', Record<string, Record<number, { nextTime: number, messages: ReturnType<typeof roomMsg>[] }>>>
+  /** channelId → { 请求 nextTime: 响应页 }；精华消息（与 roomPages 分开配置：与消息范围无关） */
+  essencePages?: Record<string, Record<number, { nextTime: number, messages: ReturnType<typeof roomMsg>[] }>>
   /** serverId → 最新一条消息（team/classic/last/message/get 的 lastMsgList 条目） */
   lastMessages?: Array<{ channelId: string, starName?: string, msgContent: string, msgTime?: number }>
   /** serverId → 该 server 下的频道（seine 频道详情，页签显示真实频道名用） */
@@ -141,6 +147,7 @@ async function setup(options: SetupOptions = {}) {
     channelFetched: [] as number[],
     lastMessageFetched: [] as string[][],
     messageFetched: [] as Array<{ channelId: string, nextTime: number, scope: 'member' | 'all' }>,
+    essenceFetched: [] as Array<{ channelId: string, nextTime: number }>,
     serverChannelsFetched: [] as string[],
     answerChecks: [] as Array<{ channelId: string, answer: string }>,
     openFloatWindow: [] as Array<[FloatPlayerKind, FloatPlayerPayload]>,
@@ -173,10 +180,17 @@ async function setup(options: SetupOptions = {}) {
       }),
       pocketGetRoomMessages: vi.fn(async (channelId: string, _serverId: string, nextTime = 0, scope: 'member' | 'all' = 'member') => {
         calls.messageFetched.push({ channelId, nextTime, scope })
-        if (roomMock.messageFail.has(channelId))
+        if (roomMock.messageFail.has(channelId) || options.messageFailScope === scope)
           throw new Error('消息拉取失败')
-        const page = options.roomPages?.[channelId]?.[nextTime] ?? { nextTime: 0, messages: [] }
+        const page = options.roomPagesByScope?.[scope]?.[channelId]?.[nextTime]
+          ?? options.roomPages?.[channelId]?.[nextTime]
+          ?? { nextTime: 0, messages: [] }
         return page
+      }),
+      // 精华消息：默认空列表（房间没有精华时顶部条不渲染），按 channelId + nextTime 取配置页
+      pocketGetRoomEssenceMessages: vi.fn(async (channelId: string, _serverId: string, nextTime = 0) => {
+        calls.essenceFetched.push({ channelId, nextTime })
+        return options.essencePages?.[channelId]?.[nextTime] ?? { nextTime: 0, messages: [] }
       }),
       pocketGetServerChannels: vi.fn(async (serverId: string) => {
         calls.serverChannelsFetched.push(serverId)
@@ -907,15 +921,78 @@ describe('use-pocket-rooms / 选中连房与消息流', () => {
     expect(digest()).toEqual([['粉丝甲', '成员发言', 200]])
 
     api.messageScope.value = 'all'
-    // watch 回调里 selectRoom 有多次 await，须把微任务队列冲干净再断言
+    // watch 回调里重载有 await，须把微任务队列冲干净再断言
     await vi.advanceTimersByTimeAsync(0)
-    // 同频道两接口口径不同，切档即重拉；游标/去重键随 clearChat 复位
+    // 同频道两接口口径不同，切档即重拉（去重键/游标随重载复位）
     expect(api.chatStatus.value).toBe('ready')
     expect(digest()).toEqual([
       ['口袋官方', '官方通知', 100],
       ['粉丝甲', '成员发言', 200],
     ])
     expect(calls.messageFetched.map(item => item.scope)).toEqual(['member', 'all'])
+  })
+
+  it('切消息范围不重拉精华、不重解析频道：只换消息流的口径', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '留言')] } } },
+      essencePages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('e', 90, '精华留言')] } } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls.essenceFetched).toEqual([{ channelId: 'ch-10001', nextTime: 0 }])
+
+    api.messageScope.value = 'all'
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 精华按频道取、与消息范围无关：重载不该清空或重拉（清了顶部条会闪一下）
+    expect(calls.essenceFetched).toEqual([{ channelId: 'ch-10001', nextTime: 0 }])
+    expect(api.essenceMessages.value.map(item => item.text)).toEqual(['精华留言'])
+    // 频道未变，不走重新解析
+    expect(calls.channelFetched).toEqual([10001])
+    expect(calls.messageFetched.map(item => item.scope)).toEqual(['member', 'all'])
+  })
+
+  it('切消息范围后新一页为空：清空旧口径的消息，不留残影', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      roomPagesByScope: {
+        member: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '只看房主能看到的')] } } },
+        all: { 'ch-10001': { 0: { nextTime: 0, messages: [] } } },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    expect(api.messages.value).toHaveLength(1)
+
+    api.messageScope.value = 'all'
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 重载保留旧消息直到回包，回包为空则必须以空列表落地
+    expect(api.messages.value).toEqual([])
+    expect(api.chatStatus.value).toBe('ready')
+  })
+
+  it('切消息范围失败：清空消息并置错误态，精华保留', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      messageFailScope: 'all',
+      roomPages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '只看房主能看到的')] } } },
+      essencePages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('e', 90, '精华留言')] } } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.chatStatus.value).toBe('ready')
+
+    api.messageScope.value = 'all'
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 旧口径的内容留在新档位下会被读成「这一档就这些」，失败即清空
+    expect(api.messages.value).toEqual([])
+    expect(api.chatStatus.value).toBe('error')
+    expect(api.essenceMessages.value.map(item => item.text)).toEqual(['精华留言'])
   })
 
   it('小房间视图下切消息范围：留在小房间，只换拉取口径（回归：原先被弹回大房间）', async () => {
@@ -1041,6 +1118,102 @@ describe('use-pocket-rooms / 选中连房与消息流', () => {
       .toEqual([['粉丝甲', '小房间密语', 300]])
     // 全程只有第一次那一声校验
     expect(calls.answerChecks.map(item => item.answer)).toEqual(['open-sesame'])
+  })
+})
+
+describe('use-pocket-rooms / 精华消息', () => {
+  it('进房拉取精华：按时间倒序，最新一条在最前（顶部条取 [0]）', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      essencePages: {
+        'ch-10001': {
+          0: { nextTime: 0, messages: [roomMsg('e1', 100, '旧精华'), roomMsg('e2', 300, '新精华')] },
+        },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(calls.essenceFetched).toEqual([{ channelId: 'ch-10001', nextTime: 0 }])
+    expect(api.essenceMessages.value.map(item => item.text)).toEqual(['新精华', '旧精华'])
+    expect(api.essenceExhausted.value).toBe(true)
+  })
+
+  it('没有精华：列表为空且不影响消息流', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      roomPages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, 'hi')] } } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.essenceMessages.value).toEqual([])
+    expect(api.essenceExhausted.value).toBe(true)
+    expect(api.chatStatus.value).toBe('ready')
+    expect(api.messages.value).toHaveLength(1)
+  })
+
+  it('精华接口失败：静默降级，房间照常就绪', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      roomPages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, 'hi')] } } },
+    })
+    vi.mocked(window.mainAPI.pocketGetRoomEssenceMessages)
+      .mockImplementationOnce(async () => {
+        throw new Error('精华接口异常')
+      })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.essenceMessages.value).toEqual([])
+    expect(api.chatStatus.value).toBe('ready')
+    expect(api.chatStatusText.value).toBe('')
+  })
+
+  it('加载更多：按 nextTime 翻页，跨页重复条目只留一份', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      essencePages: {
+        'ch-10001': {
+          0: { nextTime: 500, messages: [roomMsg('e2', 300, '新精华')] },
+          500: { nextTime: 0, messages: [roomMsg('e2', 300, '新精华'), roomMsg('e1', 100, '旧精华')] },
+        },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.essenceExhausted.value).toBe(false)
+
+    await api.loadMoreEssence()
+
+    expect(calls.essenceFetched).toEqual([
+      { channelId: 'ch-10001', nextTime: 0 },
+      { channelId: 'ch-10001', nextTime: 500 },
+    ])
+    expect(api.essenceMessages.value.map(item => item.text)).toEqual(['新精华', '旧精华'])
+    expect(api.essenceExhausted.value).toBe(true)
+  })
+
+  it('切房即清空上一个房间的精华', async () => {
+    const { api } = await setup({
+      pocketIds: [10001, 10002],
+      essencePages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('e1', 100, '甲的精华')] } },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.essenceMessages.value).toHaveLength(1)
+
+    await api.selectRoom(10002)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.essenceMessages.value).toEqual([])
   })
 })
 
