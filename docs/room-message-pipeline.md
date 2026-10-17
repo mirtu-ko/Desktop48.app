@@ -41,16 +41,17 @@ IPC 契约按项目约定三处同步：`preload/ipc-contract.d.ts` → `preload
 
 全部位于 `pocketapi.48.cn`，均需登录 token：
 
-| 用途                     | 端点                                            | 关键入参                                   | 回包要点                                                                                                              |
-| ------------------------ | ----------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| 口袋关注 ID 列表         | `user/api/v1/friendships/friends/id`            | 无（token 即账号）                         | 纯 ID 数组，不含昵称/头像（需本地成员目录反查）                                                                       |
-| 成员 userId → 房间频道   | `im/api/v1/im/server/jump`                      | `{ starId, targetType: 1 }`                | `{ serverId, channelId }`；解析不出 = 没有房间                                                                        |
-| 批量取各频道最后一条消息 | `im/api/v1/team/classic/last/message/get`       | `{ serverIdList: number[] }`               | `lastMsgList`：每频道一条，只有 `serverId/channelId/msgContent/starName`（无 `msgTime`、无 `unreadCount`，见第 7 节） |
-| 房间消息（只看房主）     | `im/api/v1/team/message/list/homeowner`         | `{ channelId, serverId, nextTime, limit }` | `message` + `nextTime` 游标；混入官方账号 121569667                                                                   |
-| 房间消息（全部用户）     | `im/api/v1/team/message/list/all`               | 同上                                       | 同上                                                                                                                  |
-| 小房间暗号题面           | `im/api/v1/im/team/room/info`                   | `{ channelId }`                            | 暗号频道回 `status 2001`，`message` 内嵌 `{ questionId, question }`                                                   |
-| 暗号作答校验             | `im/api/v1/team/channel/question/answer/verify` | `{ answer, questionId }`                   | `success: true` 即通过；否则 `message` 为「回答错误 / 问题不存在」                                                    |
-| 频道名（seine 频道详情） | `im/api/seine/server/detail`                    | `{ serverId }`                             | `content.channelInfoList[].channelName`                                                                               |
+| 用途                     | 端点                                            | 关键入参                                   | 回包要点                                                                                                                                          |
+| ------------------------ | ----------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 口袋关注 ID 列表         | `user/api/v1/friendships/friends/id`            | 无（token 即账号）                         | 纯 ID 数组，不含昵称/头像（需本地成员目录反查）                                                                                                   |
+| 成员 userId → 房间频道   | `im/api/v1/im/server/jump`                      | `{ starId, targetType: 1 }`                | `{ serverId, channelId }`；解析不出 = 没有房间                                                                                                    |
+| 批量取各频道最后一条消息 | `im/api/v1/team/classic/last/message/get`       | `{ serverIdList: number[] }`               | `lastMsgList`：每频道一条，只有 `serverId/channelId/msgContent/starName`（无 `msgTime`、无 `unreadCount`，见第 7 节）                             |
+| 房间消息（只看房主）     | `im/api/v1/team/message/list/homeowner`         | `{ channelId, serverId, nextTime, limit }` | `message` + `nextTime` 游标；混入官方账号 121569667                                                                                               |
+| 房间消息（全部用户）     | `im/api/v1/team/message/list/all`               | 同上                                       | 同上                                                                                                                                              |
+| 房间精华消息             | `im/api/v1/team/essence/message/list`           | `{ channelId, serverId, nextTime, limit }` | `content.essenceMessageList`：元素与普通消息同构（`msgId*` / `msgType` / `bodys` / `extInfo`），另带 `essenceInfo`（不消费）；`nextTime` 分页游标 |
+| 小房间暗号题面           | `im/api/v1/im/team/room/info`                   | `{ channelId }`                            | 暗号频道回 `status 2001`，`message` 内嵌 `{ questionId, question }`                                                                               |
+| 暗号作答校验             | `im/api/v1/team/channel/question/answer/verify` | `{ answer, questionId }`                   | `success: true` 即通过；否则 `message` 为「回答错误 / 问题不存在」                                                                                |
+| 频道名（seine 频道详情） | `im/api/seine/server/detail`                    | `{ serverId }`                             | `content.channelInfoList[].channelName`                                                                                                           |
 
 ## 2. 调用链路总览
 
@@ -64,7 +65,7 @@ IPC 契约按项目约定三处同步：`preload/ipc-contract.d.ts` → `preload
    ├─ refreshPocketAuthState()   等登录态落库（同步返回旧值 + 异步刷新，冷启动首帧会误判未登录）
    ├─ loadFollowedIds()          口袋关注 ID ∪ 本地关注 ID − 屏蔽名单（见第 3 节）；口袋失败则降级为本地名单
    ├─ fetchLiveMap(true)         共享 live-status store（120s 缓存，force 强制刷新）
-   ├─ 成员目录反查               头像/昵称/队伍（接口不返回；查不到降级「口袋用户 N」）
+   ├─ 成员目录反查               头像/昵称/队伍（接口不返回；成员查不到回退官方账号，再降级「口袋用户 N」）
    ├─ resolveRooms(entries)      有界并发 5 遍历 im/server/jump
    │     ├─ 解析失败/空频道 → 过滤（无房间，含已关闭），计入 hiddenRoomCount
    │     ├─ 成功 → 写入 channelCache（userId → 频道）
@@ -74,7 +75,7 @@ IPC 契约按项目约定三处同步：`preload/ipc-contract.d.ts` → `preload
 rooms.value（左列排序见下）
 ```
 
-**左列排序**（`use-pocket-rooms` 的 `sortRooms`，四级判据）：临时房间 → 有未读 → 在直播 → 昵称 `localeCompare('zh')`。未读取大房间 + 小房间合计，与条目角标同源（左列只有一个角标，两处判据不一致会自相矛盾）。
+**左列排序**（`use-pocket-rooms` 的 `sortRooms`，四级判据）：临时房间 → 在直播 → 有未读 → 昵称 `localeCompare('zh')`。未读取大房间 + 小房间合计，与条目角标同源（左列只有一个角标，两处判据不一致会自相矛盾）。
 
 ⚠️ **未读变化只在「新出现未读」时重排**。进房即 `markRead`（本地乐观清零 + 主进程广播），若一律重排，用户刚点的那一条会在他眼皮底下被抽走。条目的下沉留给下一次自然排序（重新进页面 / 手动刷新 / 直播状态刷新）。
 
@@ -91,8 +92,9 @@ rooms.value（左列排序见下）
    ├─ fetchRoomPage(channel, 0, 'replace')
    │     pocketGetRoomMessages(channelId, serverId, nextTime=0, scope)
    │     → normalizePocketRoomMessage 逐条归一（DELETE 类返回 null 过滤）
-   │     → mergeMessages(replace)：接口 msgTime 倒序 → 翻转为时间升序
-   │     → historyCursor = nextTime（0 = 没有更多）
+   │     → 选中序号已变则丢弃整页（翻历史 / 轮询同样在此拦，防旧频道回包并进新列表）
+   │     → mergeMessages(replace)：接口 msgTime 倒序 → 翻转为时间升序（空页照样落成空列表）
+   │     → historyCursor = nextTime（0 = 下次上翻改用最早持有消息兑底探测）
    └─ chatStatus='ready' → resumeMessagePoll()
 
 轮询（useIntervalFn，5s，随页面激活态暂停/恢复）：
@@ -101,6 +103,10 @@ rooms.value（左列排序见下）
 
 翻历史（贴顶自动 / 按钮）：
     loadMoreHistory() → fetchRoomPage(activeChannel, historyCursor, 'prepend')
+
+切消息范围（只看房主 ⇄ 全部消息）：
+    reloadMessagesForScope() → 复位游标/去重键 → fetchRoomPage(activeChannel, 0, 'replace')
+    └─ 频道与精华保持不动；旧口径的消息留在屏上直到本页回包（失败则清空并置 error）
 ```
 
 ### 2.3 临时房间（成员详情卡入口）
@@ -135,7 +141,7 @@ route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤�
 
 ## 3. 各阶段数据形态
 
-**① 房间条目 `PocketRoom`**：`userId`、`nickname`（成员目录反查，查不到降级「口袋用户 N」）、`avatar`、`teamName`、`teamColor`、`serverId` / `channelId`、`preview`（左列预览，空串 = 暂无消息）、`previewTime`（预览对应消息时刻，防旧快照覆盖更新的本地预览）、`live`（匹配到的在播直播；留言流与直播与否无关）。
+**① 房间条目 `PocketRoom`**：`userId`、`nickname`（成员目录反查；成员查不到时回退 `officialInfo` 官方账号，再查不到才降级「口袋用户 N」）、`avatar`、`teamName`、`teamColor`、`serverId` / `channelId`、`preview`（左列预览，空串 = 暂无消息）、`previewTime`（预览对应消息时刻，防旧快照覆盖更新的本地预览）、`live`（匹配到的在播直播；留言流与直播与否无关）。
 
 **② 房间频道 `PocketRoomChannel`**：`serverId` / `channelId` 来自 `im/server/jump` 回包 content；两者为空串表示该成员没有房间（未开通，或已关闭/被回收，见第 4 节）。`targetType: 1` 为固定值。
 
@@ -146,6 +152,8 @@ route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤�
 **⑤ 未读快照 `PocketUnreadBatch`**：`{ rooms: { userId: { count, bigCount, smallCount, latestTime } }, total }`。主进程唯一真相的全量镜像，渲染层只读；变化经 `pocketUnreadBatch` 广播到所有窗口。`count` 是**下限**（单频道数到一页为止，触顶即「至少这么多」），渲染层据此收敛为 `50+`。
 
 关注名单（`loadFollowedIds()` → `number[]`）取口袋账号关注与本地关注（member-flags store）的**并集，只增不删**，再**减去本地屏蔽名单**：本地关注是用户主观行为，口袋接口失败或未登录时不得清除；反向同步（本地新增 → 双写口袋）见成员页「关注」实现。
+
+⚠️ **名单里不只有成员**：账号可能关注官方号（袋王 / 各团官方号），这些 id 不在 `starInfo` 里，成员目录反查必然落空。左列因此再回退一层 `officialInfo`（`member-directory` 的 `findOfficialAccount`，与成员索引分建两张表，官方号不进成员名录）；官方频道其余口径与成员房间一致，不另立档位、不加标识。主进程未读检测同源：关注名单含官方号时其频道照常解析并计数。
 
 ⚠️ **关注与屏蔽正交，互不改写**（接线在 renderer 的 `composables/use-member-actions.ts`）。关注是账号维度的事实，屏蔽是本地可见性偏好；早先「屏蔽即取消关注」的规则诞生于两个名单同处本地一个平面的年代，关注改为与口袋双向之后不再自洽——本地单方面取关挡不住下一次 `mergeFromPocket` 把账号关注并回来（只增不删），而真正的账号取关又是用户没点过的操作。屏蔽的效力因此改由展示层保证（**屏蔽优先**）：已屏蔽成员不展示关注态、不进左列、不计未读；唯一保留的互斥方向是用户主动点「关注」时解除屏蔽。
 
@@ -168,10 +176,12 @@ route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤�
 | `append`  | 轮询新消息   | 0        | 去重后排序追加，同步左列预览 |
 
 - 去重键 `messageKeys`：`msgIdClient || msgIdServer || msgTime`，轮询与翻历史共用；
-- `historyExhausted` **仅认 `nextTime === 0`**——本页条数不足 limit 不表示已到末页（服务端分页策略不透明，曾按条数判断导致更早历史无法拉取）；
+- `historyExhausted` 只由上翻（prepend）判定：**连续 2 次零新增**（空回包 / 重发同页）才认定，单次零新增可能是边界假信号；上翻游标被写 0 后改用已持有消息的最早 msgTime 兑底探测（懒服务端对不满页直接回 0，不能当真到头）；
+- **轮询回包不得写 `historyCursor`、不得判到头**：轮询拉的是最新一页，其回包游标是「今天」，写进上翻游标会把游标从昨天打回今天，下一次上翻全拉回已持有消息 → 误判到头（实测同一房间有时能翻到昨天、有时翻几页就提示没有更多，即此竞态）；
 - 轮询增量的预览同步按消息时刻比较（`previewTime`），防止批量预览的旧快照覆盖更新的本地预览；
 - 轮询间隔 5s，仅选中房间就绪后启动，且**需以 `onActivated` / `onDeactivated` 控制定时器**：主窗口页面走 keep-alive，切页不销毁，仅挂 `onMounted` 时切页后仍在后台运行（房间页在主窗口内，不受失焦节流影响）；
-- 消息范围 `homeowner`（只看房主）/ `all`（全部用户）两档，切换即重拉当前房间。`homeowner` 会混入口袋官方系统账号 `121569667`，渲染层按 `userId` 过滤。**范围切换只换拉取口径，不得改变当前视图**：重开频道走「按 `viewMode` 重开」而非「按成员重选」，否则在小房间视图下切范围会被复位回大房间（踩过）。
+- 消息范围 `homeowner`（只看房主）/ `all`（全部用户）两档，切换即重拉当前房间。`homeowner` 会混入口袋官方系统账号 `121569667`，渲染层按 `userId` 过滤。**范围切换只换拉取口径，不得改变当前视图或清掉与范围无关的状态**：走 `reloadMessagesForScope()`（保留当前频道与精华消息，只复位游标/去重键并重拉一页），不要用 `clearChat()` + 重开频道——后者会连带清空精华、闪一下顶部条，多打一次精华请求；也不要改走 `selectRoom()`，它会把 `viewMode` 复位到大房间（踩过）。
+- **精华消息是房间级内容，与消息范围无关**：由房主 / 管理员挑选，`essenceInfo` 记录设置信息（本版本不消费）。进房间（含切频道）时拉一页，**不随 5s 消息轮询复查**——精华低频变更，复查会让每个房间每次停留都多打一个请求。接口失败静默降级：顶部精华条不出现，消息流不受影响。归一化与普通消息共用 `normalizePocketRoomMessage`。**弹层外壳复用 `app.scss` 的「详情卡片共用」**（`detail-card-dialog detail-card essence-card`，宽度由 `.essence-dialog` 收窄；标题头 / 滚动列 / 关闭钮 / 入场动画都走公共定义，页面侧只写列表与条目），图片用 `el-image` 的 `preview-src-list` 全屏预览，工具条复用 `ImageViewerToolbar`（带下载）。
 
 ## 6. 消息归一化
 

@@ -15,6 +15,7 @@ const ACCOUNT_A: PocketAuthState = {
   nickname: '甲',
   avatar: '',
   mobileMasked: '139****0001',
+  clientProfile: 'pocket48',
   plainFallback: false,
   savedAt: 1000,
 }
@@ -23,11 +24,17 @@ const ACCOUNT_B: PocketAuthState = { ...ACCOUNT_A, nickname: '乙', mobileMasked
 async function setup(initial: PocketAuthState) {
   vi.resetModules()
   let current = initial
+  /** 捕获 pocketAuthExpired 订阅回调，模拟主进程失效广播 */
+  let authExpiredNotify: (() => void) | undefined
   vi.stubGlobal('window', {
     mainAPI: {
       // IPC 回包每次都是新对象，桩照此返回副本，逼出「按值比指纹」而不是「按引用比对象」
       pocketGetAuthState: vi.fn(async () => ({ ...current })),
       pocketLogout: vi.fn(async () => {}),
+      pocketAuthExpired: vi.fn((callback: () => void) => {
+        authExpiredNotify = callback
+        return () => {}
+      }),
     },
   })
   const store = await import('../src/renderer/src/stores/pocket-auth')
@@ -40,6 +47,8 @@ async function setup(initial: PocketAuthState) {
       current = next
       await store.refreshPocketAuthState()
     },
+    /** 触发失效广播 */
+    broadcastAuthExpired: () => authExpiredNotify?.(),
   }
 }
 
@@ -74,5 +83,28 @@ describe('pocket-auth store / 账号变化作废小房间解锁', () => {
     expect(unlock.isSmallRoomUnlocked('ch-1-small')).toBe(false)
     await switchTo(ACCOUNT_A)
     expect(unlock.isSmallRoomUnlocked('ch-1-small')).toBe(false)
+  })
+})
+
+describe('pocket-auth store / 主进程失效广播复位镜像', () => {
+  it('收到失效广播即复位：登录态归零，小房间解锁一并作废', async () => {
+    const { store, unlock, broadcastAuthExpired } = await setup(ACCOUNT_A)
+    await store.refreshPocketAuthState()
+    expect(store.pocketAuthState.value.loggedIn).toBe(true)
+    unlock.markSmallRoomUnlocked('ch-1-small')
+
+    broadcastAuthExpired()
+
+    expect(store.pocketAuthState.value.loggedIn).toBe(false)
+    // 失效复位等价于退出登录：身份指纹变化，小房间解锁态一并作废
+    expect(unlock.isSmallRoomUnlocked('ch-1-small')).toBe(false)
+  })
+
+  it('重复广播幂等：已复位时不再误作废', async () => {
+    const { store, broadcastAuthExpired } = await setup(ACCOUNT_A)
+    await store.refreshPocketAuthState()
+    broadcastAuthExpired()
+    broadcastAuthExpired()
+    expect(store.pocketAuthState.value.loggedIn).toBe(false)
   })
 })

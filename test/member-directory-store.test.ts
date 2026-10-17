@@ -3,12 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 /**
  * stores/member-directory：成员名录（按 userId 反查合并详情）的缓存与失效语义。
  *
- * 盯住四件事：
+ * 盯住五件事：
  * - 并发反查只发一次请求（直播页与回放页相继点开抽屉）；
  * - members-updated 只**作废**、不立刻重拉 —— 没人开抽屉时不白跑请求，
  *   且下一次反查拿到的是新资料（立刻重拉会赶在 member-tree 作废之前读走旧树）；
  * - 失败不留坏缓存；
- * - 反查键归一化：列表接口给 string、成员树给 number，脏值（'123abc'）判无效而不是截断成 123 误命中。
+ * - 反查键归一化：列表接口给 string、成员树给 number，脏值（'123abc'）判无效而不是截断成 123 误命中；
+ * - 官方账号索引（officialInfo）与成员名录互不污染：官方号（袋王）查得到且不进成员索引。
  *
  * store 状态在模块作用域，每个用例都 resetModules 后重新 import，拿到干净的单例。
  */
@@ -148,5 +149,61 @@ describe('成员名录的 userId 反查', () => {
     expect(await store.findMemberByUserId(null)).toBeNull()
     // 名录里查无此人（成员库未同步 / 官网独有的成员）
     expect(await store.findMemberByUserId('9002')).toBeNull()
+  })
+})
+
+/**
+ * 官方账号（officialInfo）是「用户关注的官方频道」的取名与头像来源：
+ * 官方号字段与成员记录同构但不是成员，两张索引必须彼此独立。
+ */
+describe('官方账号索引', () => {
+  it('官方号按 userId 反查，头像归一化为绝对地址，且不混进成员名录', async () => {
+    const { store } = await setup({
+      getMemberTree: async () => treeOf([{ userId: 9001, realName: '甲' }]),
+      getAllMembers: async () => ({
+        allmembers: [record(9001, '甲', '5')],
+        officials: [{ userId: 63, realName: '袋王', nickname: '袋王', avatar: '/mediasource/avatar/daiwang.jpg' }],
+      }),
+    })
+
+    // 原始头像是 /mediasource/... 相对路径，与成员头像同款归一化（空进空出，不拼垃圾 URL）
+    expect(await store.findOfficialAccount(63)).toEqual({
+      userId: 63,
+      name: '袋王',
+      avatar: 'https://source.48.cn/mediasource/avatar/daiwang.jpg',
+    })
+    // string 键同样命中：关注名单与接口给的类型不保证一致
+    await expect(store.findOfficialAccount('63')).resolves.toBe(await store.findOfficialAccount(63))
+    // 关键：官方号不进成员索引——选举页 / 详情抽屉不会把袋王当成员渲染
+    expect(await store.findMemberByUserId(63)).toBeNull()
+    // 反向同样成立：成员不会被官方索引认领
+    expect(await store.findOfficialAccount(9001)).toBeNull()
+  })
+
+  it('显示名 realName 优先、退 nickname；脏 userId 丢弃而不是挂到别的账号上', async () => {
+    const { store } = await setup({
+      getMemberTree: async () => treeOf([]),
+      getAllMembers: async () => ({
+        allmembers: [],
+        officials: [
+          { userId: 5973, nickname: 'SNH48', avatar: '' },
+          { userId: 'abc', realName: '脏值' },
+        ],
+      }),
+    })
+
+    expect((await store.findOfficialAccount(5973))?.name).toBe('SNH48')
+    expect((await store.findOfficialAccount(5973))?.avatar).toBe('')
+    expect(await store.findOfficialAccount('abc')).toBeNull()
+    expect(await store.findOfficialAccount(null)).toBeNull()
+    // 索引里没有的 id（普通成员的 userId）同样返回 null，由调用方降级
+    expect(await store.findOfficialAccount(9001)).toBeNull()
+  })
+
+  it('载荷缺 officials（旧主进程 / 成员库未同步）不抛错：官方号查不到，成员照常', async () => {
+    const { store } = await setup(singleMember('5'))
+
+    expect(await store.findOfficialAccount(63)).toBeNull()
+    expect((await store.findMemberByUserId('9001'))?.realName).toBe('甲')
   })
 })

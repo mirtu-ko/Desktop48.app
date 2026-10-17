@@ -109,3 +109,18 @@ describe('memberCardKey（卡片 key）', () => {
     expect(memberCardKey(makeMember({ realName: '乙', sid: '5' }))).toBe('5')
   })
 })
+
+describe('memberMatches（隐藏的成员 ID 命中判定）', () => {
+  it('用口袋 userId / 官网 sid 检索时命中，但搜索提示不展示该入口', () => {
+    const member = makeMember({ realName: '张三', userId: 105710357, sid: '456789' })
+    expect(memberMatches(member, '105710357')).toBe(true)
+    expect(memberMatches(member, '456789')).toBe(true)
+  })
+
+  it('成员 ID 只做包含匹配，不影响姓名结果', () => {
+    const member = makeMember({ realName: '张三', userId: 105710357 })
+    expect(memberMatches(member, '105710')).toBe(true)
+    expect(memberMatches(member, '105710358')).toBe(false)
+    expect(memberMatches(member, '张')).toBe(true)
+  })
+})

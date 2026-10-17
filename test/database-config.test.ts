@@ -130,8 +130,8 @@ describe('database 旧库残留字段清理', () => {
     instance.init()
 
     expect('allmembersSimple' in instance.db).toBe(false)
-    // 兼职成员档案随名单一起下发（渲染端构造兼任卡片用），旧库里没有该字段时为 []
-    expect(instance.getAllMembers()).toEqual({ allmembers: [{ sid: '10337', sname: '曹可甜' }], adjuncts: [] })
+    // 兼职成员档案（兼任卡片）与官方账号（官方频道取名/头像）随名单一起下发，旧库里没有这两个字段时为 []
+    expect(instance.getAllMembers()).toEqual({ allmembers: [{ sid: '10337', sname: '曹可甜' }], adjuncts: [], officials: [] })
 
     const raw = JSON.parse(readFileSync(dbPath, 'utf-8')) as Record<string, unknown>
     expect('allmembersSimple' in raw).toBe(false)

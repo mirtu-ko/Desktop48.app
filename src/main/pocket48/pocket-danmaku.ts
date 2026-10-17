@@ -4,13 +4,18 @@
  * 与 B 站弹幕（bilibili/danmaku-session.ts）同一套「会话 + 订阅者」模式：
  * 同一聊天室多个窗口共用一条连接，渲染层按 chatroomId 过滤事件批次。
  * 凭据（accid + imToken）由主进程内部取用，渲染层接触不到。
+ *
+ * 进房身份随登录档位（`nimIdentityFor(currentClientProfile())`）：会话建立时取一次并
+ * 写入客户端，此后该连接不再变。档位切换必须经「登出 → 重新登录」，故登录态变更时由
+ * `resetPocketDanmakuSessions` 断开旧会话，避免旧档身份 / 已删 token 的连接残留。
  */
 import type { PocketDanmakuStatus, PocketRawChatMessage } from '@preload/ipc-contract'
 import type { WebContents } from 'electron'
 import { sendIpc } from '../ipc/send'
 import { debug, error } from '../logger'
+import { nimIdentityFor } from './client-profile'
 import { NimChatroomClient } from './nim-chatroom'
-import { getImCredentials } from './pocket-auth'
+import { currentClientProfile, getImCredentials } from './pocket-auth'
 
 /** 口袋48 直播聊天室的网易云信 appKey（社区多项目一致） */
 const CHATROOM_APP_KEY = '632feff1f4c838541ab75195d1ceb3fa'
@@ -96,6 +101,8 @@ export async function handlePocketDanmakuStart(chatroomId: string, liveId: strin
     account: credentials.accid,
     token: credentials.token,
     roomId: roomKey,
+    // 会话建立时定档：取一次当前档位的云信身份，与本次凭据同源
+    nim: nimIdentityFor(currentClientProfile()),
     onConnected: () => {
       debug(`[pocket-danmaku] 聊天室 ${roomKey} 已进入`)
       pushStatus(session, 'connected')
@@ -132,6 +139,21 @@ export function handlePocketDanmakuStop(chatroomId: string, sender: WebContents)
   sessions.delete(roomKey)
   disposeSession(session)
   debug(`[pocket-danmaku] 聊天室 ${roomKey} 会话已停止`)
+}
+
+/**
+ * 登录态变更（登出 / 切换档位）时断开全部会话并告知订阅者：旧连接用的是旧档进房身份与
+ * 已作废的 token，继续挂着只会收到「已过期」或按旧身份计费，不该沿用。
+ * 渲染层收到 disconnected 后重开浮窗即会以新档重新参会。
+ * 与 `cleanupPocketDanmakuSessions` 的分工：那个用于应用退出——窗口即将销毁，
+ * 既不该也没必要再发 IPC。
+ */
+export function resetPocketDanmakuSessions(): void {
+  for (const session of sessions.values()) {
+    pushStatus(session, 'disconnected', '登录状态已变更，请重新打开弹幕')
+    disposeSession(session)
+  }
+  sessions.clear()
 }
 
 /** 应用退出前清理全部会话；由 app.ts 的 before-quit 显式调用 */

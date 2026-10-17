@@ -1,3 +1,4 @@
+import type { PocketAuthState, PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
 /**
  * 口袋48登录态的共享实现（模块级单例，与 stores/member-flags.ts 同一模式）。
  *
@@ -5,7 +6,7 @@
  * 不持有凭证本体——token 只留在主进程，渲染层拿到的永远是脱敏登录态。
  * 登录态一律经 applyAuthState 写入，账号身份变化时顺带作废小房间暗号的解锁态。
  */
-import type { PocketAuthState, PocketVerifyResult } from '@preload/ipc-contract'
+import { DEFAULT_POCKET_CLIENT_PROFILE } from '@common/pocket-client-profile'
 import { clearSmallRoomUnlocks } from '@renderer/utils/small-room-unlock'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
@@ -15,12 +16,18 @@ const LOGGED_OUT: PocketAuthState = {
   nickname: '',
   avatar: '',
   mobileMasked: '',
+  clientProfile: DEFAULT_POCKET_CLIENT_PROFILE,
   plainFallback: false,
   savedAt: 0,
 }
 
 /** 登录态快照；启动后由调用方（设置页）refresh 一次 */
 export const pocketAuthState = ref<PocketAuthState>({ ...LOGGED_OUT })
+
+// 主进程清失效凭证时广播（对端 pocket-auth.ts）：各窗镜像复位，两页登录态不分叉。
+// 可选调用兜底单测桩（stub 只提供 pocketGetAuthState / pocketLogout）
+if (typeof window !== 'undefined')
+  window.mainAPI.pocketAuthExpired?.(() => applyAuthState({ ...LOGGED_OUT }))
 
 /** 是否已拉取过一次登录态（避免未初始化时直播页误判未登录） */
 let initialized = false
@@ -63,16 +70,25 @@ export function ensurePocketAuthState(): PocketAuthState {
   return pocketAuthState.value
 }
 
-/** 验证码登录；成功后更新登录态，失败抛错由调用方提示 */
-export async function loginBySmsCode(mobile: string, code: string): Promise<PocketAuthState> {
-  const state = await window.mainAPI.pocketLoginByCode(mobile, code)
+/** 验证码登录；clientProfile 为本轮选定的身份档位（口袋48 / 塞纳河48）；失败抛错由调用方提示 */
+export async function loginBySmsCode(
+  mobile: string,
+  code: string,
+  area?: string,
+  clientProfile?: PocketClientProfileId,
+): Promise<PocketAuthState> {
+  const state = await window.mainAPI.pocketLoginByCode(mobile, code, area, clientProfile)
   applyAuthState(state)
   return state
 }
 
-/** Token 粘贴登录；成功后更新登录态，失败抛错由调用方提示 */
-export async function loginByPastedToken(token: string, mobile = ''): Promise<PocketAuthState> {
-  const state = await window.mainAPI.pocketLoginByToken(token, mobile)
+/** Token 粘贴登录；clientProfile 同上；失败抛错由调用方提示 */
+export async function loginByPastedToken(
+  token: string,
+  mobile = '',
+  clientProfile?: PocketClientProfileId,
+): Promise<PocketAuthState> {
+  const state = await window.mainAPI.pocketLoginByToken(token, mobile, clientProfile)
   applyAuthState(state)
   return state
 }

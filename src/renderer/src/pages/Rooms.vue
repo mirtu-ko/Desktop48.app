@@ -2,16 +2,18 @@
 // 口袋「房间」页：左栏关注成员房间列表，右栏房间消息流（成员在房间频道的留言，非直播间弹幕）。
 // 数据与连接编排见 composables/use-pocket-rooms.ts（本页只做展示与交互）。
 
+import type { PocketRoom } from '@renderer/composables/use-pocket-rooms'
 import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import type { Component } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { ArrowRight, ChatDotRound, Close, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
-import ImageViewerToolbar from '@renderer/components/rooms/ImageViewerToolbar.vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
+import RoomEssenceDialog from '@renderer/components/rooms/RoomEssenceDialog.vue'
 import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
 import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 
+import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { copyText } from '@renderer/utils/clipboard'
@@ -20,7 +22,7 @@ import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@rende
 import Tools from '@renderer/utils/tools'
 import { useDebounceFn, useEventListener } from '@vueuse/core'
 import dayjs from 'dayjs'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -48,6 +50,10 @@ const {
   chatStatusText,
   historyExhausted,
   loadingMore,
+  essenceMessages,
+  essenceLoading,
+  essenceExhausted,
+  loadMoreEssence,
   load,
   selectRoom,
   setViewMode,
@@ -63,9 +69,70 @@ const {
 const router = useRouter()
 const route = useRoute()
 
+/** 精华消息弹层是否打开 */
+const essenceOpen = ref(false)
+/** 顶部精华条展示的那条：最新一条精华（列表已按 msgTime 倒序） */
+const newestEssence = computed(() => essenceMessages.value[0] ?? null)
+
+/** 精华条摘要：单行展示，正文优先；图片 / 语音等占位文案由归一化给出 */
+const essenceSummary = computed(() => {
+  const message = newestEssence.value
+  if (!message)
+    return ''
+  return message.text || '[消息]'
+})
+
 /** 未读数字角标文案：计数按列表一页封顶，触顶即「至少这么多」，收敛为 50+ */
 function unreadText(count: number): string {
   return count >= ROOM_MESSAGE_LIMIT ? `${ROOM_MESSAGE_LIMIT}+` : String(count)
+}
+
+/** 左列房间未读角标文案：v-if 与插值共用同一出口，计数语义与封顶规则只此一处 */
+function roomUnreadText(userId: number): string {
+  return unreadText(unreadCountOf(userId))
+}
+
+/** 是否在口袋账号侧有关注（pocket / both 都算；本地独有的不算） */
+function isPocketFollowed(source: PocketRoom['followSource']): boolean {
+  return source === 'pocket' || source === 'both'
+}
+
+/** 口袋关注 / 取关：只动账号侧关注，不改本地名单；结果就地更新当前房间来源 */
+const pocketFollowBusy = ref(false)
+
+async function togglePocketFollow() {
+  const room = selectedRoom.value
+  if (!room || pocketFollowBusy.value)
+    return
+  const willFollow = !isPocketFollowed(room.followSource)
+  // 取关是账号级破坏性操作：二次确认，避免手滑把口袋侧关注摘掉
+  if (!willFollow) {
+    const ok = await ElMessageBox.confirm(
+      `确定在口袋账号取消关注「${room.nickname}」吗？`,
+      '取消口袋关注',
+      { type: 'warning', confirmButtonText: '取消关注', cancelButtonText: '再想想' },
+    ).then(() => true).catch(() => false)
+    if (!ok)
+      return
+  }
+  pocketFollowBusy.value = true
+  try {
+    if (willFollow)
+      await window.mainAPI.pocketFollowMember(room.userId)
+    else
+      await window.mainAPI.pocketUnfollowMember(room.userId)
+    room.followSource = willFollow
+      ? (room.followSource === 'local' ? 'both' : 'pocket')
+      : (room.followSource === 'both' ? 'local' : undefined)
+    ElMessage({ message: willFollow ? '已在口袋账号关注该成员' : '已在口袋账号取消关注该成员', type: 'success' })
+  }
+  catch (error) {
+    ElMessage.error(willFollow ? '口袋关注失败，请稍后重试' : '口袋取关失败，请稍后重试')
+    debugLog('pocket-rooms', '口袋关注/取关失败', error)
+  }
+  finally {
+    pocketFollowBusy.value = false
+  }
 }
 
 /**
@@ -88,7 +155,7 @@ async function onViewModeChange(mode: 'room' | 'small') {
 /**
  * 频道页签（大房间 + 已发现的小房间）：名称取服务端频道名（见 use-pocket-rooms 的
  * ensureChannelNames），未取到退回通用名；未读按频道分计，落在各自页签上。
- * 小房间未发现时只有一个页签，此时整条页签栏不渲染（单选分段没有切换语义）。
+ * 小房间未发现时也渲染整条页签栏（只剩大房间一个页签），保持头部结构稳定。
  */
 const roomTabs = computed<Array<{ mode: 'room' | 'small', name: string, unread: number, locked: boolean }>>(() => {
   const userId = selectedRoom.value?.userId
@@ -240,6 +307,18 @@ function scrollToBottom() {
 }
 
 /**
+ * 双击左列房间条目：若正是当前房间，消息流立即钉回底部
+ * （其他房间双击时单击已先选中、进房流程本身会回底，无需额外处理）。
+ */
+function onRoomWrapDblClick(room: PocketRoom, event: MouseEvent) {
+  // 临时房间的关闭钮不参与：双击关闭钮误触回底没有意义
+  if ((event.target as HTMLElement).closest('.room-temp-close'))
+    return
+  if (room.userId === selectedUserId.value)
+    scrollToBottom()
+}
+
+/**
  * 进入大房间视图的公共收尾（点左列条目、点大房间页签共用）：
  * 与官方客户端一致，进房即清该成员**大房间**的未读（Tab 级计数职责移交房间页），
  * 小房间未读保留——它有自己的页签入口，用户点开小房间时才清。
@@ -296,6 +375,9 @@ watch(selectedUserId, () => {
 })
 
 watch(() => messages.value.length, async (len, oldLen) => {
+  // 内容增删都会改变折行与「是否超长」，统一在这条监听里重新测量长文
+  // （含翻历史 prepend 的旧消息——它们同样可能触发折叠）
+  void nextTick(measureLongText)
   // 翻更早历史：视口由 onLoadMore 保持，prepend 不计入新消息
   if (preservingScroll)
     return
@@ -346,6 +428,9 @@ async function onLoadMore() {
   // 头部插入了 prevHeight → scrollHeight 的增量，视口按同样增量下移，肉眼位置不变
   el.scrollTop = prevTop + (el.scrollHeight - prevHeight)
   lastSeenScrollTop = el.scrollTop
+  // 本次上翻才发现到头才提示（此后 onListScroll 不再触发，天然只出一次）
+  if (historyExhausted.value)
+    ElMessage.info('没有更早的消息了')
 }
 
 /** 头像 URL：口袋扩展给的是相对/完整路径混杂，统一过 sourceUrl */
@@ -402,10 +487,10 @@ function measureLongText() {
 }
 
 // 列宽变化会改变折行数，只有窗口缩放会把列宽改掉（右栏固定宽、聊天区自适应）；
-// 内容变化走 messages 的 length 监听，两条触发点覆盖全部「需要重量」的时机
+// 内容变化的触发点收在 messages 的 length 监听里（与贴底逻辑同一条），两个入口覆盖
+// 全部「需要重量」的时机
 const measureLongTextDebounced = useDebounceFn(measureLongText, 150)
 useEventListener(window, 'resize', measureLongTextDebounced)
-watch(() => messages.value.length, () => void nextTick(measureLongText))
 
 // ===== 新消息到达高亮（只贴底时）=====
 /** 时长同时注入 CSS 变量：动画与类移除同一节拍，不会闪到一半被掐 */
@@ -530,20 +615,6 @@ function resetCardState() {
 // （昵称位固定「提问」）。不做点击跳转——被引用消息往往不在当前列表，跳转价值有限。
 
 /**
- * 图片占位样式：归一层解析到原始尺寸时按 aspect-ratio 预留空间，
- * 图片加载前后布局零变化（滚动历史不再抖动）；未知尺寸回退自然加载（仅轻微抖动）。
- * 宽度压到气泡上限，fit=cover 裁切超出 max-height 的极端比例。
- */
-function imageBoxStyle(message: PocketRoomMessageView) {
-  if (!message.imageWidth || !message.imageHeight)
-    return undefined
-  return {
-    width: 'min(240px, 100%)',
-    aspectRatio: `${message.imageWidth} / ${message.imageHeight}`,
-  }
-}
-
-/**
  * 视频尺寸占位：服务端 bodys 带真实 w/h（实测竖屏 w=1080/h=1920）。
  * 横屏沿用 280px 宽上限、按真实比例出高；竖屏高度封顶 360px（小窗再按视口收缩）、
  * 宽度按比例收——两维都显式算出，不赌 aspect-ratio 对 block 尺寸的解析。
@@ -561,6 +632,21 @@ function videoBoxStyle(message: PocketRoomMessageView) {
 /** 消息时刻（HH:mm:ss） */
 function messageTime(msgTime: number) {
   return msgTime ? dayjs(msgTime).format('HH:mm:ss') : ''
+}
+
+/**
+ * 当前已加载消息的图片列表（时间序）：点开任一张后可在整个列表内左右切换，与右侧相册同一范围。
+ * 预览列表在打开 viewer 时快照，翻历史追加不影响已打开的预览。
+ */
+const messageImageUrls = computed(() =>
+  messages.value
+    .filter(message => message.imageUrl)
+    .map(message => message.imageUrl as string),
+)
+
+/** 短时刻（MM-DD HH:mm）：直播分享卡的时刻行 */
+function shortTime(ts: number | string) {
+  return ts ? dayjs(ts).format('MM-DD HH:mm') : ''
 }
 
 /** 日期分隔线：与上一条不同天时插一枚；首页第一条也是分界 */
@@ -619,20 +705,39 @@ onMounted(() => {
 
 <template>
   <div class="page-root rooms-page">
-    <!-- 未登录：整页登录引导（房间依赖账号关注关系） -->
+    <!-- 未登录：居中登录卡片（房间依赖账号关注关系） -->
     <div v-if="!loggedIn && !loading" class="gate">
-      <span class="gate-icon icon-tile" :style="{ '--tile-color': 'var(--color-rooms)' }">
-        <el-icon :size="26"><ChatDotRound /></el-icon>
-      </span>
-      <h2 class="gate-title">
-        登录后查看关注房间
-      </h2>
-      <p class="gate-sub">
-        房间列表来自口袋48账号的关注成员，右侧显示 TA 们房间里成员发送的消息（文字 / 图片 / 语音 / 回复等）。
-      </p>
-      <el-button type="primary" @click="router.push('/setting')">
-        去设置页登录
-      </el-button>
+      <div class="gate-card frosted-surface">
+        <span class="gate-icon icon-tile" :style="{ '--tile-color': 'var(--color-rooms)' }">
+          <el-icon :size="28"><ChatDotRound /></el-icon>
+        </span>
+        <h2 class="gate-title">
+          登录后查看关注房间
+        </h2>
+        <p class="gate-sub">
+          房间列表来自口袋48账号的关注成员，登录后可查看 TA 们房间里的消息（文字 / 图片 / 语音 / 回复等）。
+        </p>
+        <div class="gate-points">
+          <span class="gate-point">
+            <el-icon><StarFilled /></el-icon>
+            关注同步
+          </span>
+          <span class="gate-point">
+            <el-icon><ChatDotRound /></el-icon>
+            房间消息
+          </span>
+          <span class="gate-point">
+            <el-icon><VideoCamera /></el-icon>
+            直播回放
+          </span>
+        </div>
+        <el-button type="primary" round @click="router.push('/setting')">
+          去设置页登录
+          <el-icon class="el-icon--right">
+            <ArrowRight />
+          </el-icon>
+        </el-button>
+      </div>
     </div>
 
     <template v-else>
@@ -687,6 +792,7 @@ onMounted(() => {
             :key="room.userId"
             class="room-wrap"
             :class="{ 'is-temp': room.temporary }"
+            @dblclick="onRoomWrapDblClick(room, $event)"
           >
             <button
               type="button"
@@ -702,21 +808,34 @@ onMounted(() => {
                 <span
                   v-if="unreadCountOf(room.userId)"
                   class="unread-badge room-unread"
-                >{{ unreadText(unreadCountOf(room.userId)) }}</span>
+                >{{ roomUnreadText(room.userId) }}</span>
               </span>
               <span class="room-meta">
                 <span class="room-name-row">
                   <span class="room-name ellipsis">{{ room.nickname }}</span>
                   <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
                   <span v-if="room.temporary" class="room-temp-tag">临时</span>
-                  <span
-                    v-if="room.teamName"
-                    class="room-team"
-                    :style="Tools.colorVarStyle('--tb-color', room.teamColor)"
-                  >{{ Tools.shortTeamName(room.teamName) }}</span>
                 </span>
 
                 <span v-if="room.preview" class="room-preview ellipsis">{{ room.preview }}</span>
+              </span>
+              <!-- 右缘竖排小标签：星星在上（口袋关注），队伍徽标在下 -->
+              <span
+                v-if="room.teamName || isPocketFollowed(room.followSource)"
+                class="room-side-tags"
+              >
+                <el-tooltip
+                  v-if="isPocketFollowed(room.followSource)"
+                  content="口袋账号关注（可在设置页拉取同步）"
+                  placement="top"
+                >
+                  <el-icon class="room-follow-ico"><StarFilled /></el-icon>
+                </el-tooltip>
+                <span
+                  v-if="room.teamName"
+                  class="room-team"
+                  :style="Tools.colorVarStyle('--tb-color', room.teamColor)"
+                >{{ Tools.shortTeamName(room.teamName) }}</span>
               </span>
             </button>
 
@@ -788,9 +907,9 @@ onMounted(() => {
             </div>
 
             <!-- 频道切换（大房间 / 小房间）：放头部右侧，页签显示服务端真实频道名；
-                 小房间未发现时整条不渲染（只剩一个页签等于没有切换语义） -->
+                 小房间未发现时也整条渲染（只剩大房间一个页签） -->
             <div
-              v-if="roomTabs.length > 1"
+              v-if="roomTabs.length > 0"
               class="room-tabs"
               role="tablist"
               aria-label="房间频道"
@@ -821,6 +940,23 @@ onMounted(() => {
               <!-- 消息范围（只看房主 / 全部消息）：聊天区右上角。
                    与头部的频道页签分两层——频道是导航、范围是次级筛选，故用中性配色 -->
               <div v-if="!smallLocked" class="chat-tools">
+                <!-- 精华消息：房间顶部置顶条，展示最新一条精华；点击打开完整列表。
+                     房间没有精华时整条不渲染，不占位、不留空壳 -->
+                <button
+                  v-if="newestEssence"
+                  type="button"
+                  class="essence-bar"
+                  title="查看房间精华消息"
+                  @click="essenceOpen = true"
+                >
+                  <span class="essence-tag">
+                    <el-icon :size="11"><StarFilled /></el-icon>
+                    精华
+                  </span>
+                  <span class="essence-bar-nick">{{ newestEssence.nick }}：</span>
+                  <span class="essence-bar-text">{{ essenceSummary }}</span>
+                  <span v-if="essenceMessages.length > 1" class="essence-bar-count">{{ essenceMessages.length }}</span>
+                </button>
                 <div class="scope-tabs" role="tablist" aria-label="消息范围">
                   <button
                     type="button"
@@ -955,31 +1091,21 @@ onMounted(() => {
                             'msg-bubble--live': message.kind === 'live',
                           }"
                         >
-                          <!-- 图片：el-image 自带点击放大预览 -->
+                          <!-- 图片：PreviewImage（el-image 全屏预览 + 下载工具条，按原始尺寸占位；
+                               预览范围 = 当前已加载消息的图片列表，可与相册一样左右切换） -->
 
-                          <el-image
+                          <PreviewImage
                             v-if="message.imageUrl"
                             class="msg-image"
-                            :style="imageBoxStyle(message)"
                             :src="message.imageUrl"
-                            :preview-src-list="[message.imageUrl]"
-                            preview-teleported
+                            :image-width="message.imageWidth"
+                            :image-height="message.imageHeight"
+                            :preview-list="messageImageUrls"
+                            :initial-index="messageImageUrls.indexOf(message.imageUrl)"
                             lazy
-                            fit="cover"
-                            hide-on-click-modal
                             @load="onMediaLoad"
                             @error="onMediaLoad"
-                          >
-                            <!-- 预览工具条：EP 默认那排没有下载，整排自绘后追加一项（见 ImageViewerToolbar） -->
-                            <template #toolbar="{ actions, reset, activeIndex }">
-                              <ImageViewerToolbar
-                                :actions="actions"
-                                :reset="reset"
-                                :urls="[message.imageUrl]"
-                                :active-index="activeIndex"
-                              />
-                            </template>
-                          </el-image>
+                          />
                           <template v-else-if="message.audioUrl">
                             <RoomVoiceBar :src="message.audioUrl" />
                             <!-- 语音条本身就是内容，类型占位文案不再补一行；回复消息的真实正文（非占位）仍要展示 -->
@@ -1048,7 +1174,7 @@ onMounted(() => {
                             <span class="msg-live-text">
                               <span class="msg-live-title">{{ liveShareTitle(message.text) || '快来看看吧' }}</span>
                               <span class="msg-live-meta">
-                                <span v-if="message.liveStartTime">{{ dayjs(message.liveStartTime).format('MM-DD HH:mm') }}</span>
+                                <span v-if="message.liveStartTime">{{ shortTime(message.liveStartTime) }}</span>
                                 <span v-if="message.liveId" class="msg-live-action">
                                   {{ liveCardBadge(message).type === 'playback' ? '观看回放' : '进入直播' }}
                                   <el-icon :size="12">
@@ -1190,10 +1316,22 @@ onMounted(() => {
                 :team-name="selectedRoom.teamName"
                 :team-color="selectedRoom.teamColor"
                 :live="selectedRoom.live"
+                :pocket-followed="isPocketFollowed(selectedRoom.followSource)"
+                :pocket-follow-busy="pocketFollowBusy"
+                @toggle-follow="togglePocketFollow"
               />
               <RoomAlbum :messages="messages" />
             </aside>
           </div>
+
+          <!-- 精华消息弹层：完整列表（数据与翻页在 use-pocket-rooms，展示收在组件内） -->
+          <RoomEssenceDialog
+            v-model="essenceOpen"
+            :messages="essenceMessages"
+            :loading="essenceLoading"
+            :exhausted="essenceExhausted"
+            @load-more="loadMoreEssence"
+          />
         </template>
 
         <div v-else class="main-placeholder">
@@ -1211,6 +1349,51 @@ onMounted(() => {
 </template>
 
 <style scoped lang="scss">
+/* ===== 页内复用骨架（%placeholder，不出本样式块）=====
+ * 本页多处重复的造型收在这里：改一处即整页同步。颜色/尺寸等差异留给使用处，
+ * 只抽「形状 + 过渡」这一层。若未来其它页面也要同款，再升级为 app.scss 公共类 */
+%brand-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 72%, #fff), var(--color-rooms));
+}
+
+%mini-pill {
+  flex: none;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+%empty-block {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+%pill-tab {
+  padding: 4px 12px;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--el-text-color-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+
 /* 双栏骨架：左栏固定宽度，右栏自适应；整页不滚动，两栏各自滚（给 Dock 留底部空间）。
  * box-sizing 必须显式声明：项目没有全局 border-box 重置，.page-root 的 height:100%
  * 若按 content-box 把上下内边距算到外面，整页会高出视口，滚动被甩给 .app-content */
@@ -1223,38 +1406,123 @@ onMounted(() => {
   overflow: hidden;
 }
 
-/* ===== 登录引导（未登录整页占位） ===== */
+/* ===== 登录引导（未登录居中卡片） ===== */
 .gate {
+  position: relative;
   display: flex;
   flex: 1;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+
+  /* 背景氛围光斑：弱化空页面的「空」，把视线聚到卡片 */
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(72px);
+    opacity: 0.45;
+    pointer-events: none;
+  }
+
+  &::before {
+    top: -70px;
+    right: 10%;
+    width: 320px;
+    height: 320px;
+    background: color-mix(in srgb, var(--color-rooms) 32%, transparent);
+  }
+
+  &::after {
+    bottom: -50px;
+    left: 10%;
+    width: 260px;
+    height: 260px;
+    background: color-mix(in srgb, var(--el-color-primary) 24%, transparent);
+  }
+}
+
+.gate-card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 12px;
+  max-width: 460px;
+  padding: 40px 44px 34px;
+  border-radius: 22px;
   text-align: center;
+  animation: gate-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
 
-  .gate-icon {
-    width: 56px;
-    height: 56px;
+.gate-icon {
+  width: 60px;
+  height: 60px;
+}
 
-    .el-icon {
-      font-size: 26px;
-    }
-  }
+.gate-title {
+  margin: 2px 0 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
 
-  .gate-title {
-    margin: 4px 0 0;
-    font-size: 17px;
-    font-weight: 600;
-    color: var(--el-text-color-primary);
-  }
+.gate-sub {
+  max-width: 400px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
+}
 
-  .gate-sub {
-    max-width: 420px;
-    margin: 0 0 8px;
+/* 功能点提要：小药丸让用户一眼知道登录后能做什么 */
+.gate-points {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+
+.gate-point {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-lighter);
+  box-shadow: inset 0 0 0 1px var(--el-border-color-lighter);
+
+  .el-icon {
     font-size: 13px;
-    line-height: 1.7;
-    color: var(--el-text-color-secondary);
+    color: var(--color-rooms);
+  }
+}
+
+.gate-card .el-button {
+  padding: 12px 24px;
+  height: auto;
+}
+
+@keyframes gate-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gate-card {
+    animation: none;
   }
 }
 
@@ -1436,16 +1704,11 @@ onMounted(() => {
 }
 
 .room-avatar-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  @extend %brand-avatar;
+
   width: 100%;
   height: 100%;
-  border-radius: 50%;
   font-size: 16px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 72%, #fff), var(--color-rooms));
 }
 
 /* 开播角标：贴在头像右下角的 LIVE 小点 */
@@ -1516,6 +1779,33 @@ onMounted(() => {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 34%, transparent);
 }
 
+/* 条目右缘竖排小标签列：口袋关注星标在上、队伍徽标在下。
+ * 固定列宽：队伍徽标宽窄不一时，各行星星仍横向对齐（过长的队名截断省略） */
+.room-side-tags {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 38px;
+  margin-left: 6px;
+}
+
+.room-side-tags .room-team {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 口袋关注星标：11px 品牌色（语义：已关注），详情看 tooltip 与资料卡 */
+.room-follow-ico {
+  flex: none;
+  font-size: 11px;
+  color: var(--brand-primary);
+  opacity: 0.8;
+}
+
 /* 左列预览：频道最新一条消息（批量接口一次拉全，选中房间轮询到时本地即时补） */
 .room-preview {
   display: block;
@@ -1527,14 +1817,10 @@ onMounted(() => {
 
 .side-empty,
 .side-loading {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  @extend %empty-block;
+
   gap: 8px;
   padding: 24px 16px;
-  text-align: center;
   color: var(--el-text-color-placeholder);
 
   p {
@@ -1543,6 +1829,7 @@ onMounted(() => {
   }
 }
 
+/* 三处空态的次级提示行（精华弹层的同款规格收在其组件内） */
 .side-empty-hint,
 .msg-empty-hint,
 .main-placeholder-hint {
@@ -1579,8 +1866,68 @@ onMounted(() => {
 .chat-tools {
   display: flex;
   flex: none;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
   padding: 10px 16px 0;
+}
+
+/* 顶部精华条：房间置顶精华消息的入口，展示最新一条。
+ * 与右侧消息范围同一行——两者都是消息区的次级控件，不额外占一行高度。
+ * 整条可点，正文单行省略；没有精华时整条不渲染（见模板 v-if） */
+.essence-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: min(520px, 66%);
+  /* 独占左侧，把消息范围推到右边；无精华条时 scope-tabs 仍靠右（justify-content） */
+  margin-right: auto;
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--el-text-color-regular);
+  background: color-mix(in srgb, var(--color-follow) 14%, transparent);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+
+  &:hover {
+    background: color-mix(in srgb, var(--color-follow) 24%, transparent);
+  }
+}
+
+.essence-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  /* 鎏金在浅底上对比不足，压深后才可读（与礼物金 / 总选金字同一套处理） */
+  color: color-mix(in srgb, var(--color-follow) 62%, #000);
+}
+
+.essence-bar-nick {
+  flex: none;
+  color: var(--el-text-color-secondary);
+}
+
+.essence-bar-text {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.essence-bar-count {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  background: color-mix(in srgb, var(--el-bg-color) 70%, transparent);
 }
 
 .scope-tabs {
@@ -1592,18 +1939,7 @@ onMounted(() => {
 }
 
 .scope-tab {
-  padding: 3px 12px;
-  border: none;
-  border-radius: var(--radius-pill);
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--el-text-color-secondary);
-  background: transparent;
-  cursor: pointer;
-  transition:
-    color 0.15s ease,
-    background-color 0.15s ease;
+  @extend %pill-tab;
 
   &:hover {
     color: var(--el-text-color-primary);
@@ -1632,16 +1968,11 @@ onMounted(() => {
 }
 
 .main-avatar-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  @extend %brand-avatar;
+
   width: 100%;
   height: 100%;
-  border-radius: 50%;
   font-size: 17px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 72%, #fff), var(--color-rooms));
 }
 
 .main-head-text {
@@ -1664,11 +1995,9 @@ onMounted(() => {
 }
 
 .main-live-tag {
-  flex: none;
+  @extend %mini-pill;
+
   padding: 0 7px;
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
   line-height: 17px;
   color: #fff;
   background: var(--color-lives);
@@ -1710,23 +2039,13 @@ onMounted(() => {
 }
 
 .room-tab {
+  @extend %pill-tab;
+
   display: inline-flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
   max-width: 160px;
-  padding: 4px 12px;
-  border: none;
-  border-radius: var(--radius-pill);
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--el-text-color-secondary);
-  background: transparent;
-  cursor: pointer;
-  transition:
-    color 0.15s ease,
-    background-color 0.15s ease;
 
   &:hover {
     color: var(--color-rooms);
@@ -1862,6 +2181,16 @@ onMounted(() => {
   border-left: 1px solid var(--el-border-color-lighter);
 }
 
+/* 窗口不够宽时收起右侧信息栏（资料卡 + 相册），把宽度让给聊天区：
+ * 固定占用 = 页面左右内距 28 + 列表 300 + 间距 14 + 信息栏 264 ≈ 606px，
+ * 低于 960px 时聊天区余量不足以舒展气泡，宁可失去信息栏也不压缩消息可读性。
+ * 信息是「有更好」，相册与资料在成员页另有入口，隐藏不损失关键路径 */
+@media (max-width: 960px) {
+  .rooms-aside {
+    display: none;
+  }
+}
+
 .msg-scroll {
   flex: 1;
   box-sizing: border-box;
@@ -1884,10 +2213,12 @@ onMounted(() => {
 }
 
 /* 加载更早历史：贴在消息流顶部的状态行（滚动到顶自动触发，不再有按钮） */
+/* 顶部占位条定高：空闲/加载中/到头布局恒定，贴顶视口不因 spinner 出入被推下抖动 */
 .msg-more {
   display: flex;
+  align-items: center;
   justify-content: center;
-  padding-bottom: 8px;
+  height: 28px;
 }
 
 .msg-more-text {
@@ -1919,13 +2250,9 @@ onMounted(() => {
 }
 
 .msg-avatar--fallback {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  @extend %brand-avatar;
+
   font-size: 14px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 72%, #fff), var(--color-rooms));
 }
 
 .msg-main {
@@ -1962,12 +2289,8 @@ onMounted(() => {
 
 /* 房主徽标：实心房间色，与普通用户拉开层级（房间留言的主人就是 xox 本人） */
 .msg-member-tag {
-  flex: none;
-  padding: 0 5px;
-  /* 药丸半径与同一行互斥展示的 .msg-level 对齐（也是全站小标签的通用造型） */
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
+  @extend %mini-pill;
+
   line-height: 15px;
   color: #fff;
   background: var(--color-rooms);
@@ -2053,10 +2376,6 @@ onMounted(() => {
  * 规则放在礼物之后——成员发的礼物/翻牌同样按成员卡呈现（不再染金），
  * 系统通知走居中 pill，不经过这套样式 */
 .msg-row--member {
-  .msg-avatar {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-rooms) 55%, transparent);
-  }
-
   .msg-nick {
     color: var(--color-rooms);
   }
@@ -2193,13 +2512,10 @@ onMounted(() => {
 }
 
 .msg-flip-ask-tag {
-  flex: none;
+  @extend %mini-pill;
+
   /* 提问可能占多行，标签始终贴在首行 */
   margin-top: 3px;
-  padding: 0 5px;
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
   line-height: 15px;
   color: var(--color-rooms);
   background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
@@ -2355,6 +2671,7 @@ onMounted(() => {
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   font-size: 13px;
   line-height: 1.5;
   word-break: break-word;
@@ -2443,11 +2760,9 @@ onMounted(() => {
 
 /* 等级徽章：金色语义对齐弹幕气泡的 Lv；房主标签与等级互斥，不并存 */
 .msg-level {
-  flex: none;
+  @extend %mini-pill;
+
   padding: 0 6px;
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
   line-height: 16px;
   font-variant-numeric: tabular-nums;
   color: var(--el-color-warning);
@@ -2536,13 +2851,9 @@ onMounted(() => {
 
 .msg-empty,
 .main-placeholder {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  @extend %empty-block;
+
   gap: 8px;
-  text-align: center;
   color: var(--el-text-color-placeholder);
 
   p {

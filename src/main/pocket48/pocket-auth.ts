@@ -2,17 +2,23 @@
  * 口袋48账号登录与凭证存储。
  *
  * 登录链路（均为主进程直连 pocketapi.48.cn，不经渲染层 netRequest）：
- * 1. 短信验证码：sms/send2 发送 → login/app/mobile/code 换 token。
+ * 1. 短信验证码：v2 sms/send_sms 发送 → v2 login/app/app_login 换 token（实测成功）。
  *    服务端偶发返回 status 2001 反爬问答题（message 内嵌 JSON），需把题目透传给用户作答。
  * 2. Token 粘贴：user/info/reload 校验 token 并取回用户资料。
+ *
+ * 客户端档位：登录时用户选定模拟哪个官方客户端（口袋48 / 塞纳河48，见
+ * `common/pocket-client-profile.ts`），档位随凭证落盘，此后本模块所有请求按该档发头
+ * （特征表见 client-profile.ts 的 POCKET_CLIENT_PROFILES）。两个档协议等价、只有客户端
+ * 特征不同，服务端因此把同一账号的多个客户端会话分开——手机端在用口袋48 时，桌面选
+ * 塞纳河48 即可两端并存。档位即「当前登录身份」，切换档位需重新登录。
  *
  * 凭证保存：token 经 safeStorage 加密后落盘 userData/pocket48-auth.json；
  * 平台无加密能力（部分 Linux 无钥匙环）时降级明文并打 plainFallback 标记。
  * token 有效期由服务端掌控（被踢/长期未用会失效），使用时才暴露给调用方，
  * 调用方收到 401005 等失效状态码时引导用户重新登录，本模块不自动重登。
  */
+import type { PocketClientProfileId } from '@common/pocket-client-profile'
 import { Buffer } from 'node:buffer'
-import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -22,6 +28,7 @@ import {
   IM_USER_INFO_URL,
   LIVE_ONE_URL,
   ROOM_ANSWER_VERIFY_URL,
+  ROOM_ESSENCE_MESSAGE_URL,
   ROOM_INFO_URL,
   ROOM_LAST_MESSAGE_URL,
   ROOM_MESSAGE_URLS,
@@ -32,11 +39,12 @@ import {
   TOKEN_CHECK_URL,
   USER_MONEY_URL,
 } from '@common/pocket-api-urls'
+import { resolvePocketClientProfile } from '@common/pocket-client-profile'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
-import { clientHeaders, SEINE48_ANDROID } from './client-profile'
+import { clientHeaders, profileFor } from './client-profile'
 import { currentPa, ensurePaWasm } from './pa-sign'
 
 // ===== 接口常量：统一在 common/pocket-api-urls.ts（与渲染层同源），见文件头 import =====
@@ -46,49 +54,31 @@ const REQUEST_TIMEOUT_MS = 20 * 1000
 /**
  * `pa` 请求头兜底静态值：正常由官方 Android APK 抽出的 wasm 现算（见 pa-sign.ts），
  * 仅 wasm 加载/生成失败时使用（2021 年签名，实测服务端不拦请求）。
- * 请求头身份当前是 iOS 档（见下方 iOS 档说明），与 pa 的 Android 来源混用——
- * 5c073cc 统一档之前长期如此，实测不影响各接口行为。
+ * 主 App HTTP 头也统一为 Android 档（与 pa 同源）；v2 登录端点已对齐 7.1.44 APK。
  */
 const POCKET_PA = 'MTYzNjAxNzMxNTAwMCw3NjkyNzVkNTliZWU0MmQ0OGVjOWIyYTMwY2FkOWQzOSw3NzFhY2QwY2JiZDhkZDUzZDdjZGY3YTcxNGYzNmVlOCwyMDIxMDYwOTAx'
 
 /** token 失效的服务端状态码（与 pocket48_api 社区实现一致） */
 const TOKEN_INVALID_STATUSES = new Set([401003, 401004, 401005])
 
+/**
+ * 凭证失效广播钩子：IPC 层注入广播函数（见 register-pocket-ipc.ts），默认空实现便于单测直跑。
+ * 失效即广播，各窗口登录态镜像同步复位。
+ */
+let notifyAuthExpired: () => void = () => {}
+export function setAuthExpiredNotifier(notify: () => void): void {
+  notifyAuthExpired = notify
+}
+
 /** 反爬问答题状态码：message 字段为内嵌 JSON（{question, answer:[...]}) */
 const CAPTCHA_STATUS = 2001
 
 /**
- * 口袋主 App 伪装头（iOS 档）。
- *
- * ⚠️ 2026-10-17 实测（登录打点 + A/B）：Android 档（5c073cc 统一档）下 send2 正常、
- * `login/app/mobile/code` 恒报「验证码错误」，换回本 iOS 档立即恢复。7.1.44 官方
- * APK 的 dex 字符串里登录端点已是 `v2/login/app/app_login`，疑为服务端按客户端
- * 版本把新版 Android 引流到 v2、v1 端点拒绝且文案误导。在逆向 v2 并切换前，
- * 登录/用户域链路维持本 iOS 档；`pa` 仍由 Android wasm 现算，混用不影响行为。
- * 字段与 5c073cc 前实现逐字一致，勿顺手「统一」格式或增删字段。
+ * v2 信封：v2 登录域的 HttpData 只有 status/message/content，不一定带 success。
+ * status=200 即成功；保留 success 的旧接口也用同一判断（显式 false 才视为失败）。
  */
-const POCKET_USER_AGENT = 'PocketFans201807/7.0.41 (iPhone; iOS 16.3.1; Scale/2.00)'
-
-let pocketDeviceUuid = ''
-
-/** iOS 档设备 ID：进程内随机 UUID（与 5c073cc 前行为一致；不持久化） */
-function deviceUuid(): string {
-  if (!pocketDeviceUuid)
-    pocketDeviceUuid = randomUUID().toUpperCase()
-  return pocketDeviceUuid
-}
-
-function pocketAppInfo(): string {
-  return JSON.stringify({
-    vendor: 'apple',
-    deviceId: deviceUuid(),
-    appVersion: '7.0.41',
-    appBuild: '24011601',
-    osVersion: '16.3.1',
-    osType: 'ios',
-    deviceName: 'iPhone XR',
-    os: 'ios',
-  })
+function isEnvelopeOk(envelope: PocketEnvelope<unknown>): boolean {
+  return envelope.status === 200 && envelope.success !== false
 }
 
 // ===== 持久化结构 =====
@@ -96,6 +86,10 @@ function pocketAppInfo(): string {
 interface StoredAuth {
   /** 记住手机号（下次打开弹窗预填；明文，手机号本身不算机密） */
   mobile: string
+  /** 登录时使用的区号（如 '852'）；旧版本无此字段，读取时按 86 处理 */
+  area?: string
+  /** 登录时选定的客户端档位；旧版本无此字段，读取时按口袋48 处理 */
+  clientProfile?: PocketClientProfileId
   /** safeStorage 加密后的 token（base64）；plainFallback 时为空 */
   tokenEnc: string
   /** safeStorage 不可用时的降级明文 token；有 tokenEnc 时恒为空 */
@@ -111,8 +105,10 @@ export interface PocketAuthState {
   loggedIn: boolean
   nickname: string
   avatar: string
-  /** 脱敏手机号（139****1234）；空串表示未记住 */
+  /** 脱敏手机号（139****1234）；非中国大陆区号登录时带 `+区号 ` 前缀；空串表示未记住 */
   mobileMasked: string
+  /** 当前登录身份档位（模拟的官方客户端）；未登录 / 旧凭证时为默认档口袋48 */
+  clientProfile: PocketClientProfileId
   /** true = 平台无 safeStorage，token 以明文落盘（仅提示用） */
   plainFallback: boolean
   /** 凭证保存时间（ms 时间戳）；0 = 无记录，供设置页展示「已保存 N 天」 */
@@ -171,15 +167,25 @@ function summarizeEnvelope(envelope: PocketEnvelope<unknown> | null | undefined)
   })
 }
 
-/** 组装口袋主 App 的请求头：iOS 档身份（见上方 iOS 档说明），只补 `pa` 与 `token` */
-function pocketHeaders(token?: string, pa?: string): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json;charset=utf-8',
-    'User-Agent': POCKET_USER_AGENT,
-    'appInfo': pocketAppInfo(),
-    'Accept-Language': 'zh-Hans-CN;q=1',
-    'pa': pa ?? POCKET_PA,
-  }
+/**
+ * 当前请求所用的客户端档位：读凭证（未登录 / 旧凭证回退默认档）。
+ * 与 getToken 同口径——每次请求读一次凭证（读盘代价可忽略），故登录与退出都不需要
+ * 额外的缓存失效逻辑。同一请求内多次取值也不会读到不一致的状态。
+ *
+ * 导出供聊天室取同档云信身份（`pocket-danmaku.ts`），保证 HTTP 与 TCP 报同一家客户端。
+ */
+export function currentClientProfile(): PocketClientProfileId {
+  return resolvePocketClientProfile(readStoredAuth()?.clientProfile)
+}
+
+/**
+ * 组装请求头：按「本次指定档位 或 当前档位」取客户端特征，只补 `pa` 与 `token`。
+ * 登录链路在凭证写入前就用用户选定的档发请求，故显式传入 profileId；
+ * 其余接口省略该参数，走凭证里的当前档位。
+ */
+function pocketHeaders(token?: string, pa?: string, profileId?: PocketClientProfileId): Record<string, string> {
+  const headers = clientHeaders(profileFor(profileId ?? currentClientProfile()))
+  headers.pa = pa ?? POCKET_PA
   if (token)
     headers.token = token
   return headers
@@ -191,6 +197,7 @@ async function postPocket<T>(
   data: object,
   token?: string,
   extraHeaders?: Record<string, string>,
+  profileId?: PocketClientProfileId,
 ): Promise<PocketEnvelope<T>> {
   // pa 每次请求现算（内嵌当下时间戳）；wasm 加载失败时退回静态值，不影响请求发出
   await ensurePaWasm()
@@ -199,7 +206,7 @@ async function postPocket<T>(
   const apiPath = logPath(url)
   return new Promise<PocketEnvelope<T>>((resolve, reject) => {
     const request = net.request({ url, method: 'POST' })
-    const headers = { ...pocketHeaders(token, pa), ...extraHeaders }
+    const headers = { ...pocketHeaders(token, pa, profileId), ...extraHeaders }
     for (const [key, value] of Object.entries(headers))
       request.setHeader(key, value)
 
@@ -306,7 +313,17 @@ function extractToken(stored: StoredAuth | null): string {
   return token
 }
 
-function maskMobile(mobile: string): string {
+/**
+ * 脱敏手机号（139****1234）。非 86 区号加 `+区号 ` 前缀——区号是归属地信息，
+ * 无脱敏必要；海外号码 4-15 位不定长，头尾各留 2 位（短于 5 位时头尾重叠，脱敏无意义）。
+ */
+function maskMobile(mobile: string, area?: string): string {
+  const normalized = normalizeArea(area)
+  if (normalized !== '86') {
+    if (mobile.length < 5)
+      return ''
+    return `+${normalized} ${mobile.slice(0, 2)}****${mobile.slice(-2)}`
+  }
   if (mobile.length < 7)
     return ''
   return `${mobile.slice(0, 3)}****${mobile.slice(-4)}`
@@ -318,7 +335,8 @@ function toAuthState(stored: StoredAuth | null): PocketAuthState {
     loggedIn: !!token,
     nickname: stored?.nickname || '',
     avatar: stored?.avatar || '',
-    mobileMasked: maskMobile(stored?.mobile || ''),
+    mobileMasked: maskMobile(stored?.mobile || '', stored?.area),
+    clientProfile: resolvePocketClientProfile(stored?.clientProfile),
     plainFallback: !!stored && !!stored.tokenPlain && !safeStorageAvailable(),
     savedAt: stored?.savedAt || 0,
   }
@@ -336,24 +354,48 @@ export function getToken(): string {
   return extractToken(readStoredAuth())
 }
 
+/** 区号统一去掉可能的 + 前缀；缺省或空串（如误传单个 '+'）仍按中国大陆处理 */
+function normalizeArea(area?: string): string {
+  return (area || '86').replace(/^\+/, '') || '86'
+}
+
+/** 手机号本地校验：中国大陆仍固定 11 位，其他区号放宽到 4-15 位数字 */
+function isValidMobile(mobile: string, area: string): boolean {
+  return area === '86' ? /^\d{11}$/.test(mobile) : /^\d{4,15}$/.test(mobile)
+}
+
 /**
  * 发送登录验证码。
  * 正常返回 needCaptcha=false；命中反爬问答题（2001）时返回题目与选项，
  * 用户作答后把 answer 随下一次发送一并提交。
+ * clientProfile 为本次登录选定的身份档位（凭证写入前就按它发请求）；省略时用当前档位。
  */
-export async function sendSms(mobile: string, answer?: string): Promise<PocketSmsResult> {
+export async function sendSms(
+  mobile: string,
+  area?: string,
+  answer?: string,
+  clientProfile?: PocketClientProfileId,
+): Promise<PocketSmsResult> {
+  const normalizedArea = normalizeArea(area)
   const trimmed = mobile.trim()
-  if (!/^\d{11}$/.test(trimmed))
-    throw new Error('请输入 11 位手机号')
-  const payload: Record<string, string> = { mobile: trimmed, area: '86' }
-  if (answer)
-    payload.answer = answer
+  if (!isValidMobile(trimmed, normalizedArea))
+    throw new Error(normalizedArea === '86' ? '请输入 11 位手机号' : '请输入有效的手机号')
+  const profile = clientProfile ?? currentClientProfile()
+  // 7.1.44 APK：无答题时带业务码（登录注册=1）与空风控 token；有答题时只带 answer。
+  const payload: Record<string, unknown> = answer
+    ? { mobile: trimmed, area: normalizedArea, answer }
+    : {
+        mobile: trimmed,
+        area: normalizedArea,
+        businessCode: 1,
+        intelligenceToken: '',
+      }
   debug('[pocket-auth] → 发送验证码：', JSON.stringify({
-    profile: 'ios',
-    mobile: maskMobile(trimmed) || '***',
+    profile,
+    mobile: maskMobile(trimmed, normalizedArea) || '***',
     hasCaptchaAnswer: !!answer,
   }))
-  const envelope = await postPocket(SMS_SEND_URL, payload)
+  const envelope = await postPocket(SMS_SEND_URL, payload, undefined, undefined, profile)
   debug('[pocket-auth] ← 发送验证码：', summarizeEnvelope(envelope))
   if (envelope.status === CAPTCHA_STATUS) {
     // message 内嵌 JSON：{question: string, answer: string[]}
@@ -373,7 +415,7 @@ export async function sendSms(mobile: string, answer?: string): Promise<PocketSm
     }))
     return { needCaptcha: true, question, options, message: '需要完成验证' }
   }
-  if (envelope.success)
+  if (isEnvelopeOk(envelope))
     return { needCaptcha: false, question: '', options: [], message: '验证码已发送' }
   throw new Error(envelope.message || '验证码发送失败')
 }
@@ -389,25 +431,41 @@ function pickUserInfo(content: Record<string, unknown> | undefined | null): Pock
   }
 }
 
-/** 验证码登录：成功后落盘凭证并返回登录态 */
-export async function loginByCode(mobile: string, code: string): Promise<PocketAuthState> {
+/**
+ * 验证码登录：成功后落盘凭证（含身份档位）并返回登录态。
+ * clientProfile 为本轮登录选定的身份档位，随凭证保存并成为此后所有请求的档位。
+ */
+export async function loginByCode(
+  mobile: string,
+  code: string,
+  area?: string,
+  clientProfile?: PocketClientProfileId,
+): Promise<PocketAuthState> {
+  const normalizedArea = normalizeArea(area)
   const trimmedMobile = mobile.trim()
   const trimmedCode = code.trim()
-  if (!/^\d{11}$/.test(trimmedMobile))
-    throw new Error('请输入 11 位手机号')
+  if (!isValidMobile(trimmedMobile, normalizedArea))
+    throw new Error(normalizedArea === '86' ? '请输入 11 位手机号' : '请输入有效的手机号')
   if (!trimmedCode)
     throw new Error('请输入验证码')
+  const profile = clientProfile ?? currentClientProfile()
   debug('[pocket-auth] → 验证码登录：', JSON.stringify({
-    profile: 'ios',
-    mobile: maskMobile(trimmedMobile) || '***',
+    profile,
+    mobile: maskMobile(trimmedMobile, normalizedArea) || '***',
     codeLength: trimmedCode.length,
   }))
+  // 7.1.44 APK：mobileCodeLogin setter 还会补 loginType=MOBILE_SMS_CODE；deviceToken 允许空串。
   const envelope = await postPocket<{ token?: string }>(SMS_LOGIN_URL, {
-    mobile: trimmedMobile,
-    code: trimmedCode,
-  })
+    mobileCodeLogin: {
+      mobile: trimmedMobile,
+      code: trimmedCode,
+      area: normalizedArea,
+    },
+    loginType: 'MOBILE_SMS_CODE',
+    deviceToken: '',
+  }, undefined, undefined, profile)
   const token = envelope.content?.token
-  if (!envelope.success || !token) {
+  if (!isEnvelopeOk(envelope) || !token) {
     debug('[pocket-auth] ✕ 验证码登录失败：', JSON.stringify({
       status: envelope.status,
       success: envelope.success,
@@ -420,27 +478,33 @@ export async function loginByCode(mobile: string, code: string): Promise<PocketA
   // 登录响应的 content 里未必带资料，再校验一次顺手取昵称头像（失败不阻断，资料只是展示用）
   let info: PocketUserInfo = { nickname: '', avatar: '', userId: '' }
   try {
-    const check = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, token)
+    const check = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, token, undefined, profile)
     if (check.success)
       info = pickUserInfo(check.content)
   }
   catch (error) {
     log('[pocket-auth] 登录后拉取资料失败（不阻断登录）', error)
   }
-  saveAuth(trimmedMobile, token, info)
+  saveAuth(trimmedMobile, token, info, normalizedArea, profile)
   return getAuthState()
 }
 
-/** Token 粘贴登录：user/info/reload 校验有效后落盘 */
-export async function loginByToken(token: string, mobile = ''): Promise<PocketAuthState> {
+/** Token 粘贴登录：user/info/reload 校验有效后落盘（档位同验证码登录，随凭证保存） */
+export async function loginByToken(
+  token: string,
+  mobile = '',
+  clientProfile?: PocketClientProfileId,
+): Promise<PocketAuthState> {
   const trimmed = token.trim()
   if (!trimmed)
     throw new Error('请输入 token')
+  const profile = clientProfile ?? currentClientProfile()
   debug('[pocket-auth] → token 登录：', JSON.stringify({
+    profile,
     mobile: maskMobile(mobile.trim()) || '***',
     tokenLength: trimmed.length,
   }))
-  const envelope = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, trimmed)
+  const envelope = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, trimmed, undefined, profile)
   if (!envelope.success) {
     const invalid = envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status)
     debug('[pocket-auth] ✕ token 登录失败：', JSON.stringify({
@@ -452,14 +516,24 @@ export async function loginByToken(token: string, mobile = ''): Promise<PocketAu
     throw new Error(invalid ? 'token 无效或已过期' : envelope.message || 'token 校验失败')
   }
   const info = pickUserInfo(envelope.content)
-  saveAuth(mobile.trim(), trimmed, info)
+  // token 登录的手机号由用户手填、无区号语义（该链路不校验手机号），按 86 存档只为展示不带前缀
+  saveAuth(mobile.trim(), trimmed, info, '86', profile)
   return getAuthState()
 }
 
-function saveAuth(mobile: string, token: string, info: PocketUserInfo): void {
+/** 落盘凭证：档位一并写入，此后所有请求按该档发头（档位随凭证读） */
+function saveAuth(
+  mobile: string,
+  token: string,
+  info: PocketUserInfo,
+  area: string,
+  clientProfile: PocketClientProfileId,
+): void {
   const encrypted = safeStorageAvailable()
   saveStoredAuth({
     mobile,
+    area,
+    clientProfile,
     tokenEnc: encrypted ? safeStorage.encryptString(token).toString('base64') : '',
     tokenPlain: encrypted ? '' : token,
     nickname: info.nickname,
@@ -467,20 +541,38 @@ function saveAuth(mobile: string, token: string, info: PocketUserInfo): void {
     userId: info.userId,
     savedAt: Date.now(),
   })
-  log(`[pocket-auth] 凭证已保存（${encrypted ? '加密' : '明文降级'}），用户: ${info.nickname || '未知'}`)
+  log(`[pocket-auth] 凭证已保存（${encrypted ? '加密' : '明文降级'}，档位 ${clientProfile}），用户: ${info.nickname || '未知'}`)
 }
 
-/** 退出登录：删除本地凭证文件 */
-export function logout(): void {
+/** 删除本地凭证文件；存在才删，失败不抛（删除只影响展示，调用方各有兵底） */
+function deleteStoredCredentials(): void {
   const file = authFilePath()
   try {
     if (fs.existsSync(file))
       fs.unlinkSync(file)
-    log('[pocket-auth] 已退出登录')
   }
   catch (error) {
     log('[pocket-auth] 删除凭证失败', error)
   }
+}
+
+/** 退出登录：删除本地凭证文件（档位随凭证消失，请求头回到默认档；下次登录重新选） */
+export function logout(): void {
+  deleteStoredCredentials()
+  log('[pocket-auth] 已退出登录')
+}
+
+/** token 判失效：删凭证文件（过期无恢复手段，重登必然覆盖）+ 广播各窗复位镜像 */
+function expireStoredAuth(): void {
+  deleteStoredCredentials()
+  log('[pocket-auth] token 已失效，本地凭证已清除')
+  notifyAuthExpired()
+}
+
+/** 「登录已过期」唯一出口：先清凭证再抛 */
+function throwAuthExpired(): never {
+  expireStoredAuth()
+  throw new Error('登录已过期，请重新登录口袋48账号')
 }
 
 /** 登录有效性验证结果：imOk 表示弹幕实际依赖的 IM 凭据链路是否可用 */
@@ -570,8 +662,10 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
   if (!token)
     return { ...empty, message: '未登录口袋48账号' }
   const envelope = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, token)
-  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status)) {
+    expireStoredAuth()
     return { ...empty, message: '登录已过期，请重新登录' }
+  }
   if (!envelope.success)
     return { ...empty, message: envelope.message || 'token 校验失败' }
   const info = pickUserInfo(envelope.content)
@@ -645,7 +739,7 @@ export async function getFollowedIds(): Promise<number[]> {
     return []
   const envelope = await postPocket<Record<string, unknown>>(FRIENDS_IDS_URL, {}, token)
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取关注列表失败')
   const data = (envelope.content as Record<string, unknown> | undefined)?.data
@@ -676,7 +770,7 @@ async function postFollow(url: string, userId: number, action: string): Promise<
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || `${action}失败`)
 }
@@ -696,7 +790,7 @@ export async function getChatroomId(liveId: string): Promise<string> {
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取直播聊天室 ID 失败')
   const content = envelope.content || {}
@@ -759,7 +853,7 @@ export async function getRoomChannel(userId: number): Promise<PocketRoomChannel>
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取房间频道失败')
   const content = envelope.content || {}
@@ -793,7 +887,7 @@ export async function getRoomChannelOwner(channelId: string): Promise<PocketRoom
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取房间归属失败')
   const content = envelope.content || {}
@@ -818,7 +912,7 @@ export interface PocketServerChannel {
  * 返回完整公共头由 postPocket 覆盖合并；`pa` 仍由其统一现算，避免两处签名不一致。
  */
 function seineHeaderOverrides(): Record<string, string> {
-  return clientHeaders(SEINE48_ANDROID)
+  return clientHeaders(profileFor('seine48'))
 }
 
 /**
@@ -838,7 +932,7 @@ export async function getServerChannels(serverId: string): Promise<PocketServerC
     seineHeaderOverrides(),
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取频道列表失败')
   const content = (envelope.content || {}) as Record<string, unknown>
@@ -894,7 +988,7 @@ export async function getRoomQuestion(channelId: string): Promise<PocketRoomQues
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (envelope.success)
     return null
   const question = parseQuestionEnvelope(envelope.message || '')
@@ -969,7 +1063,7 @@ export async function checkRoomAnswer(
       token,
     )
     if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-      throw new Error('登录已过期，请重新登录口袋48账号')
+      throwAuthExpired()
     if (envelope.success)
       return { ok: true, via: 'server' }
     debug('[pocket-auth] 暗号校验未通过：', channelId, JSON.stringify(envelope))
@@ -1008,6 +1102,27 @@ function senderUserId(rawExtInfo: unknown): string {
 }
 
 /**
+ * 接口消息数组 → 归一前的原始消息（保留 bodys / extInfo 原文字符串）。
+ * 普通消息与精华消息同构，两处共用：字段名与兜底顺序改动只需改这一处。
+ */
+function toRoomMessages(list: unknown): PocketRoomMessage[] {
+  return (Array.isArray(list) ? list : [])
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map((item) => {
+      const extInfo = typeof item.extInfo === 'string' ? item.extInfo : JSON.stringify(item.extInfo ?? {})
+      return {
+        msgIdServer: String(item.msgIdServer ?? ''),
+        msgIdClient: String(item.msgIdClient ?? ''),
+        msgType: String(item.msgType ?? ''),
+        msgTime: Number(item.msgTime) || 0,
+        bodys: typeof item.bodys === 'string' ? item.bodys : JSON.stringify(item.bodys ?? ''),
+        extInfo,
+        userId: senderUserId(extInfo) || String(item.senderUserId ?? item.senderId ?? ''),
+      }
+    })
+}
+
+/**
  * 拉取房间频道消息（按 msgTime 倒序，最新在前；nextTime 为更早历史的游标）。
  * nextTime 传 0 拉最近一页——轮询新消息同样传 0，由调用方按 msgTime 增量过滤。
  */
@@ -1026,34 +1141,57 @@ export async function getRoomMessages(
     nextTime: Number(nextTime) || 0,
     limit: ROOM_MESSAGE_LIMIT,
   }
-  debug('[pocket-auth] 获取频道消息请求：', JSON.stringify({ ...request, scope }))
+  // debug('[pocket-auth] 获取频道消息请求：', JSON.stringify({ ...request, scope }))
   const envelope = await postPocket<Record<string, unknown>>(
     ROOM_MESSAGE_URLS[scope],
     request,
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取房间消息失败')
   const content = (envelope.content || {}) as Record<string, unknown>
   const list = content.message ?? content.messageList
-  const messages: PocketRoomMessage[] = (Array.isArray(list) ? list : [])
-    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
-    .map((item) => {
-      const extInfo = typeof item.extInfo === 'string' ? item.extInfo : JSON.stringify(item.extInfo ?? {})
-      return {
-        msgIdServer: String(item.msgIdServer ?? ''),
-        msgIdClient: String(item.msgIdClient ?? ''),
-        msgType: String(item.msgType ?? ''),
-        msgTime: Number(item.msgTime) || 0,
-        bodys: typeof item.bodys === 'string' ? item.bodys : JSON.stringify(item.bodys ?? ''),
-        extInfo,
-        userId: senderUserId(extInfo) || String(item.senderUserId ?? item.senderId ?? ''),
-      }
-    })
+  const messages = toRoomMessages(list)
   const result = { messages, nextTime: Number(content.nextTime) || 0 }
   return result
+}
+
+/**
+ * 拉取房间精华消息（房间页顶部置顶条 + 精华列表）。
+ * 回包 `content.essenceMessageList` 与普通消息同构，故原始消息映射与归一化全部复用；
+ * nextTime 同为分页游标（0 = 没有更多）。
+ * 与消息列表不同，精华是房主 / 管理员挑选的**房间级**内容，与「只看房主 / 全部消息」无关。
+ */
+export async function getRoomEssenceMessages(
+  channelId: string,
+  serverId: string,
+  nextTime = 0,
+): Promise<PocketRoomMessages> {
+  const token = getToken()
+  if (!token)
+    throw new Error('未登录口袋48账号')
+  const request = {
+    channelId: Number(channelId),
+    serverId: Number(serverId),
+    nextTime: Number(nextTime) || 0,
+    limit: ROOM_MESSAGE_LIMIT,
+  }
+  debug('[pocket-auth] 获取房间精华消息请求：', JSON.stringify(request))
+  const envelope = await postPocket<Record<string, unknown>>(
+    ROOM_ESSENCE_MESSAGE_URL,
+    request,
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throwAuthExpired()
+  if (!envelope.success)
+    throw new Error(envelope.message || '获取精华消息失败')
+  const content = (envelope.content || {}) as Record<string, unknown>
+  // 字段名两候选兜底：`essenceMessageList` 已由 APK 字符串池确认，message/list 防服务端换壳
+  const list = content.essenceMessageList ?? content.message ?? content.messageList
+  return { messages: toRoomMessages(list), nextTime: Number(content.nextTime) || 0 }
 }
 
 /** 频道最后一条消息（左侧房间列表预览；msgContent 与房间消息 bodys 同构） */
@@ -1103,7 +1241,7 @@ export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRo
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取房间最新消息失败')
   const content = (envelope.content || {}) as Record<string, unknown>
@@ -1169,7 +1307,7 @@ export async function getImCredentials(): Promise<PocketImCredentials> {
     { 'P-Sign-Type': 'V0' },
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   const content = envelope.content || {}
   const accid = String(content.accid || content.accId || content.imUserId || '')
   const imToken = String(content.pwd || content.token || content.imPwd || '')

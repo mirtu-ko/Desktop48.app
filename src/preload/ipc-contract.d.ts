@@ -12,9 +12,11 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
 import type { LiveDanmaku } from '@common/live-danmaku'
 import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
-import type { AllMemberItem, MemberDataContent, StarAdjunctItem, StarInfoItem } from '../main/data'
+import type { PocketClientProfileId } from '@common/pocket-client-profile'
+import type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { FfmpegProblem, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
+import type { NetDiagnoseItem } from '../main/net-diagnose'
 
 // 网络请求参数（对端：main/ipc/register-system-ipc.ts；body 为序列化后的字符串）
 export interface NetRequestOptions {
@@ -24,13 +26,18 @@ export interface NetRequestOptions {
   body?: string
 }
 
+// 网络诊断结果随契约一起暴露（渲染端设置页诊断列表消费）
+export type { NetDiagnoseItem }
+
 // ===== 成员与屏蔽名单 =====
 
 // 类型随契约一起暴露（preload/index.ts 实现侧与渲染端合并函数引用）
-export type { AllMemberItem, MemberDataContent, StarAdjunctItem }
+export type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctItem }
 
 // 类型随契约一起暴露（preload/index.ts 实现侧与渲染端引用）
 export type { MemberFlag, MemberFlagKind }
+// 客户端身份档位（口袋48 / 塞纳河48）：跨进程传递与界面选项共用，来源 common
+export type { PocketClientProfileId }
 export type MemberInfo = StarInfoItem & { teamColor: string }
 
 /**
@@ -63,11 +70,19 @@ export interface MemberTreeGroupPayload {
   children: MemberTreeTeamPayload[]
 }
 
-/** getAllMembers 返回：h5.48.cn 落库的 allmembers 成员名单 + 兼职成员档案（见 main/data.ts 对应类型） */
+/**
+ * getAllMembers 返回：h5.48.cn 落库的 allmembers 成员名单 + 兼职成员档案 + 官方账号
+ * （见 main/data.ts 对应类型）。
+ */
 export interface AllMembersPayload {
   allmembers: AllMemberItem[]
   /** starAdjunctInfo 兼职成员档案（status===1 为有效兼任，渲染端据此归入兼任队伍） */
   adjuncts?: StarAdjunctItem[]
+  /**
+   * officialInfo 官方账号（袋王 / 各团官方号）：字段与成员记录同构但不是成员，
+   * 不在 starInfo 里。房间左列按 userId 反查官方频道（用户可能关注官方号）时用它取名与头像。
+   */
+  officials?: OfficialInfoItem[]
 }
 
 // ===== FFmpeg 下载 =====
@@ -163,6 +178,8 @@ export interface PocketAuthState {
   avatar: string
   /** 脱敏手机号（139****1234）；空串表示未记住 */
   mobileMasked: string
+  /** 当前登录身份档位（模拟的官方客户端）；未登录时为默认档 */
+  clientProfile: PocketClientProfileId
   /** true = 平台无安全加密能力，token 以明文落盘（仅提示用） */
   plainFallback: boolean
   /** 凭证保存时间（ms 时间戳）；0 = 无记录，供设置页展示「已保存 N 天」 */
@@ -329,6 +346,8 @@ export type { FfmpegProblem, FfmpegStatus }
 
 interface StaticIpcInvokeMap {
   netRequest: InvokeSpec<[options: NetRequestOptions], string>
+  /** 网络诊断：对核心服务域名逐一发轻量 GET，返回状态码/耗时/失败原因（对端：main/net-diagnose.ts） */
+  netDiagnose: InvokeSpec<[], NetDiagnoseItem[]>
   saveMemberData: InvokeSpec<[content: Partial<MemberDataContent>], { ok: true }>
   getAllMembers: InvokeSpec<[], AllMembersPayload>
   hasMembers: InvokeSpec<[], boolean>
@@ -378,11 +397,11 @@ interface StaticIpcInvokeMap {
   // ===== 口袋48账号 =====
   // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts
   /** 发送登录验证码；命中反爬问答题时返回 needCaptcha=true 与题目选项 */
-  pocketSendSms: InvokeSpec<[mobile: string, answer?: string], PocketSmsResult>
-  /** 验证码登录；失败（验证码错误等）以 reject 报错 */
-  pocketLoginByCode: InvokeSpec<[mobile: string, code: string], PocketAuthState>
+  pocketSendSms: InvokeSpec<[mobile: string, area?: string, answer?: string, clientProfile?: PocketClientProfileId], PocketSmsResult>
+  /** 验证码登录；clientProfile 为本轮选定的身份档位，随凭证保存；失败以 reject 报错 */
+  pocketLoginByCode: InvokeSpec<[mobile: string, code: string, area?: string, clientProfile?: PocketClientProfileId], PocketAuthState>
   /** 粘贴 token 登录：主进程校验有效后落盘；无效以 reject 报错 */
-  pocketLoginByToken: InvokeSpec<[token: string, mobile?: string], PocketAuthState>
+  pocketLoginByToken: InvokeSpec<[token: string, mobile?: string, clientProfile?: PocketClientProfileId], PocketAuthState>
   /** 当前登录态（读本地凭证，不做网络校验） */
   pocketGetAuthState: InvokeSpec<[], PocketAuthState>
   /** 退出登录：删除本地凭证 */
@@ -401,6 +420,8 @@ interface StaticIpcInvokeMap {
   pocketGetRoomChannel: InvokeSpec<[userId: number], PocketRoomChannel>
   /** 拉取房间频道消息（msgTime 倒序最新在前；nextTime 为更早历史游标，轮询传 0 拉最新） */
   pocketGetRoomMessages: InvokeSpec<[channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all'], PocketRoomMessages>
+  /** 拉取房间精华消息（房主/管理员置顶的那批；与消息范围无关，nextTime 0 = 没有更多） */
+  pocketGetRoomEssenceMessages: InvokeSpec<[channelId: string, serverId: string, nextTime?: number], PocketRoomMessages>
   /** 批量拉取各 server 频道的最后一条消息（左侧列表预览） */
   pocketGetRoomLastMessages: InvokeSpec<[serverIds: string[]], PocketRoomLastMessage[]>
   /** 拉取 team server 下全部频道的 id 与名称（房间页 tab 显示真实频道名；失败返回空数组） */
@@ -484,6 +505,8 @@ export type IpcEventMap = {
    * 未读状态由主进程统一持有、每个窗口各存镜像，因此广播给全部窗口（见 main/ipc/send.ts）。
    */
   pocketUnreadBatch: [state: PocketUnreadBatch]
+  /** 登录凭证已因 token 失效被清除（对端：pocket-auth.ts），各窗镜像据此复位 */
+  pocketAuthExpired: []
   /**
    * 更新状态变化（对端：main/updater.ts）。
    * 状态归主进程所有、每个窗口各存镜像，因此广播给全部窗口（见 main/ipc/send.ts 的 broadcastIpc）。

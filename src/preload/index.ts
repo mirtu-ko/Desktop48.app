@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
-import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketDanmakuBatch, PocketUnreadBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
+import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketClientProfileId, PocketDanmakuBatch, PocketUnreadBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 /**
@@ -36,6 +36,7 @@ const api = {
   // ===== 网络请求 =====
   // 对端：main/ipc/register-system-ipc.ts，走 Electron net 模块 + 域名白名单
   netRequest: (options: NetRequestOptions) => invokeIpc('netRequest', options),
+  netDiagnose: () => invokeIpc('netDiagnose'),
 
   // ===== 成员与屏蔽名单 =====
   // 对端：main/ipc/register-database-ipc.ts
@@ -150,9 +151,12 @@ const api = {
   // ===== 口袋48账号 =====
   // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts。
   // IM 凭据（accid + imToken）不在此暴露：渲染层零调用方，token 只留在主进程
-  pocketSendSms: (mobile: string, answer?: string) => invokeIpc('pocketSendSms', mobile, answer),
-  pocketLoginByCode: (mobile: string, code: string) => invokeIpc('pocketLoginByCode', mobile, code),
-  pocketLoginByToken: (token: string, mobile?: string) => invokeIpc('pocketLoginByToken', token, mobile),
+  pocketSendSms: (mobile: string, area?: string, answer?: string, clientProfile?: PocketClientProfileId) =>
+    invokeIpc('pocketSendSms', mobile, area, answer, clientProfile),
+  pocketLoginByCode: (mobile: string, code: string, area?: string, clientProfile?: PocketClientProfileId) =>
+    invokeIpc('pocketLoginByCode', mobile, code, area, clientProfile),
+  pocketLoginByToken: (token: string, mobile?: string, clientProfile?: PocketClientProfileId) =>
+    invokeIpc('pocketLoginByToken', token, mobile, clientProfile),
   pocketGetAuthState: () => invokeIpc('pocketGetAuthState'),
   pocketLogout: () => invokeIpc('pocketLogout'),
   pocketGetChatroomId: (liveId: string) => invokeIpc('pocketGetChatroomId', liveId),
@@ -163,6 +167,8 @@ const api = {
   pocketGetRoomChannel: (userId: number) => invokeIpc('pocketGetRoomChannel', userId),
   pocketGetRoomMessages: (channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all') =>
     invokeIpc('pocketGetRoomMessages', channelId, serverId, nextTime, scope),
+  pocketGetRoomEssenceMessages: (channelId: string, serverId: string, nextTime?: number) =>
+    invokeIpc('pocketGetRoomEssenceMessages', channelId, serverId, nextTime),
   pocketGetRoomLastMessages: (serverIds: string[]) => invokeIpc('pocketGetRoomLastMessages', serverIds),
   pocketGetServerChannels: (serverId: string) => invokeIpc('pocketGetServerChannels', serverId),
   pocketDanmakuStart: (chatroomId: string, liveId: string) => invokeIpc('pocketDanmakuStart', chatroomId, liveId),
@@ -170,6 +176,9 @@ const api = {
   // pocketDanmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   pocketDanmakuBatch: (callback: (_batch: PocketDanmakuBatch) => void) =>
     onIpc('pocketDanmakuBatch', callback),
+  // pocketAuthExpired 由 IpcEventMap 派生：主进程清失效凭证时广播
+  pocketAuthExpired: (callback: () => void) =>
+    onIpc('pocketAuthExpired', callback),
 
   // ===== 房间未读 =====
   // 对端：main/pocket48/pocket-unread.ts（主进程唯一真相，检测不受窗口失焦节流）

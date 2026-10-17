@@ -338,6 +338,29 @@ describe('pocket-unread（房间未读检测）', () => {
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
   })
 
+  it('clearAccountUnread 即刻清空并广播归零，不等下一轮检测；无变化时静默', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    await runTick(auth, mod)
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k2'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m3', 'm2', 'm1'))
+    await runTick(auth, mod)
+    expect(mod.getState().total).toBe(2)
+
+    // 登出 / token 失效由 IPC 层直接调用：不跑 tick 也立即清空 + 广播
+    // （凭证失效后 tick 会因 token 无效整轮冻结，永远走不到未登录分支）
+    broadcasts = []
+    mod.clearAccountUnread()
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
+
+    // 已空再调不广播（并发失效报错时幂等）
+    broadcasts = []
+    mod.clearAccountUnread()
+    expect(broadcasts).toEqual([])
+  })
+
   it('取关成员：未读与水位一并清理并广播；重新关注后首见重新锚定', async () => {
     const { mod, auth } = await freshModule()
     stubOnline(auth, lastOf('k1'))

@@ -22,13 +22,13 @@ export interface MemberSection {
   members: MemberDetail[]
 }
 
-/** 命中判定：姓名 / 昵称 / 拼音缩写任一包含关键词即命中。关键词在函数内自行归一化 */
+/** 命中判定：姓名 / 昵称 / 拼音缩写任一包含关键词即命中；成员 ID 仅作为隐藏检索条件，不显示在搜索提示里 */
 export function memberMatches(member: MemberDetail, keyword: string): boolean {
   const kw = normalizeKeyword(keyword)
   if (!kw)
     return true
-  return [member.realName, member.nickname, member.abbr]
-    .some(field => (field || '').toLowerCase().includes(kw))
+  return [member.realName, member.nickname, member.abbr, member.userId, member.sid]
+    .some(field => String(field ?? '').toLowerCase().includes(kw))
 }
 
 /** 按队伍分区：入参已按树的顺序（团体 → teamSort）排好，用 Map 保住首现顺序；徽章缺失时用分团 logo 兜底 */

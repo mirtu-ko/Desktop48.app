@@ -109,6 +109,8 @@ describe('pocket-chat-message.normalizePocketChatMessage', () => {
             { user: { userId: 42, userName: '路人甲' } },
             // 榜单实测报文（2026-10-14）：头像字段为 userAvatar 且为相对路径
             { user: { userId: 859171, userName: '阿琂是谁🍥', userAvatar: '/avatar/2026/0601/859171.jpg', level: 16 } },
+            // 榜单实测报文（2026-10）：level 在 user 里，money 在条目顶层，vip/badgeList 等冗余字段忽略
+            { user: { userId: 8050966600, userName: '嘉木相思·木子', userAvatar: '/avatar/2026/0725/8050966600.jpg', level: 13, vip: true, badgeList: ['/mediasource/a.png'], nameplateList: [] }, money: 20 },
           ],
         },
       }),
@@ -118,7 +120,8 @@ describe('pocket-chat-message.normalizePocketChatMessage', () => {
     expect(result?.rankUsers).toEqual([
       { userId: '167706829', userName: '许愿大', avatar: 'https://img.example/a.jpg' },
       { userId: '42', userName: '路人甲', avatar: '' },
-      { userId: '859171', userName: '阿琂是谁🍥', avatar: '/avatar/2026/0601/859171.jpg' },
+      { userId: '859171', userName: '阿琂是谁🍥', avatar: '/avatar/2026/0601/859171.jpg', level: 16 },
+      { userId: '8050966600', userName: '嘉木相思·木子', avatar: '/avatar/2026/0725/8050966600.jpg', level: 13, money: 20 },
     ])
   })
 

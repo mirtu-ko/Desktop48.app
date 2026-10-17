@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import type { PocketVerifyResult } from '@preload/ipc-contract'
-import { Cpu, Document, Folder, Hide, Refresh, User, WarningFilled } from '@element-plus/icons-vue'
+import type { NetDiagnoseItem, PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
+import type { InputInstance } from 'element-plus'
+import { DEFAULT_POCKET_CLIENT_PROFILE, POCKET_CLIENT_PROFILE_OPTIONS, pocketClientProfileOption } from '@common/pocket-client-profile'
+import { Connection, Cpu, Document, Download, Folder, Hide, Lock, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
@@ -56,14 +58,28 @@ const { blockedMembers, refreshBlockedMembers, unblockMember, clearBlockedMember
 // 自动更新：状态镜像与操作集中在 use-updater.ts
 const { state: updaterState, checking: updaterChecking, version: appVersion, check: checkUpdate, download: downloadUpdate, install: installUpdate } = useUpdater()
 
-// 口袋关注同步：启动/登录后把账号维度的关注合并进本地名单（use-pocket-follow.ts）
+// 口袋关注拉取：启动/登录后把账号维度的关注合并进本地名单（use-pocket-follow.ts）
 const {
   syncing: followSyncing,
+  syncPulled: followSyncPulled,
   syncTotal: followSyncTotal,
   syncError: followSyncError,
   sync: syncPocketFollow,
   syncIfStale: syncPocketFollowIfStale,
 } = usePocketFollowSync()
+
+/**
+ * 手动拉取口袋关注：结果用消息提示。失败原因来自 syncError（如未登录 / 网络错误），
+ * 与启动时的静默拉取不同——用户主动点了按钮，就应得到明确反馈。
+ */
+async function handleSyncFollow() {
+  const ok = await syncPocketFollow()
+  if (ok) {
+    ElMessage({ message: `口袋关注已拉取（${followSyncPulled.value} 人）`, type: 'success' })
+    return
+  }
+  ElMessage.error(followSyncError.value || '拉取关注失败，请稍后重试')
+}
 
 onMounted(async () => {
   await loadAppConfig()
@@ -71,7 +87,7 @@ onMounted(async () => {
   await refreshFfmpeg()
   await refreshBlockedMembers()
   await refreshPocketAuthState()
-  // 已登录则静默同步一次口袋关注（friends/id 一次性返回，无分页成本）
+  // 已登录则静默拉取一次口袋关注（friends/id 一次性返回，无分页成本）
   syncPocketFollowIfStale(5 * 60 * 1000)
 })
 
@@ -112,6 +128,70 @@ async function handleChooseFfmpegDir() {
     ElMessage.error('设置 FFmpeg 目录失败，请重试')
 }
 
+// 网络诊断：对核心服务域名逐一探测连通性（主进程对端 main/net-diagnose.ts）。
+// 用于接口报错（如 HTTP 403）时让用户自助定位：不可达 / 被拒 / 服务端异常一目了然。
+const diagnosing = ref(false)
+const diagnoseResults = ref<NetDiagnoseItem[]>([])
+
+/** 发起诊断：结果整体替换而非追加，重复点击看到的是最新一轮 */
+async function handleDiagnose() {
+  if (diagnosing.value)
+    return
+  diagnosing.value = true
+  try {
+    diagnoseResults.value = await window.mainAPI.netDiagnose()
+  }
+  catch (e: any) {
+    ElMessage.error(`网络诊断失败：${e?.message || '未知错误'}`)
+  }
+  finally {
+    diagnosing.value = false
+  }
+}
+
+/** 单条结果的结论徽标：按状态码分段给出结论与语义色 */
+function diagnoseVerdict(item: NetDiagnoseItem): { label: string, type: 'success' | 'warning' | 'danger' | 'info' } {
+  if (item.status === null)
+    return { label: '不可达', type: 'danger' }
+  if (item.status < 400)
+    return { label: '正常', type: 'success' }
+  if (item.status === 403)
+    return { label: '拒绝访问', type: 'danger' }
+  if (item.status < 500)
+    return { label: `HTTP ${item.status}`, type: 'warning' }
+  return { label: `HTTP ${item.status}`, type: 'danger' }
+}
+
+/** 单条结果的补充说明：解释这个状态码对排查意味着什么 */
+function diagnoseNote(item: NetDiagnoseItem): string {
+  if (item.status === null)
+    return item.error || '连接失败'
+  if (item.status === 403)
+    return '服务端可达但拒绝访问，多为地区限制或风控拦截'
+  if (item.status >= 400 && item.status < 500)
+    return '服务端可达（该状态码是探测路径的响应，不影响业务接口）'
+  if (item.status >= 500)
+    return '服务端异常，非本机网络问题'
+  return ''
+}
+
+/** 复制诊断结果：随应用版本一起输出，方便用户直接粘贴反馈 */
+async function handleCopyDiagnose() {
+  const lines = diagnoseResults.value.map((item) => {
+    const verdict = diagnoseVerdict(item)
+    const status = item.status === null ? '无响应' : `HTTP ${item.status}`
+    const note = diagnoseNote(item)
+    return `${item.label}（${item.url}）: ${status} · ${item.ms}ms · ${verdict.label}${note ? ` · ${note}` : ''}${item.error ? ` · ${item.error}` : ''}`
+  })
+  const text = [
+    `应用版本: ${appVersion.value}`,
+    `诊断时间: ${new Date().toLocaleString()}`,
+    ...lines,
+  ].join('\n')
+  await navigator.clipboard.writeText(text)
+  ElMessage({ message: '诊断结果已复制，可粘贴发给开发者', type: 'success' })
+}
+
 /** 更新行的描述文案：一行说清当前处于什么状态、下一步该做什么 */
 const updaterDesc = computed(() => {
   const s = updaterState.value
@@ -119,11 +199,11 @@ const updaterDesc = computed(() => {
     case 'checking':
       return '正在检查更新…'
     case 'available':
-      return `发现新版本 ${s.version}，可立即下载`
+      return `发现新版本 v${s.version}`
     case 'downloading':
-      return `正在下载 ${s.version}… ${s.percent.toFixed(1)}%`
+      return `正在下载新版本 v${s.version}…`
     case 'ready':
-      return `新版本 ${s.version} 已下载，重启后生效`
+      return `新版本 v${s.version} 已下载完成，重启后生效`
     case 'error':
       return `检查更新失败：${s.message}`
     case 'unsupported':
@@ -133,19 +213,90 @@ const updaterDesc = computed(() => {
   }
 })
 
-/** 主操作按钮：状态决定文案与语义，无可用操作时为空串（模板据此渲染次要按钮） */
+/** available 态的描述切强调样式，与中性状态一眼区分 */
+const updaterDescClass = computed(() =>
+  updaterState.value.phase === 'available' ? 'is-update' : '')
+
+/**
+ * 新版本信息：仅 available 态非空。模板据此在标题行挂「有新版本」徽标、
+ * 在卡片内展开提示块，并把主按钮切成「更新版本」。
+ */
+const availableUpdate = computed(() => {
+  const s = updaterState.value
+  return s.phase === 'available' ? s : null
+})
+
+/** 下载中信息：仅 downloading 态非空，提示块内的进度展示取自此状态 */
+const downloadingUpdate = computed(() => {
+  const s = updaterState.value
+  return s.phase === 'downloading' ? s : null
+})
+
+/** 提示块标题：available / downloading 各一句；版本号在脚本侧拼接，模板不做类型收窄 */
+const availableTitle = computed(() =>
+  availableUpdate.value ? `发现新版本 v${availableUpdate.value.version}` : '')
+const downloadingTitle = computed(() =>
+  downloadingUpdate.value ? `正在下载新版本 v${downloadingUpdate.value.version}` : '')
+
+/** 版本对比行：已知当前版本时给出「当前 vX → 最新 vY」，否则只报最新版本 */
+const updateVersionLine = computed(() => {
+  const next = availableUpdate.value
+  if (!next)
+    return ''
+  return appVersion.value ? `当前 v${appVersion.value} → 最新 v${next.version}` : `最新版本 v${next.version}`
+})
+
+/**
+ * 更新说明预览：GitHub releaseNotes 常为 markdown，剥掉标题 / 列表 / 链接 /
+ * 加粗标记后按纯文本行展示，最多 4 行，超出部分提示详见 Release 页。
+ */
+const releaseNotesPreview = computed(() => {
+  const lines = (availableUpdate.value?.releaseNotes ?? '')
+    .split('\n')
+    .map(line => line
+      .replace(/^\s*#{1,6}\s+/, '')
+      .replace(/^\s*[-*+]\s+/, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/\*\*(.+?)\*\*/g, '$1')
+      .trim())
+    .filter(Boolean)
+  return { lines: lines.slice(0, 4), truncated: lines.length > 4 }
+})
+
+/** 字节数格式化：下载进度的已传 / 总量与速率 */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0)
+    return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const exp = Math.min(units.length - 1, Math.floor(Math.log2(bytes) / 10))
+  const value = bytes / 1024 ** exp
+  return `${exp === 0 || value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[exp]}`
+}
+
+/** 下载进度文字：总量已知时给出「已传 / 总量 · 速率」，否则只报已传与速率 */
+const downloadSizeText = computed(() => {
+  const d = downloadingUpdate.value
+  if (!d)
+    return ''
+  const speed = `${formatBytes(d.bytesPerSecond)}/s`
+  return d.total > 0
+    ? `${formatBytes(d.transferred)} / ${formatBytes(d.total)} · ${speed}`
+    : `${formatBytes(d.transferred)} · ${speed}`
+})
+
+/** 主操作按钮：状态决定文案与语义；available 态即「更新版本」，点击开始下载 */
 const updaterAction = computed(() => {
   const s = updaterState.value
   if (s.phase === 'downloading')
-    return { label: '下载中', disabled: true, handler: () => {} }
+    return { label: '下载中', disabled: true, loading: true, handler: () => {} }
   if (s.phase === 'ready')
-    return { label: '立即重启', disabled: false, handler: installUpdate }
+    return { label: '立即重启', disabled: false, loading: false, handler: installUpdate }
   if (s.phase === 'available')
-    return { label: '下载更新', disabled: false, handler: downloadUpdate }
+    return { label: '更新版本', disabled: false, loading: false, handler: downloadUpdate }
   // 不支持自动更新的环境（如 macOS）给出手工出路，别让用户对着禁用按钮无计可施
   if (s.phase === 'unsupported' && s.url)
-    return { label: '去下载', disabled: false, handler: () => openReleasePage(s.url!) }
-  return { label: '检查更新', disabled: updaterChecking.value || s.phase === 'unsupported', handler: checkUpdate }
+    return { label: '去下载', disabled: false, loading: false, handler: () => openReleasePage(s.url!) }
+  return { label: '检查更新', disabled: updaterChecking.value || s.phase === 'unsupported', loading: updaterChecking.value, handler: checkUpdate }
 })
 
 /**
@@ -158,7 +309,7 @@ function openReleasePage(url: string) {
   window.open(url, '_blank', 'noopener')
 }
 
-/** 下载进度条（仅 downloading 态展示） */
+/** 下载进度百分比（提示块内的进度条与百分比文字共用） */
 const updaterPercent = computed(() =>
   updaterState.value.phase === 'downloading' ? Math.min(100, updaterState.value.percent) : 0,
 )
@@ -189,13 +340,54 @@ function goMembers() {
 const loginDialogVisible = ref(false)
 const loginTab = ref<'sms' | 'token'>('sms')
 
+/** 支持的国家/地区区号：保持短列表，避免一个全量国家表喧宾夺主 */
+const AREA_OPTIONS = [
+  { label: '中国大陆 +86', value: '86' },
+  { label: '中国香港 +852', value: '852' },
+  { label: '中国澳门 +853', value: '853' },
+  { label: '中国台湾 +886', value: '886' },
+  { label: '新加坡 +65', value: '65' },
+  { label: '日本 +81', value: '81' },
+  { label: '韩国 +82', value: '82' },
+  { label: '美国/加拿大 +1', value: '1' },
+  { label: '英国 +44', value: '44' },
+  { label: '澳大利亚 +61', value: '61' },
+]
+
+/**
+ * 登录身份：本轮登录模拟哪个官方客户端。口袋48 与塞纳河48 在服务端是同一账号下的两个
+ * 客户端会话，手机端在用口袋48 时选塞纳河48 即可两端并存、互不挤掉。
+ * 档位随凭证落盘并对之后所有请求生效；换档需退出后重新登录。
+ */
+const loginProfile = ref<PocketClientProfileId>(DEFAULT_POCKET_CLIENT_PROFILE)
+/** 登录身份档位的 APP 图标：与「推荐链接」里两个官方客户端的 logo 同源 */
+const profileLogos: Record<PocketClientProfileId, string> = {
+  pocket48: 'https://h5.48.cn/pocket48/image/logo.png',
+  seine48: 'https://www.ckg48.cn/favicon.ico',
+}
+/** 当前所选身份的说明文案（登录弹窗内随选择变化） */
+const loginProfileHint = computed(() => pocketClientProfileOption(loginProfile.value).hint)
+/** 已登录账号的身份标签：默认档（口袋48）不显示，仅非默认档在账号卡片上提示，避免噪声 */
+const currentProfileLabel = computed(() => (
+  pocketAuthState.value.clientProfile === DEFAULT_POCKET_CLIENT_PROFILE
+    ? ''
+    : `${pocketClientProfileOption(pocketAuthState.value.clientProfile).label}身份`
+))
+
 /** 短信登录表单状态 */
 const smsForm = reactive({
+  area: '86',
   mobile: '',
   code: '',
   sending: false,
   loggingIn: false,
   countdown: 0,
+  /**
+   * 验证码发出后锁定区号：服务端按 (区号+手机号) 存码，发码后切换区号会导致
+   * 登录双键失配（报「验证码错误」且烧按号计的 5 次预算）。手机号不锁——
+   * 改手机号即换服务端计数器，用户重发即可，无失配风险。
+   */
+  areaLocked: false,
   /** 反爬问答题：发送命中 2001 时置位，用户作答后随下一次发送提交 */
   captcha: null as null | { question: string, options: string[], answer: string },
 })
@@ -206,14 +398,18 @@ const tokenForm = reactive({
   loggingIn: false,
 })
 
-/** 日志用：手机号脱敏，避免验证码链路打点泄露完整号码 */
-function maskMobileForLog(mobile: string): string {
-  return /^\d{11}$/.test(mobile) ? `${mobile.slice(0, 3)}****${mobile.slice(-4)}` : '***'
+/** 日志用：手机号脱敏，避免验证码链路打点泄露完整号码；海外号码位数不一，够长即按同规则脱敏并带区号前缀 */
+function maskMobileForLog(mobile: string, area = '86'): string {
+  const masked = area === '86'
+    ? (mobile.length >= 7 ? `${mobile.slice(0, 3)}****${mobile.slice(-4)}` : '***')
+    : (mobile.length >= 5 ? `${mobile.slice(0, 2)}****${mobile.slice(-2)}` : '***')
+  return area === '86' ? masked : `+${area} ${masked}`
 }
 
 function openLoginDialog() {
   smsForm.code = ''
   smsForm.captcha = null
+  smsForm.areaLocked = false
   clearCountdown()
   tokenForm.token = ''
   loginDialogVisible.value = true
@@ -303,19 +499,28 @@ function reloginFromVerify() {
 /** 服务端返回的头像多为相对路径，归一成完整 URL 供展示 */
 const authAvatarUrl = computed(() => Tools.sourceUrl(pocketAuthState.value.avatar))
 
+/** 行标题：已登录且有昵称时用昵称，否则退回「口袋48账号」 */
+const authRowTitle = computed(() => {
+  const s = pocketAuthState.value
+  return s.loggedIn && s.nickname ? s.nickname : '口袋48账号'
+})
+
 /** 发送验证码；命中反爬问答题时展示题目，作答后可重发 */
 async function sendSmsCode() {
   if (smsForm.sending || smsForm.countdown > 0)
     return
   smsForm.sending = true
   debugLog('pocket-auth', '发送验证码：', JSON.stringify({
-    mobile: maskMobileForLog(smsForm.mobile),
+    profile: loginProfile.value,
+    mobile: maskMobileForLog(smsForm.mobile, smsForm.area),
     hasCaptchaAnswer: !!smsForm.captcha?.answer,
   }))
   try {
     const result = await window.mainAPI.pocketSendSms(
       smsForm.mobile,
+      smsForm.area,
       smsForm.captcha?.answer || undefined,
+      loginProfile.value,
     )
     debugLog('pocket-auth', '发送验证码结果：', JSON.stringify({
       needCaptcha: result.needCaptcha,
@@ -329,6 +534,7 @@ async function sendSmsCode() {
     }
     smsForm.captcha = null
     ElMessage.success('验证码已发送，请留意短信')
+    smsForm.areaLocked = true
     startCountdown()
   }
   catch (error) {
@@ -370,11 +576,12 @@ async function submitSmsLogin() {
     return
   smsForm.loggingIn = true
   debugLog('pocket-auth', '提交验证码登录：', JSON.stringify({
-    mobile: maskMobileForLog(smsForm.mobile),
+    profile: loginProfile.value,
+    mobile: maskMobileForLog(smsForm.mobile, smsForm.area),
     codeLength: smsForm.code.trim().length,
   }))
   try {
-    const state = await loginBySmsCode(smsForm.mobile, smsForm.code)
+    const state = await loginBySmsCode(smsForm.mobile, smsForm.code, smsForm.area, loginProfile.value)
     loginDialogVisible.value = false
     notifyLoginSuccess(state)
     void syncPocketFollow()
@@ -393,11 +600,12 @@ async function submitTokenLogin() {
     return
   tokenForm.loggingIn = true
   debugLog('pocket-auth', '提交 token 登录：', JSON.stringify({
+    profile: loginProfile.value,
     mobile: maskMobileForLog(tokenForm.mobile),
     tokenLength: tokenForm.token.trim().length,
   }))
   try {
-    const state = await loginByPastedToken(tokenForm.token, tokenForm.mobile)
+    const state = await loginByPastedToken(tokenForm.token, tokenForm.mobile, loginProfile.value)
     loginDialogVisible.value = false
     notifyLoginSuccess(state)
     void syncPocketFollow()
@@ -411,8 +619,16 @@ async function submitTokenLogin() {
   }
 }
 
-/** 手机号是否可发送验证码 */
-const smsSendable = computed(() => /^\d{11}$/.test(smsForm.mobile))
+/** 手机号是否可发送验证码：中国大陆仍按 11 位校验，其他区号只要求数字主体有效 */
+const smsSendable = computed(() =>
+  smsForm.area === '86' ? /^\d{11}$/.test(smsForm.mobile) : /^\d{4,15}$/.test(smsForm.mobile))
+/** 短信登录手机号输入框：弹窗打开后自动聚焦，省一次点击 */
+const smsMobileRef = ref<InputInstance>()
+
+function focusSmsMobile() {
+  smsMobileRef.value?.focus()
+}
+
 /** 验证码登录按钮可用性 */
 const smsLoginable = computed(() => smsSendable.value && smsForm.code.trim().length > 0)
 /** token 登录按钮可用性 */
@@ -499,7 +715,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile auth-avatar"
-            :class="{ 'is-clickable': pocketAuthState.loggedIn, 'is-verifying': verifying }"
+            :class="{ 'is-clickable': pocketAuthState.loggedIn, 'is-verifying': verifying, 'has-avatar': !!authAvatarUrl }"
             :style="{ '--tile-color': 'var(--brand-primary)' }"
             :title="pocketAuthState.loggedIn ? (verifying ? '正在验证登录…' : '点击查看登录状态与账号资料') : ''"
             @click="pocketAuthState.loggedIn ? verifyLogin() : undefined"
@@ -515,18 +731,22 @@ function hideLogo(event: Event) {
           </span>
           <div class="row-text row-text--fluid">
             <div class="row-title">
-              口袋48账号
+              {{ authRowTitle }}<span
+                v-if="currentProfileLabel"
+                class="row-profile-badge"
+                :title="pocketClientProfileOption(pocketAuthState.clientProfile).hint"
+              >{{ currentProfileLabel }}</span>
             </div>
             <div class="row-desc">
               <template v-if="pocketAuthState.loggedIn">
-                已登录{{ pocketAuthState.nickname ? `：${pocketAuthState.nickname}` : '' }}<template v-if="pocketAuthState.mobileMasked">
+                账号<template v-if="pocketAuthState.mobileMasked">
                   （{{ pocketAuthState.mobileMasked }}）
                 </template><template v-if="followSyncing">
-                  ，正在同步口袋关注…
+                  · 正在拉取口袋关注…
                 </template><template v-else-if="followSyncError">
-                  ，口袋关注同步失败
-                </template><template v-else-if="followSyncTotal !== null">
-                  ，口袋关注已同步（{{ followSyncTotal }} 人）
+                  · 口袋关注拉取失败
+                </template><template v-else-if="followSyncPulled !== null">
+                  · 口袋关注已拉取（{{ followSyncPulled }} 人，合并后 {{ followSyncTotal }} 人）
                 </template>
               </template>
               <template v-else>
@@ -546,9 +766,9 @@ function hideLogo(event: Event) {
               </el-tag>
               <el-button
                 :loading="followSyncing"
-                @click="syncPocketFollow()"
+                @click="handleSyncFollow"
               >
-                同步关注
+                拉取关注
               </el-button>
               <el-button
                 type="danger"
@@ -615,7 +835,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-shows)' }"
+            :style="{ '--tile-color': 'var(--color-lives)' }"
           >
             <el-icon><Cpu /></el-icon>
           </span>
@@ -698,7 +918,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-lives)' }"
+            :style="{ '--tile-color': 'var(--color-members)' }"
           >
             <el-icon><Hide /></el-icon>
           </span>
@@ -759,8 +979,9 @@ function hideLogo(event: Event) {
             <div class="row-title">
               版本
               <span v-if="appVersion" class="row-version">v{{ appVersion }}</span>
+              <span v-if="availableUpdate" class="row-update-badge">有新版本</span>
             </div>
-            <div class="row-desc">
+            <div class="row-desc" :class="updaterDescClass">
               {{ updaterDesc }}
             </div>
           </div>
@@ -775,19 +996,122 @@ function hideLogo(event: Event) {
             <el-button
               type="primary"
               :disabled="updaterAction.disabled"
-              :loading="updaterAction.label === '下载中'"
+              :loading="updaterAction.loading"
               @click="updaterAction.handler"
             >
               {{ updaterAction.label }}
             </el-button>
           </div>
         </div>
-        <div v-if="updaterState.phase === 'downloading'" class="row-body">
-          <el-progress
-            :percentage="updaterPercent"
-            :stroke-width="8"
-            :show-text="false"
-          />
+
+        <!-- 新版本提示：available 态展开版本对比与更新说明；downloading 态接棒显示下载进度 -->
+        <div v-if="availableUpdate || downloadingUpdate" class="row-body update-notice">
+          <template v-if="availableUpdate">
+            <div class="update-notice-head">
+              <el-icon class="update-notice-icon">
+                <Top />
+              </el-icon>
+              <span class="update-notice-title">{{ availableTitle }}</span>
+              <span class="update-notice-versions">{{ updateVersionLine }}</span>
+            </div>
+            <ul v-if="releaseNotesPreview.lines.length" class="update-notes">
+              <li
+                v-for="(line, index) in releaseNotesPreview.lines"
+                :key="index"
+              >
+                {{ line }}
+              </li>
+            </ul>
+            <p v-if="releaseNotesPreview.truncated" class="update-notes-more">
+              更多更新内容详见 GitHub Release 页面
+            </p>
+            <p class="update-notice-hint">
+              点击「更新版本」开始下载，下载完成后重启应用即可完成升级。
+            </p>
+          </template>
+          <template v-else-if="downloadingUpdate">
+            <div class="update-notice-head">
+              <el-icon class="update-notice-icon">
+                <Download />
+              </el-icon>
+              <span class="update-notice-title">{{ downloadingTitle }}</span>
+              <span class="update-notice-versions">{{ updaterPercent.toFixed(0) }}%</span>
+            </div>
+            <el-progress
+              class="update-progress"
+              :percentage="updaterPercent"
+              :stroke-width="8"
+              :show-text="false"
+            />
+            <p class="update-notice-hint">
+              {{ downloadSizeText }}，下载完成后需重启应用以完成更新。
+            </p>
+          </template>
+        </div>
+      </section>
+
+      <!-- 网络诊断 -->
+      <section class="setting-card glass-card">
+        <div class="setting-row">
+          <span
+            class="row-icon icon-tile"
+            :style="{ '--tile-color': 'var(--color-shows)' }"
+          >
+            <el-icon><Connection /></el-icon>
+          </span>
+          <div class="row-text row-text--fluid">
+            <div class="row-title">
+              网络诊断（仅供参考）
+            </div>
+            <div class="row-desc">
+              检测核心服务域名的连通情况；接口报错（如 HTTP 403）时可能影响使用
+            </div>
+          </div>
+          <div class="row-actions">
+            <el-button
+              v-if="diagnoseResults.length"
+              :disabled="diagnosing"
+              @click="handleCopyDiagnose"
+            >
+              复制结果
+            </el-button>
+            <el-button
+              type="primary"
+              :loading="diagnosing"
+              @click="handleDiagnose"
+            >
+              开始诊断
+            </el-button>
+          </div>
+        </div>
+        <div
+          v-if="diagnoseResults.length"
+          class="row-body"
+        >
+          <div class="diagnose-grid">
+            <div
+              v-for="item in diagnoseResults"
+              :key="item.url"
+              class="diagnose-item"
+            >
+              <div class="diagnose-head">
+                <span class="diagnose-label">{{ item.label }}</span>
+                <el-tag
+                  size="small"
+                  :type="diagnoseVerdict(item).type"
+                >
+                  {{ diagnoseVerdict(item).label }}
+                </el-tag>
+              </div>
+              <div class="diagnose-detail">
+                {{ item.status === null ? '无响应' : `HTTP ${item.status}` }} · {{ item.ms }}ms
+                <span
+                  v-if="diagnoseNote(item)"
+                  class="diagnose-note"
+                >{{ diagnoseNote(item) }}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -872,7 +1196,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            style="--tile-color: var(--el-color-success)"
+            style="--tile-color: #909399"
           >
             <el-icon><Document /></el-icon>
           </span>
@@ -906,28 +1230,91 @@ function hideLogo(event: Event) {
     <!-- 口袋48登录弹窗：短信验证码 / Token 粘贴 两种方式 -->
     <el-dialog
       v-model="loginDialogVisible"
-      title="登录口袋48账号"
-      width="440px"
+      width="480px"
+      align-center
       :close-on-click-modal="false"
       append-to-body
+      @opened="focusSmsMobile"
     >
-      <el-tabs v-model="loginTab">
+      <template #header>
+        <div class="login-head">
+          <span class="login-head-icon icon-tile" :style="{ '--tile-color': 'var(--brand-primary)' }">
+            <el-icon :size="18"><Lock /></el-icon>
+          </span>
+          <div class="login-head-text">
+            <h3 class="login-head-title">
+              登录口袋48账号
+            </h3>
+            <p class="login-head-sub">
+              短信验证码或 Token 均可登录
+            </p>
+          </div>
+        </div>
+      </template>
+      <div class="login-profile">
+        <div class="login-profile-row">
+          <el-radio-group
+            v-model="loginProfile"
+            size="small"
+          >
+            <el-radio-button
+              v-for="option in POCKET_CLIENT_PROFILE_OPTIONS"
+              :key="option.id"
+              :value="option.id"
+            >
+              <span class="profile-option">
+                <img
+                  class="profile-option-logo"
+                  :src="profileLogos[option.id]"
+                  alt=""
+                  @error="hideLogo"
+                >
+                {{ option.label }}
+              </span>
+            </el-radio-button>
+          </el-radio-group>
+        </div>
+        <div class="login-profile-hint">
+          {{ loginProfileHint }}
+        </div>
+      </div>
+      <el-tabs
+        v-model="loginTab"
+        class="login-tabs"
+      >
         <el-tab-pane
           label="短信验证码"
           name="sms"
         >
           <div class="login-form">
-            <el-input
-              v-model="smsForm.mobile"
-              placeholder="手机号"
-              maxlength="11"
-              :disabled="smsForm.loggingIn"
-            />
+            <div class="login-mobile-row">
+              <el-select
+                v-model="smsForm.area"
+                class="login-area"
+                :disabled="smsForm.loggingIn || smsForm.areaLocked"
+              >
+                <el-option
+                  v-for="area in AREA_OPTIONS"
+                  :key="area.value"
+                  :label="area.label"
+                  :value="area.value"
+                />
+              </el-select>
+              <el-input
+                ref="smsMobileRef"
+                v-model="smsForm.mobile"
+                class="login-mobile"
+                placeholder="手机号"
+                :maxlength="smsForm.area === '86' ? 11 : 15"
+                :disabled="smsForm.loggingIn"
+              />
+            </div>
             <div
               v-if="smsForm.captcha"
               class="login-captcha"
             >
               <div class="captcha-question">
+                <el-icon><WarningFilled /></el-icon>
                 {{ smsForm.captcha.question }}
               </div>
               <el-radio-group
@@ -1001,7 +1388,12 @@ function hideLogo(event: Event) {
         </el-tab-pane>
       </el-tabs>
       <div class="login-hint">
-        凭证仅保存在本机（safeStorage 加密），不会上传。token 由服务端掌控有效期，失效后需重新登录。
+        <el-icon class="login-hint-icon">
+          <Lock />
+        </el-icon>
+        <p>
+          凭证仅保存在本机（safeStorage 加密），不会上传。token 由服务端掌控有效期，失效后需重新登录。
+        </p>
       </div>
     </el-dialog>
 
@@ -1035,7 +1427,7 @@ function hideLogo(event: Event) {
       <!-- 验证成功：服务端取回的账号资料卡 -->
       <div v-else-if="verifyResult?.valid" class="verify-card">
         <div class="verify-head">
-          <span class="verify-avatar">
+          <span class="verify-avatar" :class="{ 'has-avatar': !!authAvatarUrl }">
             <img v-if="authAvatarUrl" :src="authAvatarUrl" alt="账号头像">
             <el-icon v-else>
               <User />
@@ -1163,9 +1555,24 @@ function hideLogo(event: Event) {
   width: 180px;
 
   .row-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: 14px;
     font-weight: 600;
     color: var(--el-text-color-primary);
+  }
+
+  /* 登录身份徽标（如「塞纳河48身份」）：标题行右侧的品牌渐变小药丸，悬停给出选档说明 */
+  .row-profile-badge {
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #fff;
+    background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
+    cursor: default;
   }
 
   /* 版本号：紧贴标题的次要徽标，等宽数字便于逐位辨读 */
@@ -1179,6 +1586,24 @@ function hideLogo(event: Event) {
     letter-spacing: 0.02em;
     color: var(--el-text-color-secondary);
     background: color-mix(in srgb, var(--el-text-color-secondary) 12%, transparent);
+  }
+
+  /* 新版本徽标：标题右侧的告警色小药丸，进入设置页即可察觉有更新 */
+  .row-update-badge {
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #fff;
+    background: var(--el-color-warning);
+  }
+
+  /* available 态的描述加粗切主文字色，与其余状态的中性文案区分 */
+  .row-desc.is-update {
+    font-weight: 600;
+    color: var(--el-text-color-primary);
   }
 
   .row-desc {
@@ -1257,6 +1682,121 @@ function hideLogo(event: Event) {
   font-size: 12px;
   line-height: 1.7;
   color: var(--el-text-color-secondary);
+}
+
+/* 网络诊断结果：两列网格，单格 = 名称 + 徽标 / 状态摘要 + 说明；窄窗自动降为单列 */
+.diagnose-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px 14px;
+}
+
+.diagnose-item {
+  padding: 8px 12px;
+  border: 1px dashed var(--el-border-color-lighter);
+  border-radius: var(--radius-md);
+}
+
+.diagnose-item .diagnose-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.diagnose-item .diagnose-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.diagnose-item .diagnose-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.diagnose-item .diagnose-note {
+  display: block;
+}
+
+/* 新版本提示块：available 态展开版本对比与更新说明，downloading 态接棒显示进度 */
+.update-notice {
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--el-color-warning) 35%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--el-color-warning) 8%, transparent);
+}
+
+.update-notice-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.update-notice-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+  color: var(--el-color-warning);
+}
+
+.update-notice-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.update-notice-versions {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 更新说明：剥掉 markdown 标记后的纯文本行，告警色小圆点列表 */
+.update-notes {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    position: relative;
+    padding-left: 12px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--el-text-color-regular);
+    word-break: break-word;
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0.72em;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--el-color-warning);
+    }
+  }
+}
+
+.update-notes-more {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--el-text-color-placeholder);
+}
+
+.update-notice-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
+}
+
+.update-progress {
+  margin-top: 10px;
 }
 
 /* 屏蔽名单：队伍色标签（:color 内联样式优先级高，需 !important 覆盖） */
@@ -1479,11 +2019,115 @@ function hideLogo(event: Event) {
 /* 品牌渐变主按钮已全局统一，见 app.scss */
 
 /* ===== 口袋48登录弹窗 ===== */
+/* 头部：品牌色图标磁贴 + 主副标题，替代默认的单行标题 */
+.login-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding-right: 24px;
+}
+
+.login-head-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
+
+.login-head-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--el-text-color-primary);
+}
+
+.login-head-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
+}
+
+/* 登录身份选择：口袋48 / 塞纳河48 两个官方客户端档位，同一账号可在两端并存 */
+.login-profile {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--brand-primary) 4%, transparent);
+}
+
+.login-profile-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+
+  /* 身份档位分段拉满剩余宽度，两端选项等宽，视觉更稳 */
+  :deep(.el-radio-group) {
+    flex: 1;
+    display: flex;
+  }
+
+  :deep(.el-radio-button) {
+    flex: 1;
+
+    .el-radio-button__inner {
+      width: 100%;
+    }
+  }
+}
+
+.login-profile-label {
+  flex: none;
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+}
+
+/* 档位按钮内 APP logo：16px 圆角小图，加载失败自动隐藏只留文字 */
+.profile-option {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.profile-option-logo {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.login-profile-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}
+
+/* 登录方式 Tab：等宽平分弹窗宽度，视觉重心稳定 */
+.login-tabs {
+  :deep(.el-tabs__nav) {
+    display: flex;
+    width: 100%;
+  }
+
+  :deep(.el-tabs__item) {
+    flex: 1;
+    justify-content: center;
+    font-size: 14px;
+    text-align: center;
+  }
+
+  :deep(.el-tabs__nav-wrap::after) {
+    background-color: var(--el-border-color-lighter);
+  }
+}
+
 .login-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-top: 4px;
+  gap: 14px;
+  padding-top: 6px;
 }
 
 /* 问答题卡片：服务端反爬（2001），题目 + 单选作答 */
@@ -1494,15 +2138,37 @@ function hideLogo(event: Event) {
   background: color-mix(in srgb, var(--brand-primary) 4%, transparent);
 
   .captcha-question {
+    display: flex;
+    gap: 6px;
+    align-items: center;
     margin-bottom: 6px;
     font-size: 13px;
     color: var(--el-text-color-primary);
+
+    .el-icon {
+      flex: none;
+      font-size: 15px;
+      color: var(--el-color-warning);
+    }
   }
 
   .captcha-options {
     display: flex;
     flex-wrap: wrap;
     column-gap: 14px;
+  }
+}
+
+.login-mobile-row {
+  display: flex;
+  gap: 8px;
+
+  .login-area {
+    flex: 0 0 150px;
+  }
+
+  .login-mobile {
+    flex: 1;
   }
 }
 
@@ -1518,7 +2184,11 @@ function hideLogo(event: Event) {
 }
 
 .login-submit {
-  margin-top: 4px;
+  width: 100%;
+  height: 38px;
+  margin-top: 2px;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .login-token-input {
@@ -1530,10 +2200,26 @@ function hideLogo(event: Event) {
 }
 
 .login-hint {
-  margin-top: 4px;
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--el-border-color-lighter);
   font-size: 12px;
   line-height: 1.5;
   color: var(--el-text-color-secondary);
+
+  p {
+    margin: 0;
+  }
+
+  .login-hint-icon {
+    flex: none;
+    margin-top: 2px;
+    font-size: 13px;
+    color: var(--el-text-color-placeholder);
+  }
 }
 
 /* 明文存储降级提示 */
@@ -1544,6 +2230,13 @@ function hideLogo(event: Event) {
 /* 已登录头像：点击触发登录有效性验证 */
 .auth-avatar {
   overflow: hidden;
+  border-radius: 50%;
+
+  /* 头像图自带圆形裁切：有图时去掉磁贴渐变底色，避免透明四角露出紫色 */
+  &.has-avatar {
+    background: transparent;
+    box-shadow: none;
+  }
 
   img {
     width: 100%;
@@ -1638,10 +2331,17 @@ function hideLogo(event: Event) {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: 16px;
+  border-radius: 50%;
+
   background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
   color: #fff;
   font-size: 24px;
+
+  /* 头像图自带圆形裁切：有图时去掉渐变底色，避免透明四角露出紫色 */
+  &.has-avatar {
+    background: transparent;
+    box-shadow: none;
+  }
 
   img {
     width: 100%;
