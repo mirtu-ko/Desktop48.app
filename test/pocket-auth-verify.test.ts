@@ -616,3 +616,80 @@ describe('pocket-auth 区号处理', () => {
     expect(getAuthState().mobileMasked).toBe('+852 13****00')
   })
 })
+
+/**
+ * 客户端身份档位：口袋48 / 塞纳河48 两个官方客户端档，决定请求头里的 appName、
+ * UA 版本号与 Device-Type 头。同一账号可在两端并存，故档位是用户可见的功能开关，
+ * 这里钉住「默认档 / 显式指定档 / 凭证决定的档 / 未知值回退」四条路径。
+ */
+describe('pocket-auth 客户端档位', () => {
+  /** 从请求头还原该请求实际使用的身份特征 */
+  function profileOf(request?: { headers: Record<string, string> }) {
+    const appInfo = JSON.parse(request?.headers.appInfo || '{}') as Record<string, unknown>
+    return {
+      appName: appInfo.appName,
+      appVersion: appInfo.appVersion,
+      userAgent: request?.headers['User-Agent'] || '',
+      deviceType: request?.headers['X-Custom-Device-Type'],
+    }
+  }
+
+  it('无档位信息时（未登录 / 旧凭证）默认按口袋48档发请求', async () => {
+    env.stored = { ...STORED }
+    env.replies['sms/send_sms'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
+    await sendSms('13800138000')
+    const profile = profileOf(env.requests.find(r => r.url.includes('sms/send_sms')))
+    expect(profile.appName).toBe('pocket48')
+    expect(profile.appVersion).toBe('7.1.44')
+    expect(profile.userAgent).toContain('PocketFans201807/7.1.44_26092001')
+    expect(profile.deviceType).toBeUndefined()
+  })
+
+  it('显式指定塞纳河48档时，发码请求带该档特征头', async () => {
+    env.replies['sms/send_sms'] = { status: 200, body: { status: 200, success: true, message: 'OK' } }
+    await sendSms('13800138000', '86', undefined, 'seine48')
+    const profile = profileOf(env.requests.find(r => r.url.includes('sms/send_sms')))
+    expect(profile.appName).toBe('seine48')
+    expect(profile.appVersion).toBe('1.3.4')
+    expect(profile.userAgent).toContain('PocketFans201807/1.3.4_26092001')
+    expect(profile.deviceType).toBe('ANDROID')
+  })
+
+  it('塞纳河48档登录：登录与随后的资料请求都用该档，档位随凭证落盘', async () => {
+    env.replies['login/app/app_login'] = {
+      status: 200,
+      body: { status: 200, success: true, content: { token: 'tok-seine' } },
+    }
+    await loginByCode('13800138000', '432613', '86', 'seine48')
+    // 登录链路里每个请求（含登录后补拉资料那个）都必须保持同一档
+    expect(env.requests.length).toBeGreaterThan(1)
+    for (const request of env.requests) {
+      const profile = profileOf(request)
+      expect(profile.appName).toBe('seine48')
+      expect(profile.deviceType).toBe('ANDROID')
+    }
+    expect(env.written).toMatchObject({ clientProfile: 'seine48', tokenPlain: 'tok-seine' })
+  })
+
+  it('凭证里的档位决定后续所有请求的身份', async () => {
+    env.stored = { ...STORED, clientProfile: 'seine48' }
+    await verifyLogin()
+    const profile = profileOf(env.requests.find(r => r.url.includes('user/info/reload')))
+    expect(profile.appName).toBe('seine48')
+    expect(profile.userAgent).toContain('PocketFans201807/1.3.4_26092001')
+    expect(profile.deviceType).toBe('ANDROID')
+  })
+
+  it('token 登录按所选档落盘，并在登录态里回显', async () => {
+    await loginByToken('pasted-token', '13800138000', 'seine48')
+    expect(env.written).toMatchObject({ clientProfile: 'seine48' })
+    // mock 的 write 不同步 stored，手动回灌后读登录态
+    env.stored = { ...env.written } as Record<string, unknown>
+    expect(getAuthState().clientProfile).toBe('seine48')
+  })
+
+  it('未知档位值回退口袋48（旧凭证 / 手改值容错）', () => {
+    env.stored = { ...STORED, clientProfile: 'unknown-apk' }
+    expect(getAuthState().clientProfile).toBe('pocket48')
+  })
+})

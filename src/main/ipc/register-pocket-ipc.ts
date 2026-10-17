@@ -2,21 +2,40 @@
  * 口袋48账号 IPC 通道注册：只接线，登录/凭证逻辑归 main/pocket48/pocket-auth.ts。
  * 通道清单与 preload/index.ts 的 mainAPI 契约一一对应，两边改动请同步。
  */
+import type { PocketClientProfileId } from '@preload/ipc-contract'
 import type { IpcMainInvokeEvent } from 'electron'
 import * as pocketAuth from '../pocket48/pocket-auth'
-import { handlePocketDanmakuStart, handlePocketDanmakuStop } from '../pocket48/pocket-danmaku'
+import { handlePocketDanmakuStart, handlePocketDanmakuStop, resetPocketDanmakuSessions } from '../pocket48/pocket-danmaku'
 import * as pocketUnread from '../pocket48/pocket-unread'
 import { handleTraced } from './trace'
 
 export function registerPocketIPC(): void {
-  handleTraced('pocketSendSms', (_event: IpcMainInvokeEvent, mobile: string, area?: string, answer?: string) =>
-    pocketAuth.sendSms(mobile, area, answer))
-  handleTraced('pocketLoginByCode', (_event: IpcMainInvokeEvent, mobile: string, code: string, area?: string) =>
-    pocketAuth.loginByCode(mobile, code, area))
-  handleTraced('pocketLoginByToken', (_event: IpcMainInvokeEvent, token: string, mobile?: string) =>
-    pocketAuth.loginByToken(token, mobile))
+  handleTraced('pocketSendSms', (
+    _event: IpcMainInvokeEvent,
+    mobile: string,
+    area?: string,
+    answer?: string,
+    clientProfile?: PocketClientProfileId,
+  ) => pocketAuth.sendSms(mobile, area, answer, clientProfile))
+  handleTraced('pocketLoginByCode', (
+    _event: IpcMainInvokeEvent,
+    mobile: string,
+    code: string,
+    area?: string,
+    clientProfile?: PocketClientProfileId,
+  ) => pocketAuth.loginByCode(mobile, code, area, clientProfile))
+  handleTraced('pocketLoginByToken', (
+    _event: IpcMainInvokeEvent,
+    token: string,
+    mobile?: string,
+    clientProfile?: PocketClientProfileId,
+  ) => pocketAuth.loginByToken(token, mobile, clientProfile))
   handleTraced('pocketGetAuthState', () => pocketAuth.getAuthState())
-  handleTraced('pocketLogout', () => pocketAuth.logout())
+  handleTraced('pocketLogout', () => {
+    // 凭证既然要删，按该凭证建立的聊天室长连接（含进房身份）也一并断掉
+    resetPocketDanmakuSessions()
+    return pocketAuth.logout()
+  })
   // IM 凭据（accid + imToken）不设 IPC 通道：渲染层零调用方，token 不应出主进程
   // （pocket-danmaku 与 verifyLogin 均在主进程内部直取 getImCredentials）
   handleTraced('pocketGetChatroomId', (_event: IpcMainInvokeEvent, liveId: string) =>

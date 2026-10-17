@@ -6,11 +6,18 @@
  *    服务端偶发返回 status 2001 反爬问答题（message 内嵌 JSON），需把题目透传给用户作答。
  * 2. Token 粘贴：user/info/reload 校验 token 并取回用户资料。
  *
+ * 客户端档位：登录时用户选定模拟哪个官方客户端（口袋48 / 塞纳河48，见
+ * `common/pocket-client-profile.ts`），档位随凭证落盘，此后本模块所有请求按该档发头
+ * （特征表见 client-profile.ts 的 POCKET_CLIENT_PROFILES）。两个档协议等价、只有客户端
+ * 特征不同，服务端因此把同一账号的多个客户端会话分开——手机端在用口袋48 时，桌面选
+ * 塞纳河48 即可两端并存。档位即「当前登录身份」，切换档位需重新登录。
+ *
  * 凭证保存：token 经 safeStorage 加密后落盘 userData/pocket48-auth.json；
  * 平台无加密能力（部分 Linux 无钥匙环）时降级明文并打 plainFallback 标记。
  * token 有效期由服务端掌控（被踢/长期未用会失效），使用时才暴露给调用方，
  * 调用方收到 401005 等失效状态码时引导用户重新登录，本模块不自动重登。
  */
+import type { PocketClientProfileId } from '@common/pocket-client-profile'
 import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -31,11 +38,12 @@ import {
   TOKEN_CHECK_URL,
   USER_MONEY_URL,
 } from '@common/pocket-api-urls'
+import { resolvePocketClientProfile } from '@common/pocket-client-profile'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
-import { clientHeaders, POCKET48_ANDROID, SEINE48_ANDROID } from './client-profile'
+import { clientHeaders, profileFor } from './client-profile'
 import { currentPa, ensurePaWasm } from './pa-sign'
 
 // ===== 接口常量：统一在 common/pocket-api-urls.ts（与渲染层同源），见文件头 import =====
@@ -70,6 +78,8 @@ interface StoredAuth {
   mobile: string
   /** 登录时使用的区号（如 '852'）；旧版本无此字段，读取时按 86 处理 */
   area?: string
+  /** 登录时选定的客户端档位；旧版本无此字段，读取时按口袋48 处理 */
+  clientProfile?: PocketClientProfileId
   /** safeStorage 加密后的 token（base64）；plainFallback 时为空 */
   tokenEnc: string
   /** safeStorage 不可用时的降级明文 token；有 tokenEnc 时恒为空 */
@@ -87,6 +97,8 @@ export interface PocketAuthState {
   avatar: string
   /** 脱敏手机号（139****1234）；非中国大陆区号登录时带 `+区号 ` 前缀；空串表示未记住 */
   mobileMasked: string
+  /** 当前登录身份档位（模拟的官方客户端）；未登录 / 旧凭证时为默认档口袋48 */
+  clientProfile: PocketClientProfileId
   /** true = 平台无 safeStorage，token 以明文落盘（仅提示用） */
   plainFallback: boolean
   /** 凭证保存时间（ms 时间戳）；0 = 无记录，供设置页展示「已保存 N 天」 */
@@ -145,9 +157,24 @@ function summarizeEnvelope(envelope: PocketEnvelope<unknown> | null | undefined)
   })
 }
 
-/** 组装口袋主 App 的请求头：统一 Android 档身份，只补 `pa` 与 `token` */
-function pocketHeaders(token?: string, pa?: string): Record<string, string> {
-  const headers = clientHeaders(POCKET48_ANDROID)
+/**
+ * 当前请求所用的客户端档位：读凭证（未登录 / 旧凭证回退默认档）。
+ * 与 getToken 同口径——每次请求读一次凭证（读盘代价可忽略），故登录与退出都不需要
+ * 额外的缓存失效逻辑。同一请求内多次取值也不会读到不一致的状态。
+ *
+ * 导出供聊天室取同档云信身份（`pocket-danmaku.ts`），保证 HTTP 与 TCP 报同一家客户端。
+ */
+export function currentClientProfile(): PocketClientProfileId {
+  return resolvePocketClientProfile(readStoredAuth()?.clientProfile)
+}
+
+/**
+ * 组装请求头：按「本次指定档位 或 当前档位」取客户端特征，只补 `pa` 与 `token`。
+ * 登录链路在凭证写入前就用用户选定的档发请求，故显式传入 profileId；
+ * 其余接口省略该参数，走凭证里的当前档位。
+ */
+function pocketHeaders(token?: string, pa?: string, profileId?: PocketClientProfileId): Record<string, string> {
+  const headers = clientHeaders(profileFor(profileId ?? currentClientProfile()))
   headers.pa = pa ?? POCKET_PA
   if (token)
     headers.token = token
@@ -160,6 +187,7 @@ async function postPocket<T>(
   data: object,
   token?: string,
   extraHeaders?: Record<string, string>,
+  profileId?: PocketClientProfileId,
 ): Promise<PocketEnvelope<T>> {
   // pa 每次请求现算（内嵌当下时间戳）；wasm 加载失败时退回静态值，不影响请求发出
   await ensurePaWasm()
@@ -168,7 +196,7 @@ async function postPocket<T>(
   const apiPath = logPath(url)
   return new Promise<PocketEnvelope<T>>((resolve, reject) => {
     const request = net.request({ url, method: 'POST' })
-    const headers = { ...pocketHeaders(token, pa), ...extraHeaders }
+    const headers = { ...pocketHeaders(token, pa, profileId), ...extraHeaders }
     for (const [key, value] of Object.entries(headers))
       request.setHeader(key, value)
 
@@ -298,6 +326,7 @@ function toAuthState(stored: StoredAuth | null): PocketAuthState {
     nickname: stored?.nickname || '',
     avatar: stored?.avatar || '',
     mobileMasked: maskMobile(stored?.mobile || '', stored?.area),
+    clientProfile: resolvePocketClientProfile(stored?.clientProfile),
     plainFallback: !!stored && !!stored.tokenPlain && !safeStorageAvailable(),
     savedAt: stored?.savedAt || 0,
   }
@@ -329,12 +358,19 @@ function isValidMobile(mobile: string, area: string): boolean {
  * 发送登录验证码。
  * 正常返回 needCaptcha=false；命中反爬问答题（2001）时返回题目与选项，
  * 用户作答后把 answer 随下一次发送一并提交。
+ * clientProfile 为本次登录选定的身份档位（凭证写入前就按它发请求）；省略时用当前档位。
  */
-export async function sendSms(mobile: string, area?: string, answer?: string): Promise<PocketSmsResult> {
+export async function sendSms(
+  mobile: string,
+  area?: string,
+  answer?: string,
+  clientProfile?: PocketClientProfileId,
+): Promise<PocketSmsResult> {
   const normalizedArea = normalizeArea(area)
   const trimmed = mobile.trim()
   if (!isValidMobile(trimmed, normalizedArea))
     throw new Error(normalizedArea === '86' ? '请输入 11 位手机号' : '请输入有效的手机号')
+  const profile = clientProfile ?? currentClientProfile()
   // 7.1.44 APK：无答题时带业务码（登录注册=1）与空风控 token；有答题时只带 answer。
   const payload: Record<string, unknown> = answer
     ? { mobile: trimmed, area: normalizedArea, answer }
@@ -345,11 +381,11 @@ export async function sendSms(mobile: string, area?: string, answer?: string): P
         intelligenceToken: '',
       }
   debug('[pocket-auth] → 发送验证码：', JSON.stringify({
-    profile: 'android-v2',
-    mobile: maskMobile(trimmed) || '***',
+    profile,
+    mobile: maskMobile(trimmed, normalizedArea) || '***',
     hasCaptchaAnswer: !!answer,
   }))
-  const envelope = await postPocket(SMS_SEND_URL, payload)
+  const envelope = await postPocket(SMS_SEND_URL, payload, undefined, undefined, profile)
   debug('[pocket-auth] ← 发送验证码：', summarizeEnvelope(envelope))
   if (envelope.status === CAPTCHA_STATUS) {
     // message 内嵌 JSON：{question: string, answer: string[]}
@@ -385,8 +421,16 @@ function pickUserInfo(content: Record<string, unknown> | undefined | null): Pock
   }
 }
 
-/** 验证码登录：成功后落盘凭证并返回登录态 */
-export async function loginByCode(mobile: string, code: string, area?: string): Promise<PocketAuthState> {
+/**
+ * 验证码登录：成功后落盘凭证（含身份档位）并返回登录态。
+ * clientProfile 为本轮登录选定的身份档位，随凭证保存并成为此后所有请求的档位。
+ */
+export async function loginByCode(
+  mobile: string,
+  code: string,
+  area?: string,
+  clientProfile?: PocketClientProfileId,
+): Promise<PocketAuthState> {
   const normalizedArea = normalizeArea(area)
   const trimmedMobile = mobile.trim()
   const trimmedCode = code.trim()
@@ -394,9 +438,10 @@ export async function loginByCode(mobile: string, code: string, area?: string): 
     throw new Error(normalizedArea === '86' ? '请输入 11 位手机号' : '请输入有效的手机号')
   if (!trimmedCode)
     throw new Error('请输入验证码')
+  const profile = clientProfile ?? currentClientProfile()
   debug('[pocket-auth] → 验证码登录：', JSON.stringify({
-    profile: 'android-v2',
-    mobile: maskMobile(trimmedMobile) || '***',
+    profile,
+    mobile: maskMobile(trimmedMobile, normalizedArea) || '***',
     codeLength: trimmedCode.length,
   }))
   // 7.1.44 APK：mobileCodeLogin setter 还会补 loginType=MOBILE_SMS_CODE；deviceToken 允许空串。
@@ -408,7 +453,7 @@ export async function loginByCode(mobile: string, code: string, area?: string): 
     },
     loginType: 'MOBILE_SMS_CODE',
     deviceToken: '',
-  })
+  }, undefined, undefined, profile)
   const token = envelope.content?.token
   if (!isEnvelopeOk(envelope) || !token) {
     debug('[pocket-auth] ✕ 验证码登录失败：', JSON.stringify({
@@ -423,27 +468,33 @@ export async function loginByCode(mobile: string, code: string, area?: string): 
   // 登录响应的 content 里未必带资料，再校验一次顺手取昵称头像（失败不阻断，资料只是展示用）
   let info: PocketUserInfo = { nickname: '', avatar: '', userId: '' }
   try {
-    const check = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, token)
+    const check = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, token, undefined, profile)
     if (check.success)
       info = pickUserInfo(check.content)
   }
   catch (error) {
     log('[pocket-auth] 登录后拉取资料失败（不阻断登录）', error)
   }
-  saveAuth(trimmedMobile, token, info, normalizedArea)
+  saveAuth(trimmedMobile, token, info, normalizedArea, profile)
   return getAuthState()
 }
 
-/** Token 粘贴登录：user/info/reload 校验有效后落盘 */
-export async function loginByToken(token: string, mobile = ''): Promise<PocketAuthState> {
+/** Token 粘贴登录：user/info/reload 校验有效后落盘（档位同验证码登录，随凭证保存） */
+export async function loginByToken(
+  token: string,
+  mobile = '',
+  clientProfile?: PocketClientProfileId,
+): Promise<PocketAuthState> {
   const trimmed = token.trim()
   if (!trimmed)
     throw new Error('请输入 token')
+  const profile = clientProfile ?? currentClientProfile()
   debug('[pocket-auth] → token 登录：', JSON.stringify({
+    profile,
     mobile: maskMobile(mobile.trim()) || '***',
     tokenLength: trimmed.length,
   }))
-  const envelope = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, trimmed)
+  const envelope = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, trimmed, undefined, profile)
   if (!envelope.success) {
     const invalid = envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status)
     debug('[pocket-auth] ✕ token 登录失败：', JSON.stringify({
@@ -456,15 +507,23 @@ export async function loginByToken(token: string, mobile = ''): Promise<PocketAu
   }
   const info = pickUserInfo(envelope.content)
   // token 登录的手机号由用户手填、无区号语义（该链路不校验手机号），按 86 存档只为展示不带前缀
-  saveAuth(mobile.trim(), trimmed, info, '86')
+  saveAuth(mobile.trim(), trimmed, info, '86', profile)
   return getAuthState()
 }
 
-function saveAuth(mobile: string, token: string, info: PocketUserInfo, area: string): void {
+/** 落盘凭证：档位一并写入，此后所有请求按该档发头（档位随凭证读） */
+function saveAuth(
+  mobile: string,
+  token: string,
+  info: PocketUserInfo,
+  area: string,
+  clientProfile: PocketClientProfileId,
+): void {
   const encrypted = safeStorageAvailable()
   saveStoredAuth({
     mobile,
     area,
+    clientProfile,
     tokenEnc: encrypted ? safeStorage.encryptString(token).toString('base64') : '',
     tokenPlain: encrypted ? '' : token,
     nickname: info.nickname,
@@ -472,10 +531,10 @@ function saveAuth(mobile: string, token: string, info: PocketUserInfo, area: str
     userId: info.userId,
     savedAt: Date.now(),
   })
-  log(`[pocket-auth] 凭证已保存（${encrypted ? '加密' : '明文降级'}），用户: ${info.nickname || '未知'}`)
+  log(`[pocket-auth] 凭证已保存（${encrypted ? '加密' : '明文降级'}，档位 ${clientProfile}），用户: ${info.nickname || '未知'}`)
 }
 
-/** 退出登录：删除本地凭证文件 */
+/** 退出登录：删除本地凭证文件（档位随凭证消失，请求头回到默认档；下次登录重新选） */
 export function logout(): void {
   const file = authFilePath()
   try {
@@ -823,7 +882,7 @@ export interface PocketServerChannel {
  * 返回完整公共头由 postPocket 覆盖合并；`pa` 仍由其统一现算，避免两处签名不一致。
  */
 function seineHeaderOverrides(): Record<string, string> {
-  return clientHeaders(SEINE48_ANDROID)
+  return clientHeaders(profileFor('seine48'))
 }
 
 /**

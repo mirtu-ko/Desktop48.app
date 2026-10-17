@@ -12,6 +12,7 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
 import type { LiveDanmaku } from '@common/live-danmaku'
 import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
+import type { PocketClientProfileId } from '@common/pocket-client-profile'
 import type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { FfmpegProblem, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
@@ -31,6 +32,8 @@ export type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctIte
 
 // 类型随契约一起暴露（preload/index.ts 实现侧与渲染端引用）
 export type { MemberFlag, MemberFlagKind }
+// 客户端身份档位（口袋48 / 塞纳河48）：跨进程传递与界面选项共用，来源 common
+export type { PocketClientProfileId }
 export type MemberInfo = StarInfoItem & { teamColor: string }
 
 /**
@@ -171,6 +174,8 @@ export interface PocketAuthState {
   avatar: string
   /** 脱敏手机号（139****1234）；空串表示未记住 */
   mobileMasked: string
+  /** 当前登录身份档位（模拟的官方客户端）；未登录时为默认档 */
+  clientProfile: PocketClientProfileId
   /** true = 平台无安全加密能力，token 以明文落盘（仅提示用） */
   plainFallback: boolean
   /** 凭证保存时间（ms 时间戳）；0 = 无记录，供设置页展示「已保存 N 天」 */
@@ -386,11 +391,11 @@ interface StaticIpcInvokeMap {
   // ===== 口袋48账号 =====
   // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts
   /** 发送登录验证码；命中反爬问答题时返回 needCaptcha=true 与题目选项 */
-  pocketSendSms: InvokeSpec<[mobile: string, area?: string, answer?: string], PocketSmsResult>
-  /** 验证码登录；失败（验证码错误等）以 reject 报错 */
-  pocketLoginByCode: InvokeSpec<[mobile: string, code: string, area?: string], PocketAuthState>
+  pocketSendSms: InvokeSpec<[mobile: string, area?: string, answer?: string, clientProfile?: PocketClientProfileId], PocketSmsResult>
+  /** 验证码登录；clientProfile 为本轮选定的身份档位，随凭证保存；失败以 reject 报错 */
+  pocketLoginByCode: InvokeSpec<[mobile: string, code: string, area?: string, clientProfile?: PocketClientProfileId], PocketAuthState>
   /** 粘贴 token 登录：主进程校验有效后落盘；无效以 reject 报错 */
-  pocketLoginByToken: InvokeSpec<[token: string, mobile?: string], PocketAuthState>
+  pocketLoginByToken: InvokeSpec<[token: string, mobile?: string, clientProfile?: PocketClientProfileId], PocketAuthState>
   /** 当前登录态（读本地凭证，不做网络校验） */
   pocketGetAuthState: InvokeSpec<[], PocketAuthState>
   /** 退出登录：删除本地凭证 */

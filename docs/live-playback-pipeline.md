@@ -201,7 +201,7 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 | 公演（`source='open'`）     | B 站弹幕       | `bilibiliRoomId`（payload 携带）      | `main/bilibili/danmaku-session.ts` |
 | 个人直播（`source='user'`） | 口袋48互动消息 | `chatroomId`（use-live-session 补拉） | `main/pocket48/pocket-danmaku.ts`  |
 
-两源由 `use-live-danmaku` 统一订阅，投放到同一气泡层；口袋的 LIVEUPDATE 消息不进气泡层，路由到左上角互动榜面板。口袋源走自研网易云信 TCP 客户端（`nim-chatroom.ts`），需登录口袋账号。
+两源由 `use-live-danmaku` 统一订阅，投放到同一气泡层；口袋的 LIVEUPDATE 消息不进气泡层，路由到左上角互动榜面板。口袋源走自研网易云信 TCP 客户端（`nim-chatroom.ts`），需登录口袋账号；进房身份（SDK 版本与包名）随登录档位取自 `client-profile.ts` 的 `nim` 字段，与 HTTP 请求报同一家客户端，登录态变更时旧会话会被断开。
 
 **B 站房间号三级解析**（`utils/bilibili-room.ts`，从严到宽，全部落空则无弹幕）：① `teamList[0].groupId` 查团体房间表（`common/bilibili-rooms.ts`）；② 标题/副标题文本匹配，先团体名（SNH48…）再队伍名（TEAM X…，接口的 teamName 不含团体名）；③ 在线兜底：主进程拉五个官方直播间信息（`bilibiliRoomInfos` IPC，缓存 5 分钟），只取在播中的房间，与公演名书名号段互配命中——teamList 为空的公演（新生公演、生日会等）靠这层发现。
 

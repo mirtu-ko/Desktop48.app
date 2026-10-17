@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
-import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketDanmakuBatch, PocketUnreadBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
+import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketClientProfileId, PocketDanmakuBatch, PocketUnreadBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 /**
@@ -150,9 +150,12 @@ const api = {
   // ===== 口袋48账号 =====
   // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts。
   // IM 凭据（accid + imToken）不在此暴露：渲染层零调用方，token 只留在主进程
-  pocketSendSms: (mobile: string, area?: string, answer?: string) => invokeIpc('pocketSendSms', mobile, area, answer),
-  pocketLoginByCode: (mobile: string, code: string, area?: string) => invokeIpc('pocketLoginByCode', mobile, code, area),
-  pocketLoginByToken: (token: string, mobile?: string) => invokeIpc('pocketLoginByToken', token, mobile),
+  pocketSendSms: (mobile: string, area?: string, answer?: string, clientProfile?: PocketClientProfileId) =>
+    invokeIpc('pocketSendSms', mobile, area, answer, clientProfile),
+  pocketLoginByCode: (mobile: string, code: string, area?: string, clientProfile?: PocketClientProfileId) =>
+    invokeIpc('pocketLoginByCode', mobile, code, area, clientProfile),
+  pocketLoginByToken: (token: string, mobile?: string, clientProfile?: PocketClientProfileId) =>
+    invokeIpc('pocketLoginByToken', token, mobile, clientProfile),
   pocketGetAuthState: () => invokeIpc('pocketGetAuthState'),
   pocketLogout: () => invokeIpc('pocketLogout'),
   pocketGetChatroomId: (liveId: string) => invokeIpc('pocketGetChatroomId', liveId),

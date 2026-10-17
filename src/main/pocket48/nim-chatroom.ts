@@ -1,4 +1,3 @@
-import type { PocketRawChatMessage } from '@preload/ipc-contract'
 /**
  * 网易云信聊天室 TCP 协议客户端（只收弹幕的最小实现）。
  *
@@ -6,8 +5,9 @@ import type { PocketRawChatMessage } from '@preload/ipc-contract'
  * Web SDK 登录聊天室直接被服务端拒（403「非法操作或没有权限」）。
  * 本实现按云信移动端 TCP 协议直连：LBS 取地址 → RSA 握手交换 RC4 密钥
  * → 以安卓客户端身份登录进入聊天室 → 接收消息流。
- * 其中的包名、SDK 版本与设备 ID 取自 `client-profile.ts`（与口袋 HTTP 同平台同一台设备，
- * 不再各写一份；设备 ID 由 UUID 抽 16 位小写 hex，仅作登录属性，不参与签名）。
+ * 其中的包名与 SDK 版本由调用方按当前档位传入（`NimClientIdentity`，见 client-profile.ts），
+ * 设备 ID 取自 `client-profile.ts`（与口袋 HTTP 同一台设备；由 UUID 抽 16 位小写 hex，
+ * 仅作登录属性，不参与签名）。
  *
  * 协议要点：
  * - 帧：varint(总长) + header{serviceId, commandId, serial:i16LE, tag} + body；
@@ -18,13 +18,16 @@ import type { PocketRawChatMessage } from '@preload/ipc-contract'
  *   token 放属性 1000）；握手应答后需再以 RC4 发一次登录包
  * - 心跳（1_2，15s）；消息（13_7）；属性 38='1' 的消息需回执（13_35）
  */
+import type { PocketRawChatMessage } from '@preload/ipc-contract'
+import type { NimClientIdentity } from './client-profile'
+
 import { Buffer } from 'node:buffer'
 import { createPublicKey, publicEncrypt, randomBytes } from 'node:crypto'
 import net from 'node:net'
-import zlib from 'node:zlib'
 
+import zlib from 'node:zlib'
 import { debug } from '../logger'
-import { NIM_ANDROID, pocketDeviceId } from './client-profile'
+import { pocketDeviceId } from './client-profile'
 
 const LBS_URL = 'https://lbs.netease.im/lbs/chat.jsp'
 /** 云信握手 RSA 公钥（SPKI DER，base64；密钥版本 0） */
@@ -210,6 +213,43 @@ class Rc4Stream {
   }
 }
 
+// ===== 登录包构造 =====
+
+/**
+ * 构造聊天室登录包体：`[0x02] + 房间属性表 + 认证属性表`。
+ * 认证属性里的 **6 = SDK 版本、25 = 包名**就是「以哪个客户端身份进房」，
+ * 取自档位的云信身份（`NimClientIdentity`）。独立成纯函数便于直接断言这两个字段，
+ * 也避免身份来源在类内部再次隐式取用。
+ */
+export function buildChatroomLoginBody(input: {
+  appKey: string
+  account: string
+  token: string
+  roomId: string
+  deviceId: string
+  nim: NimClientIdentity
+}): Buffer {
+  const roomProperties = encodeProperties({
+    1: input.appKey,
+    2: input.account,
+    3: input.deviceId,
+    5: input.roomId,
+    8: 1,
+  })
+  const authProperties = encodeProperties({
+    3: 1,
+    4: '8.0.0',
+    6: input.nim.sdkVersion,
+    9: 1,
+    13: input.deviceId,
+    18: input.appKey,
+    19: input.account,
+    25: input.nim.packageName,
+    1000: input.token,
+  })
+  return Buffer.concat([Buffer.from([2]), roomProperties, authProperties])
+}
+
 // ===== 客户端 =====
 
 export interface NimChatroomClientOptions {
@@ -217,6 +257,11 @@ export interface NimChatroomClientOptions {
   account: string
   token: string
   roomId: string
+  /**
+   * 以哪个客户端的身份进聊天室（SDK 版本 + 包名）。由调用方按当前档位取值，
+   * 与 HTTP 请求同档——见 `client-profile.ts` 的 `nimIdentityFor`。
+   */
+  nim: NimClientIdentity
   onConnected?: () => void
   /** 断线后开始第 N 次重连 */
   onReconnecting?: (attempt: number) => void
@@ -290,7 +335,7 @@ export class NimChatroomClient {
       k: this.options.appKey,
       id: this.options.account,
       rid: this.options.roomId,
-      v: String(NIM_ANDROID.sdkVersion),
+      v: String(this.options.nim.sdkVersion),
       tp: '1',
       dt: '0',
       nt: '2',
@@ -308,31 +353,14 @@ export class NimChatroomClient {
     return { host, port }
   }
 
-  /** 登录包：[0x02] + 房间属性 + 认证属性（移动端身份） */
+  /** 登录包：帧头 + `buildChatroomLoginBody`（身份取自 options.nim） */
   private makeEnterPacket(deviceId: string): Buffer {
-    const roomProperties = encodeProperties({
-      1: this.options.appKey,
-      2: this.options.account,
-      3: deviceId,
-      5: this.options.roomId,
-      8: 1,
-    })
-    const authProperties = encodeProperties({
-      3: 1,
-      4: '8.0.0',
-      6: NIM_ANDROID.sdkVersion,
-      9: 1,
-      13: deviceId,
-      18: this.options.appKey,
-      19: this.options.account,
-      25: NIM_ANDROID.packageName,
-      1000: this.options.token,
-    })
+    const { appKey, account, token, roomId, nim } = this.options
     return makePacket(
       SERVICE_CHATROOM,
       CMD_CHATROOM_LOGIN,
       this.nextSerial(),
-      Buffer.concat([Buffer.from([2]), roomProperties, authProperties]),
+      buildChatroomLoginBody({ appKey, account, token, roomId, deviceId, nim }),
     )
   }
 
@@ -357,6 +385,8 @@ export class NimChatroomClient {
   }
 
   private async openConnection(): Promise<void> {
+    const { account, roomId, nim } = this.options
+    debug(`[nim-chatroom] 连接聊天室：房间=${roomId} 账号=${account} 身份=${nim.packageName}@${nim.sdkVersion}`)
     const address = await this.requestAddress()
     const key = randomBytes(16)
     const enterPacket = this.makeEnterPacket(pocketDeviceId())

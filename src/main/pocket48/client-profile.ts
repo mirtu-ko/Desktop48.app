@@ -1,6 +1,8 @@
+import type { PocketClientProfileId } from '@common/pocket-client-profile'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { ANDROID_DEVICE } from '@common/android-device'
+import { DEFAULT_POCKET_CLIENT_PROFILE } from '@common/pocket-client-profile'
 import { app } from 'electron'
 import { log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
@@ -8,10 +10,17 @@ import { SafeJSONFileSync } from '../safe-json-file-sync'
 /**
  * 口袋系客户端的设备身份与请求特征，**唯一来源**（pocket-auth 与 nim-chatroom 共用）。
  *
- * 平台分档现状（2026-10-17）：口袋主 App 已切到 v2 登录域并与 seine / 云信统一为
+ * 客户端档位（用户可选，2026-10-17）：`POCKET_CLIENT_PROFILES` 是「档位 → 特征」的唯一映射，
+ * 档位 id 与展示文案见 `common/pocket-client-profile.ts`。用户在登录时选定档位，档位随凭证落盘，
+ * 此后主进程所有请求按该档发头——口袋48 与塞纳河48 在服务端是同一账号下的两个客户端会话，
+ * 手机在用口袋48 时桌面选塞纳河48 即可两端并存、互不挤掉。
+ *
+ * 平台分档现状：口袋主 App 已切到 v2 登录域并与 seine / 云信统一为
  * **Android** 档，v2 验证码登录实测成功：
  * - `pa` 由官方 Android APK 抽出的 wasm 现算（resources/pocket48/2.wasm）；
  * - 云信聊天室只能以移动端身份登录（Web SDK 被服务端 403 拒），现有实现本就是 Android 报文；
+ * - 聊天室的 SDK 版本与包名也随档位（`nim` 字段）——HTTP 与 TCP 报同一家客户端，
+ *   档位才是完整口径，不再出现「口袋 HTTP 头 + seine 聊天室身份」的混搭；
  * - 口袋 HTTP 头：Android 档（pocket-auth.ts 复用本文件）；seine48 为 Android 档。
  *
  * 字段名照抄参考实现 yaya_msg 的真实设备模拟；主 App 版本号取官方 7.1.44 APK。
@@ -91,6 +100,17 @@ export function pocketDeviceId(): string {
   return cachedDeviceId
 }
 
+/**
+ * 云信聊天室登录身份（TCP 私有协议，非 HTTP）：登录属性表里的 SDK 版本与包名。
+ * 数值与包名必须取自**同一个 APK**，混搭会得到一个任何真实客户端都不存在的身份。
+ */
+export interface NimClientIdentity {
+  /** 登录属性 6 / LBS 请求的 `v` 参数：云信 Android SDK 版本号（如 92012） */
+  sdkVersion: number
+  /** 登录属性 25：客户端包名 */
+  packageName: string
+}
+
 /** 单档客户端特征：公共请求头与 appInfo 的取值来源 */
 export interface PocketClientProfile {
   /**
@@ -103,6 +123,12 @@ export interface PocketClientProfile {
   appInfo: (deviceId: string) => Record<string, string | number>
   /** 该客户端独有的额外头（如 seine 的 X-Custom-Device-Type） */
   extraHeaders?: Record<string, string>
+  /**
+   * 云信聊天室身份。**必须与本档同源**：HTTP 报哪家的客户端特征，TCP 就该报哪家的
+   * SDK 版本与包名——选口袋档即「全口径口袋客户端」，聊天室也不例外。
+   * 取用见 `nim-chatroom.ts`（握手与 LBS 请求都读这一份）。
+   */
+  nim: NimClientIdentity
 }
 
 /**
@@ -115,10 +141,14 @@ const UA_DEVICE
 
 /**
  * 口袋主 App（pocket48）Android 档：v2 登录域已启用并实测登录成功。
+ *
+ * 云信身份取自 pocket48 7.1.44 APK：applicationId `com.pocket.snh48.activity`，
+ * 内置云信 Android SDK 9.20.12（build 92012，dex 内串 `Version: 9.20.12/92012/…`）。
  */
 export const POCKET48_ANDROID: PocketClientProfile = {
   contentType: 'application/json; charset=UTF-8',
   userAgent: `PocketFans201807/7.1.44_26092001 ${UA_DEVICE}`,
+  nim: { sdkVersion: 92012, packageName: 'com.pocket.snh48.activity' },
   appInfo: deviceId => ({
     IMEI: deviceId,
     appBuild: '26092001',
@@ -134,11 +164,17 @@ export const POCKET48_ANDROID: PocketClientProfile = {
   }),
 }
 
-/** 塞纳河48（seine48）Android 档：`im/api/seine/*` 有独立客户端特征（含 Device-Type 头） */
+/**
+ * 塞纳河48（seine48）Android 档：`im/api/seine/*` 有独立客户端特征（含 Device-Type 头）。
+ *
+ * 云信身份取自 seine48 1.3.4 APK：包名 `com.seine48.app`，内置云信 Android SDK
+ * 9.21.10（build 92110）。这也是本项目长期使用的聊天室身份。
+ */
 export const SEINE48_ANDROID: PocketClientProfile = {
   contentType: 'application/json; charset=UTF-8',
   userAgent: `PocketFans201807/1.3.4_26092001 ${UA_DEVICE}`,
   extraHeaders: { 'X-Custom-Device-Type': 'ANDROID' },
+  nim: { sdkVersion: 92110, packageName: 'com.seine48.app' },
   appInfo: deviceId => ({
     appVersion: '1.3.4',
     appBuild: 26092001,
@@ -155,12 +191,6 @@ export const SEINE48_ANDROID: PocketClientProfile = {
 }
 
 /**
- * 云信聊天室身份（TCP 私有协议，非 HTTP）：登录属性表里的包名与 SDK 版本。
- * 必须是移动端身份（Web SDK 被服务端 403 拒），取自官方 Android 客户端。
- */
-export const NIM_ANDROID = { sdkVersion: 92110, packageName: 'com.seine48.app' } as const
-
-/**
  * 生成某档客户端的公共请求头（**不含 token 与 pa**——那两项由 pocket-auth 的
  * postPocket 统一补上，避免两处签名不一致）。`appInfo` 在此序列化，
  * 保证 `IMEI` / `deviceId` 与 UA 里的设备信息同源同值。
@@ -173,4 +203,23 @@ export function clientHeaders(profile: PocketClientProfile): Record<string, stri
     'Accept-Language': 'zh-Hans-CN;q=1',
     ...(profile.extraHeaders ?? {}),
   }
+}
+
+/**
+ * 档位 → 客户端特征表的唯一映射：新增档位只需在 `common/pocket-client-profile.ts` 补展示项、
+ * 并在此登记对应特征。两处都要改，缺一会 typecheck 报错（Record 的键是全集的）。
+ */
+export const POCKET_CLIENT_PROFILES: Record<PocketClientProfileId, PocketClientProfile> = {
+  pocket48: POCKET48_ANDROID,
+  seine48: SEINE48_ANDROID,
+}
+
+/** 按档位取客户端特征（未知值回退默认档，与 resolvePocketClientProfile 同口径） */
+export function profileFor(id: PocketClientProfileId): PocketClientProfile {
+  return POCKET_CLIENT_PROFILES[id] ?? POCKET_CLIENT_PROFILES[DEFAULT_POCKET_CLIENT_PROFILE]
+}
+
+/** 按档位取云信聊天室身份（聊天室握手用；未知值回退默认档，与 profileFor 同口径） */
+export function nimIdentityFor(id: PocketClientProfileId): NimClientIdentity {
+  return profileFor(id).nim
 }

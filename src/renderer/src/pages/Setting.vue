@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { PocketVerifyResult } from '@preload/ipc-contract'
+import type { PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
+import { DEFAULT_POCKET_CLIENT_PROFILE, POCKET_CLIENT_PROFILE_OPTIONS, pocketClientProfileOption } from '@common/pocket-client-profile'
 import { Cpu, Document, Folder, Hide, Refresh, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
@@ -203,6 +204,21 @@ const AREA_OPTIONS = [
   { label: '澳大利亚 +61', value: '61' },
 ]
 
+/**
+ * 登录身份：本轮登录模拟哪个官方客户端。口袋48 与塞纳河48 在服务端是同一账号下的两个
+ * 客户端会话，手机端在用口袋48 时选塞纳河48 即可两端并存、互不挤掉。
+ * 档位随凭证落盘并对之后所有请求生效；换档需退出后重新登录。
+ */
+const loginProfile = ref<PocketClientProfileId>(DEFAULT_POCKET_CLIENT_PROFILE)
+/** 当前所选身份的说明文案（登录弹窗内随选择变化） */
+const loginProfileHint = computed(() => pocketClientProfileOption(loginProfile.value).hint)
+/** 已登录账号的身份标签：默认档（口袋48）不显示，仅非默认档在账号卡片上提示，避免噪声 */
+const currentProfileLabel = computed(() => (
+  pocketAuthState.value.clientProfile === DEFAULT_POCKET_CLIENT_PROFILE
+    ? ''
+    : `${pocketClientProfileOption(pocketAuthState.value.clientProfile).label}身份`
+))
+
 /** 短信登录表单状态 */
 const smsForm = reactive({
   area: '86',
@@ -334,6 +350,7 @@ async function sendSmsCode() {
     return
   smsForm.sending = true
   debugLog('pocket-auth', '发送验证码：', JSON.stringify({
+    profile: loginProfile.value,
     mobile: maskMobileForLog(smsForm.mobile, smsForm.area),
     hasCaptchaAnswer: !!smsForm.captcha?.answer,
   }))
@@ -342,6 +359,7 @@ async function sendSmsCode() {
       smsForm.mobile,
       smsForm.area,
       smsForm.captcha?.answer || undefined,
+      loginProfile.value,
     )
     debugLog('pocket-auth', '发送验证码结果：', JSON.stringify({
       needCaptcha: result.needCaptcha,
@@ -397,11 +415,12 @@ async function submitSmsLogin() {
     return
   smsForm.loggingIn = true
   debugLog('pocket-auth', '提交验证码登录：', JSON.stringify({
+    profile: loginProfile.value,
     mobile: maskMobileForLog(smsForm.mobile, smsForm.area),
     codeLength: smsForm.code.trim().length,
   }))
   try {
-    const state = await loginBySmsCode(smsForm.mobile, smsForm.code, smsForm.area)
+    const state = await loginBySmsCode(smsForm.mobile, smsForm.code, smsForm.area, loginProfile.value)
     loginDialogVisible.value = false
     notifyLoginSuccess(state)
     void syncPocketFollow()
@@ -420,11 +439,12 @@ async function submitTokenLogin() {
     return
   tokenForm.loggingIn = true
   debugLog('pocket-auth', '提交 token 登录：', JSON.stringify({
+    profile: loginProfile.value,
     mobile: maskMobileForLog(tokenForm.mobile),
     tokenLength: tokenForm.token.trim().length,
   }))
   try {
-    const state = await loginByPastedToken(tokenForm.token, tokenForm.mobile)
+    const state = await loginByPastedToken(tokenForm.token, tokenForm.mobile, loginProfile.value)
     loginDialogVisible.value = false
     notifyLoginSuccess(state)
     void syncPocketFollow()
@@ -549,6 +569,8 @@ function hideLogo(event: Event) {
               <template v-if="pocketAuthState.loggedIn">
                 已登录{{ pocketAuthState.nickname ? `：${pocketAuthState.nickname}` : '' }}<template v-if="pocketAuthState.mobileMasked">
                   （{{ pocketAuthState.mobileMasked }}）
+                </template><template v-if="currentProfileLabel">
+                  · {{ currentProfileLabel }}
                 </template><template v-if="followSyncing">
                   ，正在同步口袋关注…
                 </template><template v-else-if="followSyncError">
@@ -939,6 +961,26 @@ function hideLogo(event: Event) {
       :close-on-click-modal="false"
       append-to-body
     >
+      <div class="login-profile">
+        <div class="login-profile-row">
+          <span class="login-profile-label">登录身份</span>
+          <el-radio-group
+            v-model="loginProfile"
+            size="small"
+          >
+            <el-radio-button
+              v-for="option in POCKET_CLIENT_PROFILE_OPTIONS"
+              :key="option.id"
+              :value="option.id"
+            >
+              {{ option.label }}
+            </el-radio-button>
+          </el-radio-group>
+        </div>
+        <div class="login-profile-hint">
+          {{ loginProfileHint }}
+        </div>
+      </div>
       <el-tabs v-model="loginTab">
         <el-tab-pane
           label="短信验证码"
@@ -1522,6 +1564,33 @@ function hideLogo(event: Event) {
 /* 品牌渐变主按钮已全局统一，见 app.scss */
 
 /* ===== 口袋48登录弹窗 ===== */
+/* 登录身份选择：口袋48 / 塞纳河48 两个官方客户端档位，同一账号可在两端并存 */
+.login-profile {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--brand-primary) 4%, transparent);
+}
+
+.login-profile-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.login-profile-label {
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+}
+
+.login-profile-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+}
+
 .login-form {
   display: flex;
   flex-direction: column;

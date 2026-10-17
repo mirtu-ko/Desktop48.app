@@ -4,8 +4,9 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   clientHeaders,
-  NIM_ANDROID,
+  nimIdentityFor,
   POCKET48_ANDROID,
+  POCKET_CLIENT_PROFILES,
   pocketDeviceId,
   SEINE48_ANDROID,
 } from '../src/main/pocket48/client-profile'
@@ -135,7 +136,28 @@ describe('client-profile / 公共头', () => {
 })
 
 describe('client-profile / 云信聊天室身份', () => {
-  it('包名与 SDK 版本取自官方 Android 客户端（Web SDK 被服务端拒）', () => {
-    expect(NIM_ANDROID).toEqual({ sdkVersion: 92110, packageName: 'com.seine48.app' })
+  it('包名与 SDK 版本取自各档自己的官方 APK（Web SDK 被服务端拒）', () => {
+    // 口袋48 7.1.44 APK：applicationId com.pocket.snh48.activity + 云信 SDK 9.20.12
+    expect(nimIdentityFor('pocket48')).toEqual({
+      sdkVersion: 92012,
+      packageName: 'com.pocket.snh48.activity',
+    })
+    // 塞纳河48 1.3.4 APK：包名 com.seine48.app + 云信 SDK 9.21.10
+    expect(nimIdentityFor('seine48')).toEqual({
+      sdkVersion: 92110,
+      packageName: 'com.seine48.app',
+    })
+  })
+
+  it('每档都必须登记云信身份，且两档取值不同（否则档位切换对聊天室无效）', () => {
+    for (const profile of Object.values(POCKET_CLIENT_PROFILES)) {
+      expect(profile.nim.sdkVersion).toBeGreaterThan(0)
+      expect(profile.nim.packageName).toMatch(/^[a-z][a-z0-9_.]+$/)
+    }
+    expect(POCKET_CLIENT_PROFILES.pocket48.nim).not.toEqual(POCKET_CLIENT_PROFILES.seine48.nim)
+  })
+
+  it('未知档位回退默认档的云信身份', () => {
+    expect(nimIdentityFor('nope' as never)).toEqual(nimIdentityFor('pocket48'))
   })
 })
