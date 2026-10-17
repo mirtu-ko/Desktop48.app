@@ -61,6 +61,16 @@ const POCKET_PA = 'MTYzNjAxNzMxNTAwMCw3NjkyNzVkNTliZWU0MmQ0OGVjOWIyYTMwY2FkOWQzO
 /** token 失效的服务端状态码（与 pocket48_api 社区实现一致） */
 const TOKEN_INVALID_STATUSES = new Set([401003, 401004, 401005])
 
+/**
+ * 凭证失效通知钩子：IPC 注册层注入广播函数（见 register-pocket-ipc.ts），默认空实现
+ * （单测直跑本模块时无窗口可广播）。失效即广播，让各窗口的登录态镜像同步复位，
+ * 免得房间页已报「登录过期」而设置页仍显示已登录。
+ */
+let notifyAuthExpired: () => void = () => {}
+export function setAuthExpiredNotifier(notify: () => void): void {
+  notifyAuthExpired = notify
+}
+
 /** 反爬问答题状态码：message 字段为内嵌 JSON（{question, answer:[...]}) */
 const CAPTCHA_STATUS = 2001
 
@@ -535,17 +545,39 @@ function saveAuth(
   log(`[pocket-auth] 凭证已保存（${encrypted ? '加密' : '明文降级'}，档位 ${clientProfile}），用户: ${info.nickname || '未知'}`)
 }
 
-/** 退出登录：删除本地凭证文件（档位随凭证消失，请求头回到默认档；下次登录重新选） */
-export function logout(): void {
+/** 删除本地凭证文件；存在才删，失败不抛（删除只影响展示，调用方各有兵底） */
+function deleteStoredCredentials(): void {
   const file = authFilePath()
   try {
     if (fs.existsSync(file))
       fs.unlinkSync(file)
-    log('[pocket-auth] 已退出登录')
   }
   catch (error) {
     log('[pocket-auth] 删除凭证失败', error)
   }
+}
+
+/** 退出登录：删除本地凭证文件（档位随凭证消失，请求头回到默认档；下次登录重新选） */
+export function logout(): void {
+  deleteStoredCredentials()
+  log('[pocket-auth] 已退出登录')
+}
+
+/**
+ * 存储的 token 被服务端判失效（TOKEN_INVALID_STATUSES）：删凭证文件并广播各窗口。
+ * 不清等于把已失效的凭证留在盘上——房间页报「登录过期」，设置页却仍显示已登录。
+ * 过期 token 无恢复手段（本模块不自动重登），重新登录必然覆盖，删除无副作用。
+ */
+function expireStoredAuth(): void {
+  deleteStoredCredentials()
+  log('[pocket-auth] token 已失效，本地凭证已清除')
+  notifyAuthExpired()
+}
+
+/** 所有「登录已过期」抛出的唯一出口：先清凭证再抛，调用方提示用户重新登录 */
+function throwAuthExpired(): never {
+  expireStoredAuth()
+  throw new Error('登录已过期，请重新登录口袋48账号')
 }
 
 /** 登录有效性验证结果：imOk 表示弹幕实际依赖的 IM 凭据链路是否可用 */
@@ -635,8 +667,10 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
   if (!token)
     return { ...empty, message: '未登录口袋48账号' }
   const envelope = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, token)
-  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status)) {
+    expireStoredAuth()
     return { ...empty, message: '登录已过期，请重新登录' }
+  }
   if (!envelope.success)
     return { ...empty, message: envelope.message || 'token 校验失败' }
   const info = pickUserInfo(envelope.content)
@@ -710,7 +744,7 @@ export async function getFollowedIds(): Promise<number[]> {
     return []
   const envelope = await postPocket<Record<string, unknown>>(FRIENDS_IDS_URL, {}, token)
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取关注列表失败')
   const data = (envelope.content as Record<string, unknown> | undefined)?.data
@@ -741,7 +775,7 @@ async function postFollow(url: string, userId: number, action: string): Promise<
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || `${action}失败`)
 }
@@ -761,7 +795,7 @@ export async function getChatroomId(liveId: string): Promise<string> {
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取直播聊天室 ID 失败')
   const content = envelope.content || {}
@@ -824,7 +858,7 @@ export async function getRoomChannel(userId: number): Promise<PocketRoomChannel>
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取房间频道失败')
   const content = envelope.content || {}
@@ -858,7 +892,7 @@ export async function getRoomChannelOwner(channelId: string): Promise<PocketRoom
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取房间归属失败')
   const content = envelope.content || {}
@@ -903,7 +937,7 @@ export async function getServerChannels(serverId: string): Promise<PocketServerC
     seineHeaderOverrides(),
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取频道列表失败')
   const content = (envelope.content || {}) as Record<string, unknown>
@@ -959,7 +993,7 @@ export async function getRoomQuestion(channelId: string): Promise<PocketRoomQues
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (envelope.success)
     return null
   const question = parseQuestionEnvelope(envelope.message || '')
@@ -1034,7 +1068,7 @@ export async function checkRoomAnswer(
       token,
     )
     if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-      throw new Error('登录已过期，请重新登录口袋48账号')
+      throwAuthExpired()
     if (envelope.success)
       return { ok: true, via: 'server' }
     debug('[pocket-auth] 暗号校验未通过：', channelId, JSON.stringify(envelope))
@@ -1119,7 +1153,7 @@ export async function getRoomMessages(
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取房间消息失败')
   const content = (envelope.content || {}) as Record<string, unknown>
@@ -1156,7 +1190,7 @@ export async function getRoomEssenceMessages(
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取精华消息失败')
   const content = (envelope.content || {}) as Record<string, unknown>
@@ -1212,7 +1246,7 @@ export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRo
     token,
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   if (!envelope.success)
     throw new Error(envelope.message || '获取房间最新消息失败')
   const content = (envelope.content || {}) as Record<string, unknown>
@@ -1278,7 +1312,7 @@ export async function getImCredentials(): Promise<PocketImCredentials> {
     { 'P-Sign-Type': 'V0' },
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
-    throw new Error('登录已过期，请重新登录口袋48账号')
+    throwAuthExpired()
   const content = envelope.content || {}
   const accid = String(content.accid || content.accId || content.imUserId || '')
   const imToken = String(content.pwd || content.token || content.imPwd || '')

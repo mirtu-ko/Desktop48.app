@@ -500,6 +500,11 @@ export type IpcEventMap = {
    */
   pocketUnreadBatch: [state: PocketUnreadBatch]
   /**
+   * 登录凭证已因 token 失效被主进程清除（对端：main/pocket48/pocket-auth.ts）。
+   * 登录态由主进程持有、每个窗口各存镜像，广播复位后房间页与设置页的登录态才不会分叉。
+   */
+  pocketAuthExpired: []
+  /**
    * 更新状态变化（对端：main/updater.ts）。
    * 状态归主进程所有、每个窗口各存镜像，因此广播给全部窗口（见 main/ipc/send.ts 的 broadcastIpc）。
    */

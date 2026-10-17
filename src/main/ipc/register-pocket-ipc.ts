@@ -7,9 +7,13 @@ import type { IpcMainInvokeEvent } from 'electron'
 import * as pocketAuth from '../pocket48/pocket-auth'
 import { handlePocketDanmakuStart, handlePocketDanmakuStop, resetPocketDanmakuSessions } from '../pocket48/pocket-danmaku'
 import * as pocketUnread from '../pocket48/pocket-unread'
+import { broadcastIpc } from './send'
 import { handleTraced } from './trace'
 
 export function registerPocketIPC(): void {
+  // token 失效清凭证时广播各窗口：渲染层 pocket-auth 镜像同步复位，
+  // 免得房间页已报「登录过期」而设置页仍显示已登录（对端：stores/pocket-auth.ts）
+  pocketAuth.setAuthExpiredNotifier(() => broadcastIpc('pocketAuthExpired'))
   handleTraced('pocketSendSms', (
     _event: IpcMainInvokeEvent,
     mobile: string,

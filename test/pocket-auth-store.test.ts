@@ -24,11 +24,17 @@ const ACCOUNT_B: PocketAuthState = { ...ACCOUNT_A, nickname: '乙', mobileMasked
 async function setup(initial: PocketAuthState) {
   vi.resetModules()
   let current = initial
+  /** 捕获主进程广播的订阅回调：模拟「token 失效清凭证」时主进程会广播 pocketAuthExpired */
+  let authExpiredNotify: (() => void) | undefined
   vi.stubGlobal('window', {
     mainAPI: {
       // IPC 回包每次都是新对象，桩照此返回副本，逼出「按值比指纹」而不是「按引用比对象」
       pocketGetAuthState: vi.fn(async () => ({ ...current })),
       pocketLogout: vi.fn(async () => {}),
+      pocketAuthExpired: vi.fn((callback: () => void) => {
+        authExpiredNotify = callback
+        return () => {}
+      }),
     },
   })
   const store = await import('../src/renderer/src/stores/pocket-auth')
@@ -41,6 +47,8 @@ async function setup(initial: PocketAuthState) {
       current = next
       await store.refreshPocketAuthState()
     },
+    /** 触发主进程的「凭证已因 token 失效被清除」广播 */
+    broadcastAuthExpired: () => authExpiredNotify?.(),
   }
 }
 
@@ -75,5 +83,28 @@ describe('pocket-auth store / 账号变化作废小房间解锁', () => {
     expect(unlock.isSmallRoomUnlocked('ch-1-small')).toBe(false)
     await switchTo(ACCOUNT_A)
     expect(unlock.isSmallRoomUnlocked('ch-1-small')).toBe(false)
+  })
+})
+
+describe('pocket-auth store / 主进程失效广播复位镜像', () => {
+  it('收到 pocketAuthExpired 广播即复位：接口报过期后设置页不再显示已登录', async () => {
+    const { store, unlock, broadcastAuthExpired } = await setup(ACCOUNT_A)
+    await store.refreshPocketAuthState()
+    expect(store.pocketAuthState.value.loggedIn).toBe(true)
+    unlock.markSmallRoomUnlocked('ch-1-small')
+
+    broadcastAuthExpired()
+
+    expect(store.pocketAuthState.value.loggedIn).toBe(false)
+    // 失效复位等价于退出登录：身份指纹变化，小房间解锁态一并作废
+    expect(unlock.isSmallRoomUnlocked('ch-1-small')).toBe(false)
+  })
+
+  it('重复广播不抖动：已复位时不再误作废（无解锁态可作废，指纹比对幂等）', async () => {
+    const { store, broadcastAuthExpired } = await setup(ACCOUNT_A)
+    await store.refreshPocketAuthState()
+    broadcastAuthExpired()
+    broadcastAuthExpired()
+    expect(store.pocketAuthState.value.loggedIn).toBe(false)
   })
 })
