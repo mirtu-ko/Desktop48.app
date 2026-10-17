@@ -16,6 +16,7 @@ import type { PocketClientProfileId } from '@common/pocket-client-profile'
 import type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { FfmpegProblem, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
+import type { NetDiagnoseItem } from '../main/net-diagnose'
 
 // 网络请求参数（对端：main/ipc/register-system-ipc.ts；body 为序列化后的字符串）
 export interface NetRequestOptions {
@@ -24,6 +25,9 @@ export interface NetRequestOptions {
   headers?: Record<string, string>
   body?: string
 }
+
+// 网络诊断结果随契约一起暴露（渲染端设置页诊断列表消费）
+export type { NetDiagnoseItem }
 
 // ===== 成员与屏蔽名单 =====
 
@@ -342,6 +346,8 @@ export type { FfmpegProblem, FfmpegStatus }
 
 interface StaticIpcInvokeMap {
   netRequest: InvokeSpec<[options: NetRequestOptions], string>
+  /** 网络诊断：对核心服务域名逐一发轻量 GET，返回状态码/耗时/失败原因（对端：main/net-diagnose.ts） */
+  netDiagnose: InvokeSpec<[], NetDiagnoseItem[]>
   saveMemberData: InvokeSpec<[content: Partial<MemberDataContent>], { ok: true }>
   getAllMembers: InvokeSpec<[], AllMembersPayload>
   hasMembers: InvokeSpec<[], boolean>

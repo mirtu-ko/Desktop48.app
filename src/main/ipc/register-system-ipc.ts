@@ -15,6 +15,7 @@ import { isAllowedUrl } from '../allowed-hosts'
 import { isPathInAllowedRoots } from '../allowed-path'
 import { Database } from '../database'
 import { inspectFfmpegDir } from '../ffmpeg/ffmpeg-process'
+import { diagnoseTargets } from '../net-diagnose'
 import { handleTraced } from './trace'
 
 // 网络请求 - 域名白名单校验
@@ -131,4 +132,7 @@ export function registerSystemIPC(): void {
   // （初始化页/设置页在「选择目录」「一键下载」之后的即时校验）。
   // 判定口径统一在 inspectFfmpegDir，此处只负责取配置。
   handleTraced('getFfmpegStatus', (_event: IpcMainInvokeEvent, dir?: string) => inspectFfmpegDir(dir ?? Database.instance().getConfig('ffmpegDirectory')))
+
+  // 网络诊断：对核心服务域名逐一轻量探测（设置页「网络诊断」），目标清单在 net-diagnose.ts
+  handleTraced('netDiagnose', async () => diagnoseTargets())
 }

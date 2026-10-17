@@ -36,6 +36,7 @@ const api = {
   // ===== 网络请求 =====
   // 对端：main/ipc/register-system-ipc.ts，走 Electron net 模块 + 域名白名单
   netRequest: (options: NetRequestOptions) => invokeIpc('netRequest', options),
+  netDiagnose: () => invokeIpc('netDiagnose'),
 
   // ===== 成员与屏蔽名单 =====
   // 对端：main/ipc/register-database-ipc.ts

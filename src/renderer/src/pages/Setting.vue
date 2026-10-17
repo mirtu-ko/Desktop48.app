@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
+import type { NetDiagnoseItem, PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
 import { DEFAULT_POCKET_CLIENT_PROFILE, POCKET_CLIENT_PROFILE_OPTIONS, pocketClientProfileOption } from '@common/pocket-client-profile'
-import { Cpu, Document, Download, Folder, Hide, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
+import { Connection, Cpu, Document, Download, Folder, Hide, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
@@ -125,6 +125,70 @@ async function handleChooseFfmpegDir() {
   }
   if (result.outcome === 'failed')
     ElMessage.error('设置 FFmpeg 目录失败，请重试')
+}
+
+// 网络诊断：对核心服务域名逐一探测连通性（主进程对端 main/net-diagnose.ts）。
+// 用于接口报错（如 HTTP 403）时让用户自助定位：不可达 / 被拒 / 服务端异常一目了然。
+const diagnosing = ref(false)
+const diagnoseResults = ref<NetDiagnoseItem[]>([])
+
+/** 发起诊断：结果整体替换而非追加，重复点击看到的是最新一轮 */
+async function handleDiagnose() {
+  if (diagnosing.value)
+    return
+  diagnosing.value = true
+  try {
+    diagnoseResults.value = await window.mainAPI.netDiagnose()
+  }
+  catch (e: any) {
+    ElMessage.error(`网络诊断失败：${e?.message || '未知错误'}`)
+  }
+  finally {
+    diagnosing.value = false
+  }
+}
+
+/** 单条结果的结论徽标：按状态码分段给出结论与语义色 */
+function diagnoseVerdict(item: NetDiagnoseItem): { label: string, type: 'success' | 'warning' | 'danger' | 'info' } {
+  if (item.status === null)
+    return { label: '不可达', type: 'danger' }
+  if (item.status < 400)
+    return { label: '正常', type: 'success' }
+  if (item.status === 403)
+    return { label: '拒绝访问', type: 'danger' }
+  if (item.status < 500)
+    return { label: `HTTP ${item.status}`, type: 'warning' }
+  return { label: `HTTP ${item.status}`, type: 'danger' }
+}
+
+/** 单条结果的补充说明：解释这个状态码对排查意味着什么 */
+function diagnoseNote(item: NetDiagnoseItem): string {
+  if (item.status === null)
+    return item.error || '连接失败'
+  if (item.status === 403)
+    return '服务端可达但拒绝访问，多为地区限制或风控拦截'
+  if (item.status >= 400 && item.status < 500)
+    return '服务端可达（该状态码是探测路径的响应，不影响业务接口）'
+  if (item.status >= 500)
+    return '服务端异常，非本机网络问题'
+  return ''
+}
+
+/** 复制诊断结果：随应用版本一起输出，方便用户直接粘贴反馈 */
+async function handleCopyDiagnose() {
+  const lines = diagnoseResults.value.map((item) => {
+    const verdict = diagnoseVerdict(item)
+    const status = item.status === null ? '无响应' : `HTTP ${item.status}`
+    const note = diagnoseNote(item)
+    return `${item.label}（${item.url}）: ${status} · ${item.ms}ms · ${verdict.label}${note ? ` · ${note}` : ''}${item.error ? ` · ${item.error}` : ''}`
+  })
+  const text = [
+    `应用版本: ${appVersion.value}`,
+    `诊断时间: ${new Date().toLocaleString()}`,
+    ...lines,
+  ].join('\n')
+  await navigator.clipboard.writeText(text)
+  ElMessage({ message: '诊断结果已复制，可粘贴发给开发者', type: 'success' })
 }
 
 /** 更新行的描述文案：一行说清当前处于什么状态、下一步该做什么 */
@@ -973,6 +1037,71 @@ function hideLogo(event: Event) {
         </div>
       </section>
 
+      <!-- 网络诊断 -->
+      <section class="setting-card glass-card">
+        <div class="setting-row">
+          <span
+            class="row-icon icon-tile"
+            :style="{ '--tile-color': 'var(--color-members)' }"
+          >
+            <el-icon><Connection /></el-icon>
+          </span>
+          <div class="row-text row-text--fluid">
+            <div class="row-title">
+              网络诊断（仅供参考）
+            </div>
+            <div class="row-desc">
+              检测核心服务域名的连通情况；接口报错（如 HTTP 403）时可能影响使用
+            </div>
+          </div>
+          <div class="row-actions">
+            <el-button
+              v-if="diagnoseResults.length"
+              :disabled="diagnosing"
+              @click="handleCopyDiagnose"
+            >
+              复制结果
+            </el-button>
+            <el-button
+              type="primary"
+              :loading="diagnosing"
+              @click="handleDiagnose"
+            >
+              开始诊断
+            </el-button>
+          </div>
+        </div>
+        <div
+          v-if="diagnoseResults.length"
+          class="row-body"
+        >
+          <div class="diagnose-grid">
+            <div
+              v-for="item in diagnoseResults"
+              :key="item.url"
+              class="diagnose-item"
+            >
+              <div class="diagnose-head">
+                <span class="diagnose-label">{{ item.label }}</span>
+                <el-tag
+                  size="small"
+                  :type="diagnoseVerdict(item).type"
+                >
+                  {{ diagnoseVerdict(item).label }}
+                </el-tag>
+              </div>
+              <div class="diagnose-detail">
+                {{ item.status === null ? '无响应' : `HTTP ${item.status}` }} · {{ item.ms }}ms
+                <span
+                  v-if="diagnoseNote(item)"
+                  class="diagnose-note"
+                >{{ diagnoseNote(item) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- 权利声明 -->
       <section class="setting-card glass-card">
         <div class="setting-row">
@@ -1054,7 +1183,7 @@ function hideLogo(event: Event) {
         <div class="setting-row">
           <span
             class="row-icon icon-tile"
-            style="--tile-color: var(--el-color-success)"
+            style="--tile-color: #909399"
           >
             <el-icon><Document /></el-icon>
           </span>
@@ -1507,6 +1636,44 @@ function hideLogo(event: Event) {
   font-size: 12px;
   line-height: 1.7;
   color: var(--el-text-color-secondary);
+}
+
+/* 网络诊断结果：两列网格，单格 = 名称 + 徽标 / 状态摘要 + 说明；窄窗自动降为单列 */
+.diagnose-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px 14px;
+}
+
+.diagnose-item {
+  padding: 8px 12px;
+  border: 1px dashed var(--el-border-color-lighter);
+  border-radius: var(--radius-md);
+}
+
+.diagnose-item .diagnose-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.diagnose-item .diagnose-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.diagnose-item .diagnose-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.diagnose-item .diagnose-note {
+  display: block;
 }
 
 /* 新版本提示块：available 态展开版本对比与更新说明，downloading 态接棒显示进度 */
