@@ -5,6 +5,7 @@ import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { computed } from 'vue'
 import { useDownloadGuard } from './use-download-guard'
+import { trackEvent } from './use-umami'
 
 /**
  * 播放器媒体任务发起流程：LivePlayer（录制）与 PlaybackPlayer（回放下载）
@@ -54,6 +55,8 @@ export function useMediaDownload(options: {
       filename,
       liveId: options.liveId(),
     }
+    // Umami 事件：下载 / 录制发起量（kind 区分 download / record，不带成员信息）
+    trackEvent('task:start', { kind: options.kind })
     // 任务由全局 store 接管，状态在播放器按钮就地可见。
     await handleTask(task, options.kind)
   }
@@ -64,6 +67,7 @@ export function useMediaDownload(options: {
       void start()
       return
     }
+    trackEvent('task:stop', { kind: options.kind })
     stopTaskByLiveId(options.kind, options.liveId())
     ElMessage({ message: options.kind === 'record' ? '已结束录制' : '已停止下载', type: 'success' })
   }

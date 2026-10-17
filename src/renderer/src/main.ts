@@ -5,7 +5,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import FloatWindowApp from './components/floats/FloatWindowApp.vue'
 import { installSettingsRouter } from './composables/use-settings-nav'
-import { trackPage } from './composables/use-umami'
+import { trackEvent, trackPage } from './composables/use-umami'
 import routes from './routes'
 import { installFloatPlayers } from './stores/float-players'
 import { installTasks } from './stores/tasks'
@@ -54,4 +54,7 @@ else {
   installFloatPlayers()
 
   app.mount('#app')
+
+  // Umami 事件：启动版本分布——UA 只能解析出 OS，应用版本必须显式上报一次
+  void window.mainAPI.getAppVersion().then(version => trackEvent('app:start', { version }))
 }

@@ -6,6 +6,7 @@ import { useMediaShortcuts } from '@renderer/composables/use-media-shortcuts'
 import { usePlaybackDanmaku } from '@renderer/composables/use-playback-danmaku'
 import { usePlaybackEngine } from '@renderer/composables/use-playback-engine'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
+import { durationBucket, trackEvent } from '@renderer/composables/use-umami'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 
 import { loadLiveDetail } from '@renderer/services/live-detail'
@@ -46,6 +47,11 @@ const realName = ref('')
 const userAvatar = ref('')
 // 观看人数：取自回放详情 onlineNum，供「全部弹幕」面板头部展示（公演回放无此数据）
 const onlineNumber = ref(0)
+
+// Umami：一次会话只计一次成功起播（首次元数据就绪）；时长以首次起播为起点，
+// 卸载时按分桶上报（durationBucket），不打精确秒数
+let playbackTracked = false
+let playbackStartedAt = 0
 
 // 弹幕展示模式：实时堆叠 | 全部面板
 type DanmakuMode = 'live' | 'all'
@@ -135,7 +141,11 @@ const startDate = computed(() => dayjs(props.startTime).format('YYYY-MM-DD HH:mm
 function toggleDanmakuMode() {
   if (!hasBarrage.value)
     return
-  danmakuMode.value = danmakuMode.value === 'live' ? 'all' : 'live'
+  const next = danmakuMode.value === 'live' ? 'all' : 'live'
+  // Umami 事件：切到「全部」面板才算一次该功能的使用
+  if (next === 'all')
+    trackEvent('danmaku:mode', { mode: 'all' })
+  danmakuMode.value = next
 }
 
 /**
@@ -175,6 +185,12 @@ const {
   onTimeUpdate: onDanmakuTimeUpdate,
   onSeeking: time => seekBarragesTo(time),
   onMetadataLoaded: async () => {
+    // Umami 事件：换清晰度 / 重试重挂也会触发 loadedmetadata，用标记只计首播
+    if (!playbackTracked) {
+      playbackTracked = true
+      playbackStartedAt = Date.now()
+      trackEvent('playback:play', { source: props.source, media: isRadio.value ? 'radio' : 'video' })
+    }
     debugLog('playback', `④元数据就绪: 刷新画面尺寸${isRadio.value ? '（电台无尺寸）' : ''} → 加载弹幕`)
     // 记录源尺寸供旋转缩放计算，并按（可能旋转后的）画面比例上报浮窗
     if (!isRadio.value)
@@ -183,6 +199,12 @@ const {
   },
   onPlaying: () => void acquireSleepBlocker(),
   onIdle: releaseSleepBlocker,
+})
+
+// Umami 事件：录播播放错误（引擎内 notifyError 已按相同文案去重）
+watch(lastPlaybackError, (message) => {
+  if (message)
+    trackEvent('player:error', { type: 'playback' })
 })
 
 // =========== 键盘策略（根节点焦点制，见 use-media-shortcuts） ===========
@@ -288,6 +310,10 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // Umami 事件：观看时长分桶
+  if (playbackTracked) {
+    trackEvent('play:duration', { type: 'playback', bucket: durationBucket((Date.now() - playbackStartedAt) / 1000) })
+  }
   debugLog('playback', `⑤录播会话结束（liveId=${props.liveId}）: 销毁播放引擎 → 释放防休眠`)
   destroyPlayer()
   releaseSleepBlocker()

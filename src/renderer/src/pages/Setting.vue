@@ -6,6 +6,7 @@ import { Connection, Cpu, Document, Download, Folder, Hide, Lock, Refresh, Top, 
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
+import { trackEvent } from '@renderer/composables/use-umami'
 import { useUpdater } from '@renderer/composables/use-updater'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
 import {
@@ -610,11 +611,14 @@ async function submitSmsLogin() {
   }))
   try {
     const state = await loginBySmsCode(smsForm.mobile, smsForm.code, smsForm.area, loginProfile.value)
+    // Umami 事件：口袋登录成功率（不带任何账号信息）
+    trackEvent('pocket:login', { method: 'sms', profile: loginProfile.value, result: 'ok' })
     loginDialogVisible.value = false
     notifyLoginSuccess(state)
     void syncPocketFollow()
   }
   catch (error) {
+    trackEvent('pocket:login', { method: 'sms', profile: loginProfile.value, result: 'fail' })
     debugLog('pocket-auth', '验证码登录失败：', error)
     ElMessage.error(pocketAuthErrorMessage(error))
   }
@@ -634,11 +638,14 @@ async function submitTokenLogin() {
   }))
   try {
     const state = await loginByPastedToken(tokenForm.token, tokenForm.mobile, loginProfile.value)
+    // Umami 事件：口袋登录成功率（不带任何账号信息）
+    trackEvent('pocket:login', { method: 'token', profile: loginProfile.value, result: 'ok' })
     loginDialogVisible.value = false
     notifyLoginSuccess(state)
     void syncPocketFollow()
   }
   catch (error) {
+    trackEvent('pocket:login', { method: 'token', profile: loginProfile.value, result: 'fail' })
     debugLog('pocket-auth', 'token 登录失败：', error)
     ElMessage.error(pocketAuthErrorMessage(error))
   }

@@ -10,6 +10,7 @@ import useMediaDownload from '@renderer/composables/use-media-download'
 import { dispatchMediaShortcut } from '@renderer/composables/use-media-shortcuts'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useStreamRetry } from '@renderer/composables/use-stream-retry'
+import { durationBucket, trackEvent } from '@renderer/composables/use-umami'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import EventBus from '@renderer/services/event-bus'
 import { debugLog } from '@renderer/utils/debug'
@@ -55,6 +56,11 @@ const mediaLoading = ref(true)
 const hovered = ref(false)
 // 卸载标记：置位后所有在途异步回包直接丢弃
 const isManuallyUnmounted = ref(false)
+
+// Umami：一场直播只计一次成功播放（首次 canplay）；观看时长以首次出画为起点，
+// 卸载时按分桶上报（durationBucket），不打精确秒数
+let livePlayTracked = false
+let livePlayStartedAt = 0
 
 const isRadio = computed(() => props.liveType !== 1)
 
@@ -149,6 +155,12 @@ const pocketChatroomId = computed(() => (props.source === 'user' ? chatroomId.va
 const hasDanmakuRoom = computed(() => danmakuRoomId.value !== undefined || !!pocketChatroomId.value)
 const showDanmaku = computed(() => hasDanmakuRoom.value && danmakuEnabled.value)
 
+/** 弹幕开关：翻转并上报使用率（只记用户主动切换，不记初始状态） */
+function toggleDanmaku() {
+  danmakuEnabled.value = !danmakuEnabled.value
+  trackEvent('danmaku:toggle', { enabled: danmakuEnabled.value ? 1 : 0 })
+}
+
 // ── 互动榜单（口袋 LIVEUPDATE 消息）─────────────────────────────
 // 榜单不进气泡层，独立显示在画面右上角（.player-actions 下方）；可由胶囊开关收起
 const rankUsers = ref<PocketRankUser[]>([])
@@ -222,6 +234,12 @@ function beginSession() {
 function onPlayerCanPlay() {
   debugLog('live', '①直播:播放就绪（canplay），复位恢复态与重试预算')
   retry.markRecovered()
+  // Umami 事件：首次出画才算成功播放；断流重连后的 canplay 不重复计数
+  if (!livePlayTracked) {
+    livePlayTracked = true
+    livePlayStartedAt = Date.now()
+    trackEvent('live:play', { source: props.source, media: isRadio.value ? 'radio' : 'video' })
+  }
   if (!isRadio.value)
     updateVideoDimensions()
 }
@@ -236,6 +254,8 @@ function rebuildMedia() {
 
 /** 媒体元素/FLV 错误统一处理：网络错误保持 loading 重试，致命错误先销毁播放器 */
 function handleStreamError(reason: string, isNetwork: boolean) {
+  // Umami 事件：播放器错误（网络类会自动进重试，这里记的是发生频率而非后果）
+  trackEvent('player:error', { type: 'live', network: isNetwork ? 1 : 0 })
   if (isNetwork) {
     debugLog('live', `①直播:网络错误（${reason}），保持 loading 并重试`)
     mediaLoading.value = true
@@ -354,6 +374,11 @@ onUnmounted(() => {
   }
   player.destroyPlayer()
   player.resetMediaElement()
+  // Umami 事件：观看时长分桶。浮窗整体关闭时组件同步卸载，
+  // umami script 走 sendBeacon / keepalive，正常网络下能送达
+  if (livePlayTracked) {
+    trackEvent('play:duration', { type: 'live', bucket: durationBucket((Date.now() - livePlayStartedAt) / 1000) })
+  }
   releaseSleepBlocker()
 })
 </script>
@@ -485,7 +510,7 @@ onUnmounted(() => {
             :class="{ 'is-on': danmakuEnabled }"
             :title="danmakuEnabled ? '关闭弹幕' : '开启弹幕'"
             :aria-label="danmakuEnabled ? '关闭弹幕' : '开启弹幕'"
-            @click="danmakuEnabled = !danmakuEnabled"
+            @click="toggleDanmaku"
           >
             <MediaIcon name="chat" :size="16" />
           </button>
