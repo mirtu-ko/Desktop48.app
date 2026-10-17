@@ -764,24 +764,29 @@ onMounted(() => {
               <span class="room-meta">
                 <span class="room-name-row">
                   <span class="room-name ellipsis">{{ room.nickname }}</span>
-                  <!-- 口袋关注标识：轻量小星标，只标注来自口袋账号的关注，本地独有的不标 -->
-                  <el-tooltip
-                    v-if="isPocketFollowed(room.followSource)"
-                    content="口袋账号关注（可在设置页拉取同步）"
-                    placement="top"
-                  >
-                    <el-icon class="room-follow-ico"><StarFilled /></el-icon>
-                  </el-tooltip>
                   <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
                   <span v-if="room.temporary" class="room-temp-tag">临时</span>
-                  <span
-                    v-if="room.teamName"
-                    class="room-team"
-                    :style="Tools.colorVarStyle('--tb-color', room.teamColor)"
-                  >{{ Tools.shortTeamName(room.teamName) }}</span>
                 </span>
 
                 <span v-if="room.preview" class="room-preview ellipsis">{{ room.preview }}</span>
+              </span>
+              <!-- 右缘竖排小标签：星星在上（口袋关注），队伍徽标在下 -->
+              <span
+                v-if="room.teamName || isPocketFollowed(room.followSource)"
+                class="room-side-tags"
+              >
+                <el-tooltip
+                  v-if="isPocketFollowed(room.followSource)"
+                  content="口袋账号关注（可在设置页拉取同步）"
+                  placement="top"
+                >
+                  <el-icon class="room-follow-ico"><StarFilled /></el-icon>
+                </el-tooltip>
+                <span
+                  v-if="room.teamName"
+                  class="room-team"
+                  :style="Tools.colorVarStyle('--tb-color', room.teamColor)"
+                >{{ Tools.shortTeamName(room.teamName) }}</span>
               </span>
             </button>
 
@@ -1584,10 +1589,19 @@ onMounted(() => {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 34%, transparent);
 }
 
-/* 口袋关注标识：昵称后 11px 品牌色小星标（语义：已关注），详情看 tooltip 与资料卡 */
+/* 条目右缘竖排小标签列：口袋关注星标在上、队伍徽标在下 */
+.room-side-tags {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+}
+
+/* 口袋关注星标：11px 品牌色（语义：已关注），详情看 tooltip 与资料卡 */
 .room-follow-ico {
   flex: none;
-  margin-left: 2px;
   font-size: 11px;
   color: var(--brand-primary);
   opacity: 0.8;

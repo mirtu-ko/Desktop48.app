@@ -67,7 +67,7 @@ const birthdayLine = computed(() => {
 const liveCover = computed(() => Tools.sourceUrl(props.live?.coverPath || ''))
 const liveTime = computed(() => {
   const time = Number.parseInt(props.live?.ctime || '', 10)
-  return Number.isFinite(time) && time > 0 ? dayjs(time).format('MM-DD HH:mm') : ''
+  return Number.isFinite(time) && time > 0 ? dayjs(time).format('HH:mm') : ''
 })
 
 function enterLive() {
@@ -146,23 +146,24 @@ function enterLive() {
         {{ pocketFollowed ? '取关' : '+ 关注' }}
       </el-button>
     </div>
-    <!-- 直播状态：在播显示封面 + 标题 + 开播时间，一键进入直播 -->
-    <button v-if="live" type="button" class="profile-live" @click="enterLive">
-      <span class="profile-live-cover">
-        <img v-if="liveCover" :src="liveCover" alt="" referrerpolicy="no-referrer">
-        <span v-else class="profile-live-ph">LIVE</span>
-      </span>
-      <span class="profile-live-text">
-        <span class="profile-live-badge">直播中</span>
-        <span class="profile-live-title ellipsis">{{ live.title || '直播中' }}</span>
-        <span v-if="liveTime" class="profile-live-time">{{ liveTime }} 开播</span>
-      </span>
-      <span class="profile-live-action">进入</span>
-    </button>
-    <p v-else class="profile-offline">
-      未开播
-    </p>
   </section>
+
+  <!-- 直播状态：独立模块，与资料卡平级（间距由右栏 gap 提供） -->
+  <button v-if="live" type="button" class="profile-live" @click="enterLive">
+    <span class="profile-live-cover">
+      <img v-if="liveCover" :src="liveCover" alt="" referrerpolicy="no-referrer">
+      <span v-else class="profile-live-ph">LIVE</span>
+    </span>
+    <span class="profile-live-text">
+      <span class="profile-live-badge">直播中</span>
+      <span class="profile-live-title ellipsis">{{ live.title || '直播中' }}</span>
+      <span v-if="liveTime" class="profile-live-time">{{ liveTime }} 开播</span>
+    </span>
+    <span class="profile-live-action">进入</span>
+  </button>
+  <span v-else class="profile-offline">
+    未开播
+  </span>
 </template>
 
 <style scoped lang="scss">
