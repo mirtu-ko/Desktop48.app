@@ -12,9 +12,8 @@ import { handleTraced } from './trace'
 
 export function registerPocketIPC(): void {
   // token 失效清凭证时广播各窗口：渲染层 pocket-auth 镜像同步复位，
-  // 免得房间页已报「登录过期」而设置页仍显示已登录（对端：stores/pocket-auth.ts）
-  pocketAuth.setAuthExpiredNotifier(() => broadcastIpc('pocketAuthExpired'))
-  // token 失效清凭证：未读即刻归零广播 + 登录态广播复位（对端两处 store 镜像）。
+  // 免得房间页已报「登录过期」而设置页仍显示已登录（对端：stores/pocket-auth.ts）。
+  // 未读即刻归零广播走同一钩子（setAuthExpiredNotifier 是单回调，只能注册一次）：
   // 轮询对 token 失效走「整轮冻结、未读不丢」，那是给瞬时网络故障的，真失效不适用
   pocketAuth.setAuthExpiredNotifier(() => {
     pocketUnread.clearAccountUnread()

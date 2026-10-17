@@ -40,6 +40,7 @@ import {
   USER_MONEY_URL,
 } from '@common/pocket-api-urls'
 import { resolvePocketClientProfile } from '@common/pocket-client-profile'
+import { toApiId } from '@common/pocket-ids'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
@@ -355,7 +356,9 @@ function toAuthState(stored: StoredAuth | null): PocketAuthState {
     avatar: stored?.avatar || '',
     mobileMasked: maskMobile(stored?.mobile || '', stored?.area),
     clientProfile: resolvePocketClientProfile(stored?.clientProfile),
-    plainFallback: !!stored && !!stored.tokenPlain && !safeStorageAvailable(),
+    // 只看凭证本体：明文 token 一旦落盘就是明文，与「此刻系统有没有加密能力」无关
+    // （曾经按 !safeStorageAvailable() 判定，系统后来可用加密时会谎报「已加密保存」）
+    plainFallback: !!stored?.tokenPlain,
     savedAt: stored?.savedAt || 0,
   }
 }
@@ -945,7 +948,7 @@ export async function getServerChannels(serverId: string): Promise<PocketServerC
   debug('[pocket-auth] 拉取频道列表请求：', JSON.stringify({ serverId: String(serverId) }))
   const envelope = await postPocket<Record<string, unknown>>(
     SEINE_SERVER_DETAIL_URL,
-    { serverId: Number(serverId) },
+    { serverId: toApiId(serverId) },
     token,
     seineHeaderOverrides(),
   )
@@ -1154,8 +1157,8 @@ export async function getRoomMessages(
   if (!token)
     throw new Error('未登录口袋48账号')
   const request = {
-    channelId: Number(channelId),
-    serverId: Number(serverId),
+    channelId: toApiId(channelId),
+    serverId: toApiId(serverId),
     nextTime: Number(nextTime) || 0,
     limit: ROOM_MESSAGE_LIMIT,
   }
@@ -1191,8 +1194,8 @@ export async function getRoomEssenceMessages(
   if (!token)
     throw new Error('未登录口袋48账号')
   const request = {
-    channelId: Number(channelId),
-    serverId: Number(serverId),
+    channelId: toApiId(channelId),
+    serverId: toApiId(serverId),
     nextTime: Number(nextTime) || 0,
     limit: ROOM_MESSAGE_LIMIT,
   }

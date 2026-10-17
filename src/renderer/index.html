@@ -4,7 +4,30 @@
     <meta charset="UTF-8" />
     <title>Desktop48</title>
     <!-- 参考：https://developer.mozilla.org/zh-CN/docs/Web/HTTP/CSP -->
-    <meta http-equiv="Content-Security-Policy" />
+    <!--
+      真实生效的 CSP（此前是空的 http-equiv，等于没有策略）。
+      口径说明：
+      - script：只允许自身与 Umami 埋点脚本；不放开 unsafe-eval（渲染层无 eval / wasm）
+      - style：'unsafe-inline' 是 Vue scoped 样式与 Element Plus 运行时注入样式所必需
+      - img/media/connect：48 系 CDN 域名由接口动态下发、无法枚举，按 https: 放开；
+        本地 HTTP-FLV 中转服务固定 127.0.0.1:8080-8090，单独放开该回环地址
+      - worker：hls.js / mpegts.js 的分片转封装走 blob worker
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self';
+        script-src 'self' https://cloud.umami.is;
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data: blob: https: http://127.0.0.1:*;
+        media-src 'self' blob: https: http://127.0.0.1:*;
+        font-src 'self' data:;
+        connect-src 'self' https: ws: wss: http://127.0.0.1:*;
+        worker-src 'self' blob:;
+        frame-src 'none';
+        object-src 'none';
+        base-uri 'self';
+        form-action 'none'"
+    />
     <!-- 关闭自动采集（data-auto-track），
          改由 use-umami.ts 的 trackPage 上报清洗后的 hash 路由。
          注意 script 本身仍会上报语言 / 分辨率 / UA，完整数据范围见 use-umami.ts 头注释 -->

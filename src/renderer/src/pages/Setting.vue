@@ -374,6 +374,11 @@ const currentProfileLabel = computed(() => (
     : `${pocketClientProfileOption(pocketAuthState.value.clientProfile).label}身份`
 ))
 
+/** 发码节流窗口：与服务端一致，重开弹窗时据此恢复倒计时 */
+const SMS_RESEND_MS = 60_000
+/** 上次成功发码时刻（ms）；0 = 本次会话还没发过 */
+const smsSentAt = ref(0)
+
 /** 短信登录表单状态 */
 const smsForm = reactive({
   area: '86',
@@ -398,6 +403,9 @@ const tokenForm = reactive({
   loggingIn: false,
 })
 
+/** 反爬问答题待作答：此时不允许重发（不带答案必然再回同一道题） */
+const captchaPending = computed(() => !!smsForm.captcha && !smsForm.captcha.answer)
+
 /** 日志用：手机号脱敏，避免验证码链路打点泄露完整号码；海外号码位数不一，够长即按同规则脱敏并带区号前缀 */
 function maskMobileForLog(mobile: string, area = '86'): string {
   const masked = area === '86'
@@ -409,9 +417,17 @@ function maskMobileForLog(mobile: string, area = '86'): string {
 function openLoginDialog() {
   smsForm.code = ''
   smsForm.captcha = null
-  smsForm.areaLocked = false
-  clearCountdown()
+  // 重开一律回到短信页：@opened 只自动聚焦短信页手机号，停在 Token 页聚焦会落空
+  loginTab.value = 'sms'
   tokenForm.token = ''
+  clearCountdown()
+  // 服务端发码节流按 60s 计：重开弹窗时按剩余时间续上倒计时并保持区号锁定，
+  // 否则用户会被允许立刻重发，拿到「发送过于频繁」这类与操作无关的报错
+  const remaining = Math.ceil((SMS_RESEND_MS - (Date.now() - smsSentAt.value)) / 1000)
+  if (smsSentAt.value && remaining > 0)
+    startCountdown(remaining)
+  else
+    smsForm.areaLocked = false
   loginDialogVisible.value = true
 }
 
@@ -426,8 +442,14 @@ async function confirmLogout() {
   catch {
     return
   }
-  await logoutPocket()
-  ElMessage.success('已退出登录')
+  try {
+    await logoutPocket()
+    ElMessage.success('已退出登录')
+  }
+  catch (error) {
+    debugLog('pocket-auth', '退出登录失败：', error)
+    ElMessage.error(pocketAuthErrorMessage(error))
+  }
 }
 
 // ===== 登录有效性验证（点击已登录头像触发） =====
@@ -509,6 +531,11 @@ const authRowTitle = computed(() => {
 async function sendSmsCode() {
   if (smsForm.sending || smsForm.countdown > 0)
     return
+  // 问答题未作答就重发必然再吃一次 2001：直接挡在本地，别让用户以为按钮坏了
+  if (captchaPending.value) {
+    ElMessage.warning('请先完成下方验证')
+    return
+  }
   smsForm.sending = true
   debugLog('pocket-auth', '发送验证码：', JSON.stringify({
     profile: loginProfile.value,
@@ -535,6 +562,7 @@ async function sendSmsCode() {
     smsForm.captcha = null
     ElMessage.success('验证码已发送，请留意短信')
     smsForm.areaLocked = true
+    smsSentAt.value = Date.now()
     startCountdown()
   }
   catch (error) {
@@ -557,9 +585,9 @@ function clearCountdown() {
   smsForm.countdown = 0
 }
 
-function startCountdown() {
+function startCountdown(seconds = 60) {
   clearCountdown()
-  smsForm.countdown = 60
+  smsForm.countdown = seconds
   countdownTimer = setInterval(() => {
     smsForm.countdown--
     if (smsForm.countdown <= 0)
@@ -620,8 +648,11 @@ async function submitTokenLogin() {
 }
 
 /** 手机号是否可发送验证码：中国大陆仍按 11 位校验，其他区号只要求数字主体有效 */
-const smsSendable = computed(() =>
-  smsForm.area === '86' ? /^\d{11}$/.test(smsForm.mobile) : /^\d{4,15}$/.test(smsForm.mobile))
+const smsSendable = computed(() => {
+  // 与主进程同口径（sendSms 会 trim）：粘贴带空格的号码不该被判成无效
+  const mobile = smsForm.mobile.trim()
+  return smsForm.area === '86' ? /^\d{11}$/.test(mobile) : /^\d{4,15}$/.test(mobile)
+})
 /** 短信登录手机号输入框：弹窗打开后自动聚焦，省一次点击 */
 const smsMobileRef = ref<InputInstance>()
 
@@ -1344,7 +1375,7 @@ function hideLogo(event: Event) {
               />
               <el-button
                 class="login-code-btn"
-                :disabled="!smsSendable || smsForm.countdown > 0"
+                :disabled="!smsSendable || smsForm.countdown > 0 || captchaPending"
                 :loading="smsForm.sending"
                 @click="sendSmsCode"
               >
@@ -1377,7 +1408,7 @@ function hideLogo(event: Event) {
             <el-input
               v-model="tokenForm.mobile"
               placeholder="手机号（选填，用于下次登录预填）"
-              maxlength="11"
+              maxlength="15"
             />
             <el-button
               type="primary"
