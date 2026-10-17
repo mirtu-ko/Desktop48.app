@@ -88,7 +88,7 @@ async function onViewModeChange(mode: 'room' | 'small') {
 /**
  * 频道页签（大房间 + 已发现的小房间）：名称取服务端频道名（见 use-pocket-rooms 的
  * ensureChannelNames），未取到退回通用名；未读按频道分计，落在各自页签上。
- * 小房间未发现时只有一个页签，此时整条页签栏不渲染（单选分段没有切换语义）。
+ * 小房间未发现时也渲染整条页签栏（只剩大房间一个页签），保持头部结构稳定。
  */
 const roomTabs = computed<Array<{ mode: 'room' | 'small', name: string, unread: number, locked: boolean }>>(() => {
   const userId = selectedRoom.value?.userId
@@ -788,9 +788,9 @@ onMounted(() => {
             </div>
 
             <!-- 频道切换（大房间 / 小房间）：放头部右侧，页签显示服务端真实频道名；
-                 小房间未发现时整条不渲染（只剩一个页签等于没有切换语义） -->
+                 小房间未发现时也整条渲染（只剩大房间一个页签） -->
             <div
-              v-if="roomTabs.length > 1"
+              v-if="roomTabs.length > 0"
               class="room-tabs"
               role="tablist"
               aria-label="房间频道"
