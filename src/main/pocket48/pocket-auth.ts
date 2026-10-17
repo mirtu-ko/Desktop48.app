@@ -62,9 +62,8 @@ const POCKET_PA = 'MTYzNjAxNzMxNTAwMCw3NjkyNzVkNTliZWU0MmQ0OGVjOWIyYTMwY2FkOWQzO
 const TOKEN_INVALID_STATUSES = new Set([401003, 401004, 401005])
 
 /**
- * 凭证失效通知钩子：IPC 注册层注入广播函数（见 register-pocket-ipc.ts），默认空实现
- * （单测直跑本模块时无窗口可广播）。失效即广播，让各窗口的登录态镜像同步复位，
- * 免得房间页已报「登录过期」而设置页仍显示已登录。
+ * 凭证失效广播钩子：IPC 层注入广播函数（见 register-pocket-ipc.ts），默认空实现便于单测直跑。
+ * 失效即广播，各窗口登录态镜像同步复位。
  */
 let notifyAuthExpired: () => void = () => {}
 export function setAuthExpiredNotifier(notify: () => void): void {
@@ -563,18 +562,14 @@ export function logout(): void {
   log('[pocket-auth] 已退出登录')
 }
 
-/**
- * 存储的 token 被服务端判失效（TOKEN_INVALID_STATUSES）：删凭证文件并广播各窗口。
- * 不清等于把已失效的凭证留在盘上——房间页报「登录过期」，设置页却仍显示已登录。
- * 过期 token 无恢复手段（本模块不自动重登），重新登录必然覆盖，删除无副作用。
- */
+/** token 判失效：删凭证文件（过期无恢复手段，重登必然覆盖）+ 广播各窗复位镜像 */
 function expireStoredAuth(): void {
   deleteStoredCredentials()
   log('[pocket-auth] token 已失效，本地凭证已清除')
   notifyAuthExpired()
 }
 
-/** 所有「登录已过期」抛出的唯一出口：先清凭证再抛，调用方提示用户重新登录 */
+/** 「登录已过期」唯一出口：先清凭证再抛 */
 function throwAuthExpired(): never {
   expireStoredAuth()
   throw new Error('登录已过期，请重新登录口袋48账号')
@@ -1146,7 +1141,7 @@ export async function getRoomMessages(
     nextTime: Number(nextTime) || 0,
     limit: ROOM_MESSAGE_LIMIT,
   }
-  debug('[pocket-auth] 获取频道消息请求：', JSON.stringify({ ...request, scope }))
+  // debug('[pocket-auth] 获取频道消息请求：', JSON.stringify({ ...request, scope }))
   const envelope = await postPocket<Record<string, unknown>>(
     ROOM_MESSAGE_URLS[scope],
     request,

@@ -7,12 +7,13 @@ import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/p
 import type { Component } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { ArrowRight, ChatDotRound, Close, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
-import ImageViewerToolbar from '@renderer/components/rooms/ImageViewerToolbar.vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
+import RoomEssenceDialog from '@renderer/components/rooms/RoomEssenceDialog.vue'
 import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
-
 import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
+
+import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { copyText } from '@renderer/utils/clipboard'
@@ -427,6 +428,9 @@ async function onLoadMore() {
   // 头部插入了 prevHeight → scrollHeight 的增量，视口按同样增量下移，肉眼位置不变
   el.scrollTop = prevTop + (el.scrollHeight - prevHeight)
   lastSeenScrollTop = el.scrollTop
+  // 本次上翻才发现到头才提示（此后 onListScroll 不再触发，天然只出一次）
+  if (historyExhausted.value)
+    ElMessage.info('没有更早的消息了')
 }
 
 /** 头像 URL：口袋扩展给的是相对/完整路径混杂，统一过 sourceUrl */
@@ -611,21 +615,6 @@ function resetCardState() {
 // （昵称位固定「提问」）。不做点击跳转——被引用消息往往不在当前列表，跳转价值有限。
 
 /**
- * 图片占位样式：归一层解析到原始尺寸时按 aspect-ratio 预留空间，
- * 图片加载前后布局零变化（滚动历史不再抖动）；未知尺寸回退自然加载（仅轻微抖动）。
- * 宽度压到容器上限，fit=cover 裁切超出 max-height 的极端比例。
- * maxWidth：消息流 240（气泡内），精华弹层 300（弹层更宽，同款占位放大一档）。
- */
-function imageBoxStyle(message: PocketRoomMessageView, maxWidth = 240) {
-  if (!message.imageWidth || !message.imageHeight)
-    return undefined
-  return {
-    width: `min(${maxWidth}px, 100%)`,
-    aspectRatio: `${message.imageWidth} / ${message.imageHeight}`,
-  }
-}
-
-/**
  * 视频尺寸占位：服务端 bodys 带真实 w/h（实测竖屏 w=1080/h=1920）。
  * 横屏沿用 280px 宽上限、按真实比例出高；竖屏高度封顶 360px（小窗再按视口收缩）、
  * 宽度按比例收——两维都显式算出，不赌 aspect-ratio 对 block 尺寸的解析。
@@ -645,7 +634,17 @@ function messageTime(msgTime: number) {
   return msgTime ? dayjs(msgTime).format('HH:mm:ss') : ''
 }
 
-/** 短时刻（MM-DD HH:mm）：直播分享卡的时刻行与精华列表共用 */
+/**
+ * 当前已加载消息的图片列表（时间序）：点开任一张后可在整个列表内左右切换，与右侧相册同一范围。
+ * 预览列表在打开 viewer 时快照，翻历史追加不影响已打开的预览。
+ */
+const messageImageUrls = computed(() =>
+  messages.value
+    .filter(message => message.imageUrl)
+    .map(message => message.imageUrl as string),
+)
+
+/** 短时刻（MM-DD HH:mm）：直播分享卡的时刻行 */
 function shortTime(ts: number | string) {
   return ts ? dayjs(ts).format('MM-DD HH:mm') : ''
 }
@@ -1073,32 +1072,21 @@ onMounted(() => {
                             'msg-bubble--live': message.kind === 'live',
                           }"
                         >
-                          <!-- 图片：el-image 自带点击放大预览 -->
+                          <!-- 图片：PreviewImage（el-image 全屏预览 + 下载工具条，按原始尺寸占位；
+                               预览范围 = 当前已加载消息的图片列表，可与相册一样左右切换） -->
 
-                          <el-image
+                          <PreviewImage
                             v-if="message.imageUrl"
                             class="msg-image"
-                            :style="imageBoxStyle(message)"
                             :src="message.imageUrl"
-                            :preview-src-list="[message.imageUrl]"
-                            preview-teleported
+                            :image-width="message.imageWidth"
+                            :image-height="message.imageHeight"
+                            :preview-list="messageImageUrls"
+                            :initial-index="messageImageUrls.indexOf(message.imageUrl)"
                             lazy
-                            fit="cover"
-                            hide-on-click-modal
-                            referrerpolicy="no-referrer"
                             @load="onMediaLoad"
                             @error="onMediaLoad"
-                          >
-                            <!-- 预览工具条：EP 默认那排没有下载，整排自绘后追加一项（见 ImageViewerToolbar） -->
-                            <template #toolbar="{ actions, reset, activeIndex }">
-                              <ImageViewerToolbar
-                                :actions="actions"
-                                :reset="reset"
-                                :urls="[message.imageUrl]"
-                                :active-index="activeIndex"
-                              />
-                            </template>
-                          </el-image>
+                          />
                           <template v-else-if="message.audioUrl">
                             <RoomVoiceBar :src="message.audioUrl" />
                             <!-- 语音条本身就是内容，类型占位文案不再补一行；回复消息的真实正文（非占位）仍要展示 -->
@@ -1317,108 +1305,14 @@ onMounted(() => {
             </aside>
           </div>
 
-          <!-- 精华消息弹层：外壳 / 标题头 / 滚动列复用 app.scss 的「详情卡片共用」，单栏列表；
-               图片走 el-image 的预览（全屏查看 + 下载），与消息流同一套工具条 -->
-          <el-dialog
+          <!-- 精华消息弹层：完整列表（数据与翻页在 use-pocket-rooms，展示收在组件内） -->
+          <RoomEssenceDialog
             v-model="essenceOpen"
-            class="detail-card-dialog essence-dialog"
-            modal-class="detail-card-overlay"
-            :show-close="false"
-            align-center
-            append-to-body
-          >
-            <div class="detail-card essence-card">
-              <div class="detail-pane">
-                <div class="detail-pane-head">
-                  <span class="detail-pane-title">精华消息</span>
-                  <span class="detail-pane-sub">{{ essenceMessages.length }} 条</span>
-                  <span class="essence-hint">房间置顶 · 按时间倒序</span>
-                </div>
-
-                <div v-if="essenceMessages.length" class="essence-list detail-scroll">
-                  <article
-                    v-for="(item, index) in essenceMessages"
-                    :key="item.id"
-                    class="essence-item detail-pane-row"
-                    :style="{ '--i': index }"
-                  >
-                    <img
-                      v-if="item.avatar"
-                      class="essence-avatar"
-                      :src="avatarUrl(item.avatar)"
-                      :alt="item.nick"
-                      referrerpolicy="no-referrer"
-                    >
-                    <span v-else class="essence-avatar essence-avatar--fallback">{{ item.nick.slice(0, 1) }}</span>
-
-                    <div class="essence-body">
-                      <div class="essence-meta">
-                        <span class="essence-nick" :class="{ 'is-member': item.isMember }">{{ item.nick }}</span>
-                        <span v-if="item.isMember" class="essence-owner">房主</span>
-                        <span class="essence-time">
-                          {{ item.msgTime ? shortTime(item.msgTime) : '' }}
-                        </span>
-                      </div>
-
-                      <!-- 媒体消息的正文只是「[图片消息]」这类占位，有图时不再重复一行 -->
-                      <p v-if="!isPlaceholderText(item.text)" class="essence-text">
-                        {{ item.text }}
-                      </p>
-
-                      <el-image
-                        v-if="item.imageUrl"
-                        class="essence-image"
-                        :style="imageBoxStyle(item, 300)"
-                        :src="item.imageUrl"
-                        :preview-src-list="[item.imageUrl]"
-                        preview-teleported
-                        hide-on-click-modal
-                        fit="cover"
-                        referrerpolicy="no-referrer"
-                      >
-                        <template #toolbar="{ actions, reset, activeIndex }">
-                          <ImageViewerToolbar
-                            :actions="actions"
-                            :reset="reset"
-                            :urls="[item.imageUrl]"
-                            :active-index="activeIndex"
-                          />
-                        </template>
-                      </el-image>
-                    </div>
-                  </article>
-                </div>
-
-                <div v-else class="essence-empty">
-                  <el-icon :size="26">
-                    <StarFilled />
-                  </el-icon>
-                  <p>{{ essenceLoading ? '正在加载精华消息…' : '这个房间还没有精华消息' }}</p>
-                  <p class="essence-empty-hint">
-                    房主或管理员设为精华的消息会出现在这里
-                  </p>
-                </div>
-
-                <div v-if="essenceMessages.length" class="essence-foot">
-                  <el-button
-                    v-if="!essenceExhausted"
-                    size="small"
-                    :loading="essenceLoading"
-                    @click="loadMoreEssence"
-                  >
-                    加载更早的精华
-                  </el-button>
-                  <span v-else class="essence-end">没有更多了</span>
-                </div>
-              </div>
-
-              <button class="detail-close" title="关闭" @click="essenceOpen = false">
-                <el-icon :size="15">
-                  <Close />
-                </el-icon>
-              </button>
-            </div>
-          </el-dialog>
+            :messages="essenceMessages"
+            :loading="essenceLoading"
+            :exhausted="essenceExhausted"
+            @load-more="loadMoreEssence"
+          />
         </template>
 
         <div v-else class="main-placeholder">
@@ -1831,11 +1725,10 @@ onMounted(() => {
   }
 }
 
-/* 四处空态的次级提示行（.essence-empty 里带父选择器是为压过其 p 的 13px） */
+/* 三处空态的次级提示行（精华弹层的同款规格收在其组件内） */
 .side-empty-hint,
 .msg-empty-hint,
-.main-placeholder-hint,
-.essence-empty .essence-empty-hint {
+.main-placeholder-hint {
   font-size: 11px;
   line-height: 1.6;
   color: var(--el-text-color-placeholder);
@@ -1931,156 +1824,6 @@ onMounted(() => {
   font-size: 11px;
   color: var(--el-text-color-secondary);
   background: color-mix(in srgb, var(--el-bg-color) 70%, transparent);
-}
-
-/* ===== 精华消息弹层（外壳 / 标题头 / 滚动列见 app.scss「详情卡片共用」，这里只留列表与条目） ===== */
-/* 关闭钮落在浅色标题头上：按专辑卡的口径给深色图标（几何与悬停态在全局） */
-.essence-card {
-  /* 投影跟着房间主题青走，与页面语义色一致 */
-  --accent: var(--color-rooms);
-  --detail-close-bg: color-mix(in srgb, var(--el-text-color-primary) 8%, transparent);
-  --detail-close-ink: var(--el-text-color-secondary);
-}
-
-/* 标题头右侧提示：左推靠关闭钮，与曲目卡的「↑ ↓ 切换专辑」同一位置 */
-.essence-hint {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--el-text-color-placeholder);
-}
-
-/* 列表自持滚动，撑满标题头与底部翻页条之间的空间 */
-.essence-list {
-  flex: 1;
-  padding: 6px 10px 14px;
-}
-
-.essence-item {
-  display: flex;
-  gap: 10px;
-  padding: 12px 10px;
-  border-radius: var(--radius-md);
-  transition: background-color 0.18s ease;
-
-  &:hover {
-    background: color-mix(in srgb, var(--color-rooms) 6%, transparent);
-  }
-
-  & + .essence-item {
-    border-top: 1px solid var(--el-border-color-extra-light);
-  }
-}
-
-.essence-avatar {
-  flex: none;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  object-fit: cover;
-  background: var(--el-fill-color-light);
-  box-shadow: 0 0 0 1px var(--el-border-color-extra-light);
-}
-
-.essence-avatar--fallback {
-  @extend %brand-avatar;
-
-  font-size: 13px;
-}
-
-.essence-body {
-  flex: 1;
-  min-width: 0;
-}
-
-.essence-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-
-.essence-nick {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-
-  &.is-member {
-    color: color-mix(in srgb, var(--color-rooms) 78%, #000);
-  }
-}
-
-/* 房主标：与消息流的「房主」小标同义，靠房间青区分 */
-.essence-owner {
-  flex: none;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 18px;
-  color: color-mix(in srgb, var(--color-rooms) 72%, #000);
-  background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
-}
-
-.essence-time {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--el-text-color-placeholder);
-  font-variant-numeric: tabular-nums;
-}
-
-.essence-text {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.65;
-  color: var(--el-text-color-regular);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* 图片可点开全屏预览（el-image 内置 viewer），与消息流一样给 zoom-in 光标 */
-.essence-image {
-  display: block;
-  max-width: min(300px, 100%);
-  max-height: 260px;
-  margin-top: 8px;
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  background: var(--el-fill-color-light);
-  cursor: zoom-in;
-}
-
-/* 底部翻页条：固定在栏底，列表再长也不用来回滚到底找按钮 */
-.essence-foot {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 10px;
-  border-top: 1px solid var(--el-border-color-extra-light);
-}
-
-.essence-end {
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
-}
-
-/* 空态：占满标题头以下的整块区域，与消息区的空态同一套语言 */
-.essence-empty {
-  @extend %empty-block;
-
-  gap: 6px;
-  padding: 24px;
-  color: var(--el-text-color-secondary);
-
-  .el-icon {
-    color: color-mix(in srgb, var(--color-follow) 62%, var(--el-text-color-secondary));
-  }
-
-  p {
-    margin: 0;
-    font-size: 13px;
-  }
 }
 
 .scope-tabs {
@@ -2334,6 +2077,16 @@ onMounted(() => {
   border-left: 1px solid var(--el-border-color-lighter);
 }
 
+/* 窗口不够宽时收起右侧信息栏（资料卡 + 相册），把宽度让给聊天区：
+ * 固定占用 = 页面左右内距 28 + 列表 300 + 间距 14 + 信息栏 264 ≈ 606px，
+ * 低于 960px 时聊天区余量不足以舒展气泡，宁可失去信息栏也不压缩消息可读性。
+ * 信息是「有更好」，相册与资料在成员页另有入口，隐藏不损失关键路径 */
+@media (max-width: 960px) {
+  .rooms-aside {
+    display: none;
+  }
+}
+
 .msg-scroll {
   flex: 1;
   box-sizing: border-box;
@@ -2356,10 +2109,12 @@ onMounted(() => {
 }
 
 /* 加载更早历史：贴在消息流顶部的状态行（滚动到顶自动触发，不再有按钮） */
+/* 顶部占位条定高：空闲/加载中/到头布局恒定，贴顶视口不因 spinner 出入被推下抖动 */
 .msg-more {
   display: flex;
+  align-items: center;
   justify-content: center;
-  padding-bottom: 8px;
+  height: 28px;
 }
 
 .msg-more-text {
@@ -2517,10 +2272,6 @@ onMounted(() => {
  * 规则放在礼物之后——成员发的礼物/翻牌同样按成员卡呈现（不再染金），
  * 系统通知走居中 pill，不经过这套样式 */
 .msg-row--member {
-  .msg-avatar {
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-rooms) 55%, transparent);
-  }
-
   .msg-nick {
     color: var(--color-rooms);
   }

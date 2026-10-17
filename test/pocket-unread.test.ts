@@ -348,14 +348,14 @@ describe('pocket-unread（房间未读检测）', () => {
     await runTick(auth, mod)
     expect(mod.getState().total).toBe(2)
 
-    // 登出 / token 失效时由 IPC 层直接调用：不跑 tick 也立即清空 + 广播
+    // 登出 / token 失效由 IPC 层直接调用：不跑 tick 也立即清空 + 广播
     // （凭证失效后 tick 会因 token 无效整轮冻结，永远走不到未登录分支）
     broadcasts = []
     mod.clearAccountUnread()
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
     expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
 
-    // 已空再调不广播（对齐 token 失效时多请求并发报错的重复清况）
+    // 已空再调不广播（并发失效报错时幂等）
     broadcasts = []
     mod.clearAccountUnread()
     expect(broadcasts).toEqual([])

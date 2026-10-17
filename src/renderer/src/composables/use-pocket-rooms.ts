@@ -79,6 +79,9 @@ export type PocketRoomChatStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 /** 房间新消息轮询间隔：参考实现通知轮询 2s，这里取 5s 平衡实时性与接口压力 */
 const MESSAGE_POLL_MS = 5_000
+
+/** 上翻连续零新增多少次才认定到头：单次零新增可能是边界/重发同页的假信号 */
+const HISTORY_MISS_LIMIT = 2
 /**
  * 左列预览刷新间隔：一次请求覆盖全部房间，与主进程未读检测（60s）同频，
  * 让「预览文案」和「未读角标」同一节奏到位。
@@ -183,8 +186,10 @@ export function usePocketRooms() {
   let activeChannel: { serverId: string, channelId: string } | null = null
   /** 已加载消息的去重键集合：轮增量与翻历史共用，防重复插入 */
   let messageKeys = new Set<string>()
-  /** 更早历史游标；0 = 没有更多 */
+  /** 更早历史游标；0 = 下次上翻改用最早持有消息作探测游标（非「没有更多」） */
   let historyCursor = 0
+  /** 上翻连续零新增计数，达 HISTORY_MISS_LIMIT 判到头；任何切房/换口径/有新增都归零 */
+  let historyMissStreak = 0
   /** 消息范围（见 PocketRoomMessageScope）；切换时重拉当前房间 */
   const messageScope = ref<PocketRoomMessageScope>('member')
   /** 大房间 / 小房间视图（见 PocketRoomViewMode）；切换时换频道重拉 */
@@ -615,6 +620,7 @@ export function usePocketRooms() {
     activeChannel = null
     messageKeys = new Set()
     historyCursor = 0
+    historyMissStreak = 0
     messages.value = []
     historyExhausted.value = false
     essenceMessages.value = []
@@ -630,8 +636,9 @@ export function usePocketRooms() {
    * mode=replace：首屏（接口倒序返回，翻转成时间升序）；
    * mode=prepend：翻更早历史（保持升序插到头部）；
    * mode=append：轮询增量（只收没见过的，排序后追加）。
+   * 返回新并入条数（0 = 全是已见过的重复），供上翻判到头用。
    */
-  function mergeMessages(incoming: PocketRoomMessageView[], mode: 'replace' | 'prepend' | 'append') {
+  function mergeMessages(incoming: PocketRoomMessageView[], mode: 'replace' | 'prepend' | 'append'): number {
     const fresh = incoming.filter(item => !messageKeys.has(item.id))
     for (const item of fresh)
       messageKeys.add(item.id)
@@ -640,10 +647,10 @@ export function usePocketRooms() {
       // 若这里提前 return，会让上一档的消息留在新档位下
       // 接口按 msgTime 倒序（最新在前），聊天流是最新在下，翻转
       messages.value = fresh.slice().sort((a, b) => a.msgTime - b.msgTime)
-      return
+      return fresh.length
     }
     if (!fresh.length)
-      return
+      return 0
     if (mode === 'prepend') {
       messages.value = [...fresh.sort((a, b) => a.msgTime - b.msgTime), ...messages.value]
     }
@@ -660,6 +667,17 @@ export function usePocketRooms() {
         }
       }
     }
+    return fresh.length
+  }
+
+  /** 已持有消息里最早的 msgTime（>0）；作上翻游标的兜底探测点 */
+  function earliestHeldMsgTime(): number {
+    let min = 0
+    for (const item of messages.value) {
+      if (item.msgTime > 0 && (min === 0 || item.msgTime < min))
+        min = item.msgTime
+    }
+    return min
   }
 
   /** 拉取并归一一页房间消息；mode 见 mergeMessages */
@@ -670,7 +688,10 @@ export function usePocketRooms() {
   ): Promise<void> {
     const requestId = selectRequestId
     const scope = messageScope.value
-    const result = await window.mainAPI.pocketGetRoomMessages(channel.channelId, channel.serverId, nextTime, scope)
+    // 上翻游标兜底：游标为 0（首屏回过 0 / 上次上翻无进展）时，用已持有消息的最早
+    // msgTime 作探测——时间戳游标语义下，服务端按 < 或 <= 出页都能正确续上
+    const cursor = mode === 'prepend' && nextTime <= 0 ? earliestHeldMsgTime() : nextTime
+    const result = await window.mainAPI.pocketGetRoomMessages(channel.channelId, channel.serverId, cursor, scope)
     // 回包期间已切房 / 换了拉取口径：旧回包不得并入当前列表
     // （翻历史与轮询都没有自己的取消机制，只能在这里拦）
     if (requestId !== selectRequestId)
@@ -679,13 +700,29 @@ export function usePocketRooms() {
       .map(normalizePocketRoomMessage)
       .filter((item): item is PocketRoomMessageView => item !== null)
     // 只看房主时剔掉混入的官方系统账号发言（接口侧不区分）
-    mergeMessages(
-      scope === 'member' ? views.filter(item => item.userId !== OFFICIAL_POCKET_USER_ID) : views,
-      mode,
-    )
-    historyCursor = result.nextTime
-    // 是否还有更早历史只认 nextTime：本页条数不满 limit 不代表到头（服务端分页策略不透明）
-    if (!result.nextTime)
+    const mergedInput = scope === 'member' ? views.filter(item => item.userId !== OFFICIAL_POCKET_USER_ID) : views
+    const freshCount = mergeMessages(mergedInput, mode)
+    // 轮询（append）只管追加新消息：回包游标是「最新一页」的，拿去写 historyCursor
+    // 会把上翻游标从昨天打回今天，下一次上翻全拉回已持有消息 → 误判到头，到头判定也不归它管
+    if (mode === 'append')
+      return
+    if (mode === 'replace') {
+      historyCursor = result.nextTime
+      return
+    }
+    // 上翻到头判定只认「无进展」：游标推进或有新增都算进展，居其一就不计 miss。
+    // 游标推进（回包 nextTime 严格小于本次请求游标）就跟走——零新增的重复页、
+    // 被口径滤空的官方发言页（只看房主）、时间空洞的空页都只是路过，跟着游标走
+    // 自然穿出去；此处归零重探测只会在同一片区域原地打转（踩过：误判到头）。
+    // 游标没前进（实测到头时原样回游标而非归零）或 nextTime=0（协议终点；但实测
+    // 懒服务端还有更早历史时也可能提前归零，故只归零游标不立即判死）→ 下次改用
+    // 最早持有消息兜底探测，连续 HISTORY_MISS_LIMIT 次探测仍无进展才认定到头。
+    // 本页条数不满 limit 不代表到头，服务端分页策略不透明。
+    const cursorAdvanced = result.nextTime > 0 && result.nextTime < cursor
+    historyCursor = cursorAdvanced ? result.nextTime : 0
+    if (freshCount > 0 || cursorAdvanced)
+      historyMissStreak = 0
+    else if (++historyMissStreak >= HISTORY_MISS_LIMIT)
       historyExhausted.value = true
   }
 
@@ -870,6 +907,7 @@ export function usePocketRooms() {
     essenceLoading.value = false
     messageKeys = new Set()
     historyCursor = 0
+    historyMissStreak = 0
     historyExhausted.value = false
     chatStatus.value = 'loading'
     chatStatusText.value = ''

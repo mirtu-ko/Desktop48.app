@@ -775,6 +775,119 @@ describe('use-pocket-rooms / 选中连房与消息流', () => {
     expect(api.chatStatus.value).toBe('ready')
   })
 
+  it('历史到底的两种回包形状：连续零新增后判定到头并锁住，不再连环请求', async () => {
+    // 实测服务端到头时回等值游标而非归零；单次零新增可能是假信号，连续两次才认定
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPages: {
+        'ch-10001': {
+          0: { nextTime: 100, messages: [roomMsg('a', 100, 'first')] },
+          // 到头形状一：空页 + 等值游标
+          100: { nextTime: 100, messages: [] },
+        },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    expect(api.historyExhausted.value).toBe(false)
+
+    // 第一次零新增：只是 miss，游标归零转兑底探测
+    await api.loadMoreHistory()
+    expect(api.historyExhausted.value).toBe(false)
+    // 第二次（兑底游标 = 最早持有 msgTime 100）仍零新增 → 到头
+    await api.loadMoreHistory()
+    expect(api.historyExhausted.value).toBe(true)
+    const afterFirst = calls.messageFetched.length
+
+    // 到头后锁死：再调不发请求
+    await api.loadMoreHistory()
+    expect(calls.messageFetched.length).toBe(afterFirst)
+
+    // 到头形状二：重发同页（同 id + 推进游标）→ 去重零新增
+    const { api: api2, calls: calls2 } = await setup({
+      pocketIds: [10001],
+      roomPages: {
+        'ch-10001': {
+          0: { nextTime: 200, messages: [roomMsg('a', 100, 'first')] },
+          200: { nextTime: 300, messages: [roomMsg('a', 100, 'first')] },
+        },
+      },
+    })
+    await api2.load()
+    await api2.selectRoom(10001)
+    await api2.loadMoreHistory()
+    expect(api2.historyExhausted.value).toBe(false)
+    await api2.loadMoreHistory()
+    expect(api2.historyExhausted.value).toBe(true)
+    const afterSecond = calls2.messageFetched.length
+    await api2.loadMoreHistory()
+    expect(calls2.messageFetched.length).toBe(afterSecond)
+  })
+
+  it('零新增但游标前进不算到头：重复页 / 口径滤空页 / 时间空洞都跟随游标穿过', async () => {
+    // 判到头只认「无进展」（游标没前进且零新增）；游标还在走就跟着穿，不该归零重探测
+    // 形状一：重发同页（全是已持有）+ 推进游标 → 零新增但跟走，下一翻拿到更早消息
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPages: {
+        'ch-10001': {
+          0: { nextTime: 200, messages: [roomMsg('a', 200, 'first')] },
+          200: { nextTime: 150, messages: [roomMsg('a', 200, 'first')] },
+          150: { nextTime: 100, messages: [roomMsg('z', 150, 'older')] },
+        },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await api.loadMoreHistory()
+    expect(api.historyExhausted.value).toBe(false)
+    await api.loadMoreHistory()
+    expect(api.messages.value.map(item => item.text)).toEqual(['older', 'first'])
+    expect(calls.messageFetched.at(-1)).toEqual({ channelId: 'ch-10001', nextTime: 150, scope: 'member' })
+
+    // 形状二：只看房主时整页官方发言被口径滤空（views 非空但零新增）+ 游标前进 → 跟走不判死
+    const officialMsg = {
+      ...roomMsg('o', 150, '官方通知', '口袋官方'),
+      extInfo: JSON.stringify({ user: { userId: 121569667, nickName: '口袋官方', level: 0 } }),
+    }
+    const { api: api2 } = await setup({
+      pocketIds: [10001],
+      roomPages: {
+        'ch-10001': {
+          0: { nextTime: 200, messages: [roomMsg('a', 200, 'first')] },
+          200: { nextTime: 150, messages: [officialMsg] },
+          150: { nextTime: 100, messages: [roomMsg('z', 150, 'older')] },
+        },
+      },
+    })
+    await api2.load()
+    await api2.selectRoom(10001)
+    await api2.loadMoreHistory()
+    expect(api2.historyExhausted.value).toBe(false)
+    await api2.loadMoreHistory()
+    expect(api2.messages.value.map(item => item.text)).toEqual(['older', 'first'])
+    expect(api2.historyExhausted.value).toBe(false)
+
+    // 形状三：时间空洞（空回包 + 推进游标）→ 跳过空洞拿到更早消息
+    const { api: api3 } = await setup({
+      pocketIds: [10001],
+      roomPages: {
+        'ch-10001': {
+          0: { nextTime: 200, messages: [roomMsg('a', 200, 'first')] },
+          200: { nextTime: 100, messages: [] },
+          100: { nextTime: 50, messages: [roomMsg('z', 50, 'oldest')] },
+        },
+      },
+    })
+    await api3.load()
+    await api3.selectRoom(10001)
+    await api3.loadMoreHistory()
+    expect(api3.historyExhausted.value).toBe(false)
+    await api3.loadMoreHistory()
+    expect(api3.messages.value.map(item => item.text)).toEqual(['oldest', 'first'])
+    expect(api3.historyExhausted.value).toBe(false)
+  })
+
   it('未开播成员：选中后同样加载房间消息（留言流与直播无关）', async () => {
     const { api, calls } = await setup({
       pocketIds: [10002],
@@ -881,7 +994,66 @@ describe('use-pocket-rooms / 选中连房与消息流', () => {
     expect(api.messages.value.map(item => item.text)).toEqual(['oldest', 'older', 'newer'])
     expect(calls.messageFetched.at(-1)).toEqual({ channelId: 'ch-10001', nextTime: 100, scope: 'member' })
 
-    // 更早一页 nextTime=0：到头
+    // 更早一页 nextTime=0 + 空页：单次零新增只是 miss（可能是假信号），游标归零转兜底探测
+    await api.loadMoreHistory()
+    expect(api.historyExhausted.value).toBe(false)
+    // 连续两次零新增才认定到头（第二次请求用最早持有消息作探测游标）
+    await api.loadMoreHistory()
+    expect(api.historyExhausted.value).toBe(true)
+  })
+
+  it('轮询回包不写历史游标：上翻不被最新一页游标打断（实测会把游标打回今天致误判到头）', async () => {
+    const { api, calls, digest } = await setup({
+      pocketIds: [10001],
+      roomPages: {
+        'ch-10001': {
+          0: { nextTime: 100, messages: [roomMsg('a', 100, 'today')] },
+          100: { nextTime: 50, messages: [roomMsg('b', 50, 'yesterday')] },
+        },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+
+    // 轮询回包带着「最新一页」的游标 500：若被写进 historyCursor，
+    // 下次上翻会拉回已持有消息 → 零新增 → 误判到头
+    vi.mocked(window.mainAPI.pocketGetRoomMessages).mockImplementationOnce(async (_channelId: string, _serverId: string, nextTime = 0) => {
+      calls.messageFetched.push({ channelId: 'ch-10001', nextTime, scope: 'member' })
+      return { nextTime: 500, messages: [roomMsg('c', 600, 'newest')] }
+    })
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(digest().at(-1)).toEqual(['粉丝甲', 'newest', 600])
+
+    // 上翻仍用 100，正常拿到昨天那页；到头判定不受轮询干扰
+    await api.loadMoreHistory()
+    expect(calls.messageFetched.at(-1)).toEqual({ channelId: 'ch-10001', nextTime: 100, scope: 'member' })
+    expect(api.messages.value.map(item => item.text)).toEqual(['yesterday', 'today', 'newest'])
+    expect(api.historyExhausted.value).toBe(false)
+  })
+
+  it('首屏回 nextTime=0 不当到头：上翻用最早持有消息兜底探测（懒服务端假象）', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPages: {
+        'ch-10001': {
+          0: { nextTime: 0, messages: [roomMsg('a', 500, 'today')] },
+          500: { nextTime: 0, messages: [roomMsg('b', 100, 'yesterday')] },
+        },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    expect(api.historyExhausted.value).toBe(false)
+
+    // 游标为 0 → 用已持有最早 msgTime 500 兜底，拉到更早一页
+    await api.loadMoreHistory()
+    expect(calls.messageFetched.at(-1)).toEqual({ channelId: 'ch-10001', nextTime: 500, scope: 'member' })
+    expect(api.messages.value.map(item => item.text)).toEqual(['yesterday', 'today'])
+    expect(api.historyExhausted.value).toBe(false)
+
+    // 真到头：再探测（兜底 100）连续两次零新增后锁定
+    await api.loadMoreHistory()
+    expect(api.historyExhausted.value).toBe(false)
     await api.loadMoreHistory()
     expect(api.historyExhausted.value).toBe(true)
   })

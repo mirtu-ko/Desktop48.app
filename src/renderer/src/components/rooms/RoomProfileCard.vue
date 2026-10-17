@@ -67,7 +67,7 @@ const birthdayLine = computed(() => {
 const liveCover = computed(() => Tools.sourceUrl(props.live?.coverPath || ''))
 const liveTime = computed(() => {
   const time = Number.parseInt(props.live?.ctime || '', 10)
-  return Number.isFinite(time) && time > 0 ? dayjs(time).format('HH:mm') : ''
+  return Number.isFinite(time) && time > 0 ? dayjs(time).format('MM-DD HH:mm') : ''
 })
 
 function enterLive() {

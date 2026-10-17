@@ -94,7 +94,7 @@ rooms.value（左列排序见下）
    │     → normalizePocketRoomMessage 逐条归一（DELETE 类返回 null 过滤）
    │     → 选中序号已变则丢弃整页（翻历史 / 轮询同样在此拦，防旧频道回包并进新列表）
    │     → mergeMessages(replace)：接口 msgTime 倒序 → 翻转为时间升序（空页照样落成空列表）
-   │     → historyCursor = nextTime（0 = 没有更多）
+   │     → historyCursor = nextTime（0 = 下次上翻改用最早持有消息兑底探测）
    └─ chatStatus='ready' → resumeMessagePoll()
 
 轮询（useIntervalFn，5s，随页面激活态暂停/恢复）：
@@ -176,7 +176,8 @@ route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤�
 | `append`  | 轮询新消息   | 0        | 去重后排序追加，同步左列预览 |
 
 - 去重键 `messageKeys`：`msgIdClient || msgIdServer || msgTime`，轮询与翻历史共用；
-- `historyExhausted` **仅认 `nextTime === 0`**——本页条数不足 limit 不表示已到末页（服务端分页策略不透明，曾按条数判断导致更早历史无法拉取）；
+- `historyExhausted` 只由上翻（prepend）判定：**连续 2 次零新增**（空回包 / 重发同页）才认定，单次零新增可能是边界假信号；上翻游标被写 0 后改用已持有消息的最早 msgTime 兑底探测（懒服务端对不满页直接回 0，不能当真到头）；
+- **轮询回包不得写 `historyCursor`、不得判到头**：轮询拉的是最新一页，其回包游标是「今天」，写进上翻游标会把游标从昨天打回今天，下一次上翻全拉回已持有消息 → 误判到头（实测同一房间有时能翻到昨天、有时翻几页就提示没有更多，即此竞态）；
 - 轮询增量的预览同步按消息时刻比较（`previewTime`），防止批量预览的旧快照覆盖更新的本地预览；
 - 轮询间隔 5s，仅选中房间就绪后启动，且**需以 `onActivated` / `onDeactivated` 控制定时器**：主窗口页面走 keep-alive，切页不销毁，仅挂 `onMounted` 时切页后仍在后台运行（房间页在主窗口内，不受失焦节流影响）；
 - 消息范围 `homeowner`（只看房主）/ `all`（全部用户）两档，切换即重拉当前房间。`homeowner` 会混入口袋官方系统账号 `121569667`，渲染层按 `userId` 过滤。**范围切换只换拉取口径，不得改变当前视图或清掉与范围无关的状态**：走 `reloadMessagesForScope()`（保留当前频道与精华消息，只复位游标/去重键并重拉一页），不要用 `clearChat()` + 重开频道——后者会连带清空精华、闪一下顶部条，多打一次精华请求；也不要改走 `selectRoom()`，它会把 `viewMode` 复位到大房间（踩过）。

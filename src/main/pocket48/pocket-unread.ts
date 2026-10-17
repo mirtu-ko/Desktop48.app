@@ -510,11 +510,9 @@ function sameSnapshot(a: Record<string, UnreadRoomState>, b: Record<string, Unre
 }
 
 /**
- * 清空账号相关未读状态（未读 / 水位 / 触发锚 / 挂起对齐），有变化则落盘 + 广播归零。
- * 登出与 token 失效清凭证时立即调用（见 register-pocket-ipc.ts）——原先只在轮询发现
- * 未登录时才清（最长要等一个 60s 周期），凭证失效后角标会一直挂着误导用户。
- * 频道缓存与账号无关，保留；重登后没有旧锚，最新消息走「首见锚定」，
- * 不会把登出前的消息补成未读。
+ * 清空账号相关未读（未读/水位/触发锚），有变化则落盘 + 广播归零。
+ * 登出与 token 失效即刻调用 —— 原先等轮询发现未登录才清（最长 60s，期间角标误导）。
+ * 频道缓存与账号无关，保留；重登后无旧锚，走首见锚定不补登出前消息。
  */
 export function clearAccountUnread(): void {
   const data = store()

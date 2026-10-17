@@ -24,10 +24,8 @@ const LOGGED_OUT: PocketAuthState = {
 /** 登录态快照；启动后由调用方（设置页）refresh 一次 */
 export const pocketAuthState = ref<PocketAuthState>({ ...LOGGED_OUT })
 
-// 主进程因 token 失效清除凭证时广播（对端：main/pocket48/pocket-auth.ts）。
-// store 是模块级单例，直接在此订阅：所有窗口的镜像同步复位，
-// 房间页报「登录过期」时设置页才不会再显示已登录。
-// 方法可选调用兜底单测桩（stub 只提供 pocketGetAuthState / pocketLogout）。
+// 主进程清失效凭证时广播（对端 pocket-auth.ts）：各窗镜像复位，两页登录态不分叉。
+// 可选调用兜底单测桩（stub 只提供 pocketGetAuthState / pocketLogout）
 if (typeof window !== 'undefined')
   window.mainAPI.pocketAuthExpired?.(() => applyAuthState({ ...LOGGED_OUT }))
 

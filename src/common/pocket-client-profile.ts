@@ -25,12 +25,12 @@ export const POCKET_CLIENT_PROFILE_OPTIONS: readonly PocketClientProfileOption[]
   {
     id: 'pocket48',
     label: '口袋48',
-    hint: '模拟口袋48官方客户端。手机端未在使用口袋48时选它。',
+    hint: '登录「口袋48」APP。手机端未在使用口袋48时选它。',
   },
   {
     id: 'seine48',
     label: '塞纳河48',
-    hint: '模拟塞纳河48官方客户端。手机端正在使用口袋48时选它，两端可同时在线。',
+    hint: '登录「塞纳河48」APP。手机端正在使用口袋48时选它, 两端可同时在线。',
   },
 ]
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
-import ImageViewerToolbar from '@renderer/components/rooms/ImageViewerToolbar.vue'
+import ImageViewerToolbar from '@renderer/components/ui/ImageViewerToolbar.vue'
 import { computed } from 'vue'
 
 const props = defineProps<{

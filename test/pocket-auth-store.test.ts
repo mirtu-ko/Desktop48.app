@@ -24,7 +24,7 @@ const ACCOUNT_B: PocketAuthState = { ...ACCOUNT_A, nickname: '乙', mobileMasked
 async function setup(initial: PocketAuthState) {
   vi.resetModules()
   let current = initial
-  /** 捕获主进程广播的订阅回调：模拟「token 失效清凭证」时主进程会广播 pocketAuthExpired */
+  /** 捕获 pocketAuthExpired 订阅回调，模拟主进程失效广播 */
   let authExpiredNotify: (() => void) | undefined
   vi.stubGlobal('window', {
     mainAPI: {
@@ -47,7 +47,7 @@ async function setup(initial: PocketAuthState) {
       current = next
       await store.refreshPocketAuthState()
     },
-    /** 触发主进程的「凭证已因 token 失效被清除」广播 */
+    /** 触发失效广播 */
     broadcastAuthExpired: () => authExpiredNotify?.(),
   }
 }
@@ -87,7 +87,7 @@ describe('pocket-auth store / 账号变化作废小房间解锁', () => {
 })
 
 describe('pocket-auth store / 主进程失效广播复位镜像', () => {
-  it('收到 pocketAuthExpired 广播即复位：接口报过期后设置页不再显示已登录', async () => {
+  it('收到失效广播即复位：登录态归零，小房间解锁一并作废', async () => {
     const { store, unlock, broadcastAuthExpired } = await setup(ACCOUNT_A)
     await store.refreshPocketAuthState()
     expect(store.pocketAuthState.value.loggedIn).toBe(true)
@@ -100,7 +100,7 @@ describe('pocket-auth store / 主进程失效广播复位镜像', () => {
     expect(unlock.isSmallRoomUnlocked('ch-1-small')).toBe(false)
   })
 
-  it('重复广播不抖动：已复位时不再误作废（无解锁态可作废，指纹比对幂等）', async () => {
+  it('重复广播幂等：已复位时不再误作废', async () => {
     const { store, broadcastAuthExpired } = await setup(ACCOUNT_A)
     await store.refreshPocketAuthState()
     broadcastAuthExpired()

@@ -672,8 +672,7 @@ onUnmounted(() => {
   gap: 4px;
 }
 
-/* 等级徽标：小号胶囊（同 Setting.vue 的 verify-level 语言，尺寸收敛适配窄面板）；
-   min-width 定宽让各行徽标左缘纵向对齐，双位数/个位数不参差 */
+/* 等级徽标：小胶囊；min-width 定宽让各行徽标纵向对齐 */
 .rank-panel__level {
   flex: none;
   min-width: 32px;
@@ -688,7 +687,7 @@ onUnmounted(() => {
   background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
 }
 
-/* 贡献值：金色与榜单主题色呼应；定宽右对齐成数字列，tabular-nums 保证刷新跳动时不抖动 */
+/* 贡献值：金色数字列，定宽右对齐 + tabular-nums */
 .rank-panel__money {
   flex: none;
   min-width: 34px;

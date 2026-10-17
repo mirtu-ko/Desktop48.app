@@ -175,7 +175,7 @@ const api = {
   // pocketDanmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   pocketDanmakuBatch: (callback: (_batch: PocketDanmakuBatch) => void) =>
     onIpc('pocketDanmakuBatch', callback),
-  // pocketAuthExpired 同上由 IpcEventMap 自动派生：主进程清除失效凭证时广播，各窗镜像复位
+  // pocketAuthExpired 由 IpcEventMap 派生：主进程清失效凭证时广播
   pocketAuthExpired: (callback: () => void) =>
     onIpc('pocketAuthExpired', callback),
 
