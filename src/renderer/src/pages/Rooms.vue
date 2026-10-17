@@ -616,6 +616,16 @@ function imageBoxStyle(message: PocketRoomMessageView) {
   }
 }
 
+/** 精华弹层里的图片：弹层比消息流宽，宽度上限放到 300px；无尺寸时交给 CSS 兜底 */
+function essenceImageStyle(message: PocketRoomMessageView) {
+  if (!message.imageWidth || !message.imageHeight)
+    return undefined
+  return {
+    width: 'min(300px, 100%)',
+    aspectRatio: `${message.imageWidth} / ${message.imageHeight}`,
+  }
+}
+
 /**
  * 视频尺寸占位：服务端 bodys 带真实 w/h（实测竖屏 w=1080/h=1920）。
  * 横屏沿用 280px 宽上限、按真实比例出高；竖屏高度封顶 360px（小窗再按视口收缩）、
@@ -1302,59 +1312,107 @@ onMounted(() => {
             </aside>
           </div>
 
-          <!-- 精华消息弹层：完整列表（按时间倒序，最新在上），可继续加载更早的精华 -->
+          <!-- 精华消息弹层：外壳 / 标题头 / 滚动列复用 app.scss 的「详情卡片共用」，单栏列表；
+               图片走 el-image 的预览（全屏查看 + 下载），与消息流同一套工具条 -->
           <el-dialog
             v-model="essenceOpen"
-            class="essence-dialog"
-            :title="`精华消息${essenceMessages.length ? ` · ${essenceMessages.length}` : ''}`"
-            width="560px"
+            class="detail-card-dialog essence-dialog"
+            modal-class="detail-card-overlay"
+            :show-close="false"
             align-center
             append-to-body
           >
-            <div v-if="essenceMessages.length" class="essence-list">
-              <article v-for="item in essenceMessages" :key="item.id" class="essence-item">
-                <img
-                  v-if="item.avatar"
-                  class="essence-avatar"
-                  :src="avatarUrl(item.avatar)"
-                  :alt="item.nick"
-                  referrerpolicy="no-referrer"
-                >
-                <span v-else class="essence-avatar essence-avatar--fallback">{{ item.nick.slice(0, 1) }}</span>
-                <div class="essence-body">
-                  <div class="essence-meta">
-                    <span class="essence-nick" :class="{ 'is-member': item.isMember }">{{ item.nick }}</span>
-                    <span class="essence-time">
-                      {{ item.msgTime ? dayjs(item.msgTime).format('MM-DD HH:mm') : '' }}
-                    </span>
-                  </div>
-                  <p class="essence-text">
-                    {{ item.text }}
-                  </p>
-                  <img
-                    v-if="item.imageUrl"
-                    class="essence-image"
-                    :src="item.imageUrl"
-                    alt="精华图片"
-                    referrerpolicy="no-referrer"
-                  >
+            <div class="detail-card essence-card">
+              <div class="detail-pane">
+                <div class="detail-pane-head">
+                  <span class="detail-pane-title">精华消息</span>
+                  <span class="detail-pane-sub">{{ essenceMessages.length }} 条</span>
+                  <span class="essence-hint">房间置顶 · 按时间倒序</span>
                 </div>
-              </article>
-              <div class="essence-more">
-                <el-button
-                  v-if="!essenceExhausted"
-                  size="small"
-                  :loading="essenceLoading"
-                  @click="loadMoreEssence"
-                >
-                  加载更多
-                </el-button>
-                <span v-else class="essence-end">没有更多了</span>
+
+                <div v-if="essenceMessages.length" class="essence-list detail-scroll">
+                  <article
+                    v-for="(item, index) in essenceMessages"
+                    :key="item.id"
+                    class="essence-item detail-pane-row"
+                    :style="{ '--i': index }"
+                  >
+                    <img
+                      v-if="item.avatar"
+                      class="essence-avatar"
+                      :src="avatarUrl(item.avatar)"
+                      :alt="item.nick"
+                      referrerpolicy="no-referrer"
+                    >
+                    <span v-else class="essence-avatar essence-avatar--fallback">{{ item.nick.slice(0, 1) }}</span>
+
+                    <div class="essence-body">
+                      <div class="essence-meta">
+                        <span class="essence-nick" :class="{ 'is-member': item.isMember }">{{ item.nick }}</span>
+                        <span v-if="item.isMember" class="essence-owner">房主</span>
+                        <span class="essence-time">
+                          {{ item.msgTime ? dayjs(item.msgTime).format('MM-DD HH:mm') : '' }}
+                        </span>
+                      </div>
+
+                      <!-- 媒体消息的正文只是「[图片消息]」这类占位，有图时不再重复一行 -->
+                      <p v-if="!isPlaceholderText(item.text)" class="essence-text">
+                        {{ item.text }}
+                      </p>
+
+                      <el-image
+                        v-if="item.imageUrl"
+                        class="essence-image"
+                        :style="essenceImageStyle(item)"
+                        :src="item.imageUrl"
+                        :preview-src-list="[item.imageUrl]"
+                        preview-teleported
+                        hide-on-click-modal
+                        fit="cover"
+                        referrerpolicy="no-referrer"
+                      >
+                        <template #toolbar="{ actions, reset, activeIndex }">
+                          <ImageViewerToolbar
+                            :actions="actions"
+                            :reset="reset"
+                            :urls="[item.imageUrl]"
+                            :active-index="activeIndex"
+                          />
+                        </template>
+                      </el-image>
+                    </div>
+                  </article>
+                </div>
+
+                <div v-else class="essence-empty">
+                  <el-icon :size="26">
+                    <StarFilled />
+                  </el-icon>
+                  <p>{{ essenceLoading ? '正在加载精华消息…' : '这个房间还没有精华消息' }}</p>
+                  <p class="essence-empty-hint">
+                    房主或管理员设为精华的消息会出现在这里
+                  </p>
+                </div>
+
+                <div v-if="essenceMessages.length" class="essence-foot">
+                  <el-button
+                    v-if="!essenceExhausted"
+                    size="small"
+                    :loading="essenceLoading"
+                    @click="loadMoreEssence"
+                  >
+                    加载更早的精华
+                  </el-button>
+                  <span v-else class="essence-end">没有更多了</span>
+                </div>
               </div>
+
+              <button class="detail-close" title="关闭" @click="essenceOpen = false">
+                <el-icon :size="15">
+                  <Close />
+                </el-icon>
+              </button>
             </div>
-            <p v-else class="essence-empty">
-              {{ essenceLoading ? '正在加载精华消息…' : '这个房间还没有精华消息' }}
-            </p>
           </el-dialog>
         </template>
 
@@ -1832,33 +1890,52 @@ onMounted(() => {
   background: color-mix(in srgb, var(--el-bg-color) 70%, transparent);
 }
 
-/* ===== 精华消息弹层 ===== */
+/* ===== 精华消息弹层（外壳 / 标题头 / 滚动列见 app.scss「详情卡片共用」，这里只留列表与条目） ===== */
+/* 关闭钮落在浅色标题头上：按专辑卡的口径给深色图标（几何与悬停态在全局） */
+.essence-card {
+  /* 投影跟着房间主题青走，与页面语义色一致 */
+  --accent: var(--color-rooms);
+  --detail-close-bg: color-mix(in srgb, var(--el-text-color-primary) 8%, transparent);
+  --detail-close-ink: var(--el-text-color-secondary);
+}
+
+/* 标题头右侧提示：左推靠关闭钮，与曲目卡的「↑ ↓ 切换专辑」同一位置 */
+.essence-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--el-text-color-placeholder);
+}
+
+/* 列表自持滚动，撑满标题头与底部翻页条之间的空间 */
 .essence-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: min(56vh, 520px);
-  overflow-y: auto;
+  flex: 1;
+  padding: 6px 10px 14px;
 }
 
 .essence-item {
   display: flex;
   gap: 10px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  padding: 12px 10px;
+  border-radius: var(--radius-md);
+  transition: background-color 0.18s ease;
 
-  &:last-of-type {
-    border-bottom: none;
+  &:hover {
+    background: color-mix(in srgb, var(--color-rooms) 6%, transparent);
+  }
+
+  & + .essence-item {
+    border-top: 1px solid var(--el-border-color-extra-light);
   }
 }
 
 .essence-avatar {
   flex: none;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   object-fit: cover;
   background: var(--el-fill-color-light);
+  box-shadow: 0 0 0 1px var(--el-border-color-extra-light);
 }
 
 .essence-avatar--fallback {
@@ -1878,8 +1955,8 @@ onMounted(() => {
 
 .essence-meta {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 4px;
 }
 
@@ -1893,33 +1970,55 @@ onMounted(() => {
   }
 }
 
+/* 房主标：与消息流的「房主」小标同义，靠房间青区分 */
+.essence-owner {
+  flex: none;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+  color: color-mix(in srgb, var(--color-rooms) 72%, #000);
+  background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
+}
+
 .essence-time {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--el-text-color-placeholder);
+  font-variant-numeric: tabular-nums;
 }
 
 .essence-text {
   margin: 0;
   font-size: 13px;
-  line-height: 1.62;
+  line-height: 1.65;
   color: var(--el-text-color-regular);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+/* 图片可点开全屏预览（el-image 内置 viewer），与消息流一样给 zoom-in 光标 */
 .essence-image {
   display: block;
-  max-width: 100%;
+  max-width: min(300px, 100%);
   max-height: 260px;
   margin-top: 8px;
   border-radius: var(--radius-sm);
-  object-fit: contain;
+  overflow: hidden;
+  background: var(--el-fill-color-light);
+  cursor: zoom-in;
 }
 
-.essence-more {
+/* 底部翻页条：固定在栏底，列表再长也不用来回滚到底找按钮 */
+.essence-foot {
+  flex: none;
   display: flex;
+  align-items: center;
   justify-content: center;
-  padding-top: 4px;
+  padding: 10px;
+  border-top: 1px solid var(--el-border-color-extra-light);
 }
 
 .essence-end {
@@ -1927,11 +2026,30 @@ onMounted(() => {
   color: var(--el-text-color-placeholder);
 }
 
+/* 空态：占满标题头以下的整块区域，与消息区的空态同一套语言 */
 .essence-empty {
-  margin: 8px 0;
-  font-size: 13px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
   color: var(--el-text-color-secondary);
-  text-align: center;
+
+  .el-icon {
+    color: color-mix(in srgb, var(--color-follow) 62%, var(--el-text-color-secondary));
+  }
+
+  p {
+    margin: 0;
+    font-size: 13px;
+  }
+
+  .essence-empty-hint {
+    font-size: 12px;
+    color: var(--el-text-color-placeholder);
+  }
 }
 
 .scope-tabs {

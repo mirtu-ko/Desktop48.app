@@ -180,7 +180,7 @@ route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤�
 - 轮询增量的预览同步按消息时刻比较（`previewTime`），防止批量预览的旧快照覆盖更新的本地预览；
 - 轮询间隔 5s，仅选中房间就绪后启动，且**需以 `onActivated` / `onDeactivated` 控制定时器**：主窗口页面走 keep-alive，切页不销毁，仅挂 `onMounted` 时切页后仍在后台运行（房间页在主窗口内，不受失焦节流影响）；
 - 消息范围 `homeowner`（只看房主）/ `all`（全部用户）两档，切换即重拉当前房间。`homeowner` 会混入口袋官方系统账号 `121569667`，渲染层按 `userId` 过滤。**范围切换只换拉取口径，不得改变当前视图或清掉与范围无关的状态**：走 `reloadMessagesForScope()`（保留当前频道与精华消息，只复位游标/去重键并重拉一页），不要用 `clearChat()` + 重开频道——后者会连带清空精华、闪一下顶部条，多打一次精华请求；也不要改走 `selectRoom()`，它会把 `viewMode` 复位到大房间（踩过）。
-- **精华消息是房间级内容，与消息范围无关**：由房主 / 管理员挑选，`essenceInfo` 记录设置信息（本版本不消费）。进房间（含切频道）时拉一页，**不随 5s 消息轮询复查**——精华低频变更，复查会让每个房间每次停留都多打一个请求。接口失败静默降级：顶部精华条不出现，消息流不受影响。归一化与普通消息共用 `normalizePocketRoomMessage`。
+- **精华消息是房间级内容，与消息范围无关**：由房主 / 管理员挑选，`essenceInfo` 记录设置信息（本版本不消费）。进房间（含切频道）时拉一页，**不随 5s 消息轮询复查**——精华低频变更，复查会让每个房间每次停留都多打一个请求。接口失败静默降级：顶部精华条不出现，消息流不受影响。归一化与普通消息共用 `normalizePocketRoomMessage`。**弹层外壳复用 `app.scss` 的「详情卡片共用」**（`detail-card-dialog detail-card essence-card`，宽度由 `.essence-dialog` 收窄；标题头 / 滚动列 / 关闭钮 / 入场动画都走公共定义，页面侧只写列表与条目），图片用 `el-image` 的 `preview-src-list` 全屏预览，工具条复用 `ImageViewerToolbar`（带下载）。
 
 ## 6. 消息归一化
 
