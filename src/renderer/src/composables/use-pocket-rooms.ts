@@ -43,6 +43,9 @@ import Tools from '@renderer/utils/tools'
 import { useIntervalFn } from '@vueuse/core'
 import { computed, getCurrentInstance, onActivated, onDeactivated, onScopeDispose, ref, watch } from 'vue'
 
+/** 关注来源：pocket = 来自口袋账号（拉取同步），local = 仅本地添加，both = 两边都有 */
+export type PocketRoomFollowSource = 'pocket' | 'local' | 'both'
+
 /** 左侧房间条目 */
 export interface PocketRoom {
   userId: number
@@ -62,6 +65,8 @@ export interface PocketRoom {
   previewTime: number
   /** 匹配到的在直播；null = 未开播（房间留言流与直播与否无关，仍可查看） */
   live: LiveListItem | null
+  /** 关注来源；临时房间缺省（不属于关注名单） */
+  followSource?: PocketRoomFollowSource
   /**
    * 临时房间（成员详情卡入口带过来的）：成员不在关注名单里，只活在本次会话内存中，
    * 不写关注名单、不落盘，撤掉条目即消失。见 openTemporaryRoom。
@@ -245,7 +250,7 @@ export function usePocketRooms() {
    * 减去屏蔽名单是「屏蔽优先」在房间页的落点：关注与屏蔽正交（见 composables/use-member-actions），
    * 账号关注照旧存在，但被屏蔽的成员不进左列——也就不必为它解析房间频道。
    */
-  async function loadFollowedIds(): Promise<number[]> {
+  async function loadFollowedIds(): Promise<{ ids: number[], followSourceOf: Map<number, PocketRoomFollowSource> }> {
     // 屏蔽名单必须先就位：isBlocked 在未加载的空名单上恒为 false，漏加载等于放行被屏蔽成员
     await ensureBlockedLoaded()
     // 首灌走 refresh 而非 ensureLoaded：store 是模块级单例，ensureLoaded 命中后
@@ -254,13 +259,29 @@ export function usePocketRooms() {
       loadPocketFollowedIds(),
       refreshFollowedMembers().then(() => followedMembers.value),
     ])
-    const ids = new Set<number>()
-    for (const id of [...pocketIds, ...localEntries.map(entry => entry.userId)]) {
+    const pocketIdSet = new Set<number>()
+    for (const id of pocketIds) {
       const userId = Tools.normalizeUserId(id)
-      if (Number.isFinite(userId) && userId > 0 && !isBlocked(userId))
-        ids.add(userId)
+      if (Number.isFinite(userId) && userId > 0)
+        pocketIdSet.add(userId)
     }
-    return [...ids]
+    const localIdSet = new Set<number>()
+    for (const entry of localEntries) {
+      const userId = Tools.normalizeUserId(entry.userId)
+      if (Number.isFinite(userId) && userId > 0)
+        localIdSet.add(userId)
+    }
+    const ids = new Set<number>()
+    const followSourceOf = new Map<number, PocketRoomFollowSource>()
+    for (const userId of [...pocketIdSet, ...localIdSet]) {
+      if (isBlocked(userId))
+        continue
+      ids.add(userId)
+      const inPocket = pocketIdSet.has(userId)
+      const inLocal = localIdSet.has(userId)
+      followSourceOf.set(userId, inPocket && inLocal ? 'both' : inPocket ? 'pocket' : 'local')
+    }
+    return { ids: [...ids], followSourceOf }
   }
 
   /** 共享 store 的全站直播索引；force=true 用于手动刷新并绕过 120s 新鲜缓存。 */
@@ -437,7 +458,7 @@ export function usePocketRooms() {
         clearChat()
         return
       }
-      const ids = await loadFollowedIds()
+      const { ids, followSourceOf } = await loadFollowedIds()
       if (requestId !== loadRequestId)
         return
       const liveMap = await fetchLiveMap(true)
@@ -457,6 +478,7 @@ export function usePocketRooms() {
           avatar: member?.avatar || official?.avatar || '',
           teamName: member?.teamName || '',
           teamColor: member?.teamColor || '',
+          followSource: followSourceOf.get(userId),
           serverId: '',
           channelId: '',
           preview: '',

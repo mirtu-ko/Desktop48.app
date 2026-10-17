@@ -2,6 +2,7 @@
 // 口袋「房间」页：左栏关注成员房间列表，右栏房间消息流（成员在房间频道的留言，非直播间弹幕）。
 // 数据与连接编排见 composables/use-pocket-rooms.ts（本页只做展示与交互）。
 
+import type { PocketRoom } from '@renderer/composables/use-pocket-rooms'
 import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import type { Component } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
@@ -10,8 +11,8 @@ import ImageViewerToolbar from '@renderer/components/rooms/ImageViewerToolbar.vu
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
 import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
-import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 
+import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { copyText } from '@renderer/utils/clipboard'
@@ -20,7 +21,7 @@ import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@rende
 import Tools from '@renderer/utils/tools'
 import { useDebounceFn, useEventListener } from '@vueuse/core'
 import dayjs from 'dayjs'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -66,6 +67,49 @@ const route = useRoute()
 /** 未读数字角标文案：计数按列表一页封顶，触顶即「至少这么多」，收敛为 50+ */
 function unreadText(count: number): string {
   return count >= ROOM_MESSAGE_LIMIT ? `${ROOM_MESSAGE_LIMIT}+` : String(count)
+}
+
+/** 是否在口袋账号侧有关注（pocket / both 都算；本地独有的不算） */
+function isPocketFollowed(source: PocketRoom['followSource']): boolean {
+  return source === 'pocket' || source === 'both'
+}
+
+/** 口袋关注 / 取关：只动账号侧关注，不改本地名单；结果就地更新当前房间来源 */
+const pocketFollowBusy = ref(false)
+
+async function togglePocketFollow() {
+  const room = selectedRoom.value
+  if (!room || pocketFollowBusy.value)
+    return
+  const willFollow = !isPocketFollowed(room.followSource)
+  // 取关是账号级破坏性操作：二次确认，避免手滑把口袋侧关注摘掉
+  if (!willFollow) {
+    const ok = await ElMessageBox.confirm(
+      `确定在口袋账号取消关注「${room.nickname}」吗？`,
+      '取消口袋关注',
+      { type: 'warning', confirmButtonText: '取消关注', cancelButtonText: '再想想' },
+    ).then(() => true).catch(() => false)
+    if (!ok)
+      return
+  }
+  pocketFollowBusy.value = true
+  try {
+    if (willFollow)
+      await window.mainAPI.pocketFollowMember(room.userId)
+    else
+      await window.mainAPI.pocketUnfollowMember(room.userId)
+    room.followSource = willFollow
+      ? (room.followSource === 'local' ? 'both' : 'pocket')
+      : (room.followSource === 'both' ? 'local' : undefined)
+    ElMessage({ message: willFollow ? '已在口袋账号关注该成员' : '已在口袋账号取消关注该成员', type: 'success' })
+  }
+  catch (error) {
+    ElMessage.error(willFollow ? '口袋关注失败，请稍后重试' : '口袋取关失败，请稍后重试')
+    debugLog('pocket-rooms', '口袋关注/取关失败', error)
+  }
+  finally {
+    pocketFollowBusy.value = false
+  }
 }
 
 /**
@@ -237,6 +281,18 @@ function scrollToBottom() {
     return
   el.scrollTop = el.scrollHeight
   lastSeenScrollTop = el.scrollTop
+}
+
+/**
+ * 双击左列房间条目：若正是当前房间，消息流立即钉回底部
+ * （其他房间双击时单击已先选中、进房流程本身会回底，无需额外处理）。
+ */
+function onRoomWrapDblClick(room: PocketRoom, event: MouseEvent) {
+  // 临时房间的关闭钮不参与：双击关闭钮误触回底没有意义
+  if ((event.target as HTMLElement).closest('.room-temp-close'))
+    return
+  if (room.userId === selectedUserId.value)
+    scrollToBottom()
 }
 
 /**
@@ -687,6 +743,7 @@ onMounted(() => {
             :key="room.userId"
             class="room-wrap"
             :class="{ 'is-temp': room.temporary }"
+            @dblclick="onRoomWrapDblClick(room, $event)"
           >
             <button
               type="button"
@@ -707,6 +764,14 @@ onMounted(() => {
               <span class="room-meta">
                 <span class="room-name-row">
                   <span class="room-name ellipsis">{{ room.nickname }}</span>
+                  <!-- 口袋关注标识：轻量小星标，只标注来自口袋账号的关注，本地独有的不标 -->
+                  <el-tooltip
+                    v-if="isPocketFollowed(room.followSource)"
+                    content="口袋账号关注（可在设置页拉取同步）"
+                    placement="top"
+                  >
+                    <el-icon class="room-follow-ico"><StarFilled /></el-icon>
+                  </el-tooltip>
                   <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
                   <span v-if="room.temporary" class="room-temp-tag">临时</span>
                   <span
@@ -1190,6 +1255,9 @@ onMounted(() => {
                 :team-name="selectedRoom.teamName"
                 :team-color="selectedRoom.teamColor"
                 :live="selectedRoom.live"
+                :pocket-followed="isPocketFollowed(selectedRoom.followSource)"
+                :pocket-follow-busy="pocketFollowBusy"
+                @toggle-follow="togglePocketFollow"
               />
               <RoomAlbum :messages="messages" />
             </aside>
@@ -1514,6 +1582,15 @@ onMounted(() => {
   color: var(--color-rooms);
   background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 34%, transparent);
+}
+
+/* 口袋关注标识：昵称后 11px 品牌色小星标（语义：已关注），详情看 tooltip 与资料卡 */
+.room-follow-ico {
+  flex: none;
+  margin-left: 2px;
+  font-size: 11px;
+  color: var(--brand-primary);
+  opacity: 0.8;
 }
 
 /* 左列预览：频道最新一条消息（批量接口一次拉全，选中房间轮询到时本地即时补） */
