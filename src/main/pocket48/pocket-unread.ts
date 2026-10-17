@@ -509,6 +509,33 @@ function sameSnapshot(a: Record<string, UnreadRoomState>, b: Record<string, Unre
   })
 }
 
+/**
+ * 清空账号相关未读状态（未读 / 水位 / 触发锚 / 挂起对齐），有变化则落盘 + 广播归零。
+ * 登出与 token 失效清凭证时立即调用（见 register-pocket-ipc.ts）——原先只在轮询发现
+ * 未登录时才清（最长要等一个 60s 周期），凭证失效后角标会一直挂着误导用户。
+ * 频道缓存与账号无关，保留；重登后没有旧锚，最新消息走「首见锚定」，
+ * 不会把登出前的消息补成未读。
+ */
+export function clearAccountUnread(): void {
+  const data = store()
+  const hadUnread = Object.keys(data.unread).length > 0
+  const hadAccountState = hadUnread
+    || Object.keys(data.seenKeys).length > 0
+    || Object.keys(data.unreadChannels).length > 0
+    || Object.keys(data.readMarks).length > 0
+  data.unread = {}
+  data.seenKeys = {}
+  data.unreadChannels = {}
+  data.readMarks = {}
+  alignPending.clear()
+  lastProbeAt.clear()
+  if (hadAccountState) {
+    persist()
+    if (hadUnread)
+      publish()
+  }
+}
+
 /** 单轮检测：登录态 → 关注名单 → 频道补齐 → 批量预览（触发）→ 拉列表计数 → 未归属频道自愈 */
 async function tick(): Promise<void> {
   if (ticking)
@@ -517,26 +544,10 @@ async function tick(): Promise<void> {
   try {
     const data = store()
 
-    // 未登录：未读与水位/触发锚都是账号相关状态，一并清空；频道缓存与账号无关可保留。
-    // 重登后没有旧锚，最新消息会走「首见锚定」，不会把登出前的消息补成未读
+    // 未登录：未读与水位/触发锚都是账号相关状态，一并清空（与登出同一条路径）
     if (!getToken()) {
       debug('[pocket-unread] 未登录，跳过本轮检测并清空账号状态')
-      const hadUnread = Object.keys(data.unread).length > 0
-      const hadAccountState = hadUnread
-        || Object.keys(data.seenKeys).length > 0
-        || Object.keys(data.unreadChannels).length > 0
-        || Object.keys(data.readMarks).length > 0
-      data.unread = {}
-      data.seenKeys = {}
-      data.unreadChannels = {}
-      data.readMarks = {}
-      alignPending.clear()
-      lastProbeAt.clear()
-      if (hadAccountState) {
-        persist()
-        if (hadUnread)
-          publish()
-      }
+      clearAccountUnread()
       return
     }
     // 屏蔽优先：屏蔽是本地可见性偏好（与关注正交，接线见 renderer 的 use-member-actions），

@@ -14,6 +14,14 @@ export function registerPocketIPC(): void {
   // token 失效清凭证时广播各窗口：渲染层 pocket-auth 镜像同步复位，
   // 免得房间页已报「登录过期」而设置页仍显示已登录（对端：stores/pocket-auth.ts）
   pocketAuth.setAuthExpiredNotifier(() => broadcastIpc('pocketAuthExpired'))
+  // token 失效清凭证时：账号相关未读（未读/水位/触发锚）即刻作废并广播归零，
+  // 再广播登录态复位 —— 否则凭证失效后房间页报过期，Docker 栏未读角标还挂着
+  // （轮询里 token 失效走「整轮冻结、未读不丢」，是给瞬时网络故障设计的，不适用于真失效）。
+  // 对端：stores/pocket-unread.ts（镜像）与 stores/pocket-auth.ts（登录态镜像）
+  pocketAuth.setAuthExpiredNotifier(() => {
+    pocketUnread.clearAccountUnread()
+    broadcastIpc('pocketAuthExpired')
+  })
   handleTraced('pocketSendSms', (
     _event: IpcMainInvokeEvent,
     mobile: string,
@@ -38,6 +46,8 @@ export function registerPocketIPC(): void {
   handleTraced('pocketLogout', () => {
     // 凭证既然要删，按该凭证建立的聊天室长连接（含进房身份）也一并断掉
     resetPocketDanmakuSessions()
+    // 账号相关未读即刻清空并广播归零（原先等下一轮 60s 检测发现未登录才清）
+    pocketUnread.clearAccountUnread()
     return pocketAuth.logout()
   })
   // IM 凭据（accid + imToken）不设 IPC 通道：渲染层零调用方，token 不应出主进程
