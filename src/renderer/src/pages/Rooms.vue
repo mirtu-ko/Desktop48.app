@@ -86,6 +86,11 @@ function unreadText(count: number): string {
   return count >= ROOM_MESSAGE_LIMIT ? `${ROOM_MESSAGE_LIMIT}+` : String(count)
 }
 
+/** 左列房间未读角标文案：v-if 与插值共用同一出口，计数语义与封顶规则只此一处 */
+function roomUnreadText(userId: number): string {
+  return unreadText(unreadCountOf(userId))
+}
+
 /** 是否在口袋账号侧有关注（pocket / both 都算；本地独有的不算） */
 function isPocketFollowed(source: PocketRoom['followSource']): boolean {
   return source === 'pocket' || source === 'both'
@@ -369,6 +374,9 @@ watch(selectedUserId, () => {
 })
 
 watch(() => messages.value.length, async (len, oldLen) => {
+  // 内容增删都会改变折行与「是否超长」，统一在这条监听里重新测量长文
+  // （含翻历史 prepend 的旧消息——它们同样可能触发折叠）
+  void nextTick(measureLongText)
   // 翻更早历史：视口由 onLoadMore 保持，prepend 不计入新消息
   if (preservingScroll)
     return
@@ -475,10 +483,10 @@ function measureLongText() {
 }
 
 // 列宽变化会改变折行数，只有窗口缩放会把列宽改掉（右栏固定宽、聊天区自适应）；
-// 内容变化走 messages 的 length 监听，两条触发点覆盖全部「需要重量」的时机
+// 内容变化的触发点收在 messages 的 length 监听里（与贴底逻辑同一条），两个入口覆盖
+// 全部「需要重量」的时机
 const measureLongTextDebounced = useDebounceFn(measureLongText, 150)
 useEventListener(window, 'resize', measureLongTextDebounced)
-watch(() => messages.value.length, () => void nextTick(measureLongText))
 
 // ===== 新消息到达高亮（只贴底时）=====
 /** 时长同时注入 CSS 变量：动画与类移除同一节拍，不会闪到一半被掐 */
@@ -605,23 +613,14 @@ function resetCardState() {
 /**
  * 图片占位样式：归一层解析到原始尺寸时按 aspect-ratio 预留空间，
  * 图片加载前后布局零变化（滚动历史不再抖动）；未知尺寸回退自然加载（仅轻微抖动）。
- * 宽度压到气泡上限，fit=cover 裁切超出 max-height 的极端比例。
+ * 宽度压到容器上限，fit=cover 裁切超出 max-height 的极端比例。
+ * maxWidth：消息流 240（气泡内），精华弹层 300（弹层更宽，同款占位放大一档）。
  */
-function imageBoxStyle(message: PocketRoomMessageView) {
+function imageBoxStyle(message: PocketRoomMessageView, maxWidth = 240) {
   if (!message.imageWidth || !message.imageHeight)
     return undefined
   return {
-    width: 'min(240px, 100%)',
-    aspectRatio: `${message.imageWidth} / ${message.imageHeight}`,
-  }
-}
-
-/** 精华弹层里的图片：弹层比消息流宽，宽度上限放到 300px；无尺寸时交给 CSS 兜底 */
-function essenceImageStyle(message: PocketRoomMessageView) {
-  if (!message.imageWidth || !message.imageHeight)
-    return undefined
-  return {
-    width: 'min(300px, 100%)',
+    width: `min(${maxWidth}px, 100%)`,
     aspectRatio: `${message.imageWidth} / ${message.imageHeight}`,
   }
 }
@@ -644,6 +643,11 @@ function videoBoxStyle(message: PocketRoomMessageView) {
 /** 消息时刻（HH:mm:ss） */
 function messageTime(msgTime: number) {
   return msgTime ? dayjs(msgTime).format('HH:mm:ss') : ''
+}
+
+/** 短时刻（MM-DD HH:mm）：直播分享卡的时刻行与精华列表共用 */
+function shortTime(ts: number | string) {
+  return ts ? dayjs(ts).format('MM-DD HH:mm') : ''
 }
 
 /** 日期分隔线：与上一条不同天时插一枚；首页第一条也是分界 */
@@ -786,7 +790,7 @@ onMounted(() => {
                 <span
                   v-if="unreadCountOf(room.userId)"
                   class="unread-badge room-unread"
-                >{{ unreadText(unreadCountOf(room.userId)) }}</span>
+                >{{ roomUnreadText(room.userId) }}</span>
               </span>
               <span class="room-meta">
                 <span class="room-name-row">
@@ -1081,6 +1085,7 @@ onMounted(() => {
                             lazy
                             fit="cover"
                             hide-on-click-modal
+                            referrerpolicy="no-referrer"
                             @load="onMediaLoad"
                             @error="onMediaLoad"
                           >
@@ -1162,7 +1167,7 @@ onMounted(() => {
                             <span class="msg-live-text">
                               <span class="msg-live-title">{{ liveShareTitle(message.text) || '快来看看吧' }}</span>
                               <span class="msg-live-meta">
-                                <span v-if="message.liveStartTime">{{ dayjs(message.liveStartTime).format('MM-DD HH:mm') }}</span>
+                                <span v-if="message.liveStartTime">{{ shortTime(message.liveStartTime) }}</span>
                                 <span v-if="message.liveId" class="msg-live-action">
                                   {{ liveCardBadge(message).type === 'playback' ? '观看回放' : '进入直播' }}
                                   <el-icon :size="12">
@@ -1351,7 +1356,7 @@ onMounted(() => {
                         <span class="essence-nick" :class="{ 'is-member': item.isMember }">{{ item.nick }}</span>
                         <span v-if="item.isMember" class="essence-owner">房主</span>
                         <span class="essence-time">
-                          {{ item.msgTime ? dayjs(item.msgTime).format('MM-DD HH:mm') : '' }}
+                          {{ item.msgTime ? shortTime(item.msgTime) : '' }}
                         </span>
                       </div>
 
@@ -1363,7 +1368,7 @@ onMounted(() => {
                       <el-image
                         v-if="item.imageUrl"
                         class="essence-image"
-                        :style="essenceImageStyle(item)"
+                        :style="imageBoxStyle(item, 300)"
                         :src="item.imageUrl"
                         :preview-src-list="[item.imageUrl]"
                         preview-teleported
@@ -1431,6 +1436,51 @@ onMounted(() => {
 </template>
 
 <style scoped lang="scss">
+/* ===== 页内复用骨架（%placeholder，不出本样式块）=====
+ * 本页多处重复的造型收在这里：改一处即整页同步。颜色/尺寸等差异留给使用处，
+ * 只抽「形状 + 过渡」这一层。若未来其它页面也要同款，再升级为 app.scss 公共类 */
+%brand-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 72%, #fff), var(--color-rooms));
+}
+
+%mini-pill {
+  flex: none;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+%empty-block {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+%pill-tab {
+  padding: 4px 12px;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--el-text-color-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+
 /* 双栏骨架：左栏固定宽度，右栏自适应；整页不滚动，两栏各自滚（给 Dock 留底部空间）。
  * box-sizing 必须显式声明：项目没有全局 border-box 重置，.page-root 的 height:100%
  * 若按 content-box 把上下内边距算到外面，整页会高出视口，滚动被甩给 .app-content */
@@ -1656,16 +1706,11 @@ onMounted(() => {
 }
 
 .room-avatar-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  @extend %brand-avatar;
+
   width: 100%;
   height: 100%;
-  border-radius: 50%;
   font-size: 16px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 72%, #fff), var(--color-rooms));
 }
 
 /* 开播角标：贴在头像右下角的 LIVE 小点 */
@@ -1774,14 +1819,10 @@ onMounted(() => {
 
 .side-empty,
 .side-loading {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  @extend %empty-block;
+
   gap: 8px;
   padding: 24px 16px;
-  text-align: center;
   color: var(--el-text-color-placeholder);
 
   p {
@@ -1790,9 +1831,11 @@ onMounted(() => {
   }
 }
 
+/* 四处空态的次级提示行（.essence-empty 里带父选择器是为压过其 p 的 13px） */
 .side-empty-hint,
 .msg-empty-hint,
-.main-placeholder-hint {
+.main-placeholder-hint,
+.essence-empty .essence-empty-hint {
   font-size: 11px;
   line-height: 1.6;
   color: var(--el-text-color-placeholder);
@@ -1939,13 +1982,9 @@ onMounted(() => {
 }
 
 .essence-avatar--fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  @extend %brand-avatar;
+
   font-size: 13px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 72%, #fff), var(--color-rooms));
 }
 
 .essence-body {
@@ -2028,11 +2067,8 @@ onMounted(() => {
 
 /* 空态：占满标题头以下的整块区域，与消息区的空态同一套语言 */
 .essence-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  @extend %empty-block;
+
   gap: 6px;
   padding: 24px;
   color: var(--el-text-color-secondary);
@@ -2045,11 +2081,6 @@ onMounted(() => {
     margin: 0;
     font-size: 13px;
   }
-
-  .essence-empty-hint {
-    font-size: 12px;
-    color: var(--el-text-color-placeholder);
-  }
 }
 
 .scope-tabs {
@@ -2061,18 +2092,7 @@ onMounted(() => {
 }
 
 .scope-tab {
-  padding: 3px 12px;
-  border: none;
-  border-radius: var(--radius-pill);
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--el-text-color-secondary);
-  background: transparent;
-  cursor: pointer;
-  transition:
-    color 0.15s ease,
-    background-color 0.15s ease;
+  @extend %pill-tab;
 
   &:hover {
     color: var(--el-text-color-primary);
@@ -2101,16 +2121,11 @@ onMounted(() => {
 }
 
 .main-avatar-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  @extend %brand-avatar;
+
   width: 100%;
   height: 100%;
-  border-radius: 50%;
   font-size: 17px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 72%, #fff), var(--color-rooms));
 }
 
 .main-head-text {
@@ -2133,11 +2148,9 @@ onMounted(() => {
 }
 
 .main-live-tag {
-  flex: none;
+  @extend %mini-pill;
+
   padding: 0 7px;
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
   line-height: 17px;
   color: #fff;
   background: var(--color-lives);
@@ -2179,23 +2192,13 @@ onMounted(() => {
 }
 
 .room-tab {
+  @extend %pill-tab;
+
   display: inline-flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
   max-width: 160px;
-  padding: 4px 12px;
-  border: none;
-  border-radius: var(--radius-pill);
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--el-text-color-secondary);
-  background: transparent;
-  cursor: pointer;
-  transition:
-    color 0.15s ease,
-    background-color 0.15s ease;
 
   &:hover {
     color: var(--color-rooms);
@@ -2388,13 +2391,9 @@ onMounted(() => {
 }
 
 .msg-avatar--fallback {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  @extend %brand-avatar;
+
   font-size: 14px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--color-rooms) 72%, #fff), var(--color-rooms));
 }
 
 .msg-main {
@@ -2431,12 +2430,8 @@ onMounted(() => {
 
 /* 房主徽标：实心房间色，与普通用户拉开层级（房间留言的主人就是 xox 本人） */
 .msg-member-tag {
-  flex: none;
-  padding: 0 5px;
-  /* 药丸半径与同一行互斥展示的 .msg-level 对齐（也是全站小标签的通用造型） */
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
+  @extend %mini-pill;
+
   line-height: 15px;
   color: #fff;
   background: var(--color-rooms);
@@ -2662,13 +2657,10 @@ onMounted(() => {
 }
 
 .msg-flip-ask-tag {
-  flex: none;
+  @extend %mini-pill;
+
   /* 提问可能占多行，标签始终贴在首行 */
   margin-top: 3px;
-  padding: 0 5px;
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
   line-height: 15px;
   color: var(--color-rooms);
   background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
@@ -2913,11 +2905,9 @@ onMounted(() => {
 
 /* 等级徽章：金色语义对齐弹幕气泡的 Lv；房主标签与等级互斥，不并存 */
 .msg-level {
-  flex: none;
+  @extend %mini-pill;
+
   padding: 0 6px;
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
   line-height: 16px;
   font-variant-numeric: tabular-nums;
   color: var(--el-color-warning);
@@ -3006,13 +2996,9 @@ onMounted(() => {
 
 .msg-empty,
 .main-placeholder {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  @extend %empty-block;
+
   gap: 8px;
-  text-align: center;
   color: var(--el-text-color-placeholder);
 
   p {
