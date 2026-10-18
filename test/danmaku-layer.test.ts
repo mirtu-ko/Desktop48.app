@@ -24,14 +24,14 @@ function makeRect(width: number, height: number) {
 }
 
 describe('useDanmakuLayer 字号', () => {
-  it('竖屏直播（口袋48，约 9:16）：短边为宽，字号 13px 量级', () => {
+  it('竖屏直播（口袋48，约 9:16）：短边为宽，字号 14px 量级', () => {
     const { fontSize } = setup(makeRect(422, 750))
-    expect(fontSize.value).toBe(13)
+    expect(fontSize.value).toBe(14)
   })
 
-  it('横屏画面（16:9）：短边为高，字号 15px 量级', () => {
+  it('横屏画面（16:9）：短边为高，字号 17px 量级', () => {
     const { fontSize } = setup(makeRect(890, 500))
-    expect(fontSize.value).toBe(15)
+    expect(fontSize.value).toBe(17)
   })
 
   it('超大画面 clamp 到 20px 上限', () => {

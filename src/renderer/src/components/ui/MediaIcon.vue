@@ -56,6 +56,8 @@ const ICONS = {
   cake: 'M5 21h14a1 1 0 0 0 1-1v-6H4v6a1 1 0 0 0 1 1zM4 14c1 2 3 2 4 0c1 2 3 2 4 0c1 2 3 2 4 0c1 2 3 2 4 0M12 6.4v7.6M12 3.4c1.1 1.2 1.1 2.1 0 3-1.1-.9-1.1-1.8 0-3z',
   // 互动奖杯（直播榜层面板开关）：杯体 + 双耳 + 底座
   trophy: 'M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4v1a4 4 0 0 0 3 3.87M17 6h3v1a4 4 0 0 1-3 3.87',
+  // 弹幕摆放到左侧黑边（左分栏）：外框 + 左侧竖分隔线
+  panelLeft: 'M3 4h18v16H3zM10 4v16',
 } as const
 
 const filled = computed(() => props.name.endsWith('Filled'))

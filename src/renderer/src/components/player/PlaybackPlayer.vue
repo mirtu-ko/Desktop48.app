@@ -8,6 +8,7 @@ import { usePlaybackEngine } from '@renderer/composables/use-playback-engine'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import { loadLiveDetail } from '@renderer/services/live-detail'
+import { danmakuPlacement, ensureDanmakuPlacement, setDanmakuPlacement } from '@renderer/stores/danmaku-placement'
 import { debugLog } from '@renderer/utils/debug'
 import { resolveCarouselImages } from '@renderer/utils/live-stream'
 import { formatMediaTime } from '@renderer/utils/time-format'
@@ -161,10 +162,28 @@ function onVideoPointerDown(event: PointerEvent) {
   danmakuMode.value = 'live'
 }
 
-const { fontSize: danmakuFontSize, position: danmakuPosition } = useDanmakuLayer({
+// 摆放偏好是全局单例，读一次即可（两个播放器并发调用共用同一次 IPC）
+void ensureDanmakuPlacement()
+
+const {
+  fontSize: danmakuFontSize,
+  position: danmakuPosition,
+  canFloatLeft: canFloatDanmaku,
+  floating: danmakuFloating,
+} = useDanmakuLayer({
   videoRect: () => videoRect.value,
   compact: () => props.compact,
+  // 「全部弹幕」面板是气泡层的子元素（宽度随它），面板展开时强制回画面内，
+  // 否则窄黑边里塞不下列表。气泡此时本就隐藏，看不见这次位置切换
+  placement: () => (danmakuMode.value === 'live' ? danmakuPlacement.value : 'video'),
 })
+
+/** 摆放只在「左侧黑边够宽」时开放：按钮只在此时出现，状态由 is-on 表示（不用 disabled） */
+function toggleDanmakuPlacement() {
+  const next = danmakuFloating.value ? 'video' : 'left'
+  void setDanmakuPlacement(next)
+  trackEvent('danmaku:placement', { placement: next })
+}
 
 // 播放防休眠（use-sleep-blocker，与 LivePlayer 共用）
 const { acquire: acquireSleepBlocker, release: releaseSleepBlocker } = useSleepBlocker()
@@ -367,6 +386,7 @@ onUnmounted(() => {
               :items="danmakuOverlayItems"
               :compact="compact"
               :hidden="danmakuMode !== 'live'"
+              :plain="danmakuFloating"
             />
             <!-- 全部模式：外壳常驻（同上），内部行用 v-if 懒渲染，避免上千行长期挂在 DOM 上 -->
             <div
@@ -483,6 +503,19 @@ onUnmounted(() => {
               >
                 <MediaIcon name="chat" :size="16" />
               </button>
+
+              <!-- 摆放切换：左侧黑边够宽时出现（窗口态竖屏回放同样适用）。
+                   「全部弹幕」面板展开时黑边用不上（面板本身是宽列表），一并隐藏 -->
+              <button
+                v-if="canFloatDanmaku && danmakuMode === 'live'"
+                class="player-capsule__btn danmaku-float-toggle"
+                :class="{ 'is-on': danmakuFloating }"
+                :title="danmakuFloating ? '弹幕移回画面内' : '弹幕移到左侧黑边'"
+                :aria-label="danmakuFloating ? '弹幕移回画面内' : '弹幕移到左侧黑边'"
+                @click="toggleDanmakuPlacement"
+              >
+                <MediaIcon name="panelLeft" :size="16" />
+              </button>
             </template>
           </MiniControls>
 
@@ -531,6 +564,10 @@ onUnmounted(() => {
 
 /* 弹幕模式激活态：仅换图标颜色；按钮尺寸与 hover 白纱见全局 .player-capsule__btn */
 .danmaku-mode-btn.is-active {
+  color: var(--brand-secondary);
+}
+
+.danmaku-float-toggle.is-on {
   color: var(--brand-secondary);
 }
 

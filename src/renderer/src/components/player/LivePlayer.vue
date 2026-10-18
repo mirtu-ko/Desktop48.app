@@ -12,6 +12,7 @@ import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useStreamRetry } from '@renderer/composables/use-stream-retry'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import EventBus from '@renderer/services/event-bus'
+import { danmakuPlacement, ensureDanmakuPlacement, setDanmakuPlacement } from '@renderer/stores/danmaku-placement'
 import { debugLog } from '@renderer/utils/debug'
 import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
 import Tools from '@renderer/utils/tools'
@@ -112,11 +113,29 @@ watch(playing, value => emit('playing', value))
 // （聊天室 ID 由详情接口携带，需登录且直播进行中）。两类互不混用。
 const danmakuRoomId = computed(() => (props.source === 'open' && props.bilibiliRoomId > 0 ? props.bilibiliRoomId : undefined))
 const danmakuEnabled = ref(true)
+// 摆放偏好是全局单例，读一次即可（两个播放器并发调用共用同一次 IPC）
+void ensureDanmakuPlacement()
 
-const { fontSize: danmakuFontSize, position: danmakuPosition, topLeft: rankPosition } = useDanmakuLayer({
+const {
+  fontSize: danmakuFontSize,
+  position: danmakuPosition,
+  topLeft: rankPosition,
+  canFloatLeft: canFloatDanmaku,
+  floating: danmakuFloating,
+} = useDanmakuLayer({
   videoRect: () => videoRect.value,
   compact: () => props.compact,
+  // 黑边不够宽（videoRect.left < 220）时由 computeDanmakuLayout 自行回落画面内，
+  // 与全屏无关：窗口态下竖屏直播同样留得出左侧栏
+  placement: () => danmakuPlacement.value,
 })
+
+/** 摆放只在「左侧黑边够宽」时开放：按钮只在此时出现，状态由 is-on 表示（不用 disabled） */
+function toggleDanmakuPlacement() {
+  const next = danmakuFloating.value ? 'video' : 'left'
+  void setDanmakuPlacement(next)
+  trackEvent('danmaku:placement', { placement: next })
+}
 
 // ── 直播轮询：已播时长 + 在线人数 ────────────────────────────────
 const polling = useLivePolling({
@@ -424,7 +443,7 @@ onUnmounted(() => {
         :class="{ 'is-compact': compact }"
         :style="{ fontSize: `${danmakuFontSize}px`, ...danmakuPosition }"
       >
-        <DanmakuBubbles :items="danmakuItems" :compact="compact" />
+        <DanmakuBubbles :items="danmakuItems" :compact="compact" :plain="danmakuFloating" />
       </div>
 
       <PlayerLoading
@@ -513,6 +532,19 @@ onUnmounted(() => {
             @click="toggleDanmaku"
           >
             <MediaIcon name="chat" :size="16" />
+          </button>
+
+          <!-- 摆放切换：左侧黑边够宽时出现（窗口态竖屏直播同样适用）。
+               不挡画面是刚需，故与弹幕开关并排常驻在胶囊最左段 -->
+          <button
+            v-if="canFloatDanmaku"
+            class="player-capsule__btn danmaku-float-toggle"
+            :class="{ 'is-on': danmakuFloating }"
+            :title="danmakuFloating ? '弹幕移回画面内' : '弹幕移到左侧黑边'"
+            :aria-label="danmakuFloating ? '弹幕移回画面内' : '弹幕移到左侧黑边'"
+            @click="toggleDanmakuPlacement"
+          >
+            <MediaIcon name="panelLeft" :size="16" />
           </button>
 
           <!-- 榜单开关：有榜单数据才给入口（个人直播的 LIVEUPDATE 才会驱动） -->
@@ -604,6 +636,10 @@ onUnmounted(() => {
 
 /* 弹幕开关：开启时图标转品牌色（按钮尺寸 / hover 白纱见全局 .player-capsule__btn） */
 .danmaku-toggle.is-on {
+  color: var(--brand-secondary);
+}
+
+.danmaku-float-toggle.is-on {
   color: var(--brand-secondary);
 }
 

@@ -16,7 +16,7 @@ import type {
 import type { MemberTreeGroupNode } from './domain/member-tree'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { CONFIG_DEFAULTS } from '@common/app-config'
+import { CONFIG_DEFAULTS, CONFIG_ENUMS } from '@common/app-config'
 import { assertMemberFlagKind } from '@common/member-flags'
 import { app } from 'electron'
 import data from './data'
@@ -29,6 +29,12 @@ import { SafeJSONFileSync } from './safe-json-file-sync'
 function assertConfigKey(key: ConfigKey) {
   if (!Object.hasOwn(CONFIG_DEFAULTS, key))
     throw new Error(`Invalid config key: ${key}`)
+}
+
+/** 枚举型配置的取值校验：未登记取值集合的键（路径类）不受限 */
+function isConfigValueAllowed(key: ConfigKey, value: string): boolean {
+  const allowed = CONFIG_ENUMS[key]
+  return !allowed || allowed.includes(value)
 }
 
 /** 名单 kind → 持久化字段名；键名保持旧格式，避免迁移已有 database.json */
@@ -153,7 +159,8 @@ class Database {
     }
     for (const key of Object.keys(CONFIG_DEFAULTS) as ConfigKey[]) {
       const value = stored?.[key]
-      if (typeof value === 'string' && value !== '')
+      // 枚举型键的旧值可能是已废弃的取值：一并当作未设置，回落默认值
+      if (typeof value === 'string' && value !== '' && isConfigValueAllowed(key, value))
         config[key] = value
     }
     this.db.config = config
@@ -314,6 +321,8 @@ class Database {
 
   public setConfig<K extends ConfigKey>(key: K, value: AppConfig[K]) {
     assertConfigKey(key)
+    if (!isConfigValueAllowed(key, value))
+      throw new Error(`Invalid config value for ${key}: ${value}`)
     const config = this.db.config ?? { ...CONFIG_DEFAULTS }
     config[key] = value
     this.db.config = config

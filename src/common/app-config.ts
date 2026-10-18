@@ -4,7 +4,15 @@
  */
 
 /** 配置的合法键（固定集合，IPC 侧以运行时校验防渲染端乱传） */
-export type ConfigKey = 'downloadDirectory' | 'ffmpegDirectory'
+export type ConfigKey = 'downloadDirectory' | 'ffmpegDirectory' | 'danmakuPlacement'
+
+/** 弹幕摆放：video = 画面内；left = 移到左侧黑边（黑边不够宽会自动回落 video） */
+export type DanmakuPlacement = 'video' | 'left'
+
+/** 枚举型配置的合法取值：载入与写入两侧共用，拦住脏值落盘 */
+export const CONFIG_ENUMS: Partial<Record<ConfigKey, readonly string[]>> = {
+  danmakuPlacement: ['video', 'left'],
+}
 
 /** 配置生效值类型：init() 补齐默认值后读取不会缺键 */
 export type AppConfig = Record<ConfigKey, string>
@@ -15,4 +23,6 @@ export const CONFIG_DEFAULTS: AppConfig = {
   downloadDirectory: '',
   /** 空串表示「未配置」：首次启动由 Initialize 引导下载/选择 ffmpeg */
   ffmpegDirectory: '',
+  /** 弹幕摆放偏好：竖屏直播是否移到左侧黑边，默认留在画面内 */
+  danmakuPlacement: 'video',
 }
