@@ -4,8 +4,8 @@ import useTasksStore from '@renderer/stores/tasks'
 import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
 import { computed } from 'vue'
+import { trackEvent } from '../utils/umami'
 import { useDownloadGuard } from './use-download-guard'
-import { trackEvent } from './use-umami'
 
 /**
  * 播放器媒体任务发起流程：LivePlayer（录制）与 PlaybackPlayer（回放下载）

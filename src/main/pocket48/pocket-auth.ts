@@ -329,6 +329,8 @@ function extractToken(stored: StoredAuth | null): string {
   else {
     token = stored.tokenPlain || ''
   }
+  // 仅开发环境打印 token，生产环境不落日志（token 本身是机密）
+  // debug('[pocket-auth] 解密后的 token：', token)
   return token
 }
 

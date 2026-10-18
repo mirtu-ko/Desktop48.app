@@ -20,6 +20,7 @@ import { copyText } from '@renderer/utils/clipboard'
 import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
 import Tools from '@renderer/utils/tools'
+import { trackEvent } from '@renderer/utils/umami'
 import { useDebounceFn, useEventListener } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -342,6 +343,7 @@ async function settleBigRoomEnter(userId: number, hadUnread: boolean) {
 
 /** 点进房间（左列条目）：选中 → 清大房间未读（有未读则回底） */
 async function enterRoom(userId: number) {
+  trackEvent('rooms:enter', { starId: String(userId) })
   const hadUnread = unreadChannelOf(userId).big > 0
   await selectRoom(userId)
   await settleBigRoomEnter(userId, hadUnread)

@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
-import { trackEvent } from '@renderer/composables/use-umami'
 import { nextRetryAttempt } from '@renderer/utils/live-stream'
+import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 

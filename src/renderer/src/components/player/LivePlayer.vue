@@ -10,12 +10,12 @@ import useMediaDownload from '@renderer/composables/use-media-download'
 import { dispatchMediaShortcut } from '@renderer/composables/use-media-shortcuts'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useStreamRetry } from '@renderer/composables/use-stream-retry'
-import { durationBucket, trackEvent } from '@renderer/composables/use-umami'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import EventBus from '@renderer/services/event-bus'
 import { debugLog } from '@renderer/utils/debug'
 import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
 import Tools from '@renderer/utils/tools'
+import { durationBucket, trackEvent } from '@renderer/utils/umami'
 
 import { useEventListener } from '@vueuse/core'
 

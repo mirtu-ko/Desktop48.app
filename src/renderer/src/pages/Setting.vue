@@ -6,7 +6,6 @@ import { Connection, Cpu, Document, Download, Folder, Hide, Lock, Refresh, Top, 
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
-import { trackEvent } from '@renderer/composables/use-umami'
 import { useUpdater } from '@renderer/composables/use-updater'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
 import {
@@ -22,6 +21,7 @@ import {
 import Constants from '@renderer/utils/constants'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
+import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'

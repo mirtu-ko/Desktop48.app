@@ -1,6 +1,6 @@
 import type { UpdaterState } from '@preload/ipc-contract'
 import { onActivated, onMounted, onUnmounted, ref } from 'vue'
-import { trackEvent } from './use-umami'
+import { trackEvent } from '../utils/umami'
 
 /** 自动更新状态与操作；主进程持真相，本模块只维护渲染端镜像。 */
 export function useUpdater() {
