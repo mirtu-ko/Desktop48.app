@@ -8,9 +8,11 @@ import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
  * 渲染层（stores/pocket-unread.ts）只做镜像与展示，经 pocketUnreadBatch 全量广播保持一致，
  * 与任务列表（task-registry → stores/tasks）是同一套「主进程真相 + 各窗镜像」的模式。
  *
- * 成员范围 = 账号关注名单（friends/id）**减去本地屏蔽名单**：屏蔽是本地可见性偏好，
+ * 成员范围 = 口袋关注（friends/id）∪ 本地关注名单，**再减去本地屏蔽名单**：屏蔽是本地可见性偏好，
  * 与关注正交（接线见 renderer 的 use-member-actions），被屏蔽的成员既不计未读，
  * 也不占频道解析名额；剔除后其频道缓存与未读按「取关清理」同一条路径一并清掉。
+ * 并集口径与渲染层房间页一致——本地关注里有口袋未关注的成员，只认前者会让这些成员
+ * 在房间页可见、却没有未读与小房间。
  *
  * 计数链路分两步（60s 一轮）：
  * 1. **触发**：批量预览接口 im/team/classic/last/message/get 一次覆盖全部关注房间，
@@ -49,6 +51,7 @@ import {
   getRoomChannelOwner,
   getRoomLastMessages,
   getRoomMessages,
+  getServerChannels,
   getToken,
 } from './pocket-auth'
 
@@ -62,6 +65,10 @@ const EMPTY_CHANNEL_TTL = 30 * 60 * 1000
 const MAX_MESSAGE_PROBES = 9
 /** 消息列表并发上限：一轮最多 9 个房间，分 3 路拉完 */
 const PROBE_CONCURRENCY = 3
+/** 小房间主动发现的间隔：每个成员 server 两次「拉频道列表 + 试暗号」之间的最小间隔 */
+const SMALL_DISCOVER_TTL = 5 * 60 * 1000
+/** 小房间主动发现的并发上限：按成员 server 分组，一次最多查 3 个 server */
+const SMALL_DISCOVER_CONCURRENCY = 3
 
 /** 单个房间的未读快照 */
 interface UnreadRoomState {
@@ -145,6 +152,11 @@ const lastProbeAt = new Map<string, number>()
  * 免得刚读过的消息被当成未读复活。挂起期间该频道不计数。
  */
 const alignPending = new Set<string>()
+/**
+ * 各 server 上一次主动发现小房间的时刻（仅本进程内）：按 server 节流，
+ * 渲染层选中成员与检测轮共用同一份，避免两边各打一次频道列表。
+ */
+const smallDiscoverAt = new Map<string, number>()
 
 /** 惰性加载持久化状态（app.getPath 在应用 ready 前不可用，与 pocket-auth 同款时机） */
 function store(): StoredUnread {
@@ -348,7 +360,7 @@ async function healChannelOwners(
         if (error instanceof Error && error.message.includes('登录已过期'))
           throw error
         const message = error instanceof Error ? error.message : String(error)
-        if (message.includes('"questionId"')) {
+        if (isQuestionGate(message)) {
           // 暗号频道 = 成员的小房间（room/info 被暗号拦下，拿不到 ownerId）：
           // 小房间与成员大房间同 server，按「同 server 的唯一关注成员」归属
           const fromResponse = lastMessages.find(item => item.channelId === channelId)?.serverId || ''
@@ -383,6 +395,151 @@ async function healChannelOwners(
 }
 
 /**
+ * 主动发现小房间：拉成员 server 的频道列表，对「大房间之外」的频道试 `room/info`，
+ * 被 `questionId` 拦下的即小房间。
+ * lastMsgList 只在频道有新消息时回条，新建 / 换新的小房间在没人说话前根本不会出现；
+ * 频道列表是唯一能做到「无消息也看得见」的入口。列表里也有公告等普通频道
+ * （`room/info` 正常回包），一律不算小房间。
+ * 归属按「server → 唯一关注成员」确定；同一 server 挂着多个成员时不猜。
+ * 返回是否有结构变化。
+ */
+async function discoverSmallChannels(targets?: number[], force = false): Promise<boolean> {
+  const data = store()
+  const now = Date.now()
+  const ownerCountByServer = new Map<string, number>()
+  for (const channel of Object.values(data.channels)) {
+    if (channel.serverId && channel.channelId)
+      ownerCountByServer.set(channel.serverId, (ownerCountByServer.get(channel.serverId) ?? 0) + 1)
+  }
+  // 被跳过的成员一并记下原因：排查「某人没小房间页签」时第一眼看的就是这里
+  const entries: Array<[string, { serverId: string, channelId: string }]> = []
+  const skipped: string[] = []
+  // 指定成员却连大房间记录都没有（不在未读轮询的关注名单里）：永远不会进入下面的枚举
+  if (targets) {
+    const unresolved = targets.filter(id => !data.channels[String(id)])
+    if (unresolved.length)
+      debug('[pocket-unread] 小房间发现跳过：这些成员没有大房间记录（不在轮询关注名单 / 解析失败）', unresolved.join(','))
+  }
+  for (const [userId, channel] of Object.entries(data.channels)) {
+    if (!channel.serverId || !channel.channelId) {
+      skipped.push(`${userId}(大房间未解析)`)
+      continue
+    }
+    if (targets && !targets.includes(Number(userId)))
+      continue
+    const owners = ownerCountByServer.get(channel.serverId) ?? 0
+    if (owners !== 1) {
+      skipped.push(`${userId}(server ${channel.serverId} 下有 ${owners} 个关注成员，无法归属)`)
+      continue
+    }
+    const checkedAt = smallDiscoverAt.get(channel.serverId)
+    if (!force && checkedAt !== undefined && now - checkedAt <= SMALL_DISCOVER_TTL) {
+      skipped.push(`${userId}(server ${channel.serverId} 距上次枚举 ${Math.round((now - checkedAt) / 1000)}s，未到 ${SMALL_DISCOVER_TTL / 1000}s)`)
+      continue
+    }
+    entries.push([userId, channel])
+  }
+  let dirty = false
+  let cursor = 0
+  let hits = 0
+  const workers = Array.from({ length: Math.min(SMALL_DISCOVER_CONCURRENCY, entries.length) }, async () => {
+    while (cursor < entries.length) {
+      const [userId, channel] = entries[cursor++]
+      const { serverId } = channel
+      smallDiscoverAt.set(serverId, Date.now())
+      try {
+        const list = await getServerChannels(serverId, force)
+        debug(
+          '[pocket-unread] 枚举小房间：成员',
+          userId,
+          'server',
+          serverId,
+          '大房间',
+          channel.channelId,
+          '频道列表',
+          list.length,
+          '个',
+          list.map(item => `${item.channelId}(${item.channelName || '无名字'})`).join(' '),
+        )
+        if (!list.length) {
+          log('[pocket-unread] 小房间枚举拿到空频道列表（server 可能不属于当前账号）', userId, serverId)
+          continue
+        }
+        let found = ''
+        for (const candidate of list) {
+          if (!candidate.channelId || candidate.channelId === channel.channelId)
+            continue
+          try {
+            const info = await getRoomChannelOwner(candidate.channelId)
+            // 正常回包（公告/互动等普通频道）：不是暗号小房间
+            debug('[pocket-unread] 候选非小房间：room/info 正常回包', candidate.channelId, candidate.channelName || '无名字', 'owner', info.ownerId)
+          }
+          catch (error) {
+            if (error instanceof Error && error.message.includes('登录已过期'))
+              throw error
+            const message = error instanceof Error ? error.message : String(error)
+            if (isQuestionGate(message)) {
+              found = candidate.channelId
+              debug('[pocket-unread] 候选命中小房间：room/info 要求暗号', candidate.channelId, candidate.channelName || '无名字')
+              break
+            }
+            // 频道不存在等：列表里可能残留已删频道，继续看下一个候选
+            debug('[pocket-unread] 候选不可用（跳过）', candidate.channelId, candidate.channelName || '无名字', message.slice(0, 80))
+          }
+        }
+        if (!found) {
+          // 旧频道已不在 server 的频道列表里 = 确实被删了。房主「只删不建」时它
+          // 也不再出现在 lastMsgList 里，探测永远等不到「频道不存在」，只能靠这里作废。
+          const stale = data.smallChannels[userId]?.channelId
+          if (stale && !list.some(item => item.channelId === stale)) {
+            invalidateSmallChannel(Number(userId))
+            // 作废会放开该 server 的发现间隔（为了尽快重找），这里重新占用：
+            // 已经枚举过一遍且确认没有，不必下一轮再打一次。
+            smallDiscoverAt.set(serverId, Date.now())
+            dirty = true
+            debug('[pocket-unread] 小房间已不存在（列表中已无该频道），作废旧记录', userId, stale)
+          }
+          else {
+            debug('[pocket-unread] 该 server 未发现暗号频道（列表里没有要求暗号的频道）', userId, serverId)
+          }
+          continue
+        }
+        if (data.smallChannels[userId]?.channelId === found) {
+          debug('[pocket-unread] 小房间无变化', userId, found)
+          continue
+        }
+        const previous = data.smallChannels[userId]?.channelId
+        if (previous)
+          clearChannelRuntimeState(previous)
+        data.smallChannels[userId] = { serverId, channelId: found, resolvedAt: Date.now() }
+        dirty = true
+        hits++
+        debug('[pocket-unread] 小房间主动发现', userId, ':', previous || '-', '->', found)
+      }
+      catch (error) {
+        if (error instanceof Error && error.message.includes('登录已过期'))
+          throw error
+        log('[pocket-unread] 小房间主动发现失败（下轮重试）', userId, serverId, error)
+        // 失败不占用间隔：下一轮重试同一 server
+        smallDiscoverAt.delete(serverId)
+      }
+    }
+  })
+  await Promise.all(workers)
+  debug(
+    '[pocket-unread] 小房间枚举结束：变更',
+    hits,
+    '个；枚举',
+    entries.length,
+    '个；跳过',
+    skipped.length,
+    '个',
+    skipped.length ? `（${skipped.join('；')}）` : '',
+  )
+  return dirty
+}
+
+/**
  * 计数口径与渲染层成员视图一致：homeowner 接口会混入官方系统账号的发言，
  * 渲染层把它剔除，这里也不计入——否则角标会多出用户在房间里看不到的未读。
  */
@@ -407,6 +564,33 @@ function countNewer(messages: PocketRoomMessage[], mark: ReadMark): number {
   }
   const newer = messages.filter(message => message.msgTime > mark.msgTime).length
   return Math.min(newer, ROOM_MESSAGE_LIMIT)
+}
+
+/** 房间接口回「频道不存在」：小房间被房主更新/删除后旧频道即此结局（原文见 healChannelOwners） */
+function isChannelGone(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('频道不存在')
+}
+
+/**
+ * room/info 被暗号拦下 = 该频道是小房间。这是唯一可靠的判据：
+ * 未通过暗号的账号拿不到 channelInfo，只能拿到 questionId 信封；
+ * 普通频道（公告/互动）是正常回包，不能按「请求成功」反推成小房间。
+ */
+function isQuestionGate(message: string): boolean {
+  return message.includes('"questionId"')
+}
+
+/**
+ * 按 channelId 作废小房间归属（房主更新小房间后旧频道失效）。返回是否命中小房间。
+ * 大房间不走这条：它的失效与重解析另属一摊（空占位 + TTL），这里只清小房间。
+ */
+function dropSmallChannelByChannelId(channelId: string): boolean {
+  const hit = Object.entries(store().smallChannels)
+    .find(([, channel]) => channel.channelId === channelId)
+  if (!hit)
+    return false
+  invalidateSmallChannel(Number(hit[0]))
+  return true
 }
 
 /** 待探测的房间：channelId + serverId + 本轮预览里的身份键（探测成功后用它推进触发锚） */
@@ -457,6 +641,10 @@ async function probeChannels(candidates: ProbeCandidate[]): Promise<boolean> {
         // token 失效上抛：整轮放弃；其余失败不推进触发锚，下一轮重试同一频道
         if (error instanceof Error && error.message.includes('登录已过期'))
           throw error
+        // 小房间频道已被房主更新：作废归属，下一轮自愈重新发现，
+        // 否则每轮都要对着死频道重打一次请求
+        if (isChannelGone(error) && dropSmallChannelByChannelId(channelId))
+          continue
         log('[pocket-unread] 拉取房间消息失败（下一轮重试）', channelId, error)
       }
     }
@@ -534,6 +722,20 @@ export function clearAccountUnread(): void {
   }
 }
 
+/**
+ * 关注名单（唯一口径）：口袋关注 ∪ 本地关注，去重后剔除屏蔽。
+ * 渲染层房间页按这两份的并集建列表（见 use-pocket-rooms 的 loadFollowedIds），主进程必须同口径；
+ * 只认口袋关注时，仅本地关注的成员能进房间页却永远没有大房间记录，小房间也就无从发现。
+ */
+function mergeFollowedIds(pocketIds: number[], localIds: number[], blockedIds: Set<number>): number[] {
+  const merged = new Set<number>()
+  for (const id of [...pocketIds, ...localIds]) {
+    if (Number.isFinite(id) && id > 0 && !blockedIds.has(id))
+      merged.add(id)
+  }
+  return [...merged]
+}
+
 /** 单轮检测：登录态 → 关注名单 → 频道补齐 → 批量预览（触发）→ 拉列表计数 → 未归属频道自愈 */
 async function tick(): Promise<void> {
   if (ticking)
@@ -552,8 +754,26 @@ async function tick(): Promise<void> {
     // 未读检测按同一条口径把被屏蔽成员从关注名单里剔除 —— 它们既不该计数，也不该占频道解析名额。
     // 剔除后 ensureChannels 会顺带清掉它们的频道缓存与未读，走的正是「取关清理」那条路径。
     const blockedIds = new Set(Database.instance().getMemberFlagIds('blocked'))
-    const followedIds = (await getFollowedIds()).filter(id => !blockedIds.has(id))
-    debug('[pocket-unread] 本轮关注名单', followedIds.length, '人（已剔除屏蔽', blockedIds.size, '人）：', followedIds.join(','))
+    const pocketIds = await getFollowedIds()
+    const localIds = Database.instance().getMemberFlagIds('followed')
+    const followedIds = mergeFollowedIds(pocketIds, localIds, blockedIds)
+    // 口袋关注与本地关注不是同一份名单：渲染层房间页按两者并集建，这里必须同口径，
+    // 否则只在本地关注的成员「房间页看得到、未读和小房间却永远没有」。
+    const pocketSet = new Set(pocketIds)
+    const localOnly = localIds.filter(id => !pocketSet.has(id) && !blockedIds.has(id))
+    debug(
+      '[pocket-unread] 本轮关注名单',
+      followedIds.length,
+      '人（口袋',
+      pocketIds.length,
+      '+ 本地',
+      localIds.length,
+      '，已剔除屏蔽',
+      blockedIds.size,
+      '）：',
+      followedIds.join(','),
+      localOnly.length ? `；仅本地关注 ${localOnly.length} 人：${localOnly.join(',')}` : '',
+    )
     const { dirty: channelDirty, unreadChanged: unfollowChanged } = await ensureChannels(followedIds)
     let dirty = channelDirty
 
@@ -629,6 +849,13 @@ async function tick(): Promise<void> {
     if (probes.length && await probeChannels(probes))
       dirty = true
 
+    // 归属补全先于聚合：heal 处理 lastMsgList 里出现的未登记频道；discover 枚举频道列表，
+    // 补上「还没人说话、所以不在 lastMsgList 里」的新建小房间。两者都可能改变成员→频道归属
+    if (await healChannelOwners(lastMessages, new Set(channelOwner.keys()), followedIds))
+      dirty = true
+    if (await discoverSmallChannels())
+      dirty = true
+
     // 按成员聚合（大房间 + 小房间都记在成员头上）并与旧快照比对
     let unreadChanged = false
     const aggregated = aggregate()
@@ -636,10 +863,6 @@ async function tick(): Promise<void> {
       data.unread = aggregated
       unreadChanged = true
     }
-
-    // 未归属频道自愈：反查房主、补全归属表（新归属下一轮生效）；结构变化随本轮一并落盘
-    if (await healChannelOwners(lastMessages, new Set(channelOwner.keys()), followedIds))
-      dirty = true
 
     // 未读累加也必须落盘：dirty 只覆盖频道解析/触发锚，不含计数路径，漏了会「重启丢未读」；
     // 取关清理（unfollowChanged）同属「registry 结构变化」，一并落盘并广播
@@ -702,6 +925,11 @@ async function alignReadMark(channel: StoredChannel): Promise<void> {
   catch (error) {
     if (error instanceof Error && error.message.includes('登录已过期'))
       throw error
+    // 频道已删除（小房间被房主更新）：作废归属，别把水位对齐挂在死频道上反复重试
+    if (isChannelGone(error) && dropSmallChannelByChannelId(channel.channelId)) {
+      alignPending.delete(channel.channelId)
+      return
+    }
     alignPending.add(channel.channelId)
     log('[pocket-unread] 已读水位对齐失败（下一轮检测对齐）', channel.channelId, error)
   }
@@ -739,13 +967,55 @@ export async function markRead(userId: number, target: 'room' | 'small' = 'room'
 }
 
 /**
- * 成员的小房间（暗号频道）频道，给渲染层查看入口用；null = 尚未发现。
- * 小房间频道只能经归属自愈被动发现（lastMsgList 回包出现 + room/info 被暗号
- * questionId 信封拦下 + 同 server 唯一关注成员归属），没有主动探测接口。
+ * 成员当前的小房间（暗号频道）频道；null = 尚未发现。
+ * 发现由 `discoverSmallChannels` 主动枚举成员 server 的频道完成（选成员时或检测轮触发）。
  */
 export function getSmallChannel(userId: number): { serverId: string, channelId: string } | null {
   const channel = store().smallChannels[String(userId)]
   return channel?.channelId ? { serverId: channel.serverId, channelId: channel.channelId } : null
+}
+
+/**
+ * 重新发现成员的小房间（渲染层选中成员 / 打开旧频道失败时调用）。
+ * force=false 走 server 级间隔，反复选中同一成员不会反复打接口；
+ * force=true 用于频道刚失效——立刻枚举，不等检测轮。
+ */
+export async function refreshSmallChannel(userId: number, force = false): Promise<{ serverId: string, channelId: string } | null> {
+  if (!getToken())
+    return null
+  await discoverSmallChannels([userId], force)
+  return getSmallChannel(userId)
+}
+
+/** 清掉某频道的未读 / 水位 / 触发锚：频道失效或换成新频道时调用，大房间不走这里 */
+function clearChannelRuntimeState(channelId: string): void {
+  const data = store()
+  delete data.unreadChannels[channelId]
+  delete data.readMarks[channelId]
+  delete data.seenKeys[channelId]
+  lastProbeAt.delete(channelId)
+  alignPending.delete(channelId)
+}
+
+/**
+ * 作废成员的小房间归属（房主更新小房间后旧频道会失效）：
+ * 清掉该频道的未读 / 水位 / 触发锚，并让下一轮检测立即重新枚举该 server；大房间不动。
+ * 触发方有两处：检测轮探测到「频道不存在」，或渲染层打开该频道失败（IPC）。
+ */
+export function invalidateSmallChannel(userId: number): void {
+  const data = store()
+  const key = String(userId)
+  const channel = data.smallChannels[key]
+  if (!channel?.channelId)
+    return
+  delete data.smallChannels[key]
+  clearChannelRuntimeState(channel.channelId)
+  // 不占发现间隔：下一轮检测立即重枚举，房主刚换的新频道不用再等满 TTL
+  smallDiscoverAt.delete(channel.serverId)
+  data.unread = aggregate()
+  persist()
+  publish()
+  log('[pocket-unread] 小房间频道已失效，重新枚举该 server 的频道', key, channel.channelId)
 }
 
 // ===== 生命周期（对端：app.ts） =====

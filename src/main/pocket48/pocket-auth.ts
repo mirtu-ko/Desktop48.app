@@ -63,6 +63,13 @@ const POCKET_PA = 'MTYzNjAxNzMxNTAwMCw3NjkyNzVkNTliZWU0MmQ0OGVjOWIyYTMwY2FkOWQzO
 const TOKEN_INVALID_STATUSES = new Set([401003, 401004, 401005])
 
 /**
+ * 频道列表短缓存：渲染层取频道名与主进程枚举小房间用的是同一个 server/detail，
+ * 选中成员时两边会各打一次。60s 足够覆盖这一次交互，又不会被房主新建频道挡住。
+ */
+const SERVER_CHANNEL_TTL = 60 * 1000
+const serverChannelCache = new Map<string, { list: PocketServerChannel[], at: number }>()
+
+/**
  * 凭证失效广播钩子：IPC 层注入广播函数（见 register-pocket-ipc.ts），默认空实现便于单测直跑。
  * 失效即广播，各窗口登录态镜像同步复位。
  */
@@ -582,12 +589,14 @@ function deleteStoredCredentials(): void {
 /** 退出登录：删除本地凭证文件（档位随凭证消失，请求头回到默认档；下次登录重新选） */
 export function logout(): void {
   deleteStoredCredentials()
+  serverChannelCache.clear()
   log('[pocket-auth] 已退出登录')
 }
 
 /** token 判失效：删凭证文件（过期无恢复手段，重登必然覆盖）+ 广播各窗复位镜像 */
 function expireStoredAuth(): void {
   deleteStoredCredentials()
+  serverChannelCache.clear()
   log('[pocket-auth] token 已失效，本地凭证已清除')
   notifyAuthExpired()
 }
@@ -943,10 +952,13 @@ function seineHeaderOverrides(): Record<string, string> {
  * 房间页用它把「房间 / 小房间」两个 tab 显示成真实频道名；
  * 字段结构无官方文档，失败/缺字段由调用方静默回退通用名。
  */
-export async function getServerChannels(serverId: string): Promise<PocketServerChannel[]> {
+export async function getServerChannels(serverId: string, force = false): Promise<PocketServerChannel[]> {
   const token = getToken()
   if (!token || !serverId)
     return []
+  const cached = serverChannelCache.get(serverId)
+  if (!force && cached && Date.now() - cached.at < SERVER_CHANNEL_TTL)
+    return cached.list
   debug('[pocket-auth] 拉取频道列表请求：', JSON.stringify({ serverId: String(serverId) }))
   const envelope = await postPocket<Record<string, unknown>>(
     SEINE_SERVER_DETAIL_URL,
@@ -969,6 +981,7 @@ export async function getServerChannels(serverId: string): Promise<PocketServerC
     .filter(item => item.channelId)
   // 排查用：该接口字段结构未公开，回包里的频道名列表直接打印对照（verbose 级别）
   debug('[pocket-auth] 获取频道列表回包：', JSON.stringify(result))
+  serverChannelCache.set(serverId, { list: result, at: Date.now() })
   return result
 }
 

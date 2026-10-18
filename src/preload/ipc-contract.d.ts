@@ -432,8 +432,10 @@ interface StaticIpcInvokeMap {
   pocketDanmakuStop: InvokeSpec<[chatroomId: string], void>
   /** 房间未读全量快照（启动时回取一次；后续变化走 pocketUnreadBatch 事件） */
   pocketUnreadState: InvokeSpec<[], PocketUnreadBatch>
-  /** 成员的小房间（暗号频道）频道，null = 尚未被发现（见 pocket-unread.ts 归属自愈） */
-  pocketGetSmallChannel: InvokeSpec<[userId: number], PocketRoomChannel | null>
+  /** 作废失效的小房间归属（房主更新后旧频道被删）；下一轮检测重新枚举该 server */
+  pocketInvalidateSmallChannel: InvokeSpec<[userId: number], void>
+  /** 重新发现小房间（枚举 server 频道列表）；force 绕过发现间隔，用于旧频道刚失效 */
+  pocketRefreshSmallChannel: InvokeSpec<[userId: number, force?: boolean], PocketRoomChannel | null>
   /** 拉取小房间的暗号问题；null = 无门禁（room/info 未被拦），其余错误 reject */
   pocketGetRoomQuestion: InvokeSpec<[channelId: string], PocketRoomQuestion | null>
   /**

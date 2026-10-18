@@ -15,6 +15,8 @@ let tmpUserData = ''
 let broadcasts: Array<{ rooms: Record<string, unknown>, total: number }> = []
 /** 本地屏蔽名单：被测模块每轮读它把成员从未读检测范围里剔除（见 tick） */
 let blockedIds: number[] = []
+/** 本地关注名单：与口袋关注取并集——只在本地关注的成员同样要参与轮询（见 mergeFollowedIds） */
+let localFollowedIds: number[] = []
 
 vi.mock('electron', () => ({
   app: {
@@ -41,11 +43,14 @@ vi.mock('../src/main/pocket48/pocket-auth', () => ({
   getRoomChannelOwner: vi.fn(),
   getRoomLastMessages: vi.fn(),
   getRoomMessages: vi.fn(),
+  getServerChannels: vi.fn(),
 }))
 
 vi.mock('../src/main/database', () => ({
   Database: {
-    instance: () => ({ getMemberFlagIds: () => blockedIds }),
+    instance: () => ({
+      getMemberFlagIds: (kind: string) => (kind === 'followed' ? localFollowedIds : blockedIds),
+    }),
   },
 }))
 
@@ -56,6 +61,7 @@ interface AuthMock {
   getRoomChannelOwner: ReturnType<typeof vi.fn>
   getRoomLastMessages: ReturnType<typeof vi.fn>
   getRoomMessages: ReturnType<typeof vi.fn>
+  getServerChannels: ReturnType<typeof vi.fn>
 }
 
 /** 重新加载被测模块与其 mock 依赖：resetModules 后 vi.fn 都是新实例，必须一并取回配置 */
@@ -105,6 +111,8 @@ function stubOnline(auth: AuthMock, last: ReturnType<typeof lastOf>) {
   auth.getFollowedIds.mockResolvedValue([1])
   auth.getRoomChannel.mockResolvedValue({ serverId: 's1', channelId: 'c1' })
   auth.getRoomLastMessages.mockResolvedValue(last)
+  // 主动发现默认「该 server 下只有大房间」：多数用例不关心小房间枚举
+  auth.getServerChannels.mockResolvedValue([{ channelId: 'c1', channelName: '大房间' }])
 }
 
 /** 跑一轮检测并等它把预览接口打完（轮询入口是同步的，用调用次数当轮次栅栏） */
@@ -123,6 +131,7 @@ function settle() {
 beforeEach(() => {
   tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'pocket-unread-test-'))
   blockedIds = []
+  localFollowedIds = []
 })
 
 afterEach(() => {
@@ -265,10 +274,15 @@ describe('pocket-unread（房间未读检测）', () => {
     auth.getRoomLastMessages.mockResolvedValue(both('k1a', 'k1b'))
     auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"596","question":"暗号"}'))
     auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    // 频道列表如实包含大房间与小房间（主动发现据此确认 cX 仍在，不会当作已被删）
+    auth.getServerChannels.mockResolvedValue([
+      { channelId: 'c1', channelName: '大房间' },
+      { channelId: 'cX', channelName: '小房间' },
+    ])
 
     // 第 1 轮：c1 首见锚定；cX 识别为小房间并归属（本轮还没进归属表，不探测）
     await runTick(auth, mod)
-    await vi.waitFor(() => expect(auth.getRoomChannelOwner).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(mod.getSmallChannel(1)).toMatchObject({ serverId: 's1', channelId: 'cX' }))
     mod.stopPocketUnread()
 
     // 第 2 轮：cX 已归属 → 首见锚定；小房间频道可查
@@ -294,6 +308,168 @@ describe('pocket-unread（房间未读检测）', () => {
     // 读小房间：清零
     await mod.markRead(1, 'small')
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+  })
+
+  it('小房间被房主更新（旧频道回「频道不存在」）：作废归属、清未读，下一轮重新发现新频道', async () => {
+    const { mod, auth } = await freshModule()
+    auth.getToken.mockReturnValue('tok')
+    auth.getFollowedIds.mockResolvedValue([1])
+    auth.getRoomChannel.mockResolvedValue({ serverId: 's1', channelId: 'c1' })
+    // 同 server 的暗号频道：room/info 被 questionId 信封拦下，拿不到 ownerId（只能按唯一关注成员归属）
+    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"596","question":"暗号"}'))
+    // 频道列表包含大房间与旧小房间 cX（主动发现据列表判断 cX 是否已被房主删除）
+    auth.getServerChannels.mockResolvedValue([
+      { channelId: 'c1', channelName: '大房间' },
+      { channelId: 'cX', channelName: '旧小房间' },
+    ])
+    // cX = 旧小房间，cY = 房主更新后的小房间
+    auth.getRoomLastMessages.mockResolvedValue([lastOf('k1a', 'c1')[0], lastOf('k1b', 'cX')[0]])
+
+    let smallGone = false
+    let smallPage = pageOf('m1')
+    auth.getRoomMessages.mockImplementation(async (channelId: string) => {
+      if (channelId === 'c1')
+        return pageOf('m1')
+      if (smallGone)
+        throw new Error('频道不存在')
+      return smallPage
+    })
+
+    // 第 1 轮：cX 尚不在归属表（本轮不探测），末尾按「同 server 唯一关注成员」归为小房间
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getSmallChannel(1)).toMatchObject({ serverId: 's1', channelId: 'cX' })
+
+    // 第 2 轮：cX 首见锚定（历史不算未读）
+    auth.getRoomLastMessages.mockResolvedValue([lastOf('k2a', 'c1')[0], lastOf('k2b', 'cX')[0]])
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+
+    // 第 3 轮：小房间来新消息 → 计未读（后面才能验证是「真被清掉」）
+    smallPage = pageOf('m2', 'm1')
+    auth.getRoomLastMessages.mockResolvedValue([lastOf('k3a', 'c1')[0], lastOf('k3b', 'cX')[0]])
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getState().rooms['1']).toMatchObject({ count: 1, bigCount: 0, smallCount: 1 })
+
+    // 第 4 轮：房主删掉了旧小房间（列表里已无 cX，还没建新的），
+    // 探测回「频道不存在」→ 作废归属 + 清掉该频道的未读
+    smallGone = true
+    auth.getServerChannels.mockResolvedValue([{ channelId: 'c1', channelName: '大房间' }])
+    auth.getRoomLastMessages.mockResolvedValue([lastOf('k4a', 'c1')[0], lastOf('k4b', 'cX')[0]])
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getSmallChannel(1)).toBeNull()
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+
+    // 第 5 轮：房主新建的小房间出现在列表与 lastMsgList → 归属自愈重新挂到同一成员名下
+    auth.getServerChannels.mockResolvedValue([
+      { channelId: 'c1', channelName: '大房间' },
+      { channelId: 'cY', channelName: '新小房间' },
+    ])
+    auth.getRoomLastMessages.mockResolvedValue([lastOf('k5a', 'c1')[0], lastOf('k5b', 'cY')[0]])
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getSmallChannel(1)).toMatchObject({ serverId: 's1', channelId: 'cY' })
+  })
+
+  it('房主删掉小房间且没建新的：频道列表里已无该频道 → 作废旧记录', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1', 'c1'))
+    auth.getServerChannels.mockResolvedValue([
+      { channelId: 'c1', channelName: '大房间' },
+      { channelId: 'cX', channelName: '小房间' },
+    ])
+    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"9","question":"暗号"}'))
+
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(mod.getSmallChannel(1)).toMatchObject({ channelId: 'cX' }))
+    mod.stopPocketUnread()
+
+    // 房主只删不建：列表只剩大房间；旧频道已不在 lastMsgList，探测永远等不到 404
+    auth.getServerChannels.mockResolvedValue([{ channelId: 'c1', channelName: '大房间' }])
+    await mod.refreshSmallChannel(1, true)
+    expect(mod.getSmallChannel(1)).toBeNull()
+  })
+
+  it('新建的小房间还没有消息（不在 lastMsgList）：靠 server 频道列表主动发现', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1', 'c1'))
+    // 频道列表里多出一个频道，lastMsgList 完全没有它的条目——被动链路永远看不到
+    auth.getServerChannels.mockResolvedValue([
+      { channelId: 'c1', channelName: '大房间' },
+      { channelId: 'cNew', channelName: '新小房间' },
+    ])
+    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"9","question":"暗号"}'))
+
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(mod.getSmallChannel(1)).toMatchObject({ serverId: 's1', channelId: 'cNew' }))
+    mod.stopPocketUnread()
+    // 还没人说话 → 不产生未读
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+  })
+
+  it('同 server 的普通频道（room/info 正常回包）不会被当成小房间', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1', 'c1'))
+    auth.getServerChannels.mockResolvedValue([
+      { channelId: 'c1', channelName: '大房间' },
+      { channelId: 'cNotice', channelName: '公告' },
+    ])
+    // 公告频道：room/info 正常回包（ownerId 命中成员也不能当暗号频道）
+    auth.getRoomChannelOwner.mockResolvedValue({ channelId: 'cNotice', serverId: 's1', ownerId: 1 })
+
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(auth.getServerChannels).toHaveBeenCalled())
+    await settle()
+    mod.stopPocketUnread()
+    expect(mod.getSmallChannel(1)).toBeNull()
+  })
+
+  it('旧小房间失效后，新频道即使不在 lastMsgList 也能重新枚举到', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1', 'c1'))
+    auth.getServerChannels.mockResolvedValue([
+      { channelId: 'c1', channelName: '大房间' },
+      { channelId: 'cOld', channelName: '旧小房间' },
+    ])
+    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"9","question":"暗号"}'))
+
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(mod.getSmallChannel(1)).toMatchObject({ channelId: 'cOld' }))
+    mod.stopPocketUnread()
+
+    // 渲染层打开旧频道失败 → 通知作废（同时放开该 server 的发现间隔）
+    mod.invalidateSmallChannel(1)
+    expect(mod.getSmallChannel(1)).toBeNull()
+
+    // 房主换上的新频道只出现在频道列表里，lastMsgList 仍只有大房间
+    auth.getServerChannels.mockResolvedValue([
+      { channelId: 'c1', channelName: '大房间' },
+      { channelId: 'cNew', channelName: '新小房间' },
+    ])
+    mod.startPocketUnread()
+    await vi.waitFor(() => expect(mod.getSmallChannel(1)).toMatchObject({ channelId: 'cNew' }))
+    mod.stopPocketUnread()
+  })
+
+  it('发现间隔内不重复拉频道列表；force 刷新才重查', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1', 'c1'))
+
+    await runTick(auth, mod)
+    await settle()
+    expect(auth.getServerChannels).toHaveBeenCalledTimes(1)
+
+    // 第二轮仍在间隔内：不再枚举
+    await runTick(auth, mod)
+    await settle()
+    expect(auth.getServerChannels).toHaveBeenCalledTimes(1)
+
+    // 渲染层强制刷新（旧频道刚失效）：绕过间隔
+    await mod.refreshSmallChannel(1, true)
+    expect(auth.getServerChannels).toHaveBeenCalledTimes(2)
   })
 
   it('预览回包缺条（该频道没回）：未读保留，不清零', async () => {
@@ -413,6 +589,49 @@ describe('pocket-unread（房间未读检测）', () => {
     await vi.waitFor(() => expect(auth.getRoomChannel).toHaveBeenCalledTimes(2))
     await settle()
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+  })
+
+  it('仅本地关注的成员同样参与轮询：解析大房间、发现小房间、消息计入未读', async () => {
+    const { mod, auth } = await freshModule()
+    auth.getToken.mockReturnValue('tok')
+    // 口袋关注只有 1；2 只在本地关注（房间页照样显示他）
+    auth.getFollowedIds.mockResolvedValue([1])
+    localFollowedIds = [1, 2]
+    auth.getRoomChannel.mockImplementation(async (userId: number) => (userId === 2
+      ? { serverId: 's2', channelId: 'c2' }
+      : { serverId: 's1', channelId: 'c1' }))
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k1', 'c2', 's2'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    auth.getServerChannels.mockImplementation(async (serverId: string) => (serverId === 's2'
+      ? [{ channelId: 'c2', channelName: '大房间' }, { channelId: 'c2s', channelName: '暗号房' }]
+      : [{ channelId: 'c1', channelName: '大房间' }]))
+    // 该 server 下多余频道被暗号拦下 = 小房间
+    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"9","question":"暗号是什么"}'))
+
+    await runTick(auth, mod)
+    await settle()
+
+    // 并集去重：两人各解析一次
+    expect(auth.getRoomChannel.mock.calls.map(call => call[0]).sort()).toEqual([1, 2])
+    expect(mod.getSmallChannel(2)).toMatchObject({ serverId: 's2', channelId: 'c2s' })
+
+    // 本地关注成员的新消息同样计入未读
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k2', 'c2', 's2'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m3', 'm2', 'm1'))
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getState().rooms['2']).toMatchObject({ count: 2 })
+  })
+
+  it('本地关注同样受屏蔽约束：被屏蔽的成员不解析、不计未读', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1'))
+    // 1 是口袋关注（被屏蔽），2 只在本地关注 → 名单里只剩 2
+    localFollowedIds = [1, 2]
+    blockedIds = [1]
+    await runTick(auth, mod)
+    await settle()
+    expect(auth.getRoomChannel.mock.calls.map(call => call[0])).toEqual([2])
   })
 
   it('未读快照与已读水位随持久化文件跨会话保留（重启不丢、也不误判未读）', async () => {

@@ -183,7 +183,8 @@ const api = {
   // ===== 房间未读 =====
   // 对端：main/pocket48/pocket-unread.ts（主进程唯一真相，检测不受窗口失焦节流）
   pocketUnreadState: () => invokeIpc('pocketUnreadState'),
-  pocketGetSmallChannel: (userId: number) => invokeIpc('pocketGetSmallChannel', userId),
+  pocketInvalidateSmallChannel: (userId: number) => invokeIpc('pocketInvalidateSmallChannel', userId),
+  pocketRefreshSmallChannel: (userId: number, force = false) => invokeIpc('pocketRefreshSmallChannel', userId, force),
   pocketGetRoomQuestion: (channelId: string) => invokeIpc('pocketGetRoomQuestion', channelId),
   pocketCheckRoomAnswer: (channelId: string, questionId: string, answer: string) =>
     invokeIpc('pocketCheckRoomAnswer', channelId, questionId, answer),

@@ -88,8 +88,12 @@ export function registerPocketIPC(): void {
   // 房间未读（主进程 60s 轮询检测，见 main/pocket48/pocket-unread.ts）：
   // 快照回取 + 小房间频道查询 + 标记已读（target 区分大/小房间）
   handleTraced('pocketUnreadState', () => pocketUnread.getState())
-  handleTraced('pocketGetSmallChannel', (_event: IpcMainInvokeEvent, userId: number) =>
-    pocketUnread.getSmallChannel(userId))
+  // 小房间失效（房主更新后旧频道被删）：渲染层打开失败时立刻作废归属，不等下一轮检测
+  handleTraced('pocketInvalidateSmallChannel', (_event: IpcMainInvokeEvent, userId: number) =>
+    pocketUnread.invalidateSmallChannel(userId))
+  // 重新发现小房间：选中成员时本地还没发现，或旧频道刚失效（force 绕过发现间隔）
+  handleTraced('pocketRefreshSmallChannel', (_event: IpcMainInvokeEvent, userId: number, force = false) =>
+    pocketUnread.refreshSmallChannel(userId, force))
   // 小房间暗号：问题拉取（room/info 拦截信封）+ 作答校验（万能密码客户端直通）
   handleTraced('pocketGetRoomQuestion', (_event: IpcMainInvokeEvent, channelId: string) =>
     pocketAuth.getRoomQuestion(channelId))

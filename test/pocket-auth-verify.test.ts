@@ -439,6 +439,18 @@ describe('pocket-auth 成员房间', () => {
     env.replies['team/classic/last/message/get'] = { status: 200, body: { status: 200, success: false, message: '服务不存在' } }
     await expect(getRoomLastMessages(['888'])).rejects.toThrow('服务不存在')
   })
+
+  it('频道列表 60s 内复用同一次请求，force 才重拉（渲染层取名字与主进程枚举共用）', async () => {
+    const detailRequests = () => env.requests.filter(item => item.url.includes('seine/server/detail')).length
+    await getServerChannels('9990001')
+    expect(detailRequests()).toBe(1)
+    // 同一次选中里两边各要一次：第二次直接吃缓存
+    await getServerChannels('9990001')
+    expect(detailRequests()).toBe(1)
+    // 旧频道刚失效要立刻看新列表：force 绕过缓存
+    await getServerChannels('9990001', true)
+    expect(detailRequests()).toBe(2)
+  })
 })
 
 describe('pocket-auth checkRoomAnswer', () => {
@@ -505,7 +517,8 @@ describe('pocket-auth 客户端身份（主 App Android 档 + seine Android 档�
 
   it('主 App 统一走 Android 档头，seine 保持独立 Android 特征', async () => {
     await getRoomChannel(10001)
-    await getServerChannels('1213951')
+    // force：频道列表有 60s 进程内缓存，这里要的是真实请求头
+    await getServerChannels('1213951', true)
 
     // 主 App（pocket48）档：Android UA + 带空格 UTF-8 Content-Type。
     const main = headersOf('im/api/v1/im/server/jump')
@@ -540,7 +553,8 @@ describe('pocket-auth 客户端身份（主 App Android 档 + seine Android 档�
 
   it('两档特征都不自带 pa / token，由 postPocket 统一补（避免签名被覆盖）', async () => {
     await getRoomChannel(10001)
-    await getServerChannels('1213951')
+    // force：频道列表有 60s 进程内缓存，同文件的上一条用例刚拉过，这里要的是真实请求头
+    await getServerChannels('1213951', true)
     // 两个请求都带上了签名与 token（由调用方补）
     for (const urlPart of ['im/api/v1/im/server/jump', 'im/api/seine/server/detail']) {
       const headers = headersOf(urlPart)
