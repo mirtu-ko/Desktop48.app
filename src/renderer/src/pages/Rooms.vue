@@ -20,6 +20,7 @@ import { copyText } from '@renderer/utils/clipboard'
 import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
 import Tools from '@renderer/utils/tools'
+import { trackEvent } from '@renderer/utils/umami'
 import { useDebounceFn, useEventListener } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -216,22 +217,27 @@ watch([selectedUserId, viewMode], () => {
 const liveCount = ref(0)
 watch(rooms, (list) => {
   liveCount.value = list.filter(room => room.live).length
-  debugLog('rooms-page', '获取频道列表完成', {
-    count: list.length,
-    liveCount: liveCount.value,
-    hiddenRoomCount: hiddenRoomCount.value,
-    rooms: list.map(room => ({
-      userId: room.userId,
-      nickname: room.nickname,
-      serverId: room.serverId,
-      channelId: room.channelId,
-      liveId: room.live?.liveId ?? '',
-      previewTime: room.previewTime,
-    })),
-  })
+  // 参数会在调用前求值，生产环境的 debugLog 是 no-op —— 用 dev 门控把整段构造成本挡掉
+  if (import.meta.env.DEV) {
+    debugLog('rooms-page', '获取频道列表完成', {
+      count: list.length,
+      liveCount: liveCount.value,
+      hiddenRoomCount: hiddenRoomCount.value,
+      rooms: list.map(room => ({
+        userId: room.userId,
+        nickname: room.nickname,
+        serverId: room.serverId,
+        channelId: room.channelId,
+        liveId: room.live?.liveId ?? '',
+        previewTime: room.previewTime,
+      })),
+    })
+  }
 }, { immediate: true })
 
 watch([selectedUserId, chatStatus], ([userId, status]) => {
+  if (!import.meta.env.DEV)
+    return
   const room = rooms.value.find(item => item.userId === userId) ?? null
   debugLog('rooms-page', '频道详情状态更新', {
     userId,
@@ -253,8 +259,9 @@ watch([selectedUserId, chatStatus], ([userId, status]) => {
 
 /** dev 调试：进入房间后打印归一化消息列表（仅 dev 生效，用来看消息格式与内容） */
 watch(chatStatus, (status) => {
-  if (status !== 'ready')
+  if (status !== 'ready' || !import.meta.env.DEV)
     return
+  // 深拷贝只该发生在 dev：生产环境 debugLog 是 no-op，JSON 往返纯属浪费
   debugLog('rooms-page', '进入房间获取的消息列表', JSON.parse(JSON.stringify(messages.value)))
 })
 // ===== 消息流自动滚底 =====
@@ -336,6 +343,7 @@ async function settleBigRoomEnter(userId: number, hadUnread: boolean) {
 
 /** 点进房间（左列条目）：选中 → 清大房间未读（有未读则回底） */
 async function enterRoom(userId: number) {
+  trackEvent('rooms:enter', { starId: String(userId), starName: rooms.value.find(room => room.userId === userId)?.nickname || '' })
   const hadUnread = unreadChannelOf(userId).big > 0
   await selectRoom(userId)
   await settleBigRoomEnter(userId, hadUnread)
@@ -436,6 +444,15 @@ async function onLoadMore() {
 /** 头像 URL：口袋扩展给的是相对/完整路径混杂，统一过 sourceUrl */
 function avatarUrl(avatar: string) {
   return avatar ? Tools.sourceUrl(avatar) : ''
+}
+
+/**
+ * 是否当前房间的房主本人。
+ * `isMember` 只表示「发言者是成员（roleId>1）」——「全部消息」档下其他成员串门发言
+ * 也满足该条件，标成「房主」是错的，这里按 userId 与房间成员比对区分。
+ */
+function isRoomOwner(message: PocketRoomMessageView): boolean {
+  return selectedUserId.value !== null && message.userId === String(selectedUserId.value)
 }
 
 // ===== 长文折叠：成员小作文超过 10 行先收起来 =====
@@ -644,6 +661,22 @@ const messageImageUrls = computed(() =>
     .map(message => message.imageUrl as string),
 )
 
+/**
+ * 消息 id → 在预览列表中的下标。
+ * 不能按 URL 反查：同一条图片被转发两次时 indexOf 恒指第一张，点第二张会从第一张开始看。
+ */
+const messageImageIndex = computed(() => {
+  const map = new Map<string, number>()
+  let index = 0
+  for (const message of messages.value) {
+    if (!message.imageUrl)
+      continue
+    map.set(message.id, index)
+    index += 1
+  }
+  return map
+})
+
 /** 短时刻（MM-DD HH:mm）：直播分享卡的时刻行 */
 function shortTime(ts: number | string) {
   return ts ? dayjs(ts).format('MM-DD HH:mm') : ''
@@ -653,8 +686,9 @@ function shortTime(ts: number | string) {
 function isDayBoundary(index: number): boolean {
   const current = messages.value[index]
   const prev = messages.value[index - 1]
+  // 没有 msgTime 的消息无法归日：不插分隔线（否则 dayjs(0) 会渲染出 1970 年的假日期）
   if (!current?.msgTime)
-    return !!prev?.msgTime
+    return false
   if (!prev?.msgTime)
     return true
   return !dayjs(current.msgTime).isSame(dayjs(prev.msgTime), 'day')
@@ -1022,7 +1056,7 @@ onMounted(() => {
                       <div class="msg-main">
                         <div class="msg-meta">
                           <span class="msg-nick ellipsis">{{ message.nick || '用户' }}</span>
-                          <span v-if="message.isMember" class="msg-member-tag">房主</span>
+                          <span v-if="message.isMember" class="msg-member-tag">{{ isRoomOwner(message) ? '房主' : '成员' }}</span>
                           <!-- 等级徽章：房主标签与等级互斥展示，语义对齐弹幕气泡的 Lv 徽章 -->
                           <span v-else-if="message.level > 0" class="msg-level">Lv{{ message.level }}</span>
                           <span class="msg-time">{{ messageTime(message.msgTime) }}</span>
@@ -1101,7 +1135,7 @@ onMounted(() => {
                             :image-width="message.imageWidth"
                             :image-height="message.imageHeight"
                             :preview-list="messageImageUrls"
-                            :initial-index="messageImageUrls.indexOf(message.imageUrl)"
+                            :initial-index="messageImageIndex.get(message.id) ?? 0"
                             lazy
                             @load="onMediaLoad"
                             @error="onMediaLoad"

@@ -118,7 +118,9 @@ useEventListener(document, 'fullscreenchange', () => {
 </script>
 
 <template>
-  <div class="fw-root frosted-surface frosted-surface--deep">
+  <!-- 不挂 frosted-surface：全窗口 backdrop-filter 被不透明标题栏与视频区完全遮盖，
+       视觉零贡献，却每帧对整窗做 26px 模糊，DWM 合成退化时是双倍成本 -->
+  <div class="fw-root">
     <!-- 皮肤类 app-title-bar 提供底色 / 边框 / 拖拽 / 按钮外观（与主窗同源），
          fw-bar 只补本窗特有的内容排布 -->
     <div

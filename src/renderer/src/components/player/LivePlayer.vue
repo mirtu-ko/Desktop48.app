@@ -12,9 +12,11 @@ import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useStreamRetry } from '@renderer/composables/use-stream-retry'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import EventBus from '@renderer/services/event-bus'
+import { danmakuPlacement, ensureDanmakuPlacement, setDanmakuPlacement } from '@renderer/stores/danmaku-placement'
 import { debugLog } from '@renderer/utils/debug'
 import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
 import Tools from '@renderer/utils/tools'
+import { durationBucket, trackEvent } from '@renderer/utils/umami'
 
 import { useEventListener } from '@vueuse/core'
 
@@ -55,6 +57,11 @@ const mediaLoading = ref(true)
 const hovered = ref(false)
 // 卸载标记：置位后所有在途异步回包直接丢弃
 const isManuallyUnmounted = ref(false)
+
+// Umami：一场直播只计一次成功播放（首次 canplay）；观看时长以首次出画为起点，
+// 卸载时按分桶上报（durationBucket），不打精确秒数
+let livePlayTracked = false
+let livePlayStartedAt = 0
 
 const isRadio = computed(() => props.liveType !== 1)
 
@@ -106,11 +113,29 @@ watch(playing, value => emit('playing', value))
 // （聊天室 ID 由详情接口携带，需登录且直播进行中）。两类互不混用。
 const danmakuRoomId = computed(() => (props.source === 'open' && props.bilibiliRoomId > 0 ? props.bilibiliRoomId : undefined))
 const danmakuEnabled = ref(true)
+// 摆放偏好是全局单例，读一次即可（两个播放器并发调用共用同一次 IPC）
+void ensureDanmakuPlacement()
 
-const { fontSize: danmakuFontSize, position: danmakuPosition, topLeft: rankPosition } = useDanmakuLayer({
+const {
+  fontSize: danmakuFontSize,
+  position: danmakuPosition,
+  topLeft: rankPosition,
+  canFloatLeft: canFloatDanmaku,
+  floating: danmakuFloating,
+} = useDanmakuLayer({
   videoRect: () => videoRect.value,
   compact: () => props.compact,
+  // 黑边不够宽（videoRect.left < 220）时由 computeDanmakuLayout 自行回落画面内，
+  // 与全屏无关：窗口态下竖屏直播同样留得出左侧栏
+  placement: () => danmakuPlacement.value,
 })
+
+/** 摆放只在「左侧黑边够宽」时开放：按钮只在此时出现，状态由 is-on 表示（不用 disabled） */
+function toggleDanmakuPlacement() {
+  const next = danmakuFloating.value ? 'video' : 'left'
+  void setDanmakuPlacement(next)
+  trackEvent('danmaku:placement', { placement: next })
+}
 
 // ── 直播轮询：已播时长 + 在线人数 ────────────────────────────────
 const polling = useLivePolling({
@@ -148,6 +173,12 @@ const pocketChatroomId = computed(() => (props.source === 'user' ? chatroomId.va
 /** 有任一弹幕源才显示气泡层与开关（个人直播未登录时两边都没有，连开关都不给） */
 const hasDanmakuRoom = computed(() => danmakuRoomId.value !== undefined || !!pocketChatroomId.value)
 const showDanmaku = computed(() => hasDanmakuRoom.value && danmakuEnabled.value)
+
+/** 弹幕开关：翻转并上报使用率（只记用户主动切换，不记初始状态） */
+function toggleDanmaku() {
+  danmakuEnabled.value = !danmakuEnabled.value
+  trackEvent('danmaku:toggle', { enabled: danmakuEnabled.value ? 1 : 0 })
+}
 
 // ── 互动榜单（口袋 LIVEUPDATE 消息）─────────────────────────────
 // 榜单不进气泡层，独立显示在画面右上角（.player-actions 下方）；可由胶囊开关收起
@@ -222,6 +253,12 @@ function beginSession() {
 function onPlayerCanPlay() {
   debugLog('live', '①直播:播放就绪（canplay），复位恢复态与重试预算')
   retry.markRecovered()
+  // Umami 事件：首次出画才算成功播放；断流重连后的 canplay 不重复计数
+  if (!livePlayTracked) {
+    livePlayTracked = true
+    livePlayStartedAt = Date.now()
+    trackEvent('live:play', { source: props.source, media: isRadio.value ? 'radio' : 'video', title: realName.value })
+  }
   if (!isRadio.value)
     updateVideoDimensions()
 }
@@ -236,6 +273,8 @@ function rebuildMedia() {
 
 /** 媒体元素/FLV 错误统一处理：网络错误保持 loading 重试，致命错误先销毁播放器 */
 function handleStreamError(reason: string, isNetwork: boolean) {
+  // Umami 事件：播放器错误（网络类会自动进重试，这里记的是发生频率而非后果）
+  trackEvent('player:error', { type: 'live', network: isNetwork ? 1 : 0 })
   if (isNetwork) {
     debugLog('live', `①直播:网络错误（${reason}），保持 loading 并重试`)
     mediaLoading.value = true
@@ -354,6 +393,11 @@ onUnmounted(() => {
   }
   player.destroyPlayer()
   player.resetMediaElement()
+  // Umami 事件：观看时长分桶。浮窗整体关闭时组件同步卸载，
+  // umami script 走 sendBeacon / keepalive，正常网络下能送达
+  if (livePlayTracked) {
+    trackEvent('play:duration', { type: 'live', bucket: durationBucket((Date.now() - livePlayStartedAt) / 1000) })
+  }
   releaseSleepBlocker()
 })
 </script>
@@ -399,7 +443,7 @@ onUnmounted(() => {
         :class="{ 'is-compact': compact }"
         :style="{ fontSize: `${danmakuFontSize}px`, ...danmakuPosition }"
       >
-        <DanmakuBubbles :items="danmakuItems" :compact="compact" />
+        <DanmakuBubbles :items="danmakuItems" :compact="compact" :plain="danmakuFloating" />
       </div>
 
       <PlayerLoading
@@ -485,9 +529,22 @@ onUnmounted(() => {
             :class="{ 'is-on': danmakuEnabled }"
             :title="danmakuEnabled ? '关闭弹幕' : '开启弹幕'"
             :aria-label="danmakuEnabled ? '关闭弹幕' : '开启弹幕'"
-            @click="danmakuEnabled = !danmakuEnabled"
+            @click="toggleDanmaku"
           >
             <MediaIcon name="chat" :size="16" />
+          </button>
+
+          <!-- 摆放切换：左侧黑边够宽时出现（窗口态竖屏直播同样适用）。
+               不挡画面是刚需，故与弹幕开关并排常驻在胶囊最左段 -->
+          <button
+            v-if="canFloatDanmaku"
+            class="player-capsule__btn danmaku-float-toggle"
+            :class="{ 'is-on': danmakuFloating }"
+            :title="danmakuFloating ? '弹幕移回画面内' : '弹幕移到左侧黑边'"
+            :aria-label="danmakuFloating ? '弹幕移回画面内' : '弹幕移到左侧黑边'"
+            @click="toggleDanmakuPlacement"
+          >
+            <MediaIcon name="panelLeft" :size="16" />
           </button>
 
           <!-- 榜单开关：有榜单数据才给入口（个人直播的 LIVEUPDATE 才会驱动） -->
@@ -582,6 +639,10 @@ onUnmounted(() => {
   color: var(--brand-secondary);
 }
 
+.danmaku-float-toggle.is-on {
+  color: var(--brand-secondary);
+}
+
 /* 榜单开关与面板：开关同弹幕语言；面板挂操作按钮（.player-actions 高约 36px）下方 */
 .rank-toggle.is-on {
   color: #f7ba2a;
@@ -597,8 +658,8 @@ onUnmounted(() => {
   overflow-y: auto;
   padding: 8px 10px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(12px);
+  /* 实色深底（非磨砂）：悬在视频上的 backdrop-filter 每帧成本高，加深底色压画面 */
+  background: rgba(0, 0, 0, 0.62);
   color: #fff;
   font-size: 12px;
   user-select: none;

@@ -7,12 +7,13 @@ import { usePlaybackDanmaku } from '@renderer/composables/use-playback-danmaku'
 import { usePlaybackEngine } from '@renderer/composables/use-playback-engine'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
-
 import { loadLiveDetail } from '@renderer/services/live-detail'
+import { danmakuPlacement, ensureDanmakuPlacement, setDanmakuPlacement } from '@renderer/stores/danmaku-placement'
 import { debugLog } from '@renderer/utils/debug'
 import { resolveCarouselImages } from '@renderer/utils/live-stream'
 import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
+import { durationBucket, trackEvent } from '@renderer/utils/umami'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -46,6 +47,11 @@ const realName = ref('')
 const userAvatar = ref('')
 // 观看人数：取自回放详情 onlineNum，供「全部弹幕」面板头部展示（公演回放无此数据）
 const onlineNumber = ref(0)
+
+// Umami：一次会话只计一次成功起播（首次元数据就绪）；时长以首次起播为起点，
+// 卸载时按分桶上报（durationBucket），不打精确秒数
+let playbackTracked = false
+let playbackStartedAt = 0
 
 // 弹幕展示模式：实时堆叠 | 全部面板
 type DanmakuMode = 'live' | 'all'
@@ -135,7 +141,11 @@ const startDate = computed(() => dayjs(props.startTime).format('YYYY-MM-DD HH:mm
 function toggleDanmakuMode() {
   if (!hasBarrage.value)
     return
-  danmakuMode.value = danmakuMode.value === 'live' ? 'all' : 'live'
+  const next = danmakuMode.value === 'live' ? 'all' : 'live'
+  // Umami 事件：切到「全部」面板才算一次该功能的使用
+  if (next === 'all')
+    trackEvent('danmaku:mode', { mode: 'all' })
+  danmakuMode.value = next
 }
 
 /**
@@ -152,10 +162,28 @@ function onVideoPointerDown(event: PointerEvent) {
   danmakuMode.value = 'live'
 }
 
-const { fontSize: danmakuFontSize, position: danmakuPosition } = useDanmakuLayer({
+// 摆放偏好是全局单例，读一次即可（两个播放器并发调用共用同一次 IPC）
+void ensureDanmakuPlacement()
+
+const {
+  fontSize: danmakuFontSize,
+  position: danmakuPosition,
+  canFloatLeft: canFloatDanmaku,
+  floating: danmakuFloating,
+} = useDanmakuLayer({
   videoRect: () => videoRect.value,
   compact: () => props.compact,
+  // 「全部弹幕」面板是气泡层的子元素（宽度随它），面板展开时强制回画面内，
+  // 否则窄黑边里塞不下列表。气泡此时本就隐藏，看不见这次位置切换
+  placement: () => (danmakuMode.value === 'live' ? danmakuPlacement.value : 'video'),
 })
+
+/** 摆放只在「左侧黑边够宽」时开放：按钮只在此时出现，状态由 is-on 表示（不用 disabled） */
+function toggleDanmakuPlacement() {
+  const next = danmakuFloating.value ? 'video' : 'left'
+  void setDanmakuPlacement(next)
+  trackEvent('danmaku:placement', { placement: next })
+}
 
 // 播放防休眠（use-sleep-blocker，与 LivePlayer 共用）
 const { acquire: acquireSleepBlocker, release: releaseSleepBlocker } = useSleepBlocker()
@@ -175,6 +203,12 @@ const {
   onTimeUpdate: onDanmakuTimeUpdate,
   onSeeking: time => seekBarragesTo(time),
   onMetadataLoaded: async () => {
+    // Umami 事件：换清晰度 / 重试重挂也会触发 loadedmetadata，用标记只计首播
+    if (!playbackTracked) {
+      playbackTracked = true
+      playbackStartedAt = Date.now()
+      trackEvent('playback:play', { source: props.source, media: isRadio.value ? 'radio' : 'video', title: realName.value })
+    }
     debugLog('playback', `④元数据就绪: 刷新画面尺寸${isRadio.value ? '（电台无尺寸）' : ''} → 加载弹幕`)
     // 记录源尺寸供旋转缩放计算，并按（可能旋转后的）画面比例上报浮窗
     if (!isRadio.value)
@@ -183,6 +217,12 @@ const {
   },
   onPlaying: () => void acquireSleepBlocker(),
   onIdle: releaseSleepBlocker,
+})
+
+// Umami 事件：录播播放错误（引擎内 notifyError 已按相同文案去重）
+watch(lastPlaybackError, (message) => {
+  if (message)
+    trackEvent('player:error', { type: 'playback' })
 })
 
 // =========== 键盘策略（根节点焦点制，见 use-media-shortcuts） ===========
@@ -288,6 +328,10 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // Umami 事件：观看时长分桶
+  if (playbackTracked) {
+    trackEvent('play:duration', { type: 'playback', bucket: durationBucket((Date.now() - playbackStartedAt) / 1000) })
+  }
   debugLog('playback', `⑤录播会话结束（liveId=${props.liveId}）: 销毁播放引擎 → 释放防休眠`)
   destroyPlayer()
   releaseSleepBlocker()
@@ -342,6 +386,7 @@ onUnmounted(() => {
               :items="danmakuOverlayItems"
               :compact="compact"
               :hidden="danmakuMode !== 'live'"
+              :plain="danmakuFloating"
             />
             <!-- 全部模式：外壳常驻（同上），内部行用 v-if 懒渲染，避免上千行长期挂在 DOM 上 -->
             <div
@@ -458,6 +503,19 @@ onUnmounted(() => {
               >
                 <MediaIcon name="chat" :size="16" />
               </button>
+
+              <!-- 摆放切换：左侧黑边够宽时出现（窗口态竖屏回放同样适用）。
+                   「全部弹幕」面板展开时黑边用不上（面板本身是宽列表），一并隐藏 -->
+              <button
+                v-if="canFloatDanmaku && danmakuMode === 'live'"
+                class="player-capsule__btn danmaku-float-toggle"
+                :class="{ 'is-on': danmakuFloating }"
+                :title="danmakuFloating ? '弹幕移回画面内' : '弹幕移到左侧黑边'"
+                :aria-label="danmakuFloating ? '弹幕移回画面内' : '弹幕移到左侧黑边'"
+                @click="toggleDanmakuPlacement"
+              >
+                <MediaIcon name="panelLeft" :size="16" />
+              </button>
             </template>
           </MiniControls>
 
@@ -509,9 +567,14 @@ onUnmounted(() => {
   color: var(--brand-secondary);
 }
 
+.danmaku-float-toggle.is-on {
+  color: var(--brand-secondary);
+}
+
 /* ===== 全部弹幕大玻璃面板：内部滚动 =====
  * 高度上限交给父容器（.danmaku-list 因双约束有确定高度），不用 min(60vh,480px) 这类绝对值；
- * 字号固定，不跟随实时气泡缩放 */
+ * 字号固定，不跟随实时气泡缩放；
+ * 无 backdrop-filter：面板悬在视频上，每帧模糊在 DWM 合成退化时成本翻倍 */
 .danmaku-all {
   display: flex;
   flex-direction: column;
@@ -521,7 +584,6 @@ onUnmounted(() => {
   border-radius: 14px;
   background: var(--player-glass-bg);
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
-  backdrop-filter: blur(10px);
   overflow: hidden;
   /* 弹幕区整体 pointer-events:none，面板单独恢复交互 */
   pointer-events: auto;

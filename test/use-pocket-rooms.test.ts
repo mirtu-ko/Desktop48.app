@@ -32,6 +32,8 @@ const { directoryMock, apisMock, authMock, roomMock } = vi.hoisted(() => ({
     channelFail: new Set<number>(),
     /** channelId → 消息失败（消息拉取失败） */
     messageFail: new Set<string>(),
+    /** channelId → 「频道不存在」（房主更新/删除小房间后旧频道失效） */
+    channelMissing: new Set<string>(),
   },
 }))
 
@@ -134,6 +136,8 @@ interface SetupOptions {
   serverChannels?: Record<string, Array<{ channelId: string, channelName: string }>>
   /** userId → 已发现的小房间频道；未设置 = 未发现（页签只有大房间） */
   smallChannels?: Record<number, { serverId: string, channelId: string }>
+  /** userId → 重新发现时返回的频道（房主换上新频道）；未设置 = 与 smallChannels 相同 */
+  refreshSmallChannels?: Record<number, { serverId: string, channelId: string } | null>
   /** channelId → 暗号问题；未设置 = room/info 未被拦（无门禁，切进去直接拉消息） */
   roomQuestions?: Record<string, { questionId: string, question: string }>
   /** channelId → 正确暗号；不设置则该频道的提交一律判错 */
@@ -150,10 +154,15 @@ async function setup(options: SetupOptions = {}) {
     essenceFetched: [] as Array<{ channelId: string, nextTime: number }>,
     serverChannelsFetched: [] as string[],
     answerChecks: [] as Array<{ channelId: string, answer: string }>,
+    /** 小房间失效通知（渲染层打开失败 → 主进程作废归属） */
+    smallChannelInvalidated: [] as number[],
+    /** 小房间重新发现请求（force = 旧频道刚失效，绕过主进程的发现间隔） */
+    smallChannelRefreshed: [] as Array<{ userId: number, force: boolean }>,
     openFloatWindow: [] as Array<[FloatPlayerKind, FloatPlayerPayload]>,
   }
   roomMock.channelFail = new Set()
   roomMock.messageFail = new Set()
+  roomMock.channelMissing = new Set()
 
   vi.stubGlobal('window', {
     mainAPI: {
@@ -180,6 +189,8 @@ async function setup(options: SetupOptions = {}) {
       }),
       pocketGetRoomMessages: vi.fn(async (channelId: string, _serverId: string, nextTime = 0, scope: 'member' | 'all' = 'member') => {
         calls.messageFetched.push({ channelId, nextTime, scope })
+        if (roomMock.channelMissing.has(channelId))
+          throw new Error('频道不存在')
         if (roomMock.messageFail.has(channelId) || options.messageFailScope === scope)
           throw new Error('消息拉取失败')
         const page = options.roomPagesByScope?.[scope]?.[channelId]?.[nextTime]
@@ -196,8 +207,18 @@ async function setup(options: SetupOptions = {}) {
         calls.serverChannelsFetched.push(serverId)
         return options.serverChannels?.[serverId] ?? []
       }),
-      // 小房间频道发现走主进程归属自愈：默认未发现（页签只有大房间）
-      pocketGetSmallChannel: vi.fn(async (userId: number) => options.smallChannels?.[userId] ?? null),
+      // 失效通知：主进程作废该成员的归属，下一轮检测重新枚举该 server
+      pocketInvalidateSmallChannel: vi.fn(async (userId: number) => {
+        calls.smallChannelInvalidated.push(userId)
+      }),
+      // 小房间频道发现走主进程枚举：默认未发现（页签只有大房间）。
+      // refreshSmallChannels 描述「强制重枚举后」的结果（房主已换上新频道），非强制仍返回已发现的
+      pocketRefreshSmallChannel: vi.fn(async (userId: number, force = false) => {
+        calls.smallChannelRefreshed.push({ userId, force })
+        if (force && options.refreshSmallChannels && userId in options.refreshSmallChannels)
+          return options.refreshSmallChannels[userId]
+        return options.smallChannels?.[userId] ?? null
+      }),
       // 默认无门禁（room/info 未被拦）；给了问题即视为被暗号拦下
       pocketGetRoomQuestion: vi.fn(async (channelId: string) => options.roomQuestions?.[channelId] ?? null),
       pocketCheckRoomAnswer: vi.fn(async (channelId: string, _questionId: string, answer: string) => {
@@ -1222,6 +1243,113 @@ describe('use-pocket-rooms / 选中连房与消息流', () => {
     expect(api.smallLocked.value).toBe(true)
     // 锁定态本来就不拉小房间消息；切范围同样不该回落大房间重拉
     expect(calls.messageFetched.map(item => item.channelId)).toEqual(['ch-10001'])
+  })
+
+  it('小房间被房主更新（打开即「频道不存在」）：作废归属、退回大房间，不留在错误页', async () => {
+    const { api, calls, digest } = await setup({
+      pocketIds: [10001],
+      smallChannels: { 10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' } },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '大房间留言')] } },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.smallChannel.value?.channelId).toBe('ch-10001-small')
+
+    // 房主更新小房间：旧频道随即被删，拉消息回「频道不存在」
+    roomMock.channelMissing.add('ch-10001-small')
+    await api.setViewMode('small')
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 通知主进程作废归属（下一轮检测重新枚举），入口收起、视图回大房间
+    expect(calls.smallChannelInvalidated).toEqual([10001])
+    expect(api.smallChannel.value).toBeNull()
+    expect(api.viewMode.value).toBe('room')
+    expect(api.chatStatus.value).toBe('ready')
+    expect(digest()).toEqual([['粉丝甲', '大房间留言', 100]])
+  })
+
+  it('小房间旧频道失效且房主已换新：作废后立刻重新发现，自动切到新频道', async () => {
+    const { api, calls, digest } = await setup({
+      pocketIds: [10001],
+      smallChannels: { 10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' } },
+      refreshSmallChannels: { 10001: { serverId: 'srv-10001', channelId: 'ch-10001-small-new' } },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '大房间留言')] } },
+        'ch-10001-small-new': { 0: { nextTime: 0, messages: [roomMsg('n', 300, '新房主频道留言')] } },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.smallChannel.value?.channelId).toBe('ch-10001-small')
+
+    // 房主换掉了小房间：旧频道回「频道不存在」
+    roomMock.channelMissing.add('ch-10001-small')
+    await api.setViewMode('small')
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 作废后强制重新发现：拿到新频道就直接切进去，不退回大房间
+    expect(calls.smallChannelInvalidated).toEqual([10001])
+    // 选中时一次（非强制），失效后一次（force）
+    expect(calls.smallChannelRefreshed).toEqual([
+      { userId: 10001, force: false },
+      { userId: 10001, force: true },
+    ])
+    expect(api.smallChannel.value?.channelId).toBe('ch-10001-small-new')
+    expect(api.viewMode.value).toBe('small')
+    expect(api.chatStatus.value).toBe('ready')
+    expect(digest()).toEqual([['粉丝甲', '新房主频道留言', 300]])
+  })
+
+  it('小房间尚未发现时不缓存「没有」：主进程枚举发现后，再次选中即可显示入口', async () => {
+    const smallChannels: Record<number, { serverId: string, channelId: string }> = {}
+    const { api } = await setup({
+      pocketIds: [10001, 10002],
+      smallChannels,
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '大房间留言')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('b', 110, '另一人留言')] } },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.smallChannel.value).toBeNull()
+
+    // 主进程这一轮自愈发现了小房间（房主刚更新过频道）
+    smallChannels[10001] = { serverId: 'srv-10001', channelId: 'ch-10001-small' }
+    await api.selectRoom(10002)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.smallChannel.value?.channelId).toBe('ch-10001-small')
+  })
+
+  it('同房重选会校正小房间：房主刚换的新频道不用切走再回来', async () => {
+    const smallChannels = { 10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' } }
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      smallChannels,
+      roomPages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '大房间留言')] } } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.smallChannel.value?.channelId).toBe('ch-10001-small')
+    const fetchedBefore = calls.messageFetched.length
+
+    // 房主换掉了小房间：主进程重新枚举，本地缓存还是旧频道
+    smallChannels[10001] = { serverId: 'srv-10001', channelId: 'ch-10001-small-new' }
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 消息流原地不动，只把小房间入口校正到新频道（force：绕过主进程的发现间隔）
+    expect(calls.messageFetched.length).toBe(fetchedBefore)
+    expect(calls.smallChannelRefreshed.at(-1)).toEqual({ userId: 10001, force: true })
+    expect(api.smallChannel.value?.channelId).toBe('ch-10001-small-new')
   })
 
   /** 小房间暗号用例的公共假环境：10001 的小房间被暗号拦着（答案 open-sesame），10002 另有暗号 */

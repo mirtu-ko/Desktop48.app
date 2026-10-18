@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import { nextRetryAttempt } from '@renderer/utils/live-stream'
+import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
@@ -65,12 +66,16 @@ export function useStreamRetry(options: {
     if (next === null) {
       options.mediaLoading.value = false
       isRecoveringStream.value = false
+      // Umami 事件：重试预算耗尽 = 这场直播没能救回来
+      trackEvent('live:fail', { retries: maxRetries })
       ElMessage.warning('直播已结束')
       options.onExhausted()
       return
     }
 
     retryCount.value = next
+    // Umami 事件：断流重连节奏（next = 当前连续失败次数）
+    trackEvent('live:retry', { count: next })
     isRecoveringStream.value = true
     options.mediaLoading.value = true
     clearTimer()

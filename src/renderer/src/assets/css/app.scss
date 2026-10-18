@@ -87,8 +87,10 @@
   --glass-shadow:
     0 0 0 1px rgba(var(--glass-edge-rgb), 0.07), 0 2px 6px -1px rgba(var(--shadow-rgb), 0.1), var(--shadow-lg);
 
-  /* ===== 播放器深色玻璃 token：.action-btn / .player-capsule 体系共用 ===== */
-  --player-glass-bg: rgba(15, 17, 26, 0.55);
+  /* ===== 播放器深色玻璃 token：.action-btn / .player-capsule 体系共用 =====
+   * 一律不带 backdrop-filter：这些元素都悬在视频上，每帧模糊在 DWM 合成退化
+   * （多屏/高刷致 MPO 关闭）时成本翻倍，改用加深的实色底压画面 */
+  --player-glass-bg: rgba(15, 17, 26, 0.68);
   --player-glass-ring: rgba(255, 255, 255, 0.16);
   --player-glass-hover: rgba(255, 255, 255, 0.12);
 
@@ -1163,14 +1165,14 @@ body,
 }
 
 /* ===== 播放器深色玻璃胶囊容器（RotationControls / MiniControls 共用） =====
- * 消费 :root 的 --player-glass-* token，与 .action-btn 同一设计语言 */
+ * 消费 :root 的 --player-glass-* token，与 .action-btn 同一设计语言；
+ * 无 backdrop-filter，原因见 token 组注释 */
 .player-capsule {
   display: flex;
   align-items: center;
   border-radius: var(--radius-pill);
   background: var(--player-glass-bg);
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
-  backdrop-filter: blur(8px);
 }
 
 /* 胶囊内透明圆钮：hover 白纱、按下缩放。尺寸写在这里而非各播放器的 scoped 样式 ——
@@ -1205,8 +1207,10 @@ body,
 }
 
 /* ===== 弹幕层（直播 / 回放共用） =====
- * left / bottom 由组件脚本注入；top + bottom 双约束把盒子拉伸为确定高度，面板的 max-height:100% 才有参照。
- * width 须定死：百分比落在 shrink-to-fit 的绝对定位父上会解析成 auto，面板宽度随内容抖动 */
+ * left / bottom / width 由组件脚本注入（锚视频实际渲染区，竖屏下不越黑边）；
+ * top + bottom 双约束把盒子拉伸为确定高度，面板的 max-height:100% 才有参照。
+ * 此处 width 仅为元数据未就绪（脚本拿不到渲染区）时的兜底：百分比落在 shrink-to-fit
+ * 的绝对定位父上会解析成 auto，必须定死，面板宽度才不会随内容抖动 */
 .danmaku-list {
   position: absolute;
   top: 12px;
@@ -1221,15 +1225,10 @@ body,
   align-items: flex-start;
 }
 
-/* 迷你窗：玻璃条更瘦，最多占八成宽 */
-.danmaku-list.is-compact {
-  width: min(80%, 44em);
-}
-
-/* 作者名：上限只能写 100% —— 气泡宽度由内容撑出，减去预留额度会在短弹幕上截掉名字 */
+/* 作者名：8em 上限——写 100% 无约束力（气泡宽由内容撑出），长 ID 会把正文挤成多行 */
 .danmaku-author {
   flex-shrink: 0;
-  max-width: 100%;
+  max-width: 8em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1268,7 +1267,6 @@ body,
   background-color: var(--player-glass-bg);
   background-image: linear-gradient(var(--ab-tint), var(--ab-tint));
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
-  backdrop-filter: blur(8px);
   cursor: pointer;
   transition:
     --ab-tint 0.2s ease,

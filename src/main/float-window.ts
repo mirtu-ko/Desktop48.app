@@ -29,6 +29,8 @@ interface FloatWindowRecord {
   autoFitSettled: boolean
   /** 最近一次程序设置的尺寸；Linux 上 will-resize 不触发，靠尺寸比对反推用户缩放 */
   lastProgrammaticSize: WindowSize | null
+  /** 当前置顶态：setFloatWindowPlaying 据此幂等，断流重试的 pause→play 不再重复重排 z-order */
+  topmost: boolean
 }
 
 // 按 `${kind}:${liveId}` 持有，兼作去重表与载荷表
@@ -127,6 +129,7 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
     userResized: false,
     autoFitSettled: false,
     lastProgrammaticSize: { w: width, h: height },
+    topmost: true, // 创建即置顶（见 BrowserWindow 的 alwaysOnTop）
   }
   records.set(key, record)
 
@@ -210,11 +213,17 @@ export function fitFloatWindowAspect(sender: WebContents, aspect: number): void 
 /**
  * 播放状态驱动置顶：播放中置顶，暂停 / 结束取消置顶。
  * 渲染端只在状态变化时上报，加载期间保持创建时的置顶态；层级用默认 floating。
+ * 状态未变直接跳过：Electron 的 setAlwaysOnTop 每次都下发 SetWindowPos，
+ * 断流重试的 pause→play 会让它空排一次 z-order。
  */
 export function setFloatWindowPlaying(sender: WebContents, playing: boolean): void {
   const win = BrowserWindow.fromWebContents(sender)
   if (!win || win.isDestroyed())
     return
+  const record = findByWindow(win)
+  if (!record || record.topmost === playing)
+    return
+  record.topmost = playing
   win.setAlwaysOnTop(playing)
 }
 

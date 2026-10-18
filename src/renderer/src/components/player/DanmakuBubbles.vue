@@ -10,6 +10,8 @@ defineProps({
   compact: { type: Boolean, default: false },
   /** 「全部弹幕」面板展开时隐藏实时层（保留渲染树，见 .is-hidden 说明） */
   hidden: { type: Boolean, default: false },
+  /** 左侧黑边模式：黑底上无画面要隔离，去掉卡片底色与描边，只留文字 */
+  plain: { type: Boolean, default: false },
 })
 
 /**
@@ -42,7 +44,7 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
     name="danmaku"
     tag="div"
     class="danmaku-bubbles"
-    :class="{ 'is-hidden': hidden, 'is-compact': compact }"
+    :class="{ 'is-hidden': hidden, 'is-compact': compact, 'is-plain': plain }"
     @before-leave="onBeforeLeave"
   >
     <div
@@ -83,7 +85,7 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   display: flex;
   flex-direction: column-reverse;
   align-items: flex-start;
-  gap: 0.5em;
+  gap: 0.2em;
   width: 100%;
   height: 100%;
   overflow: hidden;
@@ -97,18 +99,22 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   visibility: hidden;
 }
 
-/* 弹幕气泡：磨砂玻璃底，不拦截点击（让鼠标穿过看到播放器）；内边距 / 圆角随字号缩放 */
+/* 弹幕气泡：实色深底，不拦截点击（让鼠标穿过看到播放器）。
+   垂直内边距写死 3px：全屏字号涨到 20px 时框不跟着变胖；水平仍随字号收放。
+   无 backdrop-filter：气泡悬在视频上，每窗多条气泡的逐块模糊是线性叠加的每帧成本 */
 .danmaku-bubble {
   display: flex;
-  align-items: baseline;
-  gap: 0.5em;
+  /* 顶对齐：名字/正文行框等高（1em×1.35），顶对齐即基线重合，正文换成两行时徽章和名字也不动。
+   * baseline 会把徽章的 padding 全坠到基线下方（视觉低 ~2px），
+   * center 在正文换行后以整条气泡为基准，徽章和名字会坠到中缝 */
+  align-items: flex-start;
+  gap: 0.4em;
   max-width: 100%;
-  padding: 0.5em 1em;
+  padding: 0.4em 0.6em;
   border-radius: 1.33em;
   background: var(--player-glass-bg);
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
-  backdrop-filter: blur(8px);
-  color: rgba(255, 255, 255, 0.94);
+  color: rgba(255, 255, 255, 0.86);
   font-size: 1em;
   line-height: 1.35;
   pointer-events: none;
@@ -153,6 +159,15 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   transform: translateY(-6px);
 }
 
+/* 左侧黑边模式：卡片的底色/描边本来是为了把文字从画面上分离出来，纯黑底上没有可分离的对象，
+ * 留着只剩一圈灰框抢注意力。横向内边距归零，让整列从黑边的留白处起排 */
+.danmaku-bubbles.is-plain .danmaku-bubble {
+  padding-right: 0;
+  padding-left: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 /* 迷你窗：气泡更紧凑 */
 .danmaku-bubbles.is-compact {
   gap: 0.4em;
@@ -168,8 +183,13 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   color: var(--brand-primary-light);
 }
 
-/* 等级徽章：作者名后的小号圆角片；字号略小于正文，避免抢戏 */
+/* 等级徽章：作者名旁的小号圆角片；字号略小于正文，避免抢戏。
+ * 对齐靠外层 flex-start 顶对齐（理由见 .danmaku-bubble）；顶对齐后胶囊中心仍比名字墨迹
+ * 中心高 ~1px——PingFang 类字体墨迹偏上（实测墨迹中心在基线上 0.36em，顶对齐胶囊中心
+ * 在 0.43em），下移 0.09em 让胶囊对准墨迹中心 */
 .danmaku-level {
+  position: relative;
+  top: 0.09em;
   flex: none;
   padding: 0.05em 0.5em;
   border-radius: 0.8em;
@@ -179,12 +199,12 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   font-size: 0.78em;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  line-height: 1.5;
+  line-height: 1.35;
 }
 
 .danmaku-bubbles.is-compact .danmaku-bubble {
-  padding: 0.4em 0.9em;
-  border-radius: 1.3em;
+  padding: 0.4em 0.6em;
+  border-radius: 1em;
 }
 
 /* 新弹幕入场：从下方轻浮入位 */

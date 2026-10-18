@@ -5,10 +5,10 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import FloatWindowApp from './components/floats/FloatWindowApp.vue'
 import { installSettingsRouter } from './composables/use-settings-nav'
-import { trackPage } from './composables/use-umami'
 import routes from './routes'
 import { installFloatPlayers } from './stores/float-players'
 import { installTasks } from './stores/tasks'
+import { trackEvent, trackPage } from './utils/umami'
 
 import 'element-plus/dist/index.css'
 import './assets/css/app.scss'
@@ -39,7 +39,7 @@ else {
   app.use(router).use(ElementPlus)
 
   // Umami 上报：
-  // hash 路由（数据范围详见 use-umami.ts 头注释）；afterEach 对首次导航同样触发
+  // hash 路由（数据范围详见 utils/umami.ts 头注释）；afterEach 对首次导航同样触发
   router.afterEach(to => trackPage(to.fullPath))
 
   // 设置页跳转的全局 Router：开播校验等在组件之外触发（stores/float-players.ts 的
@@ -54,4 +54,7 @@ else {
   installFloatPlayers()
 
   app.mount('#app')
+
+  // Umami 事件：启动版本分布——UA 只能解析出 OS，应用版本必须显式上报一次
+  void window.mainAPI.getAppVersion().then(version => trackEvent('app:start', { version }))
 }

@@ -37,6 +37,9 @@ declare global {
 // 上报一次页面访问。path 不含 '#'，如 '/setting'、'/float?live=123'
 export function trackPage(path: string): void {
   // CDN 拉取失败 / 离线时 window.umami 不存在，静默跳过
+  // 单测跑在 node 环境，同样没有 window：与 CDN 失败 / 离线一样静默跳过
+  if (typeof window === 'undefined')
+    return
   window.umami?.track(props => ({
     ...props,
     url: `/#${path}`,
@@ -50,5 +53,20 @@ export function trackPage(path: string): void {
 // 上报一条自定义事件（Umami 仪表盘 Events 里看），data 里的属性会一起进库
 export function trackEvent(name: string, data: Record<string, string | number>): void {
   // CDN 拉取失败 / 离线时 window.umami 不存在，静默跳过
+  // 同 trackPage：无 window（单测 / 离线 / CDN 失败）一律静默跳过
+  if (typeof window === 'undefined')
+    return
   window.umami?.track(name, data)
+}
+
+// 观看时长只上报分桶（<1m / 1-5m / 5-15m / 15m+）：Umami 事件没有时长概念，
+// 逐条精确时长落库也没有仪表盘可看，分桶足够回答「点开就走」的比例
+export function durationBucket(seconds: number): string {
+  if (seconds < 60)
+    return '<1m'
+  if (seconds < 300)
+    return '1-5m'
+  if (seconds < 900)
+    return '5-15m'
+  return '15m+'
 }

@@ -12,9 +12,8 @@ import { handleTraced } from './trace'
 
 export function registerPocketIPC(): void {
   // token 失效清凭证时广播各窗口：渲染层 pocket-auth 镜像同步复位，
-  // 免得房间页已报「登录过期」而设置页仍显示已登录（对端：stores/pocket-auth.ts）
-  pocketAuth.setAuthExpiredNotifier(() => broadcastIpc('pocketAuthExpired'))
-  // token 失效清凭证：未读即刻归零广播 + 登录态广播复位（对端两处 store 镜像）。
+  // 免得房间页已报「登录过期」而设置页仍显示已登录（对端：stores/pocket-auth.ts）。
+  // 未读即刻归零广播走同一钩子（setAuthExpiredNotifier 是单回调，只能注册一次）：
   // 轮询对 token 失效走「整轮冻结、未读不丢」，那是给瞬时网络故障的，真失效不适用
   pocketAuth.setAuthExpiredNotifier(() => {
     pocketUnread.clearAccountUnread()
@@ -89,8 +88,12 @@ export function registerPocketIPC(): void {
   // 房间未读（主进程 60s 轮询检测，见 main/pocket48/pocket-unread.ts）：
   // 快照回取 + 小房间频道查询 + 标记已读（target 区分大/小房间）
   handleTraced('pocketUnreadState', () => pocketUnread.getState())
-  handleTraced('pocketGetSmallChannel', (_event: IpcMainInvokeEvent, userId: number) =>
-    pocketUnread.getSmallChannel(userId))
+  // 小房间失效（房主更新后旧频道被删）：渲染层打开失败时立刻作废归属，不等下一轮检测
+  handleTraced('pocketInvalidateSmallChannel', (_event: IpcMainInvokeEvent, userId: number) =>
+    pocketUnread.invalidateSmallChannel(userId))
+  // 重新发现小房间：选中成员时本地还没发现，或旧频道刚失效（force 绕过发现间隔）
+  handleTraced('pocketRefreshSmallChannel', (_event: IpcMainInvokeEvent, userId: number, force = false) =>
+    pocketUnread.refreshSmallChannel(userId, force))
   // 小房间暗号：问题拉取（room/info 拦截信封）+ 作答校验（万能密码客户端直通）
   handleTraced('pocketGetRoomQuestion', (_event: IpcMainInvokeEvent, channelId: string) =>
     pocketAuth.getRoomQuestion(channelId))

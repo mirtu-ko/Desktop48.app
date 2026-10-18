@@ -107,6 +107,11 @@ function isAuthExpired(error: unknown): boolean {
   return error instanceof Error && error.message.includes('登录已过期')
 }
 
+/** 频道已不存在：房主更新/删除小房间后旧频道即此结局（服务端原文，与主进程同一判据） */
+function isChannelMissing(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('频道不存在')
+}
+
 /** 有界并发映射：最多 limit 个在途，结果保序；任一任务抛错即整体拒绝 */
 async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = Array.from<R>({ length: items.length })
@@ -196,8 +201,8 @@ export function usePocketRooms() {
   const viewMode = ref<PocketRoomViewMode>('room')
   /** 选中成员的小房间频道；null = 未发现（主进程归属自愈只认 lastMsgList 回包里出现过的频道） */
   const smallChannel = ref<{ serverId: string, channelId: string } | null>(null)
-  /** userId → 小房间频道缓存（null 也缓存：查过但未发现，不重复打接口） */
-  const smallChannelCache = new Map<number, { serverId: string, channelId: string } | null>()
+  /** userId → 已发现的小房间频道缓存（只缓存命中；失效时由 dropSmallChannel 删除） */
+  const smallChannelCache = new Map<number, { serverId: string, channelId: string }>()
   /**
    * 频道名表（tab 显示真实频道名）：连同所属 serverId 一起存，
    * 读取时校验归属——否则切成员后旧 server 的表会顶出新名字。
@@ -815,21 +820,30 @@ export function usePocketRooms() {
   }
 
   /**
-   * 发现选中成员的小房间频道（主进程归属自愈的结果）；null = 未发现，入口隐藏。
+   * 发现选中成员的小房间频道（主进程枚举 server 频道列表的结果）；null = 未发现，入口隐藏。
+   * 本地没有时让主进程重新枚举一次（server 级间隔，反复选中不会反复打接口）——
+   * 房主新建 / 换新的小房间不必等最多一分钟的检测轮才出现。
+   * `refresh` 用于同房重选：缓存命中也要问一次主进程，别一直显示已被换掉的旧频道。
+   * 只缓存命中：缓存 null 会让新频道等到重启才出现。
    * 频道就位后顺手取一次暗号问题：页签上的锁图标靠它判定「是否需要暗号」，
    * 不能等到切进小房间才拉，否则在大房间视图下永远看不到锁。
    */
-  async function ensureSmallChannel(userId: number): Promise<void> {
-    if (smallChannelCache.has(userId)) {
+  async function ensureSmallChannel(userId: number, refresh = false): Promise<void> {
+    const cached = smallChannelCache.get(userId)
+    if (cached && !refresh) {
       if (selectedUserId.value === userId)
-        smallChannel.value = smallChannelCache.get(userId) ?? null
+        smallChannel.value = cached
     }
     else {
       try {
-        const channel = await window.mainAPI.pocketGetSmallChannel(userId)
-        smallChannelCache.set(userId, channel)
+        // 一次往返：主进程查自己的记录，没有（或要求校正）就枚举该 server 的频道列表
+        const channel = await window.mainAPI.pocketRefreshSmallChannel(userId, refresh)
+        if (channel)
+          smallChannelCache.set(userId, channel)
         if (selectedUserId.value === userId)
           smallChannel.value = channel
+        if (!channel)
+          debugLog('pocket-rooms', '小房间入口隐藏：主进程未发现', userId, '强制重查', refresh)
       }
       catch (error) {
         debugLog('pocket-rooms', '小房间频道查询失败（入口降级隐藏）', error)
@@ -837,6 +851,32 @@ export function usePocketRooms() {
     }
     if (selectedUserId.value === userId && smallChannel.value)
       void ensureSmallQuestion()
+  }
+
+  /**
+   * 作废失效的小房间频道并立刻重找：清本地缓存 → 通知主进程清归属 → 强制枚举该 server，
+   * 返回房主换上的新频道（没有则 null）。旧频道被删后新频道通常已经在列表里，
+   * 不必让用户等下一轮检测。
+   */
+  async function refreshAfterDrop(userId: number, channelId: string): Promise<{ serverId: string, channelId: string } | null> {
+    smallChannelCache.delete(userId)
+    smallQuestionCache.delete(channelId)
+    if (selectedUserId.value === userId) {
+      smallChannel.value = null
+      smallQuestion.value = null
+      viewMode.value = 'room'
+    }
+    try {
+      await window.mainAPI.pocketInvalidateSmallChannel(userId)
+      const channel = await window.mainAPI.pocketRefreshSmallChannel(userId, true)
+      if (channel)
+        smallChannelCache.set(userId, channel)
+      return channel
+    }
+    catch (error) {
+      debugLog('pocket-rooms', '小房间重新发现失败（入口暂时隐藏）', error)
+      return null
+    }
   }
 
   /** 拉取当前小房间的暗号问题（channelId 缓存；null = room/info 未被拦，即无门禁） */
@@ -943,6 +983,27 @@ export function usePocketRooms() {
     }
     catch (error) {
       if (requestId === selectRequestId) {
+        // 小房间在打开期间被房主更新：旧频道已删除。作废归属并立刻枚举该 server，
+        // 找到新频道就直接切过去；没有小房间了才退回大房间，不把「频道不存在」当错误页留给用户。
+        if (viewMode.value === 'small' && smallChannel.value?.channelId === channel.channelId && isChannelMissing(error)) {
+          const next = await refreshAfterDrop(userId, channel.channelId)
+          if (requestId !== selectRequestId)
+            return
+          // 只在真的换到了新频道时自动切过去：同一频道重试只会再吃一次 404
+          if (next && next.channelId !== channel.channelId && selectedUserId.value === userId) {
+            smallChannel.value = next
+            viewMode.value = 'small'
+            await openChannel(userId, next)
+            return
+          }
+          const bigChannel = channelCache.get(userId)
+          if (bigChannel) {
+            await openChannel(userId, bigChannel)
+            return
+          }
+          await selectRoom(userId)
+          return
+        }
         chatStatus.value = 'error'
         chatStatusText.value = error instanceof Error ? error.message : String(error)
       }
@@ -962,9 +1023,13 @@ export function usePocketRooms() {
    * 房间留言流与直播与否无关：未开播的成员同样有房间消息。
    */
   async function selectRoom(userId: number | null) {
-    // 同房且已就绪：no-op（保留消息流与轮询）
-    if (userId === selectedUserId.value && chatStatus.value === 'ready')
+    // 同房且已就绪：消息流与轮询保持不动，但小房间可能刚被房主新建 / 换新，
+    // 补一次发现（缓存命中不打接口，主进程侧也有 server 级间隔）
+    if (userId === selectedUserId.value && chatStatus.value === 'ready') {
+      if (userId !== null)
+        void ensureSmallChannel(userId, true)
       return
+    }
     clearChat()
     selectedUserId.value = userId
     // 视图随选中成员复位到大房间；小房间频道异步发现（不阻塞大房间首屏）
