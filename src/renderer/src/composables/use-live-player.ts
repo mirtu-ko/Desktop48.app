@@ -87,11 +87,13 @@ export function useLivePlayer(options: {
       isLive: true,
       lazyLoad: false,
       liveBufferLatencyChasing: true,
-      liveBufferLatencyMaxLatency: 1.5,
-      liveBufferLatencyMinRemain: 0.3,
+      // 追帧阈值放宽：太激进的低延迟会在网络抖动时频繁触发跳帧/变速，
+      // 表现为小窗卡顿或断流感；这里用约 1.5s 缓冲换取播放连续性。
+      liveBufferLatencyMaxLatency: 3,
+      liveBufferLatencyMinRemain: 1,
       liveSync: true,
-      liveSyncMaxLatency: 1.2,
-      liveSyncTargetLatency: 0.6,
+      liveSyncMaxLatency: 3.5,
+      liveSyncTargetLatency: 1.5,
       liveSyncPlaybackRate: 1.2,
     })
 
