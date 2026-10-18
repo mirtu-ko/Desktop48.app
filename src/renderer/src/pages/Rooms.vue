@@ -343,7 +343,7 @@ async function settleBigRoomEnter(userId: number, hadUnread: boolean) {
 
 /** 点进房间（左列条目）：选中 → 清大房间未读（有未读则回底） */
 async function enterRoom(userId: number) {
-  trackEvent('rooms:enter', { starId: String(userId) })
+  trackEvent('rooms:enter', { starId: String(userId), starName: rooms.value.find(room => room.userId === userId)?.nickname || '' })
   const hadUnread = unreadChannelOf(userId).big > 0
   await selectRoom(userId)
   await settleBigRoomEnter(userId, hadUnread)

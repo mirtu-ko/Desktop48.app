@@ -188,7 +188,7 @@ const {
     if (!playbackTracked) {
       playbackTracked = true
       playbackStartedAt = Date.now()
-      trackEvent('playback:play', { source: props.source, media: isRadio.value ? 'radio' : 'video' })
+      trackEvent('playback:play', { source: props.source, media: isRadio.value ? 'radio' : 'video', title: realName.value })
     }
     debugLog('playback', `④元数据就绪: 刷新画面尺寸${isRadio.value ? '（电台无尺寸）' : ''} → 加载弹幕`)
     // 记录源尺寸供旋转缩放计算，并按（可能旋转后的）画面比例上报浮窗

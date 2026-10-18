@@ -97,18 +97,19 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   visibility: hidden;
 }
 
-/* 弹幕气泡：实色深底，不拦截点击（让鼠标穿过看到播放器）；内边距 / 圆角随字号缩放。
+/* 弹幕气泡：实色深底，不拦截点击（让鼠标穿过看到播放器）。
+   垂直内边距写死 3px：全屏字号涨到 20px 时框不跟着变胖；水平仍随字号收放。
    无 backdrop-filter：气泡悬在视频上，每窗多条气泡的逐块模糊是线性叠加的每帧成本 */
 .danmaku-bubble {
   display: flex;
   align-items: baseline;
-  gap: 0.5em;
+  gap: 0.4em;
   max-width: 100%;
-  padding: 0.5em 1em;
-  border-radius: 1.33em;
+  padding: 0.4em 0.6em;
+  border-radius: 1em;
   background: var(--player-glass-bg);
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
-  color: rgba(255, 255, 255, 0.94);
+  color: rgba(255, 255, 255, 0.86);
   font-size: 1em;
   line-height: 1.35;
   pointer-events: none;
@@ -168,7 +169,9 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   color: var(--brand-primary-light);
 }
 
-/* 等级徽章：作者名后的小号圆角片；字号略小于正文，避免抢戏 */
+/* 等级徽章：作者名后的小号圆角片；字号略小于正文，避免抢戏。
+ * line-height 必须与气泡正文一致（1.35）：气泡是 baseline 对齐，行框高度不同徽章会相对名字偏斜；
+ * 也不能用 align-self: center——正文换行后气泡变高，居中是相对整条气泡算的，徽章会掉进中缝 */
 .danmaku-level {
   flex: none;
   padding: 0.05em 0.5em;
@@ -179,12 +182,12 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   font-size: 0.78em;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  line-height: 1.5;
+  line-height: 1.35;
 }
 
 .danmaku-bubbles.is-compact .danmaku-bubble {
-  padding: 0.4em 0.9em;
-  border-radius: 1.3em;
+  padding: 0.4em 0.6em;
+  border-radius: 1em;
 }
 
 /* 新弹幕入场：从下方轻浮入位 */

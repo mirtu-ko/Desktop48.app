@@ -4,12 +4,14 @@ import { computed } from 'vue'
 interface DanmakuLayerRect {
   left: number
   top: number
+  width: number
   height: number
   bottom: number
 }
 
-// 弹幕字号随画面渲染高度等比缩放的系数（写死 px 在大画面里偏小）
-const FONT_RATIO = 0.027
+// 弹幕字号随画面渲染区短边等比缩放的系数：竖屏直播高度≈窗口全高，按高度算会顶到上限，
+// 短边与画面宽度同阶，气泡占画面的比例在横竖屏下才均匀
+const FONT_RATIO = 0.033
 // 弹幕条距画面左 / 下边的内缩量
 const MARGIN = 12
 // bottom 下限：避开底部控制条
@@ -28,7 +30,9 @@ export function useDanmakuLayer(options: {
   // 字号上下限按窗口形态区分：窄浮窗 10~14px，主窗 / 全屏 12~20px
   const fontSize = computed(() => {
     const [min, max] = compact() ? [10, 14] : [12, 20]
-    return Math.min(max, Math.max(min, Math.round((videoRect()?.height ?? 0) * FONT_RATIO)))
+    const rect = videoRect()
+    const shortSide = rect ? Math.min(rect.width, rect.height) : 0
+    return Math.min(max, Math.max(min, Math.round(shortSide * FONT_RATIO)))
   })
 
   const position = computed(() => {
@@ -39,6 +43,8 @@ export function useDanmakuLayer(options: {
     return {
       left: `${(rect.left + MARGIN).toFixed(1)}px`,
       bottom: `${Math.max(MIN_BOTTOM, rect.bottom + MARGIN).toFixed(1)}px`,
+      // 宽度锚渲染区：竖屏下容器远宽于画面，气泡不得越过黑边
+      width: `${rect.width.toFixed(1)}px`,
     }
   })
 

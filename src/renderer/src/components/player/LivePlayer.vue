@@ -238,7 +238,7 @@ function onPlayerCanPlay() {
   if (!livePlayTracked) {
     livePlayTracked = true
     livePlayStartedAt = Date.now()
-    trackEvent('live:play', { source: props.source, media: isRadio.value ? 'radio' : 'video' })
+    trackEvent('live:play', { source: props.source, media: isRadio.value ? 'radio' : 'video', title: realName.value })
   }
   if (!isRadio.value)
     updateVideoDimensions()
