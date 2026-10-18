@@ -90,11 +90,12 @@ export function useLivePlayer(options: {
       // 追帧阈值放宽：太激进的低延迟会在网络抖动时频繁触发跳帧/变速，
       // 表现为小窗卡顿或断流感；这里用约 1.5s 缓冲换取播放连续性。
       liveBufferLatencyMaxLatency: 3,
-      liveBufferLatencyMinRemain: 1,
+      liveBufferLatencyMinRemain: 1.5,
       liveSync: true,
       liveSyncMaxLatency: 3.5,
       liveSyncTargetLatency: 1.5,
-      liveSyncPlaybackRate: 1.2,
+      // 追帧速率保守化：高负载机器上 1.2x 抢跑本身可感知（卡一下后突然快放）
+      liveSyncPlaybackRate: 1.1,
     })
 
     player = created

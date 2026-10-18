@@ -536,7 +536,8 @@ onUnmounted(() => {
 
 /* ===== 全部弹幕大玻璃面板：内部滚动 =====
  * 高度上限交给父容器（.danmaku-list 因双约束有确定高度），不用 min(60vh,480px) 这类绝对值；
- * 字号固定，不跟随实时气泡缩放 */
+ * 字号固定，不跟随实时气泡缩放；
+ * 无 backdrop-filter：面板悬在视频上，每帧模糊在 DWM 合成退化时成本翻倍 */
 .danmaku-all {
   display: flex;
   flex-direction: column;
@@ -546,7 +547,6 @@ onUnmounted(() => {
   border-radius: 14px;
   background: var(--player-glass-bg);
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
-  backdrop-filter: blur(10px);
   overflow: hidden;
   /* 弹幕区整体 pointer-events:none，面板单独恢复交互 */
   pointer-events: auto;

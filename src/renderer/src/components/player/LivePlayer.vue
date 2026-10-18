@@ -622,8 +622,8 @@ onUnmounted(() => {
   overflow-y: auto;
   padding: 8px 10px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(12px);
+  /* 实色深底（非磨砂）：悬在视频上的 backdrop-filter 每帧成本高，加深底色压画面 */
+  background: rgba(0, 0, 0, 0.62);
   color: #fff;
   font-size: 12px;
   user-select: none;

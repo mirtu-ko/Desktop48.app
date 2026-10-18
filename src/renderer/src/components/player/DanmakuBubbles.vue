@@ -97,7 +97,8 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   visibility: hidden;
 }
 
-/* 弹幕气泡：磨砂玻璃底，不拦截点击（让鼠标穿过看到播放器）；内边距 / 圆角随字号缩放 */
+/* 弹幕气泡：实色深底，不拦截点击（让鼠标穿过看到播放器）；内边距 / 圆角随字号缩放。
+   无 backdrop-filter：气泡悬在视频上，每窗多条气泡的逐块模糊是线性叠加的每帧成本 */
 .danmaku-bubble {
   display: flex;
   align-items: baseline;
@@ -107,7 +108,6 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   border-radius: 1.33em;
   background: var(--player-glass-bg);
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
-  backdrop-filter: blur(8px);
   color: rgba(255, 255, 255, 0.94);
   font-size: 1em;
   line-height: 1.35;
