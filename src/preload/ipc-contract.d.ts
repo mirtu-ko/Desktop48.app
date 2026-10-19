@@ -158,15 +158,15 @@ export type UpdaterState
   = | { phase: 'idle' }
   /** 正在检查（首次检查可能持续数秒） */
     | { phase: 'checking' }
-  /** 发现新版本，等待用户确认是否下载 */
-    | { phase: 'available', version: string, releaseNotes: string }
+  /** 发现新版本；manualUpdate 表示仅可引导到 GitHub 手动下载 */
+    | { phase: 'available', version: string, releaseNotes: string, manualUpdate?: boolean, url?: string }
   /** 正在下载 */
     | { phase: 'downloading', version: string, percent: number, bytesPerSecond: number, transferred: number, total: number }
   /** 已下载完成，等待重启安装 */
     | { phase: 'ready', version: string }
   /** 检查 / 下载失败（国内访问 GitHub 不稳定属常态，非致命） */
     | { phase: 'error', message: string }
-  /** 当前环境不支持自动更新（macOS 未签名 / dev 环境 / 免安装版）；url 非空时可引导手工下载 */
+  /** 当前环境不支持自动更新（dev 环境 / 免安装版）；url 非空时可引导手工下载 */
     | { phase: 'unsupported', reason: string, url?: string }
 
 // ===== 口袋48账号 =====
