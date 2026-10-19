@@ -45,6 +45,7 @@ import { Database } from '../database'
 import { broadcastIpc } from '../ipc/send'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
+import { setTrayUnread } from '../tray'
 import {
   getFollowedIds,
   getRoomChannel,
@@ -210,6 +211,9 @@ function publish(): void {
   catch (error) {
     log('[pocket-unread] 应用角标设置失败', error)
   }
+
+  // Windows 托盘未读提示（随未读快照实时更新 tooltip；非托盘场景为 no-op）
+  setTrayUnread(state.total)
 }
 
 /**
