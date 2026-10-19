@@ -22,6 +22,7 @@ import Constants from '@renderer/utils/constants'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
+import { previewReleaseNotes } from '@renderer/utils/update-notes'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -249,20 +250,11 @@ const updateVersionLine = computed(() => {
 
 /**
  * 更新说明预览：GitHub releaseNotes 常为 markdown，剥掉标题 / 列表 / 链接 /
- * 加粗标记后按纯文本行展示，最多 4 行，超出部分提示详见 Release 页。
+ * 加粗标记后按纯文本行展示，并过滤 Full Changelog 汇总行；最多 4 行。
  */
-const releaseNotesPreview = computed(() => {
-  const lines = (availableUpdate.value?.releaseNotes ?? '')
-    .split('\n')
-    .map(line => line
-      .replace(/^\s*#{1,6}\s+/, '')
-      .replace(/^\s*[-*+]\s+/, '')
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-      .replace(/\*\*(.+?)\*\*/g, '$1')
-      .trim())
-    .filter(Boolean)
-  return { lines: lines.slice(0, 4), truncated: lines.length > 4 }
-})
+const releaseNotesPreview = computed(() =>
+  previewReleaseNotes(availableUpdate.value?.releaseNotes ?? ''),
+)
 
 /** 字节数格式化：下载进度的已传 / 总量与速率 */
 function formatBytes(bytes: number): string {
@@ -285,16 +277,26 @@ const downloadSizeText = computed(() => {
     : `${formatBytes(d.transferred)} · ${speed}`
 })
 
-/** 主操作按钮：状态决定文案与语义；available 态即「更新版本」，点击开始下载 */
+/** 手动下载兜底地址；正常情况下主进程会在 available 态带上 GitHub Release 地址。 */
+const MANUAL_RELEASE_PAGE_URL = 'https://github.com/mirtu-ko/Desktop48.app/releases/latest'
+
+/** available 态是否只能跳转 GitHub 手动下载（macOS 当前走该链路） */
+const manualUpdateNotice = computed(() => availableUpdate.value?.manualUpdate ?? false)
+/** available 态的手动下载地址，模板与操作按钮共用 */
+const manualUpdateUrl = computed(() => availableUpdate.value?.url ?? MANUAL_RELEASE_PAGE_URL)
+
+/** 主操作按钮：状态决定文案与语义；自动更新 available 态是「更新版本」，macOS 是「去下载」 */
 const updaterAction = computed(() => {
   const s = updaterState.value
   if (s.phase === 'downloading')
     return { label: '下载中', disabled: true, loading: true, handler: () => {} }
   if (s.phase === 'ready')
     return { label: '立即重启', disabled: false, loading: false, handler: installUpdate }
+  if (s.phase === 'available' && s.manualUpdate)
+    return { label: '去下载', disabled: false, loading: false, handler: () => openReleasePage(manualUpdateUrl.value) }
   if (s.phase === 'available')
     return { label: '更新版本', disabled: false, loading: false, handler: downloadUpdate }
-  // 不支持自动更新的环境（如 macOS）给出手工出路，别让用户对着禁用按钮无计可施
+  // 免安装版等不支持自动更新的环境给出手工出路，别让用户对着禁用按钮无计可施
   if (s.phase === 'unsupported' && s.url)
     return { label: '去下载', disabled: false, loading: false, handler: () => openReleasePage(s.url!) }
   return { label: '检查更新', disabled: updaterChecking.value || s.phase === 'unsupported', loading: updaterChecking.value, handler: checkUpdate }
@@ -1064,7 +1066,9 @@ function hideLogo(event: Event) {
               更多更新内容详见 GitHub Release 页面
             </p>
             <p class="update-notice-hint">
-              点击「更新版本」开始下载，下载完成后重启应用即可完成升级。
+              {{ manualUpdateNotice
+                ? 'macOS 暂不支持应用内更新，请点击「去下载」打开 GitHub 页面，下载后手动安装。'
+                : '点击「更新版本」开始下载，下载完成后重启应用即可完成升级。' }}
             </p>
           </template>
           <template v-else-if="downloadingUpdate">

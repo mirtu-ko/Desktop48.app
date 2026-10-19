@@ -22,7 +22,7 @@ function getAutoUpdater() {
 export type UpdaterState
   = | { phase: 'idle' }
     | { phase: 'checking' }
-    | { phase: 'available', version: string, releaseNotes: string }
+    | { phase: 'available', version: string, releaseNotes: string, manualUpdate?: boolean, url?: string }
     | { phase: 'downloading', version: string, percent: number, bytesPerSecond: number, transferred: number, total: number }
     | { phase: 'ready', version: string }
     | { phase: 'error', message: string }
@@ -30,6 +30,10 @@ export type UpdaterState
 
 /** GitHub Release 手动下载页；仓库地址变更时需同步 publish 配置。 */
 const RELEASE_PAGE_URL = 'https://github.com/mirtu-ko/Desktop48.app/releases/latest'
+
+/** GitHub latest Release API；macOS 不做应用内下载，但可用它做版本检查。 */
+const GITHUB_LATEST_RELEASE_URL = 'https://api.github.com/repos/mirtu-ko/Desktop48.app/releases/latest'
+const MANUAL_CHECK_TIMEOUT_MS = 10 * 1000
 
 /*
  * 不单独配置请求超时：electron-updater 的 timeout 配置在当前实现中未生效。
@@ -91,6 +95,8 @@ function humanizeError(err: any): string {
     return '未找到可用的更新包，请稍后重试或前往 GitHub 下载'
   if (code === 'ERR_UPDATER_INVALID_VERSION' || code.startsWith('ERR_UPDATER_INVALID_'))
     return '更新信息格式异常，请稍后重试或前往 GitHub 下载'
+  if (err?.statusCode === 403)
+    return 'GitHub 访问受限或请求过于频繁，已改用 Release 页面检查；如仍失败可前往 GitHub 页面手动下载'
   if (typeof err?.statusCode === 'number' && err.statusCode >= 500)
     return '更新服务器暂时不可用，请稍后重试'
   if (/timed out|timeout|ETIMEDOUT/i.test(code + message))
@@ -106,23 +112,107 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+/** 把 v1.2.3 / 1.2.3 归一成可比数字；非法段视为 0，避免比较时抛错。 */
+function parseVersion(version: string): number[] {
+  return version.trim().replace(/^v/i, '').split('.').map(part => Number.parseInt(part, 10))
+}
+
+/** 语义化版本比较（项目当前只用 x.y.z）：next 大于 current 时返回 true。 */
+function isNewerVersion(next: string, current: string): boolean {
+  const a = parseVersion(next)
+  const b = parseVersion(current)
+  const width = Math.max(a.length, b.length)
+  for (let i = 0; i < width; i++) {
+    const av = a[i] ?? 0
+    const bv = b[i] ?? 0
+    if (av !== bv)
+      return av > bv
+  }
+  return false
+}
+
+/** GitHub latest Release 的响应字段（只取更新检查需要的内容）。 */
+interface GithubLatestRelease {
+  tag_name?: string
+  body?: string | null
+}
+
+/** 从 GitHub Release 页面重定向后的最终地址解析 tag；API 限流时的降级来源。 */
+async function fetchLatestReleaseFromPage(): Promise<GithubLatestRelease> {
+  const response = await fetch(RELEASE_PAGE_URL, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(MANUAL_CHECK_TIMEOUT_MS),
+  })
+  if (!response.ok) {
+    const error = new Error(`GitHub Release 页面请求失败: HTTP ${response.status}`) as Error & { statusCode: number }
+    error.statusCode = response.status
+    throw error
+  }
+  const segments = new URL(response.url).pathname.split('/').filter(Boolean)
+  const tag = segments[segments.length - 1] ?? ''
+  if (!/^v?\d/.test(tag)) {
+    throw new Error(`无法从 GitHub Release 页面解析版本号: ${response.url}`)
+  }
+  return { tag_name: decodeURIComponent(tag) }
+}
+
+/** 手动检查入口：优先 API（带更新说明），遇 403/429 限流时用 Release 页面兜底。 */
+async function fetchLatestRelease(): Promise<GithubLatestRelease> {
+  try {
+    return await fetchLatestReleaseFromApi()
+  }
+  catch (err: any) {
+    if (err?.statusCode === 403 || err?.statusCode === 429) {
+      log('[updater] GitHub API 限流，改用 Release 页面检查版本号')
+      return fetchLatestReleaseFromPage()
+    }
+    throw err
+  }
+}
+
+async function fetchLatestReleaseFromApi(): Promise<GithubLatestRelease> {
+  const response = await fetch(GITHUB_LATEST_RELEASE_URL, {
+    headers: {
+      'accept': 'application/vnd.github+json',
+      'user-agent': `Desktop48/${app.getVersion()}`,
+    },
+    signal: AbortSignal.timeout(MANUAL_CHECK_TIMEOUT_MS),
+  })
+  if (!response.ok) {
+    const error = new Error(`GitHub Release 请求失败: HTTP ${response.status}`) as Error & { statusCode: number }
+    error.statusCode = response.status
+    throw error
+  }
+  return await response.json() as GithubLatestRelease
+}
+
 let currentState: UpdaterState = { phase: 'idle' }
 
 /** 标记检查循环进行中；重试期间的瞬时 error 事件不应推给 UI。 */
 let checkingInProgress = false
 
 /** 是否具备自动更新条件；不满足时给出原因，渲染端据此禁用按钮并说明 */
-export function resolveUpdaterSupport(): { ok: true } | { ok: false, reason: string, url?: string } {
-  if (!app.isPackaged)
+export type UpdaterSupport
+  = | { ok: true, mode: 'auto' | 'manual' }
+    | { ok: false, reason: string, url?: string }
+
+/** 是否具备更新检查条件；不满足时给出原因，渲染端据此说明 */
+const DEV_UPDATE_CHECK_ENV = 'DESKTOP48_DEV_UPDATE_CHECK'
+
+/** 是否具备更新检查条件；不满足时给出原因，渲染端据此说明 */
+export function resolveUpdaterSupport(): UpdaterSupport {
+  const devUpdateCheckEnabled = process.env[DEV_UPDATE_CHECK_ENV] === '1'
+  if (!app.isPackaged && !devUpdateCheckEnabled)
     return { ok: false, reason: '开发模式下不检查更新' }
-  if (process.platform === 'darwin')
-    return { ok: false, reason: 'macOS 版本暂不支持自动更新，请前往 GitHub 下载新版本', url: RELEASE_PAGE_URL }
+  // macOS 只能手动下载；dev 模式显式开启后同样走 GitHub 手动检查，便于本地验证 UI。
+  if (process.platform === 'darwin' || devUpdateCheckEnabled)
+    return { ok: true, mode: 'manual' }
 
   // 免安装包缺少 app-update.yml，提前拦截并说明。
   if (!existsSync(path.join(process.resourcesPath, 'app-update.yml')))
     return { ok: false, reason: '当前为免安装版，不支持自动更新（请使用安装包版本）', url: RELEASE_PAGE_URL }
 
-  return { ok: true }
+  return { ok: true, mode: 'auto' }
 }
 
 function setState(next: UpdaterState): void {
@@ -212,6 +302,14 @@ export function initUpdater(): void {
     return
   }
 
+  // macOS 只能检查版本并引导手动下载，不能初始化 electron-updater 的下载/安装链路。
+  if (support.mode === 'manual') {
+    setTimeout(() => {
+      void checkForUpdates({ silent: true })
+    }, 5000)
+    return
+  }
+
   const autoUpdater = getAutoUpdater()
   autoUpdater.autoDownload = false
   // 仅在退出时安装，不主动重启应用。
@@ -237,6 +335,9 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
     currentState = { phase: 'unsupported', reason: support.reason, url: support.url }
     return currentState
   }
+
+  if (support.mode === 'manual')
+    return checkManualRelease({ silent: Boolean(options.silent) })
 
   let lastError: any = null
 
@@ -277,6 +378,68 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
   }
 
   currentState = { phase: 'error', message: humanizeError(lastError) }
+  return currentState
+}
+
+/** macOS 的手动检查；只查询 Release，不调用 electron-updater。 */
+async function checkManualRelease(options: CheckOptions): Promise<UpdaterState> {
+  // 失败时按静默语义还原；否则启动检查一失败，UI 会永久停在 checking。
+  const baseline = currentState
+  let lastError: any = null
+  checkingInProgress = true
+  setState({ phase: 'checking' })
+  try {
+    for (let attempt = 1; attempt <= CHECK_MAX_ATTEMPTS; attempt++) {
+      try {
+        const release = await fetchLatestRelease()
+        const version = (release.tag_name ?? '').trim().replace(/^v/i, '')
+        if (!version) {
+          const error = new Error('GitHub Release 缺少版本号') as Error & { statusCode: number }
+          error.statusCode = 502
+          throw error
+        }
+
+        if (!isNewerVersion(version, app.getVersion())) {
+          setState({ phase: 'idle' })
+          return currentState
+        }
+
+        const next: UpdaterState = {
+          phase: 'available',
+          version,
+          releaseNotes: release.body ?? '',
+          manualUpdate: true,
+          url: RELEASE_PAGE_URL,
+        }
+        setState(next)
+        return next
+      }
+      catch (err: any) {
+        lastError = err
+        const retryable = isRetryableError(err)
+        const isLast = attempt === CHECK_MAX_ATTEMPTS
+        if (retryable && !isLast) {
+          const wait = RETRY_BACKOFF_BASE_MS * 3 ** (attempt - 1)
+          log(`[updater] macOS 手动检查失败（第 ${attempt}/${CHECK_MAX_ATTEMPTS} 次），${wait}ms 后重试:`, err?.message || err)
+          await delay(wait)
+          continue
+        }
+
+        log(`[updater] macOS 手动检查失败（第 ${attempt}/${CHECK_MAX_ATTEMPTS} 次）:`, err?.message || err)
+        break
+      }
+    }
+  }
+  finally {
+    checkingInProgress = false
+  }
+
+  if (options.silent) {
+    setState(baseline)
+    return currentState
+  }
+
+  setState({ phase: 'error', message: humanizeError(lastError) })
   return currentState
 }
 
