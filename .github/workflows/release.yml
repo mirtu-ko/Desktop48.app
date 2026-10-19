@@ -3,7 +3,9 @@ name: Build & Release
 on:
   push:
     tags:
-      - 'v*' # 只有推送 v 开头的 tag 时才触发，例如 v1.0.0
+      # v 开头的 tag 即触发：稳定版（v1.0.0）与测试版（v1.0.0-beta.1）同一套流程，
+      # 区别只在 create-release 是否把 Release 标记为 Pre-release。
+      - 'v*'
 
 permissions:
   contents: write
@@ -19,8 +21,16 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # release 已存在时跳过创建，支持失败重跑和复用已有 release
-        run: gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
+        # tag 含 "-" 即 semver 预发行（如 v0.2.6-beta.1）：必须标记为 Pre-release，
+        # 否则 /releases/latest 会指向 beta，全部稳定用户被推测试版。
+        # release 已存在时跳过创建，支持失败重跑和复用已有 release。
+        run: |
+          args=(--title "${GITHUB_REF_NAME}" --generate-notes)
+          case "${GITHUB_REF_NAME}" in
+            *-*) args+=(--prerelease) ;;
+          esac
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
+            || gh release create "${GITHUB_REF_NAME}" "${args[@]}"
 
   release:
     needs: create-release # 等待 release 创建完成，后续 job 只上传产物
