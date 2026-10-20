@@ -3,9 +3,7 @@ name: Build & Release
 on:
   push:
     tags:
-      # v 开头的 tag 即触发：稳定版（v1.0.0）与测试版（v1.0.0-beta.1）同一套流程，
-      # 区别只在 create-release 是否把 Release 标记为 Pre-release。
-      - 'v*'
+      - 'v*' # v 开头的 tag 触发
 
 permissions:
   contents: write
@@ -21,9 +19,8 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # tag 含 "-" 即 semver 预发行（如 v0.2.6-beta.1）：必须标记为 Pre-release，
-        # 否则 /releases/latest 会指向 beta，全部稳定用户被推测试版。
-        # release 已存在时跳过创建，支持失败重跑和复用已有 release。
+        # tag 含 "-" 即 semver 预发行：必须加 --prerelease，否则 /releases/latest 会指向 beta
+        # release 已存在时跳过创建，支持失败重跑和复用已有 release
         run: |
           args=(--title "${GITHUB_REF_NAME}" --generate-notes)
           case "${GITHUB_REF_NAME}" in

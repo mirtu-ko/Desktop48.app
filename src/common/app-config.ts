@@ -29,6 +29,6 @@ export const CONFIG_DEFAULTS: AppConfig = {
   ffmpegDirectory: '',
   /** 弹幕摆放偏好：竖屏直播是否移到左侧黑边，默认留在画面内 */
   danmakuPlacement: 'video',
-  /** 关闭主窗口是否最小化到 Windows 系统托盘（默认开启方案 B 行为） */
+  /** 关闭主窗口是否最小化到 Windows 系统托盘 */
   trayOnClose: 'on',
 }
