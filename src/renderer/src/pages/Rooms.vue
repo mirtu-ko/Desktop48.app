@@ -21,7 +21,7 @@ import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
-import { useDebounceFn, useEventListener } from '@vueuse/core'
+import { useDebounceFn, useDocumentVisibility, useEventListener } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
@@ -69,6 +69,9 @@ const {
 
 const router = useRouter()
 const route = useRoute()
+
+/** 页面可见性：窗口隐藏 / 最小化时暂停左列直播特效动画（见 .rooms-page.is-paused） */
+const docVisibility = useDocumentVisibility()
 
 /** 精华消息弹层是否打开 */
 const essenceOpen = ref(false)
@@ -738,7 +741,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-root rooms-page">
+  <div class="page-root rooms-page" :class="{ 'is-paused': docVisibility === 'hidden' }">
     <!-- 未登录：居中登录卡片（房间依赖账号关注关系） -->
     <div v-if="!loggedIn && !loading" class="gate">
       <div class="gate-card frosted-surface">
@@ -838,7 +841,13 @@ onMounted(() => {
                 <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
                 <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
                 <!-- 开播状态：头像边缘呼吸光环（见 .room-live-badge），不再占头像右下角 -->
-                <span v-if="room.live" class="room-live-badge" aria-label="直播中"></span>
+                <span v-if="room.live" class="room-live-badge" aria-label="直播中" />
+                <!-- 开播伴生：头像内底部均衡器跳动（同 .room-live-badge 一起表达「正在直播」） -->
+                <span v-if="room.live" class="room-eq" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
                 <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角保持未读红点；开播呼吸光环只绕头像外周，不抢这个角 -->
                 <span
                   v-if="unreadCountOf(room.userId)"
@@ -1747,32 +1756,143 @@ onMounted(() => {
 }
 
 /* 开播状态：头像边缘一圈呼吸光环，替代原本右下角的 LIVE 小点。
- * 光环不占头像角落，未读角标照旧贴头像右上角，两者不再互相挤压 */
+ * 光环不占头像角落，未读角标照旧贴头像右上角，两者不再互相挤压。
+ * 动画只动 opacity / transform（合成器线程）：环本体呼吸，::after 外扩柔光脉冲；
+ * 柔光的静态 box-shadow 随提层烘焙，缩放不触发重绘 */
 .room-live-badge {
   position: absolute;
   inset: -4px;
   border-radius: 50%;
   border: 2px solid var(--color-lives);
   pointer-events: none;
+  will-change: opacity;
   animation: room-live-breathe 2.4s ease-in-out infinite;
+
+  &::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    box-shadow: 0 0 6px 2px color-mix(in srgb, var(--color-lives) 45%, transparent);
+    will-change: transform, opacity;
+    animation: room-live-pulse 2.4s ease-in-out infinite;
+  }
 }
 
 @keyframes room-live-breathe {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-lives) 45%, transparent);
     opacity: 0.8;
   }
 
   50% {
-    box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-lives) 0%, transparent);
     opacity: 1;
+  }
+}
+
+@keyframes room-live-pulse {
+  0%,
+  100% {
+    transform: scale(0.9);
+    opacity: 0.9;
+  }
+
+  50% {
+    transform: scale(1.25);
+    opacity: 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .room-live-badge {
     animation: none;
+
+    &::after {
+      display: none;
+    }
+  }
+}
+
+/* 开播伴生：头像底部一汪同色氛围光，衬托均衡器条。
+ * 静态径向渐变（不提层、不参与动画），随圆裁切；底部浓芯、向上快速衰减 */
+.room-item.is-live .room-avatar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    95% 75% at 50% 118%,
+    color-mix(in srgb, var(--color-lives) 85%, transparent) 0%,
+    color-mix(in srgb, var(--color-lives) 45%, transparent) 38%,
+    transparent 74%
+  );
+  pointer-events: none;
+}
+
+/* 开播伴生：头像内底部均衡器——几根小竖条此起彼伏跳动，一眼传达「正在直播」 */
+.room-eq {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 10px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  /* 氛围光是头像 ::after（树序更靠后），条形需显式提层压在其上 */
+  z-index: 1;
+
+  i {
+    display: block;
+    width: 2px;
+    /* 固定满高度，跳动全靠 scaleY（transform 合成，不触发重排）；
+     * scaleY(0.4) ≈ 原 height 4px / 10px，逐帧观感一致 */
+    height: 10px;
+    border-radius: 1px;
+    /* 均衡器与外围呼吸光环同色（--color-lives），开播状态整体同一种语义色 */
+    background: var(--color-lives);
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+    transform-origin: bottom;
+    will-change: transform;
+    animation: room-eq-bounce 0.8s ease-in-out infinite;
+
+    &:nth-child(2) {
+      animation-delay: -0.25s;
+    }
+
+    &:nth-child(3) {
+      animation-delay: -0.5s;
+    }
+  }
+}
+
+@keyframes room-eq-bounce {
+  0%,
+  100% {
+    transform: scaleY(0.4);
+  }
+
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .room-eq i {
+    animation: none;
+    /* 静态中等高度（≈ 原 6px），不跳动 */
+    transform: scaleY(0.6);
+  }
+}
+
+/* 页面不可见（窗口最小化 / 被遮挡）时暂停整页直播特效：
+ * animation-play-state 在合成器线程生效，主线程零成本，恢复可见后无缝续播 */
+.rooms-page.is-paused {
+  .room-live-badge,
+  .room-live-badge::after,
+  .room-eq i {
+    animation-play-state: paused;
   }
 }
 
