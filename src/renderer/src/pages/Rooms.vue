@@ -837,8 +837,9 @@ onMounted(() => {
               <span class="room-avatar">
                 <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
                 <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
-                <span v-if="room.live" class="room-live-badge">LIVE</span>
-                <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角，与右下 LIVE 点错开 -->
+                <!-- 开播状态：头像边缘呼吸光环（见 .room-live-badge），不再占头像右下角 -->
+                <span v-if="room.live" class="room-live-badge" aria-label="直播中"></span>
+                <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角保持未读红点；开播呼吸光环只绕头像外周，不抢这个角 -->
                 <span
                   v-if="unreadCountOf(room.userId)"
                   class="unread-badge room-unread"
@@ -1745,23 +1746,38 @@ onMounted(() => {
   font-size: 16px;
 }
 
-/* 开播角标：贴在头像右下角的 LIVE 小点 */
+/* 开播状态：头像边缘一圈呼吸光环，替代原本右下角的 LIVE 小点。
+ * 光环不占头像角落，未读角标照旧贴头像右上角，两者不再互相挤压 */
 .room-live-badge {
   position: absolute;
-  right: -3px;
-  bottom: -2px;
-  padding: 0 4px;
-  border-radius: var(--radius-pill);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 14px;
-  color: #fff;
-  background: var(--color-lives);
-  box-shadow: 0 0 0 2px var(--el-bg-color);
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--color-lives);
+  pointer-events: none;
+  animation: room-live-breathe 2.4s ease-in-out infinite;
 }
 
-/* 未读数字角标：贴在头像右上角（LIVE 点在右下角，两者不打架）；
- * 外观走全局 .unread-badge，这里只给落点与外描边（把角标从头像上抬出来） */
+@keyframes room-live-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-lives) 45%, transparent);
+    opacity: 0.8;
+  }
+
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-lives) 0%, transparent);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .room-live-badge {
+    animation: none;
+  }
+}
+
+/* 未读数字角标：贴在头像右上角；开播时头像外圈是呼吸光环（.room-live-badge），
+ * 红点叠在光环一角仍清晰可读。外观走全局 .unread-badge，这里只给落点与外描边 */
 .room-unread {
   position: absolute;
   top: -5px;
