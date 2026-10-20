@@ -84,13 +84,8 @@ const MESSAGE_POLL_MS = 5_000
 const HISTORY_MISS_LIMIT = 2
 /**
  * 左列预览刷新间隔：一次请求覆盖全部房间，与主进程未读检测（60s）同频，
- * 让「预览文案」和「未读角标」同一节奏到位。
- *
- * 这条轮询是补回来的：本页原先只有一个 60s 定时器跑 `refreshRoomStatus`
- * （直播状态 + 预览一起刷），抽出全站直播 store 时只把「直播」那半边改接共享轮询，
- * 「预览」半边再没有定时器 —— 于是未读角标照常增长，左列文案却只在
- * 重进页面（onActivated）或手动刷新（load）时才变。
- * 只驱动预览、不再建第二个直播轮询：共享 store 已覆盖直播状态，重复建会翻倍直播接口流量。
+ * 让「预览文案」和「未读角标」同一节奏到位。只驱动预览，不另建直播轮询
+ * （共享 store 已覆盖直播状态）。
  */
 const ROOM_PREVIEW_POLL_MS = 60_000
 /** 房间频道/状态遍历的并发上限：关注几十人时不打爆接口，也不至于让首灌等太久 */
@@ -693,12 +688,10 @@ export function usePocketRooms() {
   ): Promise<void> {
     const requestId = selectRequestId
     const scope = messageScope.value
-    // 上翻游标兜底：游标为 0（首屏回过 0 / 上次上翻无进展）时，用已持有消息的最早
-    // msgTime 作探测——时间戳游标语义下，服务端按 < 或 <= 出页都能正确续上
+    // 上翻游标兜底：游标为 0（首屏回过 0 / 上次上翻无进展）时，用最早持有消息的 msgTime 作探测
     const cursor = mode === 'prepend' && nextTime <= 0 ? earliestHeldMsgTime() : nextTime
     const result = await window.mainAPI.pocketGetRoomMessages(channel.channelId, channel.serverId, cursor, scope)
     // 回包期间已切房 / 换了拉取口径：旧回包不得并入当前列表
-    // （翻历史与轮询都没有自己的取消机制，只能在这里拦）
     if (requestId !== selectRequestId)
       return
     const views = result.messages
@@ -707,8 +700,7 @@ export function usePocketRooms() {
     // 只看房主时剔掉混入的官方系统账号发言（接口侧不区分）
     const mergedInput = scope === 'member' ? views.filter(item => item.userId !== OFFICIAL_POCKET_USER_ID) : views
     const freshCount = mergeMessages(mergedInput, mode)
-    // 轮询（append）只管追加新消息：回包游标是「最新一页」的，拿去写 historyCursor
-    // 会把上翻游标从昨天打回今天，下一次上翻全拉回已持有消息 → 误判到头，到头判定也不归它管
+    // 轮询（append）只管追加新消息：回包游标属「最新一页」，不能拿去写上翻游标
     if (mode === 'append')
       return
     if (mode === 'replace') {
@@ -716,13 +708,8 @@ export function usePocketRooms() {
       return
     }
     // 上翻到头判定只认「无进展」：游标推进或有新增都算进展，居其一就不计 miss。
-    // 游标推进（回包 nextTime 严格小于本次请求游标）就跟走——零新增的重复页、
-    // 被口径滤空的官方发言页（只看房主）、时间空洞的空页都只是路过，跟着游标走
-    // 自然穿出去；此处归零重探测只会在同一片区域原地打转（踩过：误判到头）。
-    // 游标没前进（实测到头时原样回游标而非归零）或 nextTime=0（协议终点；但实测
-    // 懒服务端还有更早历史时也可能提前归零，故只归零游标不立即判死）→ 下次改用
-    // 最早持有消息兜底探测，连续 HISTORY_MISS_LIMIT 次探测仍无进展才认定到头。
-    // 本页条数不满 limit 不代表到头，服务端分页策略不透明。
+    // 游标没前进或归零（协议终点；懒服务端也可能提前归零）→ 下次改用最早持有消息
+    // 兜底探测，连续 HISTORY_MISS_LIMIT 次无进展才认定到头；条数不满 limit 不代表到头。
     const cursorAdvanced = result.nextTime > 0 && result.nextTime < cursor
     historyCursor = cursorAdvanced ? result.nextTime : 0
     if (freshCount > 0 || cursorAdvanced)

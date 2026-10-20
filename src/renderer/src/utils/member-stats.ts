@@ -59,10 +59,8 @@ export interface StatsOverview {
 const CONSTELLATIONS = '白羊 金牛 双子 巨蟹 狮子 处女 天秤 天蝎 射手 摩羯 水瓶 双鱼'.split(' ')
 
 /**
- * 星座别名 → 规范名。
- * 上游**同时下发「摩羯座」与「魔羯座」两种写法**（实测 20 人 / 44 人），其实是同一个星座 ——
- * 「摩羯」是 Capricornus 的中文正名，「魔羯」是常见笔误。不归一的话「魔羯」会被当脏值丢掉，
- * 摩羯座凭空少掉一大半（64 → 20），在图上变成倒数第二稀有的星座。
+ * 星座别名 → 规范名：上游同时下发「摩羯座」与「魔羯座」两种写法，实为同一星座
+ * （「摩羯」是 Capricornus 中文正名，「魔羯」是常见笔误）。
  */
 const CONSTELLATION_ALIASES: Record<string, string> = { 魔羯: '摩羯' }
 

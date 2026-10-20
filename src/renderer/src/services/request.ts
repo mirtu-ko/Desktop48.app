@@ -5,20 +5,15 @@ import { debugLog } from '@renderer/utils/debug'
  * 站点请求的 UA（本模块发出的请求都带它）。
  *
  * 与口袋客户端的伪装身份是两回事，不要合并：`main/pocket48/client-profile.ts` 那套
- * （PocketFans UA + appInfo + pa）用于**模拟 App 客户端**；这里打的是面向网页/浏览器受众的
- * 域名（纯静态资源、媒体 CDN、cgt48 曲库），用移动端浏览器标识才是它们的正常调用方。
+ * 用于模拟 App 客户端；这里打的是静态资源 / 媒体 CDN / cgt48 曲库等网页域。
  *
  * ⚠️ **打口袋业务接口（pocketapi.48.cn、h5.48.cn）的请求不以此 UA 发出**：
- * 主进程 netRequest 会在转发前把 UA / appInfo / pa 整组换成 App 身份
- * （清单与理由见 `main/net-request-headers.ts`）——服务端按客户端身份判定，
- * 站点身份在境外线路直接 403。因此本文件里的 UA 只对静态资源域生效，
- * 不要据此推断服务端在业务接口上看到的身份。
+ * 主进程 netRequest 转发前会把 UA / appInfo / pa 整组换成 App 身份（清单见
+ * `main/net-request-headers.ts`）——站点身份在业务接口上直接 403。
  *
- * 但**设备必须是同一台**：机型事实取自 `common/android-device.ts`（App 档同源），
- * 否则同一出口 IP 在服务端看来就是「App 来自 A 机、浏览器来自 B 机」两台设备。
+ * 但**设备必须是同一台**：机型事实取自 `common/android-device.ts`（App 档同源）。
  *
- * 固定为常量、不再可配置：原先设置页有自定义入口，改坏后接口异常且无从排查；
- * 顺带省掉每次请求读一次配置的跨进程往返（原为 `getConfig('userAgent')`）。
+ * 固定为常量、不再可配置。
  */
 const SITE_USER_AGENT = `Mozilla/5.0 (Linux; Android ${ANDROID_DEVICE.osVersion}; ${ANDROID_DEVICE.model}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36`
 

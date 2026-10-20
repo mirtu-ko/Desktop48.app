@@ -59,11 +59,7 @@ export function ffmpegBinaryPath(ffmpegDir: string): string {
   return path.join(ffmpegDir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
 }
 
-/**
- * 判定目录是否构成可用的 FFmpeg 环境（纯函数，可单测）。
- * 逐层区分「未配置 / 目录不存在 / 目录内缺二进制」，因为三者的修复动作不同：
- * 前者需要配置，中者多因目录被移动或删除，后者多是手动选错了目录。
- */
+/** 判定目录是否构成可用的 FFmpeg 环境（纯函数，可单测）：逐层区分未配置 / 目录不存在 / 缺二进制 */
 export function inspectFfmpegDir(ffmpegDir: string): FfmpegStatus {
   const directory = ffmpegDir?.trim() ?? ''
   if (!directory)

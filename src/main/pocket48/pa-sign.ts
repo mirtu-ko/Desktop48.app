@@ -5,11 +5,6 @@
  * 官方 App 抽取的 wasm（resources/pocket48/2.wasm，约 52KB）现算现用，每次请求生成全新 pa；
  * 加载/生成失败时退回静态 pa，只影响签名新鲜度，不阻塞请求。
  *
- * ⚠️ 曾经的判断「服务端按 pa 时间戳新鲜度决定回包档位（旧 pa 只回降级字段，缺 unreadCount）」
- * **已被实测证伪**：wasm 生效（pa 每次现算）时 `last/message/get` 仍只回 4 个字段，
- * `unreadCount` 恒为 null；15 组 A/B（pa 三态 × iOS/Android 头 × 参考实现真实 profile）
- * 全部一致。即该字段与客户端特征无关，未读计数改走消息列表逐条数（见 pocket-unread.ts）。
- *
  * wasm 是 Android APK 抽取件，故请求头平台也已统一为 Android（见 client-profile.ts）。
  */
 import type { Buffer } from 'node:buffer'

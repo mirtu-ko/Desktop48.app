@@ -366,7 +366,6 @@ function toAuthState(stored: StoredAuth | null): PocketAuthState {
     mobileMasked: maskMobile(stored?.mobile || '', stored?.area),
     clientProfile: resolvePocketClientProfile(stored?.clientProfile),
     // 只看凭证本体：明文 token 一旦落盘就是明文，与「此刻系统有没有加密能力」无关
-    // （曾经按 !safeStorageAvailable() 判定，系统后来可用加密时会谎报「已加密保存」）
     plainFallback: !!stored?.tokenPlain,
     savedAt: stored?.savedAt || 0,
   }

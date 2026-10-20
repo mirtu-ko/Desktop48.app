@@ -52,10 +52,7 @@ interface StoredDevice {
 let cachedDeviceId = ''
 let deviceStore: SafeJSONFileSync<StoredDevice> | null = null
 
-/**
- * 惰性创建持久化句柄。`app.getPath` 在应用 ready 之前不可用，故推迟到首次发请求时；
- * 存储不可用时返回 null，由调用方退回「本次会话内存内生成」，不阻断请求。
- */
+/** 惰性创建持久化句柄：`app.getPath` 在应用 ready 前不可用；存储不可用时返回 null，调用方退回内存 ID */
 function store(): SafeJSONFileSync<StoredDevice> | null {
   if (!deviceStore) {
     try {

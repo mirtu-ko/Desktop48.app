@@ -1,9 +1,8 @@
 /**
  * 窗口控制与系统休眠阻止的 IPC 通道注册。
  *
- * 窗口控制一律作用于「发起请求的窗口」（BrowserWindow.fromWebContents(event.sender)）：
- * 主窗口与独立播放窗共用同一组通道，原先恒取主窗口会让播放窗的关闭按钮关掉主窗口。
- * 休眠阻止状态（sleepBlockers）归 app.ts 管理，这里只做通道到函数的接线。
+ * 窗口控制一律作用于「发起请求的窗口」（BrowserWindow.fromWebContents(event.sender)），
+ * 主窗口与独立播放窗共用同一组通道。休眠阻止状态（sleepBlockers）归 app.ts 管理，这里只做接线。
  * 通道清单与 preload/index.ts 的 mainAPI 契约一一对应，两边改动请同步。
  */
 import type { IpcMainInvokeEvent } from 'electron'

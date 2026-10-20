@@ -239,7 +239,6 @@ export interface RequestOptions {
 /**
  * 瞬时失败的重试：网络层异常（超时/断网/主进程拒绝）与 RETRYABLE_SERVER_STATUS 命中的业务状态码，
  * 退避 400ms → 800ms → 1200ms 再试。只重试**失败**的读接口，不会产生重复副作用。
- * 取 3 次是因为 1017 单次失败率约 1/3，4 次尝试后残留失败率已 <2%（再往上收益很小）。
  */
 const DEFAULT_RETRIES = 3
 const RETRY_BASE_DELAY = 400
@@ -247,8 +246,7 @@ const RETRY_BASE_DELAY = 400
 /**
  * 值得重试的服务端业务状态码。
  *
- * `1017 参数错误` 是 pocketapi 的**瞬时**失败：同一份 body 连续请求 40 次约 1/3 命中，
- * 与请求参数、频率、并发都无关（2026-09-13 实测），重试即可恢复。
+ * `1017 参数错误` 是 pocketapi 的**瞬时**失败（实测与参数 / 频率 / 并发无关），重试即可恢复。
  * 其余状态码（如 `10049 该成员直播已被删除`）是确定性结论，重试没有意义，必须原样上抛。
  */
 const RETRYABLE_SERVER_STATUS = new Set([1017])

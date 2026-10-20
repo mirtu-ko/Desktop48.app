@@ -46,13 +46,10 @@ log('[app.ts] Chromium 版本:', process.versions.chrome)
 
 // 保持对主窗口的引用，供自定义标题栏窗口控制使用
 let mainWindow: BrowserWindow | null = null
-/**
- * 是否正处于应用退出流程：置位后主窗口 close 放行（不再隐藏到托盘），
- * 否则托盘模式的「关闭」会永远把窗口藏起来，退出流程会卡在 hide 上。
- */
+/** 是否正处于退出流程：置位后主窗口 close 放行，不再隐藏到托盘 */
 let isQuitting = false
 
-/** Windows 托盘方案 B：仅当开启「关闭最小化到托盘」且未在退出时才隐藏，其余情况照常关闭 */
+/** 是否把主窗口「关闭」转为隐藏到托盘（Windows、开关开启、未在退出） */
 function shouldHideToTray(): boolean {
   return process.platform === 'win32'
     && !isQuitting
@@ -91,8 +88,7 @@ function createWindow(): void {
   })
   mainWindow = win
 
-  // Windows 托盘方案 B：关闭主窗口时隐藏到托盘（不销毁窗口），真正退出走托盘「退出」。
-  // 退出流程（before-quit 置 isQuitting）或关闭托盘功能时放行，窗口照常销毁。
+  // Windows 托盘：关闭主窗口时隐藏到托盘（不销毁），退出流程中照常关闭
   win.on('close', (event) => {
     if (shouldHideToTray()) {
       event.preventDefault()
@@ -150,8 +146,7 @@ export function activeWindow(): BrowserWindow | null {
   return null
 }
 
-// 当运行第二个实例时，显示并聚焦已有主窗口（单实例锁在 index.ts 中已获取）。
-// 托盘模式下主窗口可能处于隐藏态，走统一的 showMainWindow 恢复。
+// 当运行第二个实例时，显示并聚焦已有主窗口（单实例锁在 index.ts 中已获取）
 app.on('second-instance', () => {
   showMainWindow()
 })
@@ -172,7 +167,7 @@ app.whenReady().then(() => {
 
   createWindow()
 
-  // Windows 系统托盘（方案 B）：常驻托盘 + 右键「显示主窗口 / 退出」；仅 Windows 创建
+  // Windows 系统托盘：常驻托盘 + 右键菜单；仅 Windows 创建
   if (process.platform === 'win32')
     installTray(trayIco, { showWindow: showMainWindow })
 
@@ -183,16 +178,12 @@ app.whenReady().then(() => {
   initUpdater()
 
   app.on('activate', () => {
-    // 点击 Dock / 任务栏图标恢复应用：最小化时窗口仍存在，但被系统隐藏，需主动 restore 并聚焦；
-    // 窗口已被销毁（如独立播放窗全关）时重建，符合 macOS 约定。与托盘模式同走 showMainWindow
+    // 点击 Dock / 任务栏图标恢复应用，统一走 showMainWindow
     showMainWindow()
   })
 })
 
-// 所有窗口关闭时退出（macOS 除外）。
-// Windows 托盘方案 B：开启「关闭最小化到托盘」且托盘在驻时保持常驻——
-// 此时主窗口通常只是隐藏（未销毁）并不会触发本事件，此守卫兜底「隐藏主窗 + 各浮窗关完」场景，
-// 避免窗口对象被外部因素销毁后应用静默退出；关闭托盘功能则回落到原有退出约定。
+// 所有窗口关闭时退出（macOS 除外）；Windows 托盘在驻且开启时保持常驻
 app.on('window-all-closed', () => {
   if (process.platform === 'darwin')
     return
@@ -204,7 +195,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  // 真正进入退出流程：先解除 close→hide，才能让主窗口/独立播放窗随后被正常销毁
+  // 进入退出流程：解除 close→hide 拦截并销毁托盘
   isQuitting = true
   destroyTray()
   // 应用退出前统一清理独立播放窗 / 直播会话 / 转流进程 / 弹幕长连接
