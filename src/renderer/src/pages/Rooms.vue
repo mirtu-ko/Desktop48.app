@@ -1036,7 +1036,7 @@ onMounted(() => {
                   </div>
                   <div
                     class="msg-row"
-                    :class="[`msg-row--${message.kind}`, { 'msg-row--member': message.isMember, 'is-arriving': arrivingIds.has(message.id) }]"
+                    :class="[`msg-row--${message.kind}`, { 'msg-row--member': message.isMember, 'msg-row--member-reply': message.isMember && message.quote && message.kind !== 'flip', 'is-arriving': arrivingIds.has(message.id) }]"
                     @contextmenu.prevent="openMessageMenu($event, message)"
                   >
                     <template v-if="message.kind === 'system'">
@@ -2414,10 +2414,26 @@ onMounted(() => {
     color: var(--color-rooms);
   }
 
+  /* 成员（xox）普通文字消息：相比普通用户气泡再微提一层，正文用主色、底色与描边更实。
+   * 回复/引用类消息看 .msg-row--member-reply，不套这份强化 */
   .msg-bubble:not(.msg-bubble--media) {
     color: var(--el-text-color-primary);
-    background: color-mix(in srgb, var(--color-rooms) 12%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 30%, transparent);
+    background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 40%, transparent);
+  }
+}
+
+/* 成员回复/引用类消息：顺着别人话题回的次要消息，整体弱一档（次级文字 + 更淡底，去掉描边），
+ * 把视觉重心让给成员自己的原创文字 */
+.msg-row--member-reply {
+  .msg-nick {
+    color: var(--el-text-color-secondary);
+  }
+
+  .msg-bubble:not(.msg-bubble--media) {
+    color: var(--el-text-color-secondary);
+    background: var(--el-fill-color-lighter);
+    box-shadow: none;
   }
 }
 
