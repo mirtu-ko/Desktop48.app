@@ -47,8 +47,7 @@ export function useLiveGuard(router?: Router) {
 
       const { title, action } = describeFfmpegProblem(status.problem, status.directory)
       ElMessage({
-        // 未配置时用户不知道「看直播为什么需要 ffmpeg」，补一句缘由；
-        // 其余两类 title 已说明问题本身（目录失效 / 缺二进制），不必再重复
+        // 未配置时补一句说明；其余两类 title 已说明问题本身，不必再重复
         message: status.problem === 'unset'
           ? `直播播放需要 FFmpeg，请先在${settingsName}中${action}`
           : `${title}，请在${settingsName}中${action}`,

@@ -1210,7 +1210,7 @@ describe('use-pocket-rooms / 选中连房与消息流', () => {
     api.messageScope.value = 'all'
     await vi.advanceTimersByTimeAsync(0)
 
-    // 范围切换只换口径：视图仍在小房间，拉的也还是小房间频道（原先走 selectRoom 会被复位）
+    // 范围切换只换口径：视图仍在小房间，拉的也还是小房间频道
     expect(api.viewMode.value).toBe('small')
     expect(digest()).toEqual([['粉丝甲', '小房间密语', 300]])
     expect(calls.messageFetched.map(item => [item.channelId, item.scope])).toEqual([

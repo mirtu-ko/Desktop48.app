@@ -3,16 +3,12 @@ import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
 /**
  * 房间未读检测服务（主进程唯一真相）。
  *
- * 设计原则：检测与未读状态都归主进程 —— 页面没开、窗口最小化时未读照样积累
- * （定时器在主进程，不受 Chromium 对失焦窗口的节流影响）；
- * 渲染层（stores/pocket-unread.ts）只做镜像与展示，经 pocketUnreadBatch 全量广播保持一致，
- * 与任务列表（task-registry → stores/tasks）是同一套「主进程真相 + 各窗镜像」的模式。
+ * 检测与未读状态都归主进程（页面没开 / 窗口最小化时未读照样积累）；
+ * 渲染层（stores/pocket-unread.ts）只做镜像，经 pocketUnreadBatch 全量广播保持一致。
  *
- * 成员范围 = 口袋关注（friends/id）∪ 本地关注名单，**再减去本地屏蔽名单**：屏蔽是本地可见性偏好，
- * 与关注正交（接线见 renderer 的 use-member-actions），被屏蔽的成员既不计未读，
- * 也不占频道解析名额；剔除后其频道缓存与未读按「取关清理」同一条路径一并清掉。
- * 并集口径与渲染层房间页一致——本地关注里有口袋未关注的成员，只认前者会让这些成员
- * 在房间页可见、却没有未读与小房间。
+ * 成员范围 = 口袋关注（friends/id）∪ 本地关注 − 本地屏蔽（口径与渲染层房间页一致）：
+ * 屏蔽与关注正交，被屏蔽成员不计未读、不占解析名额，
+ * 其频道缓存与未读按「取关清理」同一条路径一并清掉。
  *
  * 计数链路分两步（60s 一轮）：
  * 1. **触发**：批量预览接口 im/team/classic/last/message/get 一次覆盖全部关注房间，
@@ -22,16 +18,14 @@ import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
  *    ROOM_MESSAGE_LIMIT 条），数出「比已读水位更新」的条数。口径与渲染层成员视图一致
  *    （只看房主/成员发言 + 剔除官方系统账号），与服务端角标同源。
  *
- * 为什么不用预览接口的 unreadCount 字段：实测拿不到。该字段要求服务端回完整档，
- * 而 15 组 A/B 探测（pa 三态 × 平台特征头 × 参考实现的真实客户端 profile）全部只回
- * 4 个字段，`unreadCount` 恒为 null；预览接口也没有 msgTime。详见 pocket-auth 的注解。
+ * 预览接口的 `unreadCount` 实测恒为 null（服务端只回 4 个字段）。
  *
  * 上限与代价：每轮最多探测 MAX_MESSAGE_PROBES 个房间（一轮页几十 KB），超出的留到
  * 下一轮（按上次探测时刻轮转，不会饿死）；单频道最多数到 ROOM_MESSAGE_LIMIT 条，
  * 触顶即「至少这么多」，渲染层的角标按同一条数收敛为 50+。
  *
  * 水位（readMarks）只在两处推进：**首见锚定**（历史不算未读）与 **markRead**（读到此刻）；
- * 检测轮里绝不推进——否则未读会退化成「本轮增量」，无人阅读时角标自己消失（踩过）。
+ * 检测轮里绝不推进——否则未读会退化成「本轮增量」，无人阅读时角标自己消失。
  *
  * 持久化（userData/pocket48-unread.json，原子写 + 坏档回退复用 SafeJSONFileSync）：
  * 频道解析结果（server/jump，开销最大的一段）随水位/未读快照一并落盘，重启不重解析、不丢未读。
@@ -703,8 +697,8 @@ function sameSnapshot(a: Record<string, UnreadRoomState>, b: Record<string, Unre
 
 /**
  * 清空账号相关未读（未读/水位/触发锚），有变化则落盘 + 广播归零。
- * 登出与 token 失效即刻调用 —— 原先等轮询发现未登录才清（最长 60s，期间角标误导）。
- * 频道缓存与账号无关，保留；重登后无旧锚，走首见锚定不补登出前消息。
+ * 登出与 token 失效即刻调用；频道缓存与账号无关，保留。
+ * 重登后无旧锚，走首见锚定不补登出前消息。
  */
 export function clearAccountUnread(): void {
   const data = store()

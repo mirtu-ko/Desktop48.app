@@ -34,7 +34,7 @@ export const POCKET_CLIENT_PROFILE_OPTIONS: readonly PocketClientProfileOption[]
   },
 ]
 
-/** 缺省档位：口袋48（与历史行为一致，未登录时主进程请求也走它） */
+/** 缺省档位：口袋48（未登录时主进程请求也走它） */
 export const DEFAULT_POCKET_CLIENT_PROFILE: PocketClientProfileId = 'pocket48'
 
 /** 归一化外部传入的档位：无法识别（缺省、旧数据、手改值）一律回退默认档 */

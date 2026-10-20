@@ -83,9 +83,8 @@ function failEntry(entry: ChatroomEntry, message: string): void {
 
 /**
  * 起会话（在途/已建由 entry.starting 收敛，同房间只发一次 start）。
- * 回包时记录若已转墓碑且无人顶替（entries 里仍是自己）：主进程是 start 成功后
- * 才登记会话的，destroy 当时发出的退订是空转，必须补一次才收得回连接
- * （与 B 站弹幕同款竞态）。已被新会话顶替则绝不能补——那会杀死新会话。
+ * 回包时若已转墓碑且无人顶替（entries 里仍是自己）：补一次退订才收得回连接
+ * （与 B 站弹幕同款竞态）；已被新会话顶替则绝不能补——那会杀死新会话。
  */
 async function startEntry(entry: ChatroomEntry): Promise<void> {
   try {

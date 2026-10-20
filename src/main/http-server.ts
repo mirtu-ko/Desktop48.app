@@ -164,9 +164,7 @@ const server = http.createServer((req, res) => {
 let port = minPort
 
 // 上次退出的残留监听或外部程序可能占用端口，按 minPort-maxPort 区间向后退避尝试。
-// error/listening 只在下面注册一次：EventEmitter 的监听器是追加式的，若放在 tryListen
-// 里每次重试都重新注册，一次 EADDRINUSE 会被所有累积的历史监听器各处理一次，
-// 导致端口连跳、对同一 server 重复 listen，且 _serverPort 可能被旧监听器写成错误端口。
+// error 监听只注册一次：放进 tryListen 会随重试累积，一次 EADDRINUSE 会被多个监听器各处理一次。
 function tryListen() {
   server.listen(port, serverHost)
 }

@@ -1,10 +1,8 @@
 /**
  * 远程图片落盘（渲染层链路）：fetch → blob → `<a download>` → Chromium 下载到系统下载目录。
  *
- * 为什么不走主进程 netRequest：它只把响应体按 utf8 解码返回（且有 32MB 上限），二进制会被毁掉；
- * 新开一条二进制 IPC 通道要动 preload/契约/注册/测试四处。实测图片域 source.48.cn 返回
- * `Access-Control-Allow-Origin: *`，渲染层 fetch 不被 CORS 挡，故先用这条零 IPC 的路。
- * 代价：无「另存为」对话框；若接口哪天改发到不带 CORS 头的域，这里会 reject，由调用方提示。
+ * 走渲染层 fetch：主进程 netRequest 按 utf8 解码会毁掉二进制；依赖图片域的 CORS 头，
+ * 若接口改发到不带 CORS 头的域会 reject，由调用方提示。代价：无「另存为」对话框。
  */
 
 /** 图片 MIME → 扩展名；仅用于「URL 尾段没有扩展名」时补全，取不到就不猜 */

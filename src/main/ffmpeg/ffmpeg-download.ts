@@ -160,7 +160,7 @@ async function runDownload(sender: WebContents): Promise<string> {
   const dir = ffmpegTargetDir()
   const targetPath = path.join(dir, source.filename)
   // 已存在且校验通过才复用（重复发起不重复下载）；半成品写 .download 临时名不会被误判，
-  // 但历史残留的截断文件、或换平台后落下的同名文件必须重下，否则会把损坏环境当成可用
+  // 但截断 / 换平台残留的坏档必须重下
   if (inspectFfmpegDir(dir).ok) {
     log('[ffmpeg-download]ffmpeg 已存在且校验通过，跳过下载:', targetPath)
     return dir
