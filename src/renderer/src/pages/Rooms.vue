@@ -2378,6 +2378,8 @@ onMounted(() => {
   /* 礼物金：底色保持淡金，文字压深一半 —— 原 #ffd479 / #e8b84b 是深底弹幕沿用的亮金，
    * 叠在浅色底上只有 1.4:1 / 1.9:1，粉丝送礼的昵称与正文基本读不出来 */
   --msg-gift-ink: color-mix(in srgb, var(--el-color-warning) 50%, #000);
+  /* 回复类正文：正文色与次级灰的中点，比成员原创弱一档，但仍过 AA（约 4.5:1） */
+  --msg-reply-ink: color-mix(in srgb, var(--el-text-color-regular) 62%, var(--el-text-color-secondary));
   /* 到达高亮时长由页面按 ARRIVE_FLASH_MS 注入：动画与类的移除同一节拍 */
   --arrive-flash: 1200ms;
 }
@@ -2533,7 +2535,8 @@ onMounted(() => {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--el-text-color-regular);
+  /* 普通用户正文整梯下移一档，把「正文色」那一格让给成员回复类（见 --msg-reply-ink） */
+  color: color-mix(in srgb, var(--el-text-color-regular) 88%, var(--el-text-color-secondary));
   background: var(--el-fill-color-light);
 }
 
@@ -2559,15 +2562,15 @@ onMounted(() => {
   }
 }
 
-/* 成员回复/引用类消息：顺着别人话题回的次要消息，整体弱一档（次级文字 + 更淡底，去掉描边），
- * 把视觉重心让给成员自己的原创文字 */
+/* 成员回复/引用类消息：顺着别人话题回的次要消息，比成员原创、也比普通用户发言弱一档
+ * （中间色 + 更淡底 + 去掉描边）。字色不再用纯次级灰——那档只有约 3:1，读不清 */
 .msg-row--member-reply {
   .msg-nick {
-    color: var(--el-text-color-secondary);
+    color: var(--msg-reply-ink);
   }
 
   .msg-bubble:not(.msg-bubble--media) {
-    color: var(--el-text-color-secondary);
+    color: var(--msg-reply-ink);
     background: var(--el-fill-color-lighter);
     box-shadow: none;
   }
