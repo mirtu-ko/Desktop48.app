@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
-import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketClientProfileId, PocketDanmakuBatch, PocketRoomBatch, PocketRoomReplyTarget, PocketUnreadBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
+import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketClientProfileId, PocketDanmakuBatch, PocketRoomBatch, PocketRoomReplyTarget, PocketUnreadBatch, RoomAlbumDownloadProgress, RoomAlbumDownloadSource, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 /**
@@ -61,6 +61,10 @@ const api = {
   openPath: (filePath: string) => invokeIpc('openPath', filePath),
   selectDirectory: () => invokeIpc('selectDirectory'),
   pathJoin: (...paths: string[]) => invokeIpc('pathJoin', ...paths),
+  roomAlbumDownload: (sources: RoomAlbumDownloadSource[], filterSmall: boolean) =>
+    invokeIpc('roomAlbumDownload', sources, filterSmall),
+  roomAlbumDownloadProgress: (callback: (_progress: RoomAlbumDownloadProgress) => void) =>
+    onIpc('roomAlbumDownloadProgress', callback),
 
   // ===== FFmpeg 环境 =====
   // 对端：main/ipc/register-system-ipc.ts（判定口径在 main/ffmpeg/ffmpeg-process.ts 的 inspectFfmpegDir）

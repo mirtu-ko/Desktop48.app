@@ -6,6 +6,7 @@
  * 新增通道域时在此追加一行调用，不要在业务模块里散落 ipcMain.handle。
  */
 import { registerFfmpegDownloadIPC } from '../ffmpeg/ffmpeg-download'
+import { registerRoomAlbumDownloadIPC } from '../pocket48/room-album-download'
 import { registerDanmakuIPC } from './register-danmaku-ipc'
 import { registerDatabaseIPC } from './register-database-ipc'
 import { registerFloatWindowIPC } from './register-float-window-ipc'
@@ -23,6 +24,7 @@ export function registerAllIPC(): void {
   registerStreamIPC()
   registerDanmakuIPC()
   registerPocketIPC()
+  registerRoomAlbumDownloadIPC()
   registerFloatWindowIPC()
   registerTaskIPC()
   registerFfmpegDownloadIPC()
