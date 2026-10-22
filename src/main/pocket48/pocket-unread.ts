@@ -1,4 +1,4 @@
-import type { PocketUnreadBatch } from '@preload/ipc-contract'
+import type { PocketRoomReadMark, PocketUnreadBatch } from '@preload/ipc-contract'
 import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
 /**
  * 房间未读检测服务（主进程唯一真相）。
@@ -897,6 +897,21 @@ async function tick(): Promise<void> {
 /** 全量未读快照（启动时回取一次；后续变化走 pocketUnreadBatch 事件） */
 export function getState(): PocketUnreadBatch {
   return snapshot()
+}
+
+/**
+ * 某频道的已读水位，供渲染层画「以下是新消息」分割线。
+ * 纯只读：不推进、不写盘、不广播（store() 懒加载也只读文件）。
+ * 必须在 markRead 之前调用——markRead 拉一页最新消息把水位推到当下，之后取到的就没有未读了。
+ * 返回 null 的两种情形：频道还没解析出 channelId（小房间未发现）、从未锚定过（首见即锚定，一般不会）。
+ */
+export function getReadMark(userId: number, target: 'room' | 'small' = 'room'): PocketRoomReadMark | null {
+  const data = store()
+  const channel = target === 'small' ? data.smallChannels[String(userId)] : data.channels[String(userId)]
+  const mark = channel?.channelId ? data.readMarks[channel.channelId] : undefined
+  if (!mark)
+    return null
+  return { msgTime: mark.msgTime, msgIdServer: mark.msgIdServer }
 }
 
 /**

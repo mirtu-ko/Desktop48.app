@@ -5,7 +5,7 @@
 import type { PocketRoom } from '@renderer/composables/use-pocket-rooms'
 import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import type { InputInstance } from 'element-plus'
-import type { Component, VNode } from 'vue'
+import type { Component, ComponentPublicInstance, VNode } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { ArrowRight, ChatDotRound, Close, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
@@ -162,18 +162,74 @@ async function togglePocketFollow() {
   }
 }
 
+// ===== 未读分割线（进房时的已读水位锚点）=====
+
+/**
+ * 本次进房截到的未读起点（主进程已读水位 + 条数）；null = 没有未读，不画分割线。
+ * 水位只在 markRead 之前取一次：markRead 会把它推到当下，进房后再取就永远是「没有未读」。
+ */
+const unreadAnchor = ref<{ msgTime: number, count: number } | null>(null)
+/** 未读胶囊是否已让位：跳转过后、或用户自己上翻去找时收起（分割线本身保留） */
+const unreadJumped = ref(false)
+/** 分割线在 messages 里的下标；-1 = 不画（没有锚点，或列表里没有比水位更新的消息） */
+const unreadIndex = computed(() => {
+  const anchor = unreadAnchor.value
+  if (!anchor)
+    return -1
+  return messages.value.findIndex(message => message.msgTime > anchor.msgTime)
+})
+
+/** 分割线的 DOM 锚点（v-for 内函数 ref，元素卸载时传 null） */
+const unreadAnchorEl = ref<HTMLElement | null>(null)
+function setUnreadAnchorEl(el: Element | ComponentPublicInstance | null) {
+  unreadAnchorEl.value = el instanceof HTMLElement ? el : null
+}
+
+/**
+ * 截取未读起点。必须在 markRoomRead 之前调用，否则主进程水位已被推到当下。
+ * 取不到水位（频道还没解析、或从未锚定）时退回「只显示未读计数」，宁可少画也不乱画。
+ */
+async function captureUnreadAnchor(userId: number, target: 'room' | 'small', count: number) {
+  unreadJumped.value = false
+  if (count <= 0) {
+    unreadAnchor.value = null
+    return
+  }
+  try {
+    const mark = await window.mainAPI.pocketReadMark(userId, target)
+    unreadAnchor.value = mark ? { msgTime: mark.msgTime, count } : null
+  }
+  catch (error) {
+    unreadAnchor.value = null
+    debugLog('rooms-page', '读取已读水位失败，本次不画未读分割线', error)
+  }
+}
+
+/** 跳到未读分割线：居中显示，胶囊随即让位（分割线留着做视觉标记） */
+function jumpToUnread() {
+  unreadJumped.value = true
+  unreadAnchorEl.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+
 /**
  * 频道切换（页签）：切到哪个频道就清当前频道的未读。
  */
 async function onViewModeChange(mode: 'room' | 'small') {
   const userId = selectedUserId.value
   if (mode !== 'room') {
+    // 小房间未读同样在 markRoomRead 清空之前取（两个频道各有自己的水位与条数）
+    const hadUnread = userId !== null ? unreadChannelOf(userId).small : 0
+    unreadAnchor.value = null
     void setViewMode(mode)
-    if (userId !== null && unreadChannelOf(userId).small > 0)
-      void markRoomRead(userId, 'small')
+    if (userId !== null) {
+      await captureUnreadAnchor(userId, 'small', hadUnread)
+      if (hadUnread > 0)
+        void markRoomRead(userId, 'small')
+    }
     return
   }
-  const hadUnread = userId !== null && unreadChannelOf(userId).big > 0
+  const hadUnread = userId !== null ? unreadChannelOf(userId).big : 0
+  unreadAnchor.value = null
   await setViewMode(mode)
   if (userId !== null)
     await settleBigRoomEnter(userId, hadUnread)
@@ -317,10 +373,14 @@ function onListScroll() {
   const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
   // scrollTop 相对上次变小才是用户真的上滚，才允许退出钉底；
   // 仅 scrollHeight 变大（媒体撑高、追加消息）保持钉底，由媒体回调继续补贴底
-  if (!nearBottom && prevSeen >= 0 && el.scrollTop < prevSeen - 1)
+  if (!nearBottom && prevSeen >= 0 && el.scrollTop < prevSeen - 1) {
     atBottom.value = false
-  else if (nearBottom)
+    // 用户自己上翻去找未读，胶囊让位（分割线还在，不重复挡视线）
+    unreadJumped.value = true
+  }
+  else if (nearBottom) {
     atBottom.value = true
+  }
   // 回到底部即清空新消息计数
   if (atBottom.value)
     newCount.value = 0
@@ -358,10 +418,15 @@ function onRoomWrapDblClick(room: PocketRoom, event: MouseEvent) {
  * 清零的前提是用户确实看得到消息：进入前大房间已有未读时，加载完成后强制回底，
  * 否则会出现「角标没了但新消息还在上面」的漏读。未读为 0 时不额外动作，
  * 交给消息流自身的贴底逻辑（同房重进不重拉，位置得以保留）。
+ *
+ * unreadCount 传条数而非布尔：画未读分割线与底部胶囊都要用它，而 markRoomRead
+ * 会乐观清零，之后再查就只剩 0。
  */
-async function settleBigRoomEnter(userId: number, hadUnread: boolean) {
+async function settleBigRoomEnter(userId: number, unreadCount: number) {
+  // 顺序不能反：水位必须在 markRead 把「此刻」写进去之前截下来
+  await captureUnreadAnchor(userId, 'room', unreadCount)
   void markRoomRead(userId, 'room')
-  if (!hadUnread)
+  if (unreadCount <= 0)
     return
   await nextTick()
   scrollToBottom()
@@ -370,7 +435,10 @@ async function settleBigRoomEnter(userId: number, hadUnread: boolean) {
 /** 点进房间（左列条目）：选中 → 清大房间未读（有未读则回底） */
 async function enterRoom(userId: number) {
   trackEvent('rooms:enter', { starId: String(userId), starName: rooms.value.find(room => room.userId === userId)?.nickname || '' })
-  const hadUnread = unreadChannelOf(userId).big > 0
+  // 未读数在 markRoomRead 乐观清零前取，否则永远是 0
+  const hadUnread = unreadChannelOf(userId).big
+  // 换房先撤掉上一间的分割线：消息清空与水位重取之间有间隙，别让旧锚点落回新列表
+  unreadAnchor.value = null
   await selectRoom(userId)
   await settleBigRoomEnter(userId, hadUnread)
 }
@@ -961,18 +1029,6 @@ function shortTime(ts: number | string) {
   return ts ? dayjs(ts).format('MM-DD HH:mm') : ''
 }
 
-/** 日期分隔线：与上一条不同天时插一枚；首页第一条也是分界 */
-function isDayBoundary(index: number): boolean {
-  const current = messages.value[index]
-  const prev = messages.value[index - 1]
-  // 没有 msgTime 的消息无法归日：不插分隔线（否则 dayjs(0) 会渲染出 1970 年的假日期）
-  if (!current?.msgTime)
-    return false
-  if (!prev?.msgTime)
-    return true
-  return !dayjs(current.msgTime).isSame(dayjs(prev.msgTime), 'day')
-}
-
 /** 分隔线文案：今天 / 昨天 / 本年 M月D日 / 跨年 YYYY年M月D日 */
 function dayLabel(msgTime: number): string {
   const day = dayjs(msgTime)
@@ -983,6 +1039,37 @@ function dayLabel(msgTime: number): string {
     return '昨天'
   return day.year() === now.year() ? day.format('M月D日') : day.format('YYYY年M月D日')
 }
+
+/** 相邻两条消息间隔超过它才插时刻分隔：按 IM 惯例取 5 分钟（成员的发言本来就是一阵一阵的） */
+const TIME_GAP_MS = 5 * 60 * 1000
+
+/**
+ * 分隔条预计算：消息下标 → 文案。跨天用日期（今天/昨天/M月D日），同一天内断档超过
+ * TIME_GAP_MS 用时刻（HH:mm）。两条都满足时日期优先——断档文案跨天时没有信息量。
+ *
+ * 一次性 O(n) 算好给模板 O(1) 查表：逐条在模板里判断要对每条消息做两次 dayjs 解析，
+ * 翻历史一页上百条、且每次重渲染都要重算。
+ */
+const dividerMap = computed(() => {
+  const map = new Map<number, string>()
+  const list = messages.value
+  let prevTime = 0
+  let prevDay = ''
+  for (let index = 0; index < list.length; index += 1) {
+    const msgTime = list[index]?.msgTime ?? 0
+    // 没有 msgTime 的消息无法归日/比间隔：跳过且不推进基线（否则会渲染出 1970 年的假日期）
+    if (!msgTime)
+      continue
+    const day = dayjs(msgTime).format('YYYY-MM-DD')
+    if (!prevTime || day !== prevDay)
+      map.set(index, dayLabel(msgTime))
+    else if (msgTime - prevTime > TIME_GAP_MS)
+      map.set(index, dayjs(msgTime).format('HH:mm'))
+    prevTime = msgTime
+    prevDay = day
+  }
+  return map
+})
 
 /**
  * 直播分享卡角标（类型语义对齐 LiveItem）：回放 > 录屏 > 电台 > 直播。
@@ -1315,10 +1402,19 @@ onMounted(() => {
                   </span>
                   <span v-else-if="historyExhausted" class="msg-more-text">没有更早的消息了</span>
                 </div>
-                <!-- 聊天气泡卡片：日期分隔 + 头像 + 昵称行 + 气泡；系统通知居中弱化 -->
+                <!-- 聊天气泡卡片：时间分隔 + 头像 + 昵称行 + 气泡；系统通知居中弱化 -->
                 <template v-for="(message, index) in messages" :key="message.id">
-                  <div v-if="isDayBoundary(index)" class="msg-date-pill">
-                    {{ dayLabel(message.msgTime) }}
+                  <!-- 时间分隔：跨天显示日期，同一天内断档超过 5 分钟显示时刻（见 dividerMap） -->
+                  <div v-if="dividerMap.get(index)" class="msg-date-pill">
+                    {{ dividerMap.get(index) }}
+                  </div>
+                  <!-- 未读分割线：主进程水位之后的第一条。日期分隔在前，两者重合时是「今天」+「以下是…」两层 -->
+                  <div
+                    v-if="unreadAnchor && unreadIndex === index"
+                    :ref="setUnreadAnchorEl"
+                    class="msg-unread-pill"
+                  >
+                    以下是 {{ unreadAnchor.count }} 条新消息
                   </div>
                   <div
                     class="msg-row"
@@ -1669,6 +1765,21 @@ onMounted(() => {
               <footer v-if="statusText" class="main-foot">
                 {{ statusText }}
               </footer>
+
+              <!-- 进房遗留未读的跳转浮标：贴底时分割线在视口上方，点它滚到那里。
+                   与下面的「新消息」浮标互斥（一个只在贴底、一个只在离开底部时出现） -->
+              <button
+                v-if="atBottom && unreadAnchor && unreadIndex >= 0 && !unreadJumped"
+                type="button"
+                class="new-msg-float new-msg-float--up"
+                :style="newMsgFloatStyle"
+                @click="jumpToUnread"
+              >
+                <el-icon :size="12">
+                  <ArrowRight />
+                </el-icon>
+                {{ unreadAnchor.count }} 条未读
+              </button>
 
               <!-- 上翻历史时收到新消息的浮标：点击回底（贴在输入条上方，见 newMsgFloatStyle） -->
               <button
@@ -3290,6 +3401,26 @@ onMounted(() => {
   color: var(--el-text-color-placeholder);
 }
 
+/* 未读分割线：两侧细线夹一行品牌色文案（flex 撑满行宽，线自动延伸）。
+ * 比日期药丸更强——它回答的是「从哪里开始是新消息」，是进房后第一眼要找的东西 */
+.msg-unread-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 6px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--brand-primary, var(--el-color-primary));
+
+  &::before,
+  &::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(var(--brand-rgb), 0.28);
+  }
+}
+
 /* 等级徽章：金色语义对齐弹幕气泡的 Lv；房主标签与等级互斥，不并存 */
 .msg-level {
   @extend %mini-pill;
@@ -3379,6 +3510,12 @@ onMounted(() => {
   &:hover {
     opacity: 0.9;
   }
+}
+
+/* 未读浮标指向分割线（向上）：与上面同款 ArrowRight，反向旋转。
+ * 同特异度，必须定义在 .new-msg-float 之后才生效 */
+.new-msg-float--up .el-icon {
+  transform: rotate(-90deg);
 }
 
 .msg-empty,

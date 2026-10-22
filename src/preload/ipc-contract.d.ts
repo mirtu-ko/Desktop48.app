@@ -392,6 +392,15 @@ export interface PocketUnreadRoomState {
   /** 最新一条未读消息时刻（ms） */
   latestTime: number
 }
+/**
+ * 单个频道的已读水位（「读到哪一条」）。
+ * 渲染层只用 msgTime 与消息列表比较，定位「以下是新消息」分割线；
+ * msgIdServer 是同源取数时的精确定位依据（同一毫秒多条），渲染层不要拿列表里的 id 回写水位。
+ */
+export interface PocketRoomReadMark {
+  msgTime: number
+  msgIdServer: string
+}
 /** 未读全量快照 */
 export interface PocketUnreadBatch {
   rooms: Record<string, PocketUnreadRoomState>
@@ -526,6 +535,12 @@ interface StaticIpcInvokeMap {
    * 主进程随即把该频道的已读水位推到当下，下一轮检测数出的就是读了之后的新消息
    */
   pocketMarkRead: InvokeSpec<[userId: number, target?: 'room' | 'small'], void>
+  /**
+   * 某频道的已读水位（只读，不推进不广播）：进房画未读分割线用。
+   * 必须在 pocketMarkRead 之前取——markRead 会把水位推到当下，之后取就永远没有分割线。
+   * 频道未解析（小房间还没被归属发现）或从未锚定时返回 null，调用方退回「只显示未读计数」。
+   */
+  pocketReadMark: InvokeSpec<[userId: number, target?: 'room' | 'small'], PocketRoomReadMark | null>
   /**
    * 进入房间频道的 QChat 连接（订阅实时消息）。渲染层进房时调用，离房走 Leave；
    * 同一账号多频道复用一条连接，最后一个订阅者离开即断开。
