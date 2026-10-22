@@ -66,12 +66,12 @@ describe('macOS 手动更新检查', () => {
     expect(getUpdaterState()).toEqual(state)
   })
 
-  it('release 版本不高于当前版本时保持 idle', async () => {
+  it('release 版本不高于当前版本时返回 up-to-date', async () => {
     fetchMock.mockResolvedValueOnce(githubResponse({ tag_name: 'v0.2.5', body: '' }))
 
     const state = await checkForUpdates()
 
-    expect(state).toEqual({ phase: 'idle' })
+    expect(state).toEqual({ phase: 'up-to-date' })
   })
 
   it('临时性失败会重试', async () => {

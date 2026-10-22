@@ -22,6 +22,7 @@ function getAutoUpdater() {
 export type UpdaterState
   = | { phase: 'idle' }
     | { phase: 'checking' }
+    | { phase: 'up-to-date' }
     | { phase: 'available', version: string, releaseNotes: string, manualUpdate?: boolean, url?: string }
     | { phase: 'downloading', version: string, percent: number, bytesPerSecond: number, transferred: number, total: number }
     | { phase: 'ready', version: string }
@@ -264,7 +265,7 @@ function wireEvents(): void {
 
   autoUpdater.on('update-not-available', () => {
     log('[updater] 当前已是最新版本')
-    setState({ phase: 'idle' })
+    setState({ phase: 'up-to-date' })
   })
 
   autoUpdater.on('download-progress', (progress: ProgressInfo) => {
@@ -400,7 +401,7 @@ async function checkManualRelease(options: CheckOptions): Promise<UpdaterState> 
         }
 
         if (!isNewerVersion(version, app.getVersion())) {
-          setState({ phase: 'idle' })
+          setState({ phase: 'up-to-date' })
           return currentState
         }
 

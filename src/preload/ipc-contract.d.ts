@@ -154,10 +154,12 @@ export interface FloatPlayerPayload {
  * （与 FfmpegDownloadProgress 同理）。
  */
 export type UpdaterState
-  /** 未检查 / 当前已是最新 */
+  /** 尚未检查 */
   = | { phase: 'idle' }
   /** 正在检查（首次检查可能持续数秒） */
     | { phase: 'checking' }
+  /** 检查完成且当前没有可用更新 */
+    | { phase: 'up-to-date' }
   /** 发现新版本；manualUpdate 表示仅可引导到 GitHub 手动下载 */
     | { phase: 'available', version: string, releaseNotes: string, manualUpdate?: boolean, url?: string }
   /** 正在下载 */

@@ -199,7 +199,9 @@ const updaterDesc = computed(() => {
   const s = updaterState.value
   switch (s.phase) {
     case 'checking':
-      return '正在检查更新…'
+      return '正在检查更新，请稍候…'
+    case 'up-to-date':
+      return '当前已是最新版本，无需更新'
     case 'available':
       return `发现新版本 v${s.version}`
     case 'downloading':
@@ -211,7 +213,7 @@ const updaterDesc = computed(() => {
     case 'unsupported':
       return s.reason
     default:
-      return '检查新版本，并下载升级'
+      return '检查是否有可用的新版本'
   }
 })
 
