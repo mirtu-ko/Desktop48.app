@@ -199,7 +199,9 @@ const updaterDesc = computed(() => {
   const s = updaterState.value
   switch (s.phase) {
     case 'checking':
-      return '正在检查更新…'
+      return '正在检查更新，请稍候…'
+    case 'up-to-date':
+      return '当前已是最新版本，无需更新'
     case 'available':
       return `发现新版本 v${s.version}`
     case 'downloading':
@@ -211,7 +213,7 @@ const updaterDesc = computed(() => {
     case 'unsupported':
       return s.reason
     default:
-      return '检查新版本，并下载升级'
+      return '检查是否有可用的新版本'
   }
 })
 
@@ -371,12 +373,11 @@ const profileLogos: Record<PocketClientProfileId, string> = {
 }
 /** 当前所选身份的说明文案（登录弹窗内随选择变化） */
 const loginProfileHint = computed(() => pocketClientProfileOption(loginProfile.value).hint)
-/** 已登录账号的身份标签：默认档（口袋48）不显示，仅非默认档在账号卡片上提示，避免噪声 */
-const currentProfileLabel = computed(() => (
-  pocketAuthState.value.clientProfile === DEFAULT_POCKET_CLIENT_PROFILE
-    ? ''
-    : `${pocketClientProfileOption(pocketAuthState.value.clientProfile).label}身份`
-))
+/** 已登录账号的身份标签：口袋48 / 塞纳河48 都展示当前登录档位 */
+const currentProfileLabel = computed(() => {
+  const s = pocketAuthState.value
+  return s.loggedIn ? `${pocketClientProfileOption(s.clientProfile).label}身份` : ''
+})
 
 /** 发码节流窗口：与服务端一致，重开弹窗时据此恢复倒计时 */
 const SMS_RESEND_MS = 60_000
@@ -1612,7 +1613,7 @@ function hideLogo(event: Event) {
     color: var(--el-text-color-primary);
   }
 
-  /* 登录身份徽标（如「塞纳河48身份」）：标题行右侧的品牌渐变小药丸，悬停给出选档说明 */
+  /* 登录身份徽标（如「口袋48身份」或「塞纳河48身份」）：标题行右侧的品牌渐变小药丸，悬停给出选档说明 */
   .row-profile-badge {
     padding: 1px 7px;
     border-radius: 999px;

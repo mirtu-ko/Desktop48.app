@@ -651,8 +651,8 @@ function connectConfirmBody(): VNode {
   return h('div', { class: 'app-confirm-body' }, [
     h('p', { class: 'app-confirm-lead' }, '发言需要以当前账号连接云信 IM。'),
     h('ul', { class: 'app-confirm-list' }, [
-      h('li', '同一账号只允许一台设备在线'),
-      h('li', '连接后，手机或其他设备上正在登录的口袋48会被顶下线，需要重新打开'),
+      h('li', '同一账号只允许一台设备在线, 同时连接会顶掉手机端口袋48'),
+      h('li', '推荐杀掉手机app再连接, 不用时及时断开连接'),
     ]),
   ])
 }
