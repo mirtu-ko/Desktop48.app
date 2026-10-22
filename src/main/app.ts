@@ -11,6 +11,7 @@ import { closeAllFloatWindows } from './float-window'
 import { registerAllIPC } from './ipc'
 import { log } from './logger'
 import { cleanupPocketDanmakuSessions } from './pocket48/pocket-danmaku'
+import { cleanupRoomQChatSessions } from './pocket48/pocket-room-qchat'
 import { startPocketUnread, stopPocketUnread } from './pocket48/pocket-unread'
 import { cleanupStreamSessions } from './stream'
 import { destroyTray, installTray, isTrayActive } from './tray'
@@ -203,6 +204,7 @@ app.on('before-quit', () => {
   cleanupStreamSessions()
   cleanupDanmakuSessions()
   cleanupPocketDanmakuSessions()
+  cleanupRoomQChatSessions()
   stopPocketUnread()
   // 对仍在运行的所有 ffmpeg 任务写 'q' 优雅收尾，避免退出后残留孤儿进程
   stopAllFfmpegTasks()

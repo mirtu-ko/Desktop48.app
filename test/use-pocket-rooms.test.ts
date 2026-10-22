@@ -1,17 +1,19 @@
-import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
+import type { FloatPlayerKind, FloatPlayerPayload, PocketRoomBatch, PocketRoomPermission, PocketRoomQChatMessage } from '@preload/ipc-contract'
 import type { PocketRoomMessageView } from '../src/renderer/src/utils/pocket-room-message'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick } from 'vue'
+import { normalizePocketRoomMessage } from '../src/renderer/src/utils/pocket-room-message'
 
 /**
  * use-pocket-rooms 编排层：关注名单合并、房间遍历（过滤无房间）、
- * 左列最新消息预览、消息拉取/轮询/翻历史、切人与降级。
+ * 左列最新消息预览、消息拉取/轮询/翻历史、切人与降级；
+ * 房间发言（QChat 发送 / 删除 / 实时推送）。
  *
  * 真实接入 pocket-room-message（归一）与 member-flags（本地关注 store），
  * 仅 mock 四个边界：成员目录、直播列表接口、口袋登录态、主进程房间接口。
  */
 
-const { directoryMock, apisMock, authMock, roomMock } = vi.hoisted(() => ({
+const { directoryMock, apisMock, authMock, roomMock, roomBatchHandlers } = vi.hoisted(() => ({
   directoryMock: {
     /** userId → 成员详情；默认查不到（降级为「口袋用户 N」） */
     find: async (_userId: number) => null as any,
@@ -35,6 +37,8 @@ const { directoryMock, apisMock, authMock, roomMock } = vi.hoisted(() => ({
     /** channelId → 「频道不存在」（房主更新/删除小房间后旧频道失效） */
     channelMissing: new Set<string>(),
   },
+  /** 主进程 QChat 事件推送的订阅 handler（每个 composable 实例注册一个；广播给全部） */
+  roomBatchHandlers: [] as Array<(batch: PocketRoomBatch) => void>,
 }))
 
 vi.mock('@renderer/stores/member-directory', () => ({
@@ -56,6 +60,7 @@ vi.mock('@renderer/stores/pocket-auth', async () => {
     loggedIn: true,
     nickname: '',
     avatar: '',
+    userId: '999',
     mobileMasked: '',
     plainFallback: false,
     savedAt: 0,
@@ -92,6 +97,55 @@ function roomMsg(msgIdClient: string, msgTime: number, text: string, nick = '粉
     msgTime,
     bodys: text,
     extInfo: JSON.stringify({ user: { userId: 1, nickName: nick, level: 5 } }),
+  }
+}
+
+/** 传输层消息（QChat 24/11 推送与发送回显同形状；ext 可带发送者资料） */
+function qchatMsg(overrides: Partial<PocketRoomQChatMessage> = {}): PocketRoomQChatMessage {
+  return {
+    serverId: 'srv-10001',
+    channelId: 'ch-10001',
+    fromAccount: 'acc-1',
+    fromClientType: 0,
+    fromNick: '粉丝甲',
+    time: 1728000010,
+    type: 0,
+    body: '',
+    attachment: '',
+    ext: '',
+    msgIdClient: 'push-1',
+    msgIdServer: 'push-srv-1',
+    ...overrides,
+  }
+}
+
+/** 带发送者资料的 ext（userId 口径见 normalizePocketRoomMessage） */
+function extOf(userId: number | string, nickName: string): string {
+  return JSON.stringify({ user: { userId: String(userId), nickName, level: 5 } })
+}
+
+/** 发送 ACK + 合成回显（主进程 sendRoomMessage 的返回形状；ACK 只回 ID 与时刻） */
+function sendEcho(overrides: { body?: string, msgIdClient?: string, time?: number } = {}) {
+  const msgIdClient = overrides.msgIdClient ?? 'mine-1'
+  const time = overrides.time ?? 1728000009
+  return {
+    msgIdClient,
+    msgIdServer: 'srv-mine-1',
+    time,
+    message: {
+      serverId: 'srv-10001',
+      channelId: 'ch-10001',
+      fromAccount: 'acc-me',
+      fromClientType: 0,
+      fromNick: '我',
+      type: 0,
+      body: overrides.body ?? '我发的消息',
+      attachment: '',
+      ext: extOf(999, '我'),
+      msgIdClient,
+      msgIdServer: 'srv-mine-1',
+      time,
+    },
   }
 }
 
@@ -142,6 +196,8 @@ interface SetupOptions {
   roomQuestions?: Record<string, { questionId: string, question: string }>
   /** channelId → 正确暗号；不设置则该频道的提交一律判错 */
   roomAnswers?: Record<string, string>
+  /** channelId → 发言权限；未设置 = 未知（null，不禁用输入，仍由服务端兜底） */
+  roomPermissions?: Record<string, PocketRoomPermission>
 }
 
 async function setup(options: SetupOptions = {}) {
@@ -159,10 +215,15 @@ async function setup(options: SetupOptions = {}) {
     /** 小房间重新发现请求（force = 旧频道刚失效，绕过主进程的发现间隔） */
     smallChannelRefreshed: [] as Array<{ userId: number, force: boolean }>,
     openFloatWindow: [] as Array<[FloatPlayerKind, FloatPlayerPayload]>,
+    /** QChat 进房订阅（切房先订新房再退旧房，顺序即断言） */
+    qchatEntered: [] as Array<{ serverId: string, channelId: string }>,
+    /** QChat 退订 */
+    qchatLeft: [] as Array<{ serverId: string, channelId: string }>,
   }
   roomMock.channelFail = new Set()
   roomMock.messageFail = new Set()
   roomMock.channelMissing = new Set()
+  roomBatchHandlers.length = 0
 
   vi.stubGlobal('window', {
     mainAPI: {
@@ -181,6 +242,9 @@ async function setup(options: SetupOptions = {}) {
           throw new Error('频道解析失败')
         return { serverId: `srv-${userId}`, channelId: `ch-${userId}` }
       }),
+      // 房间发言权限：默认未知（null = 不禁用输入）；roomPermissions 用于构造禁言房间
+      pocketGetRoomPermissions: vi.fn(async (channelId: string) =>
+        options.roomPermissions?.[channelId] ?? null),
       pocketGetRoomLastMessages: vi.fn(async (serverIds: string[]) => {
         calls.lastMessageFetched.push(serverIds)
         return (options.lastMessages ?? []).filter(item =>
@@ -230,6 +294,38 @@ async function setup(options: SetupOptions = {}) {
       openFloatWindow: vi.fn(async (kind: FloatPlayerKind, payload: FloatPlayerPayload) => {
         calls.openFloatWindow.push([kind, payload])
       }),
+      // 房间发言（QChat）：默认全部成功。回显由各用例按需配置
+      pocketRoomBatch: vi.fn((handler: (batch: PocketRoomBatch) => void) => {
+        roomBatchHandlers.push(handler)
+        return () => {}
+      }),
+      pocketRoomQChatEnter: vi.fn(async (serverId: string, channelId: string) => {
+        calls.qchatEntered.push({ serverId, channelId })
+        return { ok: true }
+      }),
+      pocketRoomQChatLeave: vi.fn(async (serverId: string, channelId: string) => {
+        calls.qchatLeft.push({ serverId, channelId })
+      }),
+      pocketSendRoomMessage: vi.fn(async () => ({
+        msgIdClient: 'mine-1',
+        msgIdServer: 'srv-mine-1',
+        time: 1728000009,
+        message: {
+          serverId: 'srv-10001',
+          channelId: 'ch-10001',
+          fromAccount: 'acc-me',
+          fromClientType: 0,
+          fromNick: '我',
+          type: 0,
+          body: '我发的消息',
+          attachment: '',
+          ext: JSON.stringify({ user: { userId: 999, nickName: '我', avatar: '', level: 0, roleId: 0 } }),
+          msgIdClient: 'mine-1',
+          msgIdServer: 'srv-mine-1',
+          time: 1728000009,
+        },
+      })),
+      pocketDeleteRoomMessage: vi.fn(async () => {}),
       // 标记房间已读（进房 / 贴底时由页面层调用）：未读真相在主进程，这里只收下调用
       pocketMarkRead: vi.fn(async () => {}),
       // 开直播窗前会做 FFmpeg 校验（use-live-guard）：给就绪态，选中直播的用例才开得出窗
@@ -311,6 +407,11 @@ async function setup(options: SetupOptions = {}) {
     },
     /** 当前房间消息流的 [昵称, 正文, 时刻] 摘要 */
     digest: () => api.messages.value.map(item => [item.nick, item.text, item.msgTime]),
+    /** 模拟主进程推送 QChat 事件批次（广播给本实例注册的全部 handler） */
+    emitRoomBatch: (batch: PocketRoomBatch) => {
+      for (const handler of roomBatchHandlers)
+        handler(batch)
+    },
   }
 }
 
@@ -1694,6 +1795,7 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
   function shareMsg(overrides: Partial<PocketRoomMessageView> = {}): PocketRoomMessageView {
     const base: PocketRoomMessageView = {
       id: 'm1',
+      msgIdClient: '',
       kind: 'live',
       text: '[直播分享] 小猫咪来了',
       userId: '1',
@@ -1797,5 +1899,438 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(api.roomChannelName.value).toBe('')
+  })
+})
+
+describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
+  /** 10001 / 10002 两个房间就绪，各带一条别人的留言（可作回复目标） */
+  function sendFixture(): SetupOptions {
+    return {
+      pocketIds: [10001, 10002],
+      directory: {
+        10001: { realName: '甲', avatar: '', teamName: '', teamColor: '' },
+        10002: { realName: '乙', avatar: '', teamName: '', teamColor: '' },
+      },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '别人的留言')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('b', 100, '乙房间')] } },
+      },
+    }
+  }
+
+  it('房间级禁言：canSpeak=false，发送被拒且不进 IPC', async () => {
+    const { api } = await setup({
+      ...sendFixture(),
+      // 实测口径：房主开全员禁言时 sendText=false、cdTime=30
+      roomPermissions: { 'ch-10001': { sendText: false, cdTime: 30, roomRole: '0', followFlag: true } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.canSpeak.value).toBe(false)
+    // 即使连接已就绪（optIn 是账号级、从别的房间带过来），禁言房间也不该把消息发出去
+    await api.connectRoomQChat()
+    expect(await api.sendMessage('禁言房间')).toEqual({ ok: false, message: '房主已开启全员禁言，暂时不能发言' })
+    expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
+  })
+
+  it('发言权限未知（接口失败 / 未取到）：不禁用输入，交给服务端兜底', async () => {
+    const { api } = await setup(sendFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.canSpeak.value).toBe(true)
+  })
+
+  it('发送成功：ACK 回显入列、冷却倒数、回复态清空', async () => {
+    const { api } = await setup(sendFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    // 默认不连云信，发送前需确认连接
+    expect(await api.connectRoomQChat()).toEqual({ ok: true })
+
+    // 先进回复态：发送成功后清空
+    api.startReply(api.messages.value[0])
+    expect(api.replyTarget.value).toEqual({ msgIdClient: 'a', senderName: '粉丝甲', text: '别人的留言' })
+
+    expect(await api.sendMessage('我发的消息')).toEqual({ ok: true })
+
+    // 回显按 24/11 同一形状归一插入（time 秒 → 毫秒）
+    expect(api.messages.value.at(-1)).toMatchObject({
+      nick: '我',
+      text: '我发的消息',
+      msgIdClient: 'mine-1',
+      msgTime: 1728000009000,
+    })
+    // 自己发的消息：userId 与登录态一致（删除入口的判据）
+    expect(api.isOwnMessage(api.messages.value.at(-1)!)).toBe(true)
+    // 冷却镜像启动（与主进程 SEND_INTERVAL_MS 同口径）
+    expect(api.sendCooldownLeft.value).toBeGreaterThan(0)
+    expect(api.replyTarget.value).toBeNull()
+    // 回复目标透传到 IPC（服务端据此关联原消息）
+    expect(window.mainAPI.pocketSendRoomMessage).toHaveBeenCalledWith(
+      'srv-10001',
+      'ch-10001',
+      '我发的消息',
+      { msgIdClient: 'a', senderName: '粉丝甲', text: '别人的留言' },
+    )
+
+    // 冷却到点归零（自调度 tick 收尾；末次 tick 落在 1600ms 档）
+    await vi.advanceTimersByTimeAsync(1600)
+    expect(api.sendCooldownLeft.value).toBe(0)
+  })
+
+  it('发送失败：如实回错，消息不入列，不开冷却', async () => {
+    const { api } = await setup(sendFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.connectRoomQChat()
+
+    vi.mocked(window.mainAPI.pocketSendRoomMessage).mockImplementationOnce(async () => {
+      throw new Error('房间连接已失效，请重新进入房间')
+    })
+
+    expect(await api.sendMessage('发不出去')).toEqual({ ok: false, message: '房间连接已失效，请重新进入房间' })
+    expect(api.messages.value.map(item => item.text)).not.toContain('发不出去')
+    expect(api.sendCooldownLeft.value).toBe(0)
+  })
+
+  it('未进房 / 未确认连接 / 纯空白：拒绝发送且不进 IPC', async () => {
+    const { api } = await setup(sendFixture())
+    await api.load()
+
+    // 未选中房间：无频道
+    expect(await api.sendMessage('在吗')).toEqual({ ok: false, message: '请先进入房间' })
+
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    // 进房不自动连云信：未确认前一律不发
+    expect(await api.sendMessage('在吗')).toEqual({ ok: false, message: '请先点击聊天框连接房间' })
+    expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
+
+    await api.connectRoomQChat()
+    expect(await api.sendMessage('   ')).toEqual({ ok: false })
+    expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
+  })
+
+  it('主动断开连接：撤销授权、退订当前频道，回到只看模式', async () => {
+    const { api } = await setup(sendFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.connectRoomQChat()
+    expect(api.qchatOptIn.value).toBe(true)
+
+    await api.disconnectRoomQChat()
+
+    expect(api.qchatOptIn.value).toBe(false)
+    expect(api.qchatStatus.value).toBe('disconnected')
+    expect(window.mainAPI.pocketRoomQChatLeave).toHaveBeenCalledWith('srv-10001', 'ch-10001')
+    // 断开后发送被拒，提示先连接（不会直接发）
+    expect(await api.sendMessage('还在吗')).toEqual({ ok: false, message: '请先点击聊天框连接房间' })
+    expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
+  })
+
+  it('aCK 回包期间切房：旧频道的回显不得插进新房间', async () => {
+    const { api } = await setup(sendFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.connectRoomQChat()
+
+    // 挂起发送：回包落地前切到 10002
+    let release: (value: unknown) => void = () => {}
+    vi.mocked(window.mainAPI.pocketSendRoomMessage).mockImplementationOnce(async () => {
+      await new Promise((resolve) => {
+        release = resolve
+      })
+      return sendEcho({ body: '旧房尾音' })
+    })
+    const pending = api.sendMessage('旧房尾音')
+    await api.selectRoom(10002)
+    release(null)
+
+    expect((await pending).ok).toBe(true)
+    expect(api.messages.value.map(item => item.text)).toEqual(['乙房间'])
+  })
+
+  it('删除自己发的消息：本地立即摘除，传播延迟内不回屏', async () => {
+    const { api } = await setup(sendFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.connectRoomQChat()
+    await api.sendMessage('我发的消息')
+    const mine = api.messages.value.at(-1)!
+
+    expect(await api.deleteOwnMessage(mine)).toEqual({ ok: true })
+
+    expect(api.messages.value.map(item => item.text)).not.toContain('我发的消息')
+    expect(window.mainAPI.pocketDeleteRoomMessage).toHaveBeenCalledWith('ch-10001', 'mine-1', 1728000009000)
+
+    // 服务端传播延迟内轮询回包仍带着它：去重键留着，不回屏
+    vi.mocked(window.mainAPI.pocketGetRoomMessages).mockImplementationOnce(async () => ({
+      nextTime: 0,
+      messages: [{
+        msgIdServer: 'srv-mine-1',
+        msgIdClient: 'mine-1',
+        msgType: 'TEXT',
+        msgTime: 1728000009000,
+        bodys: '我发的消息',
+        extInfo: extOf(999, '我'),
+      }],
+    }))
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(api.messages.value.map(item => item.text)).not.toContain('我发的消息')
+  })
+
+  it('只能删自己的：删别人的消息被拒且不进 IPC', async () => {
+    const { api } = await setup(sendFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(await api.deleteOwnMessage(api.messages.value[0]))
+      .toEqual({ ok: false, message: '只能删除自己发送的消息' })
+    expect(window.mainAPI.pocketDeleteRoomMessage).not.toHaveBeenCalled()
+    expect(api.messages.value).toHaveLength(1)
+  })
+
+  it('eligibility：文本/回复/礼物可回复，媒体不可；删除只对自己且 ID 时刻齐全', async () => {
+    const { api } = await setup(sendFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const view = (raw: unknown) => normalizePocketRoomMessage(raw)!
+    const otherText = view(roomMsg('t1', 100, '你好'))
+    const myText = view({ ...roomMsg('t2', 200, '我的'), extInfo: extOf(999, '我') })
+    const image = view({ ...roomMsg('t3', 300, ''), msgType: 'IMAGE', bodys: '{}' })
+    const gift = view({
+      ...roomMsg('t4', 400, ''),
+      msgType: 'GIFT_TEXT',
+      bodys: JSON.stringify({ giftInfo: { giftName: '小心心', giftNum: 1 } }),
+    })
+    const myNoTime = view({ ...roomMsg('t5', 0, '我的'), extInfo: extOf(999, '我') })
+
+    // 可回复：有 msgIdClient 的文本 / 礼物，且正文非占位
+    expect(api.canReplyMessage(otherText)).toBe(true)
+    expect(api.canReplyMessage(gift)).toBe(true)
+    // 媒体消息没有可引用的文字，引用块会只剩空壳
+    expect(api.canReplyMessage(image)).toBe(false)
+
+    // 可删除：自己发的 + msgIdClient + msgTime > 0（删除接口三者都要）
+    expect(api.canDeleteMessage(myText)).toBe(true)
+    expect(api.canDeleteMessage(otherText)).toBe(false)
+    expect(api.canDeleteMessage(myNoTime)).toBe(false)
+
+    // 进入回复态登记摘要；不可回复的消息不进态
+    api.startReply(otherText)
+    expect(api.replyTarget.value).toEqual({ msgIdClient: 't1', senderName: '粉丝甲', text: '你好' })
+    api.cancelReply()
+    expect(api.replyTarget.value).toBeNull()
+    api.startReply(image)
+    expect(api.replyTarget.value).toBeNull()
+  })
+})
+
+describe('use-pocket-rooms / QChat 实时推送（24/11）', () => {
+  function pushFixture(): SetupOptions {
+    return {
+      pocketIds: [10001, 10002],
+      directory: {
+        10001: { realName: '甲', avatar: '', teamName: '', teamColor: '' },
+        10002: { realName: '乙', avatar: '', teamName: '', teamColor: '' },
+      },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '别人的留言')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('b', 100, '乙房间')] } },
+      },
+    }
+  }
+
+  it('连接状态批次：更新 qchatStatus 与附言', async () => {
+    const { api, emitRoomBatch } = await setup(pushFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    emitRoomBatch({ kind: 'status', status: 'connected' })
+    expect(api.qchatStatus.value).toBe('connected')
+    expect(api.qchatHint.value).toBe('')
+
+    emitRoomBatch({ kind: 'status', status: 'reconnecting', message: '第 2 次重连' })
+    expect(api.qchatStatus.value).toBe('reconnecting')
+    expect(api.qchatHint.value).toBe('第 2 次重连')
+  })
+
+  it('当前频道消息入列（秒 → 毫秒）；DELETE 通知过滤', async () => {
+    const { api, emitRoomBatch } = await setup(pushFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    emitRoomBatch({ kind: 'message', message: qchatMsg({ body: '实时消息', ext: extOf(10001, '甲'), msgIdClient: 'push-1' }) })
+    expect(api.messages.value.at(-1)).toMatchObject({
+      text: '实时消息',
+      msgIdClient: 'push-1',
+      msgTime: 1728000010000,
+    })
+
+    emitRoomBatch({ kind: 'message', message: qchatMsg({
+      type: 100,
+      attachment: JSON.stringify({ messageType: 'DELETE' }),
+      msgIdClient: 'push-del',
+    }) })
+    expect(api.messages.value.map(item => item.msgIdClient)).not.toContain('push-del')
+  })
+
+  it('非当前频道 / 退房后的尾包不插入', async () => {
+    const { api, emitRoomBatch } = await setup(pushFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 切房瞬间可能收到旧频道尾包
+    emitRoomBatch({ kind: 'message', message: qchatMsg({ channelId: 'ch-other', body: '别房消息' }) })
+    expect(api.messages.value.map(item => item.text)).not.toContain('别房消息')
+
+    await api.selectRoom(null)
+    emitRoomBatch({ kind: 'message', message: qchatMsg({ body: '退房尾包' }) })
+    expect(api.messages.value.map(item => item.text)).not.toContain('退房尾包')
+  })
+
+  it('「只看房主」档：推送只收房主与自己，与轮询口径一致', async () => {
+    const { api, emitRoomBatch } = await setup(pushFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 别人的发言：member 档过滤（homeowner 链路本就不返回别人）
+    emitRoomBatch({ kind: 'message', message: qchatMsg({ body: '别人的', ext: extOf(1, '粉丝甲'), msgIdClient: 'push-other' }) })
+    expect(api.messages.value.map(item => item.msgIdClient)).not.toContain('push-other')
+
+    // 房主（10001）与自己（999，登录态）都收
+    emitRoomBatch({ kind: 'message', message: qchatMsg({ body: '房主说的', ext: extOf(10001, '甲'), msgIdClient: 'push-owner' }) })
+    emitRoomBatch({ kind: 'message', message: qchatMsg({ body: '我说的', ext: extOf(999, '我'), msgIdClient: 'push-mine' }) })
+    expect(api.messages.value.map(item => item.msgIdClient))
+      .toEqual(expect.arrayContaining(['push-owner', 'push-mine']))
+
+    // 切到「全部消息」：别人的发言也收
+    api.messageScope.value = 'all'
+    await vi.advanceTimersByTimeAsync(0)
+    emitRoomBatch({ kind: 'message', message: qchatMsg({ body: '别人的', ext: extOf(1, '粉丝甲'), msgIdClient: 'push-other-2' }) })
+    expect(api.messages.value.map(item => item.msgIdClient)).toContain('push-other-2')
+  })
+
+  it('双源去重：推送与轮询回包同 msgIdClient 只显示一次', async () => {
+    const { api, emitRoomBatch } = await setup(pushFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 推送先到（房主身份，member 档可见）
+    emitRoomBatch({ kind: 'message', message: qchatMsg({ body: '同一条', ext: extOf(10001, '甲'), msgIdClient: 'dup-1' }) })
+    // 轮询回包再带同一条
+    vi.mocked(window.mainAPI.pocketGetRoomMessages).mockImplementationOnce(async () => ({
+      nextTime: 0,
+      messages: [{
+        msgIdServer: 'srv-dup-1',
+        msgIdClient: 'dup-1',
+        msgType: 'TEXT',
+        msgTime: 1728000010000,
+        bodys: '同一条',
+        extInfo: extOf(1, '粉丝甲'),
+      }],
+    }))
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(api.messages.value.filter(item => item.msgIdClient === 'dup-1')).toHaveLength(1)
+  })
+
+  it('发送回显与推送回显同 msgIdClient：只显示一次', async () => {
+    const { api, emitRoomBatch } = await setup(pushFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    await api.sendMessage('我发的消息') // 回显先入列
+    emitRoomBatch({ kind: 'message', message: qchatMsg({ body: '我发的消息', ext: extOf(999, '我'), msgIdClient: 'mine-1' }) })
+
+    expect(api.messages.value.filter(item => item.msgIdClient === 'mine-1')).toHaveLength(1)
+  })
+})
+
+describe('use-pocket-rooms / QChat 订阅同步', () => {
+  function syncFixture(): SetupOptions {
+    return {
+      pocketIds: [10001, 10002],
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '甲房间')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('b', 100, '乙房间')] } },
+      },
+    }
+  }
+
+  it('进房不建连；确认后订阅；切房先订新房再退旧房；退房退订', async () => {
+    const { api, calls } = await setup(syncFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    // 默认不连云信：只看房间不建连、不订阅，消息靠 HTTP 轮询
+    expect(calls.qchatEntered).toEqual([])
+    expect(api.qchatStatus.value).toBe('disconnected')
+    expect(api.chatStatus.value).toBe('ready')
+
+    expect(await api.connectRoomQChat()).toEqual({ ok: true })
+    expect(calls.qchatEntered).toEqual([{ serverId: 'srv-10001', channelId: 'ch-10001' }])
+
+    await api.selectRoom(10002)
+    await vi.advanceTimersByTimeAsync(0)
+    // 先订新房再退旧房：旧频道若是最后一条订阅，先退会整条连接销毁
+    expect(calls.qchatEntered).toEqual([
+      { serverId: 'srv-10001', channelId: 'ch-10001' },
+      { serverId: 'srv-10002', channelId: 'ch-10002' },
+    ])
+    expect(calls.qchatLeft).toEqual([{ serverId: 'srv-10001', channelId: 'ch-10001' }])
+
+    await api.selectRoom(null)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls.qchatLeft).toEqual([
+      { serverId: 'srv-10001', channelId: 'ch-10001' },
+      { serverId: 'srv-10002', channelId: 'ch-10002' },
+    ])
+  })
+
+  it('作用域销毁：退订最后一个频道', async () => {
+    const { api, calls, scope } = await setup(syncFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.connectRoomQChat()
+
+    scope.stop()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(calls.qchatLeft).toEqual([{ serverId: 'srv-10001', channelId: 'ch-10001' }])
+  })
+
+  it('连接失败：返回原因、连接态置 disconnected，消息链路不受影响', async () => {
+    const { api } = await setup(syncFixture())
+    await api.load()
+    vi.mocked(window.mainAPI.pocketRoomQChatEnter).mockImplementationOnce(async () => ({ ok: false, message: '连接超时' }))
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(await api.connectRoomQChat()).toEqual({ ok: false, message: '连接超时' })
+    expect(api.qchatStatus.value).toBe('disconnected')
+    expect(api.qchatHint.value).toBe('连接超时')
+    // 实时链路失败只禁发送；HTTP 轮询仍是消息链路兜底
+    expect(api.chatStatus.value).toBe('ready')
+    expect(api.messages.value).toHaveLength(1)
   })
 })

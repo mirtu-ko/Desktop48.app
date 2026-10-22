@@ -176,6 +176,8 @@ export interface PocketAuthState {
   loggedIn: boolean
   nickname: string
   avatar: string
+  /** 口袋 userId（登录时落盘）；房间页据此判定「自己发的消息」（删除入口只对自己的展示） */
+  userId: string
   /** 脱敏手机号（139****1234）；空串表示未记住 */
   mobileMasked: string
   /** 当前登录身份档位（模拟的官方客户端）；未登录时为默认档 */
@@ -218,6 +220,20 @@ export interface PocketVerifyResult {
 export interface PocketRoomChannel {
   serverId: string
   channelId: string
+}
+
+/**
+ * 房间发言权限（room/info 的 userFunction，服务端按当前账号算好）。
+ * sendText=false 即该房间禁止发言（房主房间级禁言或个人禁言），渲染层据此禁用输入框。
+ */
+export interface PocketRoomPermission {
+  sendText: boolean
+  /** 房间级发言冷却（秒）：禁言房间实测 30，常规房间 10 */
+  cdTime: number
+  /** 房间身份："0" = 普通成员 */
+  roomRole: string
+  /** 是否已关注该房间所属成员 */
+  followFlag: boolean
 }
 
 /** team server 下的频道（seine 频道详情）：channelId + 服务端给的频道名 */
@@ -271,6 +287,61 @@ export interface PocketRoomLastMessage {
   msgTime: number
   /** 服务端真实未读数；null = pa 降级回包没给该字段 */
   unreadCount: number | null
+}
+
+// ===== 房间消息发送（QChat 圈组长连接） =====
+
+// 对端：main/pocket48/pocket-room-qchat.ts（会话与发送）、nim-qchat.ts（协议解码）。
+// 与直播间弹幕（pocketDanmaku*）是两套体系：房间留言走云信圈组，弹幕走云信聊天室。
+
+/** QChat 传输层房间消息（主进程 nim-qchat.ts 解码出的形状；业务归一在渲染层 utils/pocket-room-message.ts） */
+export interface PocketRoomQChatMessage {
+  serverId: string
+  channelId: string
+  fromAccount: string
+  fromClientType: number
+  fromNick: string
+  time: number
+  /** 0 = 文本，100 = 自定义（回复等，正文在 attachment） */
+  type: number
+  body: string
+  attachment: string
+  ext: string
+  msgIdClient: string
+  msgIdServer: string
+}
+
+export type PocketRoomQChatStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+
+/** 房间 QChat 事件批次（对端：pocket-room-qchat.ts，发给订阅了该账号房间会话的窗口） */
+export type PocketRoomBatch
+  = | { kind: 'status', status: PocketRoomQChatStatus, message?: string }
+    | { kind: 'message', message: PocketRoomQChatMessage }
+
+/** 回复态入参：被回复消息的摘要（msgIdClient 必填，服务端据此关联原消息） */
+export interface PocketRoomReplyTarget {
+  msgIdClient: string
+  senderName: string
+  text: string
+  giftInfo?: Record<string, unknown>
+}
+
+/** 进房连接结果：!ok 时 message 说明原因（未登录 / 凭据失效 / 连接失败） */
+export interface PocketRoomQChatEnterResult {
+  ok: boolean
+  message?: string
+}
+
+/**
+ * 发送结果：服务端 ACK 的消息 ID 与时刻（time 为协议原值，秒/毫秒未归一），
+ * 以及一条**发送回显**（ACK 只回 ID 与时刻，正文与资料由发送入参补全）——
+ * 渲染层按 24/11 同一形状归一插入，与推送回显、HTTP 回包按 msgIdClient 三源去重。
+ */
+export interface PocketRoomSendResult {
+  msgIdClient: string
+  msgIdServer: string
+  time: number
+  message: PocketRoomQChatMessage
 }
 
 /** 口袋48聊天室原始消息（主进程协议客户端解码出的传输层形状；业务归一在渲染层 utils/pocket-chat-message.ts） */
@@ -418,6 +489,11 @@ interface StaticIpcInvokeMap {
   pocketUnfollowMember: InvokeSpec<[userId: number], void>
   /** 解析成员的房间频道（口袋 App「房间」留言流用，非直播间弹幕）；未登录返回空频道，过期 reject */
   pocketGetRoomChannel: InvokeSpec<[userId: number], PocketRoomChannel>
+  /**
+   * 拉取当前账号在房间的发言权限（room/info 的 userFunction）：sendText=false = 禁止发言。
+   * 未登录返回 null；小房间暗号未通过（status 2001）等失败 reject，调用方按「未知」处理。
+   */
+  pocketGetRoomPermissions: InvokeSpec<[channelId: string], PocketRoomPermission | null>
   /** 拉取房间频道消息（msgTime 倒序最新在前；nextTime 为更早历史游标，轮询传 0 拉最新） */
   pocketGetRoomMessages: InvokeSpec<[channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all'], PocketRoomMessages>
   /** 拉取房间精华消息（房主/管理员置顶的那批；与消息范围无关，nextTime 0 = 没有更多） */
@@ -448,6 +524,20 @@ interface StaticIpcInvokeMap {
    * 主进程随即把该频道的已读水位推到当下，下一轮检测数出的就是读了之后的新消息
    */
   pocketMarkRead: InvokeSpec<[userId: number, target?: 'room' | 'small'], void>
+  /**
+   * 进入房间频道的 QChat 连接（订阅实时消息）。渲染层进房时调用，离房走 Leave；
+   * 同一账号多频道复用一条连接，最后一个订阅者离开即断开。
+   */
+  pocketRoomQChatEnter: InvokeSpec<[serverId: string, channelId: string], PocketRoomQChatEnterResult>
+  /** 离开房间频道：退订并（无剩余订阅时）断开连接 */
+  pocketRoomQChatLeave: InvokeSpec<[serverId: string, channelId: string], void>
+  /**
+   * 在房间频道发言（QChat 24/10）。reply 非空时为回复某条消息（custom 类型）；
+   * 服务端 ACK 带回 msgIdServer 与时刻。未连接 / 冷却中 / 目标频道未订阅均 reject。
+   */
+  pocketSendRoomMessage: InvokeSpec<[serverId: string, channelId: string, text: string, reply?: PocketRoomReplyTarget], PocketRoomSendResult>
+  /** 删除自己发的房间消息（HTTP im/api/v1/team/msg/delete；服务端按 accId 校验） */
+  pocketDeleteRoomMessage: InvokeSpec<[channelId: string, msgIdClient: string, msgTime: number], void>
 
   // ===== B 站直播间信息 =====
   // 对端：main/bilibili/room-info.ts
@@ -502,6 +592,8 @@ export type IpcEventMap = {
   danmakuBatch: [batch: DanmakuBatch]
   /** 口袋聊天室事件（对端：main/pocket48/pocket-danmaku.ts，仅发给订阅了该聊天室的窗口） */
   pocketDanmakuBatch: [batch: PocketDanmakuBatch]
+  /** 房间 QChat 事件（对端：main/pocket48/pocket-room-qchat.ts：连接状态 + 实时消息，发给订阅了房间会话的窗口） */
+  pocketRoomBatch: [batch: PocketRoomBatch]
   /**
    * 房间未读状态变化（对端：main/pocket48/pocket-unread.ts，全量快照）。
    * 未读状态由主进程统一持有、每个窗口各存镜像，因此广播给全部窗口（见 main/ipc/send.ts）。

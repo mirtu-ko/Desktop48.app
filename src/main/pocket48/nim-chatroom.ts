@@ -16,23 +16,31 @@
  * - 登录（13_2）：[0x02] + 房间属性表 + 认证属性表（SDK 版本/包名等移动端身份，
  *   token 放属性 1000）；握手应答后需再以 RC4 发一次登录包
  * - 心跳（1_2，15s）；消息（13_7）；属性 38='1' 的消息需回执（13_35）
+ *
+ * 帧 / 属性表 / RC4 / 握手等共用原语见 nim-common.ts（圈组 QChat 客户端共用）。
  */
 import type { PocketRawChatMessage } from '@preload/ipc-contract'
 import type { NimClientIdentity } from './client-profile'
 
+import type { WirePacket } from './nim-common'
 import { Buffer } from 'node:buffer'
-import { createPublicKey, publicEncrypt, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import net from 'node:net'
-
-import zlib from 'node:zlib'
 import { debug } from '../logger'
 import { pocketDeviceId } from './client-profile'
+import {
+  decodeEmbeddedPacket,
+  decodePacket,
+  decodeProperties,
+  encodeProperties,
+  makeHandshake,
+  makePacket,
+  Rc4Stream,
+  readVarint,
+  text,
+} from './nim-common'
 
 const LBS_URL = 'https://lbs.netease.im/lbs/chat.jsp'
-/** 云信握手 RSA 公钥（SPKI DER，base64；密钥版本 0） */
-const RSA_KEY_VERSION = 0
-const RSA_PUBLIC_KEY_DER
-  = 'MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCBxLuL8+xpQSddSnSvPkvNOHdcr5Euqw+kkOSzO/buDMheCfFILRC/v5+nv8BsL7/YZWVpDA8sIBTxfNRqSCu0uLjlbJqT/sMnPT1xxdQrkb1HSnuSyTbZbqaInQ13tBE2SfcAhsQZJJ1hKQSE2QyKOMxQPhP583qcsIhDbdExvwIDAQAB'
 
 // 服务号 / 指令号（本客户端只用到这几个）
 const SERVICE_HANDSHAKE = 1
@@ -50,167 +58,6 @@ const HEARTBEAT_INTERVAL_MS = 15_000
 const RECONNECT_MAX_DELAY_MS = 30_000
 /** 消息去重容量：环形丢弃最老的 uuid，防长直播内存增长 */
 const SEEN_MESSAGE_LIMIT = 2048
-
-// ===== varint 与属性表编解码 =====
-
-function encodeVarint(value: number): Buffer {
-  let rest = value >>> 0
-  const bytes: number[] = []
-  do {
-    let byte = rest & 0x7F
-    rest = Math.floor(rest / 128)
-    if (rest)
-      byte |= 0x80
-    bytes.push(byte)
-  } while (rest)
-  return Buffer.from(bytes)
-}
-
-interface Varint {
-  value: number
-  size: number
-}
-
-function readVarint(buffer: Buffer, offset = 0): Varint | null {
-  let value = 0
-  let scale = 1
-  for (let index = offset; index < buffer.length && index < offset + 5; index++) {
-    const byte = buffer[index]
-    value += (byte & 0x7F) * scale
-    if ((byte & 0x80) === 0)
-      return { value, size: index - offset + 1 }
-    scale *= 128
-  }
-  return null
-}
-
-function encodeBytes(value: string | number | Buffer): Buffer {
-  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value), 'utf8')
-  return Buffer.concat([encodeVarint(bytes.length), bytes])
-}
-
-/** 属性表编码：按 key 升序，跳过空值 */
-function encodeProperties(input: Record<number, string | number | Buffer>): Buffer {
-  const entries = Object.entries(input)
-    .filter(([, value]) => value !== undefined && value !== null && value !== '')
-    .map(([key, value]) => [Number(key), value] as const)
-    .sort(([left], [right]) => left - right)
-  const chunks: Buffer[] = [encodeVarint(entries.length)]
-  for (const [key, value] of entries) {
-    chunks.push(encodeVarint(key), encodeBytes(value))
-  }
-  return Buffer.concat(chunks)
-}
-
-function decodeProperties(body: Buffer): Map<number, Buffer> {
-  const count = readVarint(body)
-  if (!count)
-    throw new Error('聊天室属性表不完整')
-  let offset = count.size
-  const properties = new Map<number, Buffer>()
-  for (let index = 0; index < count.value; index++) {
-    const key = readVarint(body, offset)
-    const length = key ? readVarint(body, offset + key.size) : null
-    if (!key || !length)
-      throw new Error('聊天室属性条目不完整')
-    offset += key.size + length.size
-    if (offset + length.value > body.length)
-      throw new Error('聊天室属性内容越界')
-    properties.set(key.value, body.subarray(offset, offset + length.value))
-    offset += length.value
-  }
-  return properties
-}
-
-function text(buffer: Buffer | undefined): string {
-  return (buffer || Buffer.alloc(0)).toString('utf8').trim()
-}
-
-// ===== 帧编解码 =====
-
-interface WirePacket {
-  serviceId: number
-  commandId: number
-  serial: number
-  resultCode: number
-  body: Buffer
-}
-
-const EMPTY_BODY = Buffer.alloc(0)
-
-function makePacket(serviceId: number, commandId: number, serial: number, body: Buffer = EMPTY_BODY, tag = 0): Buffer {
-  const header = Buffer.allocUnsafe(5)
-  header[0] = serviceId
-  header[1] = commandId
-  header.writeInt16LE(serial, 2)
-  header[4] = tag
-  return Buffer.concat([encodeVarint(header.length + body.length), header, body])
-}
-
-function decodePacket(raw: Buffer, embedded = false): WirePacket {
-  const frameLength = readVarint(raw)
-  if (!frameLength || raw.length < frameLength.size + 5 || (!embedded && frameLength.value < 5))
-    throw new Error('聊天室数据帧不完整')
-  let offset = frameLength.size
-  const serviceId = raw[offset]
-  const commandId = raw[offset + 1]
-  const serial = raw.readInt16LE(offset + 2)
-  const tag = raw[offset + 4]
-  offset += 5
-
-  let resultCode = 200
-  if (tag & 2) {
-    if (offset + 2 > raw.length)
-      throw new Error('聊天室响应状态不完整')
-    resultCode = raw.readInt16LE(offset)
-    offset += 2
-  }
-
-  const end = embedded ? raw.length : Math.min(raw.length, frameLength.size + frameLength.value)
-  let body = raw.subarray(offset, end)
-  if (tag & 1) {
-    if (body.length < 4)
-      throw new Error('聊天室压缩帧不完整')
-    const expectedLength = body.readInt32LE(0)
-    body = zlib.inflateSync(body.subarray(4))
-    if (body.length !== expectedLength)
-      throw new Error('聊天室压缩帧长度不一致')
-  }
-  return { serviceId, commandId, serial, resultCode, body }
-}
-
-// ===== RC4 流加密（收发各持独立状态实例） =====
-
-class Rc4Stream {
-  private state = Uint8Array.from({ length: 256 }, (_, index) => index)
-  private x = 0
-  private y = 0
-
-  constructor(key: Buffer) {
-    if (!key.length)
-      throw new Error('聊天室加密密钥为空')
-    let cursor = 0
-    for (let index = 0; index < 256; index++) {
-      cursor = (cursor + this.state[index] + key[index % key.length]) & 0xFF
-      const swapped = this.state[index]
-      this.state[index] = this.state[cursor]
-      this.state[cursor] = swapped
-    }
-  }
-
-  apply(input: Buffer): Buffer {
-    const output = Buffer.allocUnsafe(input.length)
-    for (let index = 0; index < input.length; index++) {
-      this.x = (this.x + 1) & 0xFF
-      this.y = (this.y + this.state[this.x]) & 0xFF
-      const swapped = this.state[this.x]
-      this.state[this.x] = this.state[this.y]
-      this.state[this.y] = swapped
-      output[index] = input[index] ^ this.state[(this.state[this.x] + this.state[this.y]) & 0xFF]
-    }
-    return output
-  }
-}
 
 // ===== 登录包构造 =====
 
@@ -363,33 +210,13 @@ export class NimChatroomClient {
     )
   }
 
-  /** 握手包：i32LE(密钥版本) + RSA 分块加密的 [密钥 + 登录包] */
-  private makeHandshake(key: Buffer, enterPacket: Buffer): Buffer {
-    const publicKey = createPublicKey({
-      key: Buffer.from(RSA_PUBLIC_KEY_DER, 'base64'),
-      format: 'der',
-      type: 'spki',
-    })
-    const payload = Buffer.concat([encodeBytes(key), enterPacket])
-    const blocks: Buffer[] = []
-    for (let offset = 0; offset < payload.length; offset += 117) {
-      blocks.push(publicEncrypt({
-        key: publicKey,
-        padding: 1, // RSA_PKCS1_PADDING
-      }, payload.subarray(offset, offset + 117)))
-    }
-    const version = Buffer.allocUnsafe(4)
-    version.writeInt32LE(RSA_KEY_VERSION)
-    return makePacket(SERVICE_HANDSHAKE, CMD_HANDSHAKE, 0, Buffer.concat([version, ...blocks]))
-  }
-
   private async openConnection(): Promise<void> {
     const { account, roomId, nim } = this.options
     debug(`[nim-chatroom] 连接聊天室：房间=${roomId} 账号=${account} 身份=${nim.packageName}@${nim.sdkVersion}`)
     const address = await this.requestAddress()
     const key = randomBytes(16)
     const enterPacket = this.makeEnterPacket(pocketDeviceId())
-    const handshake = this.makeHandshake(key, enterPacket)
+    const handshake = makeHandshake(key, enterPacket)
     this.encryptor = new Rc4Stream(key)
     this.decryptor = new Rc4Stream(key)
     this.receiveBuffer = Buffer.alloc(0)
@@ -508,20 +335,13 @@ export class NimChatroomClient {
 
       // 上行合并帧（serviceId 4）内嵌真实数据包
       if (packet.serviceId === 4 && [1, 2, 10, 11].includes(packet.commandId) && packet.body.length > 8) {
-        const embedded = this.decodeEmbedded(packet.body.subarray(8))
+        const embedded = decodeEmbeddedPacket(packet.body.subarray(8))
         if (!embedded)
           continue
         packet = embedded
       }
       onFrame(packet)
     }
-  }
-
-  private decodeEmbedded(raw: Buffer): WirePacket | null {
-    const length = readVarint(raw)
-    if (!length || raw.length < length.size + 5)
-      return null
-    return decodePacket(raw, true)
   }
 
   private handleMessage(body: Buffer): void {

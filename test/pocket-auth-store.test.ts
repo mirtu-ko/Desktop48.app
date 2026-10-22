@@ -4,8 +4,9 @@
  *
  * 为什么盯这条：小房间频道 id 跨账号稳定，而消息列表接口不带暗号——
  * 解锁表若跟着上一个账号留到下一个账号，等于门禁白送。
- * 登录态里没有 userId，身份只能靠「脱敏手机号 + 昵称 + 凭证保存时刻」指纹判定，
- * 所以同账号重复刷新（指纹不变）绝不能误清，否则用户每次轮询都会被踢出小房间。
+ * 身份指纹取「脱敏手机号 + 昵称 + 凭证保存时刻」（userId 登录时才落盘、
+ * 旧凭证可能缺，不进指纹）：所以同账号重复刷新（指纹不变）绝不能误清，
+ * 否则用户每次轮询都会被踢出小房间。
  */
 import type { PocketAuthState } from '@preload/ipc-contract'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,6 +15,7 @@ const ACCOUNT_A: PocketAuthState = {
   loggedIn: true,
   nickname: '甲',
   avatar: '',
+  userId: '10001',
   mobileMasked: '139****0001',
   clientProfile: 'pocket48',
   plainFallback: false,

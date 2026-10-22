@@ -322,6 +322,8 @@ async function confirmClearBlockedMembers() {
   try {
     await ElMessageBox.confirm(`确定清空全部 ${blockedMembers.value.length} 个屏蔽成员？`, '清空屏蔽名单', {
       type: 'warning',
+      customClass: 'app-confirm',
+      modalClass: 'detail-card-overlay',
       confirmButtonText: '清空',
       cancelButtonText: '取消',
     })
@@ -358,8 +360,7 @@ const AREA_OPTIONS = [
 ]
 
 /**
- * 登录身份：本轮登录模拟哪个官方客户端。口袋48 与塞纳河48 在服务端是同一账号下的两个
- * 客户端会话，手机端在用口袋48 时选塞纳河48 即可两端并存、互不挤掉。
+ * 登录身份：本轮登录模拟哪个官方客户端（只影响请求头里的客户端身份）。
  * 档位随凭证落盘并对之后所有请求生效；换档需退出后重新登录。
  */
 const loginProfile = ref<PocketClientProfileId>(DEFAULT_POCKET_CLIENT_PROFILE)
@@ -438,6 +439,8 @@ async function confirmLogout() {
   try {
     await ElMessageBox.confirm('退出后直播互动消息将不可用，确定退出？', '退出登录', {
       type: 'warning',
+      customClass: 'app-confirm',
+      modalClass: 'detail-card-overlay',
       confirmButtonText: '退出',
       cancelButtonText: '取消',
     })

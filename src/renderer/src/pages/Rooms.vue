@@ -4,15 +4,16 @@
 
 import type { PocketRoom } from '@renderer/composables/use-pocket-rooms'
 import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
-import type { Component } from 'vue'
+import type { InputInstance } from 'element-plus'
+import type { Component, VNode } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
-import { ArrowRight, ChatDotRound, Close, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import { ArrowRight, ChatDotRound, Close, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
 import RoomEssenceDialog from '@renderer/components/rooms/RoomEssenceDialog.vue'
 import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
-import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 
+import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
@@ -21,10 +22,10 @@ import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
-import { useDebounceFn, useEventListener } from '@vueuse/core'
+import { useDebounceFn, useDocumentVisibility, useEventListener, useResizeObserver } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const {
@@ -65,10 +66,29 @@ const {
   loadMoreHistory,
   openSharedLive,
   isSharedLiveOnAir,
+
+  qchatStatus,
+  qchatHint,
+  qchatOptIn,
+  canSpeak,
+  connectRoomQChat,
+  disconnectRoomQChat,
+  sendBusy,
+  sendCooldownLeft,
+  replyTarget,
+  canReplyMessage,
+  canDeleteMessage,
+  startReply,
+  cancelReply,
+  sendMessage,
+  deleteOwnMessage,
 } = usePocketRooms()
 
 const router = useRouter()
 const route = useRoute()
+
+/** 页面可见性：窗口隐藏 / 最小化时暂停左列直播特效动画（见 .rooms-page.is-paused） */
+const docVisibility = useDocumentVisibility()
 
 /** 精华消息弹层是否打开 */
 const essenceOpen = ref(false)
@@ -111,7 +131,13 @@ async function togglePocketFollow() {
     const ok = await ElMessageBox.confirm(
       `确定在口袋账号取消关注「${room.nickname}」吗？`,
       '取消口袋关注',
-      { type: 'warning', confirmButtonText: '取消关注', cancelButtonText: '再想想' },
+      {
+        type: 'warning',
+        customClass: 'app-confirm',
+        modalClass: 'detail-card-overlay',
+        confirmButtonText: '取消关注',
+        cancelButtonText: '再想想',
+      },
     ).then(() => true).catch(() => false)
     if (!ok)
       return
@@ -549,6 +575,224 @@ watch(messages, (list) => {
     flashArrivals(appended.map(item => item.id))
 }, { flush: 'post' })
 
+// ===== 发言输入条（确认连接后在消息区底部常驻）=====
+/** 输入草稿；发送成功即清空 */
+const draft = ref('')
+const draftInput = ref<InputInstance | null>(null)
+
+/** 输入条可见条件：已登录 + 选中房间 + 消息就绪 + 不在小房间暗号锁定态。
+ * 连接状态不影响可见性——未连接也要把输入条摆出来，点它才引导连接。
+ * 房间禁言也不隐藏：要让用户看到「为什么说不了话」，而不是输入框凭空消失。
+ */
+const composerVisible = computed(() =>
+  loggedIn.value
+  && !!selectedRoom.value
+  && chatStatus.value === 'ready'
+  && !smallLocked.value,
+)
+
+/** 房主开了房间级禁言（room/info 的 userFunction.sendText === false） */
+const composerMuted = computed(() => composerVisible.value && !canSpeak.value)
+
+/** 禁言提示节流：反复点输入框时只每 3s 提示一次，不堆一屏 toast */
+let muteToastAt = 0
+
+/** 输入条可交互（不含连接状态）：未连接时点击它用于引导连接；禁言态直接不可交互 */
+const composerUsable = computed(() =>
+  composerVisible.value
+  && canSpeak.value
+  && !sendBusy.value
+  && sendCooldownLeft.value === 0,
+)
+
+/** 可发送：已确认连接 + 连接就绪 + 不在发送中 / 冷却中（主进程同口径限流是最终防线） */
+const canSend = computed(() =>
+  composerUsable.value
+  && qchatOptIn.value
+  && qchatStatus.value === 'connected',
+)
+
+/** 占位文案即状态：未连接时是「点击连接」的引导，连接后是连接状态与冷却倒数 */
+const composerPlaceholder = computed(() => {
+  if (!composerVisible.value)
+    return ''
+  // 禁言优先于连接状态：连接了也发不出去，别让文案引导用户去建连
+  if (composerMuted.value)
+    return '暂时不能发言'
+  if (sendBusy.value)
+    return '正在发送…'
+  if (sendCooldownLeft.value > 0)
+    return `发送冷却中（${Math.ceil(sendCooldownLeft.value / 1000)}s）…`
+  if (!qchatOptIn.value)
+    return '点击此处连接房间后发言'
+  if (qchatStatus.value === 'connecting')
+    return '正在连接房间…'
+  if (qchatStatus.value === 'reconnecting')
+    return qchatHint.value || '连接断开，正在重连…'
+  if (qchatStatus.value !== 'connected')
+    return qchatHint.value || '房间未连接，暂不能发言'
+  return '说点什么…'
+})
+
+/** 发送钮文案：发送中 / 冷却倒数 / 发送 */
+const sendButtonLabel = computed(() => {
+  if (sendBusy.value)
+    return '发送中'
+  if (sendCooldownLeft.value > 0)
+    return `${Math.ceil(sendCooldownLeft.value / 1000)}s`
+  return '发送'
+})
+
+/**
+ * 连接确认正文：一句前提 + 两条影响，拆成要点比整段说明更好扫读。
+ * 弹窗挂在 body 下，正文样式复用 app.scss 的 .app-confirm-body / .app-confirm-list。
+ */
+function connectConfirmBody(): VNode {
+  return h('div', { class: 'app-confirm-body' }, [
+    h('p', { class: 'app-confirm-lead' }, '发言需要以当前账号连接云信 IM。'),
+    h('ul', { class: 'app-confirm-list' }, [
+      h('li', '同一账号只允许一台设备在线'),
+      h('li', '连接后，手机或其他设备上正在登录的口袋48会被顶下线，需要重新打开'),
+    ]),
+  ])
+}
+
+/**
+ * 连接房间前的确认：发言必须以当前账号登录云信 IM，同账号只允许一台设备在线，
+ * 连接后手机（或其他设备）上的口袋48 会被顶下线。确认一次后本窗口内不再打扰。
+ */
+async function requestQChatConnection(): Promise<boolean> {
+  if (qchatOptIn.value)
+    return qchatStatus.value !== 'disconnected'
+  try {
+    await ElMessageBox.confirm(
+      connectConfirmBody(),
+      '连接房间',
+      {
+        type: 'warning',
+        customClass: 'app-confirm',
+        modalClass: 'detail-card-overlay',
+        confirmButtonText: '连接并发言',
+        cancelButtonText: '取消',
+      },
+    )
+  }
+  catch {
+    // 用户取消：保持未连接，房间消息仍可正常浏览（HTTP 轮询）
+    return false
+  }
+  const result = await connectRoomQChat()
+  if (!result.ok) {
+    ElMessage.error(result.message || '连接房间失败')
+    return false
+  }
+  draftInput.value?.focus()
+  return true
+}
+
+/** 禁言态点输入框：只解释原因，绝不发起 QChat 建连（建连会顶掉手机端，而这里本就发不出去） */
+function onMutedComposerClick(): void {
+  if (Date.now() - muteToastAt < 3000)
+    return
+  muteToastAt = Date.now()
+  ElMessage.info('房主已开启全员禁言，暂时不能发言')
+}
+
+/** 未连接时点输入框：先确认再连接，不吞掉用户的输入意图 */
+function onComposerClick(): void {
+  if (composerMuted.value) {
+    onMutedComposerClick()
+    return
+  }
+  if (!composerUsable.value || qchatOptIn.value)
+    return
+  void requestQChatConnection()
+}
+
+/** Enter 发送；组词中的 Enter 是拼音选字，不是确认 */
+function onDraftEnter(event: KeyboardEvent) {
+  if (event.isComposing)
+    return
+  void onSendClick()
+}
+
+/** 输入条上的「断开连接」：回到只看模式（不再顶手机），断开前二次确认 */
+async function onDisconnectClick(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '断开连接后回到只看模式，手机等其他设备不再被顶下线；房间消息仍通过 HTTP 轮询。',
+      '断开房间连接',
+      {
+        type: 'warning',
+        customClass: 'app-confirm',
+        modalClass: 'detail-card-overlay',
+        confirmButtonText: '断开',
+        cancelButtonText: '取消',
+      },
+    )
+  }
+  catch {
+    return
+  }
+  await disconnectRoomQChat()
+  ElMessage.success('已断开房间连接')
+}
+
+async function onSendClick() {
+  if (!composerUsable.value)
+    return
+  if (!canSend.value) {
+    // 未连接：先引导连接。连接成功后由用户再点一次发送，避免「确认完就误发」
+    if (!qchatOptIn.value)
+      void requestQChatConnection()
+    else if (qchatStatus.value !== 'connected')
+      ElMessage.info(qchatHint.value || '房间正在连接，请稍候')
+    return
+  }
+  const text = draft.value.trim()
+  if (!text)
+    return
+  const result = await sendMessage(text)
+  if (result.ok) {
+    draft.value = ''
+    return
+  }
+  if (result.message)
+    ElMessage.error(result.message)
+}
+
+/** 删除自己消息：破坏性操作二次确认，成功后本地摘除（主进程已删） */
+async function confirmDeleteOwn(message: PocketRoomMessageView) {
+  try {
+    await ElMessageBox.confirm('删除后所有人都看不到这条消息，确定删除吗？', '删除消息', {
+      type: 'warning',
+      customClass: 'app-confirm',
+      modalClass: 'detail-card-overlay',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  }
+  catch {
+    // 用户取消：安静退出，不弹错误
+    return
+  }
+  const result = await deleteOwnMessage(message)
+  if (result.ok)
+    ElMessage.success('消息已删除')
+  else
+    ElMessage.error(result.message || '删除失败')
+}
+
+// 输入条高度联动「新消息浮标」：浮标贴在输入条上方，不挡住发送钮
+const composerRef = ref<HTMLElement | null>(null)
+const composerHeight = ref(0)
+useResizeObserver(composerRef, (entries) => {
+  composerHeight.value = entries[0]?.contentRect.height ?? 0
+})
+const newMsgFloatStyle = computed(() => ({
+  bottom: `${12 + (composerVisible.value ? composerHeight.value : 0)}px`,
+}))
+
 // ===== 复制（hover 按钮 + 右键菜单）=====
 /** 右键菜单的定位与目标消息；null = 未打开 */
 const menu = ref<{ x: number, y: number, message: PocketRoomMessageView } | null>(null)
@@ -561,11 +805,35 @@ const COPY_ITEMS: Record<PocketRoomCopyKey, { label: string, icon: Component }> 
   video: { label: '复制视频链接', icon: VideoCamera },
 }
 
-function copyMenuItems(message: PocketRoomMessageView) {
+/** 右键菜单项：danger 只影响配色（删除是破坏性操作，与普通动作分开） */
+interface RoomMenuItem {
+  key: string
+  label: string
+  icon: Component
+  danger?: boolean
+}
+
+function copyMenuItems(message: PocketRoomMessageView): RoomMenuItem[] {
   return pocketRoomCopyTargets(message).map(item => ({ key: item.key, ...COPY_ITEMS[item.key] }))
 }
 
-const menuItems = computed(() => (menu.value ? copyMenuItems(menu.value.message) : []))
+/**
+ * 右键菜单全量项：回复 → 复制 → 删除。
+ * 回复 / 删除的 eligibility 在归一层（canReplyMessage / canDeleteMessage）：
+ * 别人发的文本类消息可回复，自己发的才可删（服务端也只允许删自己的）。
+ */
+const menuItems = computed<RoomMenuItem[]>(() => {
+  const target = menu.value
+  if (!target)
+    return []
+  const items: RoomMenuItem[] = []
+  if (canReplyMessage(target.message))
+    items.push({ key: 'reply', label: '回复', icon: ChatDotRound })
+  items.push(...copyMenuItems(target.message))
+  if (canDeleteMessage(target.message))
+    items.push({ key: 'delete', label: '删除', icon: Delete, danger: true })
+  return items
+})
 
 /** hover 复制按钮的文案；空串 = 这条没有可复制内容，按钮不渲染（如系统通知、投票） */
 function copyHint(message: PocketRoomMessageView): string {
@@ -593,7 +861,8 @@ function copyPrimary(message: PocketRoomMessageView) {
 }
 
 function openMessageMenu(event: MouseEvent, message: PocketRoomMessageView) {
-  if (!pocketRoomCopyTargets(message).length)
+  // 没有可回复 / 可复制 / 可删除的动作时不弹菜单（系统通知、投票等）
+  if (!canReplyMessage(message) && !canDeleteMessage(message) && !pocketRoomCopyTargets(message).length)
     return
   menu.value = { x: event.clientX, y: event.clientY, message }
 }
@@ -605,8 +874,18 @@ function closeMenu() {
 function onMenuPick(key: string) {
   const target = menu.value
   menu.value = null
-  if (target)
-    void runCopy(key as PocketRoomCopyKey, target.message)
+  if (!target)
+    return
+  if (key === 'reply') {
+    startReply(target.message)
+    void nextTick(() => draftInput.value?.focus())
+    return
+  }
+  if (key === 'delete') {
+    void confirmDeleteOwn(target.message)
+    return
+  }
+  void runCopy(key as PocketRoomCopyKey, target.message)
 }
 
 // 页面切走（keep-alive 只停用不销毁）：右键菜单挂在 body 上，不关会盖住别的页面
@@ -738,7 +1017,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page-root rooms-page">
+  <div class="page-root rooms-page" :class="{ 'is-paused': docVisibility === 'hidden' }">
     <!-- 未登录：居中登录卡片（房间依赖账号关注关系） -->
     <div v-if="!loggedIn && !loading" class="gate">
       <div class="gate-card frosted-surface">
@@ -837,8 +1116,15 @@ onMounted(() => {
               <span class="room-avatar">
                 <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
                 <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
-                <span v-if="room.live" class="room-live-badge">LIVE</span>
-                <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角，与右下 LIVE 点错开 -->
+                <!-- 开播状态：头像边缘呼吸光环（见 .room-live-badge），不再占头像右下角 -->
+                <span v-if="room.live" class="room-live-badge" aria-label="直播中" />
+                <!-- 开播伴生：头像内底部均衡器跳动（同 .room-live-badge 一起表达「正在直播」） -->
+                <span v-if="room.live" class="room-eq" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角保持未读红点；开播呼吸光环只绕头像外周，不抢这个角 -->
                 <span
                   v-if="unreadCountOf(room.userId)"
                   class="unread-badge room-unread"
@@ -1036,7 +1322,7 @@ onMounted(() => {
                   </div>
                   <div
                     class="msg-row"
-                    :class="[`msg-row--${message.kind}`, { 'msg-row--member': message.isMember, 'is-arriving': arrivingIds.has(message.id) }]"
+                    :class="[`msg-row--${message.kind}`, { 'msg-row--member': message.isMember, 'msg-row--member-reply': message.isMember && message.quote && message.kind !== 'flip', 'is-arriving': arrivingIds.has(message.id) }]"
                     @contextmenu.prevent="openMessageMenu($event, message)"
                   >
                     <template v-if="message.kind === 'system'">
@@ -1314,15 +1600,82 @@ onMounted(() => {
                 </template>
               </div>
 
+              <!-- 发言输入条：房间就绪后常驻消息区底部。默认不连接云信（只看不挤手机），
+                   点输入框先确认「会挤掉其他登录端」，确认后才建连；回复态在输入行上方显示引用摘要 -->
+              <div v-if="composerVisible" ref="composerRef" class="chat-composer">
+                <div v-if="replyTarget" class="composer-reply">
+                  <span class="composer-reply-name">回复 {{ replyTarget.senderName }}</span>
+                  <span class="composer-reply-text">{{ replyTarget.text || '消息' }}</span>
+                  <button
+                    type="button"
+                    class="composer-reply-close"
+                    title="取消回复"
+                    aria-label="取消回复"
+                    @click="cancelReply"
+                  >
+                    <el-icon :size="12">
+                      <Close />
+                    </el-icon>
+                  </button>
+                </div>
+                <div class="composer-row">
+                  <el-button
+                    v-if="qchatOptIn"
+                    class="composer-disconnect"
+                    text
+                    size="small"
+                    type="danger"
+                    title="断开连接（回到只看模式，不再顶手机）"
+                    :disabled="sendBusy"
+                    @click="onDisconnectClick"
+                  >
+                    断开连接
+                  </el-button>
+                  <el-input
+                    ref="draftInput"
+                    v-model="draft"
+                    class="composer-input"
+                    :class="{ 'is-muted': composerMuted }"
+                    :placeholder="composerPlaceholder"
+                    :readonly="!canSend"
+                    maxlength="500"
+                    clearable
+                    @click="onComposerClick"
+                    @keyup.enter="onDraftEnter"
+                  >
+                    <!-- 禁言状态合并进输入框：即使草稿仍占着 placeholder，左侧标记也能持续说明原因 -->
+                    <template #prefix>
+                      <span v-if="composerMuted" class="composer-muted-mark">
+                        <el-icon :size="12">
+                          <Lock />
+                        </el-icon>
+                        全员禁言
+                      </span>
+                    </template>
+                  </el-input>
+                  <el-button
+                    class="composer-send"
+                    type="primary"
+                    round
+                    :loading="sendBusy"
+                    :disabled="!composerUsable"
+                    @click="onSendClick"
+                  >
+                    {{ sendButtonLabel }}
+                  </el-button>
+                </div>
+              </div>
+
               <footer v-if="statusText" class="main-foot">
                 {{ statusText }}
               </footer>
 
-              <!-- 上翻历史时收到新消息的浮标：点击回底 -->
+              <!-- 上翻历史时收到新消息的浮标：点击回底（贴在输入条上方，见 newMsgFloatStyle） -->
               <button
                 v-if="newCount > 0 && !atBottom"
                 type="button"
                 class="new-msg-float"
+                :style="newMsgFloatStyle"
                 @click="scrollToBottom"
               >
                 <el-icon :size="12">
@@ -1745,23 +2098,149 @@ onMounted(() => {
   font-size: 16px;
 }
 
-/* 开播角标：贴在头像右下角的 LIVE 小点 */
+/* 开播状态：头像边缘一圈呼吸光环，替代原本右下角的 LIVE 小点。
+ * 光环不占头像角落，未读角标照旧贴头像右上角，两者不再互相挤压。
+ * 动画只动 opacity / transform（合成器线程）：环本体呼吸，::after 外扩柔光脉冲；
+ * 柔光的静态 box-shadow 随提层烘焙，缩放不触发重绘 */
 .room-live-badge {
   position: absolute;
-  right: -3px;
-  bottom: -2px;
-  padding: 0 4px;
-  border-radius: var(--radius-pill);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 14px;
-  color: #fff;
-  background: var(--color-lives);
-  box-shadow: 0 0 0 2px var(--el-bg-color);
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--color-lives);
+  pointer-events: none;
+  will-change: opacity;
+  animation: room-live-breathe 2.4s ease-in-out infinite;
+
+  &::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    box-shadow: 0 0 6px 2px color-mix(in srgb, var(--color-lives) 45%, transparent);
+    will-change: transform, opacity;
+    animation: room-live-pulse 2.4s ease-in-out infinite;
+  }
 }
 
-/* 未读数字角标：贴在头像右上角（LIVE 点在右下角，两者不打架）；
- * 外观走全局 .unread-badge，这里只给落点与外描边（把角标从头像上抬出来） */
+@keyframes room-live-breathe {
+  0%,
+  100% {
+    opacity: 0.8;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes room-live-pulse {
+  0%,
+  100% {
+    transform: scale(0.9);
+    opacity: 0.9;
+  }
+
+  50% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .room-live-badge {
+    animation: none;
+
+    &::after {
+      display: none;
+    }
+  }
+}
+
+/* 开播伴生：头像底部一汪同色氛围光，衬托均衡器条。
+ * 静态径向渐变（不提层、不参与动画），随圆裁切；底部浓芯、向上快速衰减 */
+.room-item.is-live .room-avatar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    95% 75% at 50% 118%,
+    color-mix(in srgb, var(--color-lives) 85%, transparent) 0%,
+    color-mix(in srgb, var(--color-lives) 45%, transparent) 38%,
+    transparent 74%
+  );
+  pointer-events: none;
+}
+
+/* 开播伴生：头像内底部均衡器——几根小竖条此起彼伏跳动，一眼传达「正在直播」 */
+.room-eq {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 10px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  /* 氛围光是头像 ::after（树序更靠后），条形需显式提层压在其上 */
+  z-index: 1;
+
+  i {
+    display: block;
+    width: 2px;
+    /* 固定满高度，跳动全靠 scaleY（transform 合成，不触发重排）；
+     * scaleY(0.4) ≈ 原 height 4px / 10px，逐帧观感一致 */
+    height: 10px;
+    border-radius: 1px;
+    /* 均衡器与外围呼吸光环同色（--color-lives），开播状态整体同一种语义色 */
+    background: var(--color-lives);
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+    transform-origin: bottom;
+    will-change: transform;
+    animation: room-eq-bounce 0.8s ease-in-out infinite;
+
+    &:nth-child(2) {
+      animation-delay: -0.25s;
+    }
+
+    &:nth-child(3) {
+      animation-delay: -0.5s;
+    }
+  }
+}
+
+@keyframes room-eq-bounce {
+  0%,
+  100% {
+    transform: scaleY(0.4);
+  }
+
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .room-eq i {
+    animation: none;
+    /* 静态中等高度（≈ 原 6px），不跳动 */
+    transform: scaleY(0.6);
+  }
+}
+
+/* 页面不可见（窗口最小化 / 被遮挡）时暂停整页直播特效：
+ * animation-play-state 在合成器线程生效，主线程零成本，恢复可见后无缝续播 */
+.rooms-page.is-paused {
+  .room-live-badge,
+  .room-live-badge::after,
+  .room-eq i {
+    animation-play-state: paused;
+  }
+}
+
+/* 未读数字角标：贴在头像右上角；开播时头像外圈是呼吸光环（.room-live-badge），
+ * 红点叠在光环一角仍清晰可读。外观走全局 .unread-badge，这里只给落点与外描边 */
 .room-unread {
   position: absolute;
   top: -5px;
@@ -2242,6 +2721,8 @@ onMounted(() => {
   /* 礼物金：底色保持淡金，文字压深一半 —— 原 #ffd479 / #e8b84b 是深底弹幕沿用的亮金，
    * 叠在浅色底上只有 1.4:1 / 1.9:1，粉丝送礼的昵称与正文基本读不出来 */
   --msg-gift-ink: color-mix(in srgb, var(--el-color-warning) 50%, #000);
+  /* 回复类正文：正文色与次级灰的中点，比成员原创弱一档，但仍过 AA（约 4.5:1） */
+  --msg-reply-ink: color-mix(in srgb, var(--el-text-color-regular) 62%, var(--el-text-color-secondary));
   /* 到达高亮时长由页面按 ARRIVE_FLASH_MS 注入：动画与类的移除同一节拍 */
   --arrive-flash: 1200ms;
 }
@@ -2397,7 +2878,8 @@ onMounted(() => {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--el-text-color-regular);
+  /* 普通用户正文整梯下移一档，把「正文色」那一格让给成员回复类（见 --msg-reply-ink） */
+  color: color-mix(in srgb, var(--el-text-color-regular) 88%, var(--el-text-color-secondary));
   background: var(--el-fill-color-light);
 }
 
@@ -2414,10 +2896,26 @@ onMounted(() => {
     color: var(--color-rooms);
   }
 
+  /* 成员（xox）普通文字消息：相比普通用户气泡再微提一层，正文用主色、底色与描边更实。
+   * 回复/引用类消息看 .msg-row--member-reply，不套这份强化 */
   .msg-bubble:not(.msg-bubble--media) {
     color: var(--el-text-color-primary);
-    background: color-mix(in srgb, var(--color-rooms) 12%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 30%, transparent);
+    background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 40%, transparent);
+  }
+}
+
+/* 成员回复/引用类消息：顺着别人话题回的次要消息，比成员原创、也比普通用户发言弱一档
+ * （中间色 + 更淡底 + 去掉描边）。字色不再用纯次级灰——那档只有约 3:1，读不清 */
+.msg-row--member-reply {
+  .msg-nick {
+    color: var(--msg-reply-ink);
+  }
+
+  .msg-bubble:not(.msg-bubble--media) {
+    color: var(--msg-reply-ink);
+    background: var(--el-fill-color-lighter);
+    box-shadow: none;
   }
 }
 
@@ -2902,5 +3400,99 @@ onMounted(() => {
   border-top: 1px solid var(--el-border-color-lighter);
   font-size: 11px;
   color: var(--el-text-color-secondary);
+}
+
+/* 发言输入条：房间就绪后常驻消息区底部（与 .main-foot 互斥出现：后者只在加载/错误态）。
+ * 禁用态不置灰整条——占位文案即连接状态（正在连接 / 重连中 / 未连接原因），
+ * 用户要能看到「为什么发不了」，而不是面对一个灰掉的输入框猜原因 */
+.chat-composer {
+  flex: none;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+/* 回复态摘要：被回复者昵称 + 内容一行省略，取消钮靠右 */
+.composer-reply {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  font-size: 12px;
+  background: var(--el-fill-color-lighter);
+}
+
+.composer-reply-name {
+  flex: none;
+  font-weight: 600;
+  /* 房间语义色（与页签 / 图标同一支），不用品牌紫 */
+  color: var(--color-rooms);
+}
+
+.composer-reply-text {
+  overflow: hidden;
+  min-width: 0;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--el-text-color-secondary);
+}
+
+.composer-reply-close {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  margin-left: auto;
+  padding: 2px;
+  border: none;
+  border-radius: var(--radius-xs);
+  color: var(--el-text-color-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+
+  &:hover {
+    color: var(--el-text-color-primary);
+    background: var(--el-fill-color);
+  }
+}
+
+/* 禁言态与输入框合并：锁定标记常驻在输入框内，警告色只落在这一处 */
+.composer-input.is-muted :deep(.el-input__wrapper) {
+  background: var(--el-color-warning-light-9);
+  box-shadow: 0 0 0 1px var(--el-color-warning-light-5) inset;
+}
+
+.composer-input.is-muted :deep(.el-input__inner),
+.composer-input.is-muted :deep(.el-input__inner::placeholder) {
+  color: var(--el-color-warning-dark-2);
+}
+
+.composer-muted-mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  padding-right: 8px;
+  border-right: 1px solid var(--el-color-warning-light-5);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--el-color-warning-dark-2);
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 发送钮定宽：文案在「发送 / 发送中 / 冷却倒数」之间切换，宽度跳变会抖 */
+.composer-send {
+  flex: none;
+  min-width: 64px;
 }
 </style>

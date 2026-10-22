@@ -1041,6 +1041,196 @@ body,
   white-space: nowrap;
 }
 
+/* ===== 确认弹窗共用（ElMessageBox） =====
+ * 全项目的 ElMessageBox 二次确认都走这一套：蒙版直接复用 .detail-card-overlay，
+ * 圆角 / 投影 / 标题药丸沿用卡片与 .section-title 的配方。用法：
+ *   ElMessageBox.confirm(message, title, {
+ *     customClass: 'app-confirm',
+ *     modalClass: 'detail-card-overlay',
+ *   })
+ * 主题色由 --confirm-accent 注入，缺省品牌紫：图标徽章、标题药丸、顶部氛围光都跟着它走 */
+.el-message-box.app-confirm {
+  --confirm-accent: var(--brand-primary);
+
+  max-width: 420px;
+  padding: 0;
+  border-radius: var(--radius-card);
+  box-shadow:
+    0 28px 64px -20px color-mix(in srgb, var(--confirm-accent) 40%, transparent),
+    var(--shadow-lg);
+  overflow: hidden;
+
+  /* 顶部氛围光：卡面不靠描边分层，靠这层主题色光晕拉开层次 */
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 96px;
+    background: radial-gradient(
+      120% 100% at 15% 0%,
+      color-mix(in srgb, var(--confirm-accent) 14%, transparent),
+      transparent 72%
+    );
+    pointer-events: none;
+  }
+
+  /* 右侧留出关闭钮的位置 */
+  .el-message-box__header {
+    position: relative;
+    padding: 22px 48px 0 24px;
+  }
+
+  /* 标题前的主题色药丸：与 .section-title 同一造型 */
+  .el-message-box__title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 22px;
+    color: var(--el-text-color-primary);
+
+    &::before {
+      content: '';
+      flex: none;
+      width: 3px;
+      height: 14px;
+      border-radius: var(--radius-pill);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--confirm-accent) 60%, #fff), var(--confirm-accent));
+      box-shadow: 0 0 8px color-mix(in srgb, var(--confirm-accent) 35%, transparent);
+    }
+  }
+
+  /* 关闭钮：圆形，悬停转 90° 并转危险色（与详情卡片的关闭钮同一手感） */
+  .el-message-box__headerbtn {
+    top: 18px;
+    right: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 14px;
+    transition:
+      background-color 0.2s ease,
+      transform 0.25s ease;
+
+    .el-message-box__close {
+      color: var(--el-text-color-secondary);
+      transition: color 0.2s ease;
+    }
+
+    &:hover {
+      background: var(--el-fill-color);
+      transform: rotate(90deg);
+
+      .el-message-box__close {
+        color: var(--el-color-danger);
+      }
+    }
+  }
+
+  .el-message-box__content {
+    position: relative;
+    padding: 16px 24px 0;
+    font-size: 13px;
+    color: var(--el-text-color-regular);
+  }
+
+  /* 多行正文从图标顶部对齐，不随行数上下居中 */
+  .el-message-box__container {
+    align-items: flex-start;
+  }
+
+  /* 语义图标做成圆形磁贴：底色与描边取图标自身的语义色，不另设色号。
+   * 上移 4px 让圆心对齐首行文字中线（磁贴 32px，正文行高 24px） */
+  .el-message-box__status {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-top: -4px;
+    border-radius: 50%;
+    font-size: 18px;
+    background: color-mix(in srgb, currentcolor 13%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentcolor 26%, transparent);
+  }
+
+  .el-message-box__message {
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .el-message-box__btns {
+    padding: 22px 24px;
+    gap: 10px;
+
+    .el-button {
+      min-width: 92px;
+      margin-left: 0;
+      border-radius: var(--radius-sm);
+    }
+
+    /* 取消走描边次级按钮，画面留给品牌渐变主按钮 */
+    .el-button:not(.el-button--primary) {
+      color: var(--el-text-color-regular);
+      border-color: var(--el-border-color);
+      background: var(--el-bg-color);
+
+      &:hover {
+        color: var(--brand-primary);
+        border-color: color-mix(in srgb, var(--brand-primary) 40%, transparent);
+        background: var(--el-color-primary-light-9);
+      }
+    }
+  }
+}
+
+/* 确认弹窗正文：引导句 + 要点列表。弹窗挂在 body 下，类名只能写在全局样式里 */
+.app-confirm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.app-confirm-lead {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.app-confirm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  list-style: none;
+  background: var(--el-fill-color-lighter);
+
+  li {
+    position: relative;
+    padding-left: 14px;
+    line-height: 1.6;
+    color: var(--el-text-color-regular);
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0.68em;
+      left: 3px;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--brand-primary) 60%, transparent);
+    }
+  }
+}
+
 /* ===== 主题色渐变图标磁贴（设置行 / 下载中心等共用） =====
  * 深色底白字款：颜色由 --tile-color 注入，尺寸/圆角/图标字号按需覆写 */
 .icon-tile {

@@ -40,7 +40,8 @@ else {
 
   // Umami 上报：
   // hash 路由（数据范围详见 utils/umami.ts 头注释）；afterEach 对首次导航同样触发
-  router.afterEach(to => trackPage(to.fullPath))
+  // referrer 取 from.fullPath（上一页 hash 路由），无上一页时 trackPage 内部保持空串
+  router.afterEach((to, from) => trackPage(to.fullPath, from.fullPath))
 
   // 设置页跳转的全局 Router：开播校验等在组件之外触发（stores/float-players.ts 的
   // openLive），拿不到组件实例上的 $router，只能由这里安装一次

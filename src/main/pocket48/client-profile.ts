@@ -10,10 +10,12 @@ import { SafeJSONFileSync } from '../safe-json-file-sync'
 /**
  * 口袋系客户端的设备身份与请求特征，**唯一来源**（pocket-auth 与 nim-chatroom 共用）。
  *
- * 客户端档位（用户可选，2026-10-17）：`POCKET_CLIENT_PROFILES` 是「档位 → 特征」的唯一映射，
+ * 客户端档位（用户可选）：`POCKET_CLIENT_PROFILES` 是「档位 → 特征」的唯一映射，
  * 档位 id 与展示文案见 `common/pocket-client-profile.ts`。用户在登录时选定档位，档位随凭证落盘，
- * 此后主进程所有请求按该档发头——口袋48 与塞纳河48 在服务端是同一账号下的两个客户端会话，
- * 手机在用口袋48 时桌面选塞纳河48 即可两端并存、互不挤掉。
+ * 此后主进程所有请求按该档发头。
+ *
+ * 档位只是**客户端指纹**，不改变账号身份：两档用同一个 pocketapi 账号取凭据，
+ * 拿到的 `accid` 与 `userId` 完全相同。
  *
  * 平台分档现状：口袋主 App 已切到 v2 登录域并与 seine / 云信统一为
  * **Android** 档，v2 验证码登录实测成功：
