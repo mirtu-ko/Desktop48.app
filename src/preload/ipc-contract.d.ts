@@ -99,6 +99,37 @@ export interface FfmpegDownloadProgress {
   total: number
 }
 
+// ===== 房间相册批量下载 =====
+
+/** 一张待下载图片；尺寸来自消息体，0 / 缺省表示未知（主进程下载后识别） */
+export interface RoomAlbumDownloadSource {
+  url: string
+  width?: number
+  height?: number
+  /** 消息时间（ms），用于生成可读文件名 */
+  msgTime?: number
+  /** 发送者昵称，用于生成可读文件名 */
+  nickname?: string
+}
+
+/** 逐张处理进度（对端：main/pocket48/room-album-download.ts） */
+export interface RoomAlbumDownloadProgress {
+  processed: number
+  total: number
+  downloaded: number
+  skipped: number
+  failed: number
+}
+
+/** 批量下载结果；canceled=true 表示用户在目录选择器里取消了保存 */
+export interface RoomAlbumDownloadResult {
+  canceled: boolean
+  directory: string
+  downloaded: number
+  skipped: number
+  failed: number
+}
+
 // ===== 播放 =====
 
 /** createLiveStream 返回：本地 HTTP-FLV 播放地址（对端：main/stream.ts） */
@@ -446,6 +477,8 @@ interface StaticIpcInvokeMap {
   openPath: InvokeSpec<[filePath: string], void>
   selectDirectory: InvokeSpec<[], string | null>
   pathJoin: InvokeSpec<[...paths: string[]], string>
+  /** 打开一次目录选择器，随后把相册图片逐张写入所选目录（对端：main/pocket48/room-album-download.ts） */
+  roomAlbumDownload: InvokeSpec<[sources: RoomAlbumDownloadSource[], filterSmall: boolean], RoomAlbumDownloadResult>
   /** FFmpeg 环境状态：省略 dir 时校验当前生效配置，传入时校验指定目录（选择/下载后的即时校验） */
   getFfmpegStatus: InvokeSpec<[dir?: string], FfmpegStatus>
   downloadFfmpeg: InvokeSpec<[], string>
@@ -602,6 +635,8 @@ type TaskEventMap = {
 
 export type IpcEventMap = {
   ffmpegDownloadProgress: [progress: FfmpegDownloadProgress]
+  /** 相册批量下载逐张进度，仅回推发起窗口 */
+  roomAlbumDownloadProgress: [progress: RoomAlbumDownloadProgress]
   windowOnMaximizeChange: [isMaximized: boolean]
   /** 主进程转发：独立播放窗报告某直播已下架，主窗口据此刷新列表（对端：main/float-window.ts） */
   liveUnavailable: [liveId: string]

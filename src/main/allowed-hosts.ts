@@ -7,8 +7,9 @@ const ALLOWED_HOSTS = new Set([
   'live.48.cn',
 ])
 
-// 直播/点播的媒体域名由接口动态下发，无法枚举，按域名后缀兜底
-const ALLOWED_HOST_SUFFIXES = ['.48.cn', '.snh48.com']
+// 直播/点播/房间图片域名由接口动态下发，无法枚举，按域名后缀兜底。
+// yunxinsvr.com 是网易云信媒体 CDN（房间图片 / 音视频），实际子域随上传节点变化。
+const ALLOWED_HOST_SUFFIXES = ['.48.cn', '.snh48.com', '.yunxinsvr.com']
 
 /** rtmp:// 拉流域名的动态下发后缀（与 HTTP 白名单分开维护：拉流走 RTMP 协议，域名体系不同） */
 const ALLOWED_RTMP_SUFFIXES = ['.48.cn', '.snh48.com']

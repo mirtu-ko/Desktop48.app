@@ -17,12 +17,14 @@ describe('isAllowedUrl', () => {
   it('按域名后缀放行动态下发的媒体域名', () => {
     expect(isAllowedUrl('https://al.hls.xiaoka.48.cn/stream.m3u8')).toBe(true)
     expect(isAllowedUrl('https://cdn.example.snh48.com/v.mp4')).toBe(true)
+    expect(isAllowedUrl('https://kd48-nosdn.yunxinsvr.com/NDA5MzEwOA==/image')).toBe(true)
   })
 
   it('拒绝外部域名', () => {
     expect(isAllowedUrl('https://evil.com/api')).toBe(false)
     // 后缀匹配必须以 .48.cn 结尾，而不是包含 48.cn
     expect(isAllowedUrl('https://48.cn.evil.com/api')).toBe(false)
+    expect(isAllowedUrl('https://yunxinsvr.com.evil.com/image')).toBe(false)
   })
 
   it('拒绝非 http/https 协议', () => {
@@ -43,6 +45,7 @@ describe('isAllowedStreamUrl（ffmpeg 输入地址校验）', () => {
 
   it('放行 http/https 回放与录制源（与 netRequest 同一套 HTTP 白名单）', () => {
     expect(isAllowedStreamUrl('https://al.hls.xiaoka.48.cn/stream.m3u8')).toBe(true)
+    expect(isAllowedStreamUrl('https://kd48-nosdn.yunxinsvr.com/NDA5MzEwOA==/video')).toBe(true)
     expect(isAllowedStreamUrl('http://ts.48.cn/live/123/playlist.m3u8')).toBe(true)
   })
 
