@@ -34,9 +34,9 @@ describe('useDanmakuLayer 字号', () => {
     expect(fontSize.value).toBe(17)
   })
 
-  it('超大画面 clamp 到 20px 上限', () => {
+  it('超大画面 clamp 到 18px 上限', () => {
     const { fontSize } = setup(makeRect(1920, 1080))
-    expect(fontSize.value).toBe(20)
+    expect(fontSize.value).toBe(18)
   })
 
   it('小画面 clamp 到 12px 下限', () => {
@@ -74,5 +74,14 @@ describe('useDanmakuLayer 定位', () => {
   it('渲染区未就绪：left/bottom 走兜底，不注入 width（由 CSS 兜底宽度）', () => {
     const { position } = setup(null)
     expect(position.value).toEqual({ left: '12px', bottom: '46px' })
+  })
+
+  it('支持注入额外最大宽度', () => {
+    const layer = useDanmakuLayer({
+      videoRect: () => makeRect(1000, 800),
+      compact: () => false,
+      maxWidth: () => '33vw',
+    })
+    expect(layer.position.value.maxWidth).toBe('33vw')
   })
 })

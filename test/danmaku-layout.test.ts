@@ -16,16 +16,16 @@ function layout(rect: DanmakuLayerRect | null, placement: 'video' | 'left' = 'vi
 describe('computeDanmakuLayout', () => {
   it('横屏按短边取字号，宽度铺满画面渲染区', () => {
     const result = layout(LANDSCAPE)
-    expect(result.fontSize).toBe(20)
+    expect(result.fontSize).toBe(18)
     expect(result.width).toBe('1920.0px')
     expect(result.left).toBe('12.0px')
     expect(result.bottom).toBe('46.0px')
   })
 
   it('竖屏字号按宽度缩放，不因高度撑满而顶到上限', () => {
-    // 短边 427 × 0.033 ≈ 14px：按高度算会是 25 → 被 20 上限截住，相对画面大一圈
+    // 短边 427 × 0.033 ≈ 14px：按高度算会是 25 → 被 18 上限截住，相对画面大一圈
     expect(layout(PORTRAIT_WINDOW).fontSize).toBe(14)
-    expect(layout(PORTRAIT).fontSize).toBe(20)
+    expect(layout(PORTRAIT).fontSize).toBe(18)
   })
 
   it('左侧栏贴屏幕最左，宽度铺满屏幕（不按黑边收窄）', () => {

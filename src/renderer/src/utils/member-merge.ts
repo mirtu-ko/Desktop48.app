@@ -67,6 +67,11 @@ export interface MemberDetail {
   /** ===== 以下仅 allmembers 提供 ===== */
   /** 总选举排名（'0' 表示无排名） */
   ranking: string
+  /**
+   * 排名所属年份：只有本地总选表（utils/member-ranking.ts）能给出。
+   * 官网名单的 `ranking` 不带年份，所以两个来源混用时这里可能为空。
+   */
+  rankingYear?: number
   /** 经历（接口用 <br> 分行） */
   experience: string
   catchPhrase: string
@@ -91,6 +96,8 @@ export interface MemberTreeLike {
 /** 树叶子节点（starInfo 全量字段的 spread） */
 interface TreeMemberLike {
   userId?: number | string
+  /** 队伍 id：详情接口必填参数，也是兼任记录归位的依据 */
+  teamId?: number | string
   realName?: string
   nickname?: string
   avatar?: string

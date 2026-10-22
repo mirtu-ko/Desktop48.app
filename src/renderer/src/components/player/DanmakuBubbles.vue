@@ -110,7 +110,7 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
   align-items: flex-start;
   gap: 0.4em;
   max-width: 100%;
-  padding: 0.4em 0.6em;
+  padding: 4px 0.6em;
   border-radius: 1.33em;
   background: var(--player-glass-bg);
   box-shadow: inset 0 0 0 1px var(--player-glass-ring);
@@ -171,6 +171,7 @@ function onEmoteError(item: DanmakuOverlayItem, index: number) {
 /* 迷你窗：气泡更紧凑 */
 .danmaku-bubbles.is-compact {
   gap: 0.4em;
+  padding: 3px 0.6em;
 }
 
 /* 作者名色调按消息类型区分（布局走全局 .danmaku-author）：

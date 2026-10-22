@@ -41,7 +41,7 @@ export function computeDanmakuLayout(
   options: { compact: boolean, placement: DanmakuPlacement },
 ): DanmakuLayerLayout {
   const { compact, placement } = options
-  const [min, max] = compact ? [10, 14] : [12, 20]
+  const [min, max] = compact ? [10, 14] : [12, 18]
   const shortSide = rect ? Math.min(rect.width, rect.height) : 0
   const fontSize = Math.min(max, Math.max(min, Math.round(shortSide * FONT_RATIO)))
 
@@ -92,6 +92,8 @@ export function useDanmakuLayer(options: {
   videoRect: () => DanmakuLayerRect | null
   compact: () => boolean
   placement?: () => DanmakuPlacement
+  /** 额外宽度上限（CSS 长度）；不传则沿用布局自身的 width */
+  maxWidth?: () => string | undefined
 }) {
   const { videoRect, compact } = options
 
@@ -101,11 +103,15 @@ export function useDanmakuLayer(options: {
   }))
 
   const fontSize = computed(() => layout.value.fontSize)
-  const position = computed(() => ({
-    left: layout.value.left,
-    bottom: layout.value.bottom,
-    width: layout.value.width,
-  }))
+  const position = computed(() => {
+    const maxWidth = options.maxWidth?.()
+    return {
+      left: layout.value.left,
+      bottom: layout.value.bottom,
+      width: layout.value.width,
+      ...(maxWidth ? { maxWidth } : {}),
+    }
+  })
   const canFloatLeft = computed(() => layout.value.canFloatLeft)
   const floating = computed(() => layout.value.floating)
 

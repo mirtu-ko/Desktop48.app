@@ -80,7 +80,15 @@ const stats = computed<StatCell[]>(() => {
   if (!member)
     return []
   return [
-    { key: 'rank', label: '总选排名', value: member.ranking ? `第 ${member.ranking} 名` : '', crown: true },
+    {
+      key: 'rank',
+      // 排名取自随包的历届总选表，同一份数据里带得出年份：标上届次，避免把旧届成绩读成最新一届
+      label: '总选排名',
+      value: member.ranking
+        ? `第 ${member.ranking} 名${member.rankingYear ? ` · ${member.rankingYear}` : ''}`
+        : '',
+      crown: true,
+    },
     { key: 'period', label: '期数', value: member.periodName, crown: false },
     { key: 'height', label: '身高', value: member.height ? `${member.height}cm` : '', crown: false },
     {
