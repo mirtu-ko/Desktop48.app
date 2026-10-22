@@ -7,12 +7,18 @@ import { useDanmakuLayer } from '../src/renderer/src/composables/use-danmaku-lay
  * 字号锚画面短边（min(width, height)）而非高度：竖屏直播高度≈窗口全高，
  * 按高度算会把字号顶到上限。以下数值即该契约的字面表达，改动算法时这些用例应当失败。
  */
-function setup(rect: { left: number, top: number, width: number, height: number, bottom: number } | null, compact = false) {
+function setup(
+  rect: { left: number, top: number, width: number, height: number, bottom: number } | null,
+  compact = false,
+  fullscreen = true,
+) {
   const videoRect = ref(rect) as Ref<any>
   const compactRef = ref(compact)
+  const fullscreenRef = ref(fullscreen)
   return useDanmakuLayer({
     videoRect: () => videoRect.value,
     compact: () => compactRef.value,
+    fullscreen: () => fullscreenRef.value,
   })
 }
 
@@ -32,6 +38,11 @@ describe('useDanmakuLayer 字号', () => {
   it('横屏画面（16:9）：短边为高，字号 17px 量级', () => {
     const { fontSize } = setup(makeRect(890, 500))
     expect(fontSize.value).toBe(17)
+  })
+
+  it('同一横屏画面非全屏时封顶 15px，全屏恢复 17px', () => {
+    expect(setup(makeRect(890, 500), false, false).fontSize.value).toBe(14)
+    expect(setup(makeRect(890, 500), false, true).fontSize.value).toBe(17)
   })
 
   it('超大画面 clamp 到 18px 上限', () => {
@@ -80,6 +91,7 @@ describe('useDanmakuLayer 定位', () => {
     const layer = useDanmakuLayer({
       videoRect: () => makeRect(1000, 800),
       compact: () => false,
+      fullscreen: () => true,
       maxWidth: () => '33vw',
     })
     expect(layer.position.value.maxWidth).toBe('33vw')

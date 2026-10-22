@@ -125,6 +125,7 @@ const {
 } = useDanmakuLayer({
   videoRect: () => videoRect.value,
   compact: () => props.compact,
+  fullscreen: () => isFullscreen.value,
   // 黑边不够宽（videoRect.left < 220）时由 computeDanmakuLayout 自行回落画面内，
   // 与全屏无关：窗口态下竖屏直播同样留得出左侧栏
   placement: () => danmakuPlacement.value,

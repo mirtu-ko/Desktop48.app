@@ -173,6 +173,7 @@ const {
 } = useDanmakuLayer({
   videoRect: () => videoRect.value,
   compact: () => props.compact,
+  fullscreen: () => isFullscreen.value,
   // 「全部弹幕」面板是气泡层的子元素（宽度随它），面板展开时强制回画面内，
   // 否则窄黑边里塞不下列表。气泡此时本就隐藏，看不见这次位置切换
   placement: () => (danmakuMode.value === 'live' ? danmakuPlacement.value : 'video'),

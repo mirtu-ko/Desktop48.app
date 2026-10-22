@@ -147,17 +147,19 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 
 建议阅读顺序：先读 `beginSession` / `rebuildMedia` / `handleStreamError` / `onPlayerCanPlay` / `recoverStream` / `handleRetryExhausted` 六个 handler，再回看 `useXxx({...})` 的参数。
 
-| composable           | 负责                                               | 不负责                               |
-| -------------------- | -------------------------------------------------- | ------------------------------------ |
-| `use-live-session`   | 拉详情、补拉聊天室 ID、开/停转流会话、界面状态同步 | 播放器实例、重试节奏、轮询、弹幕订阅 |
-| `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位                 | 地址来源、错误处理策略               |
-| `use-stream-retry`   | 重试节奏（默认 2s × 3，决策走纯函数）              | 具体恢复逻辑（由 attempt 注入）      |
-| `use-live-polling`   | 已播时长、在线人数定时刷新                         | 播放行为本身                         |
-| `use-video-rotation` | 旋转 / 容器全屏 / 播放暂停 / 音量                  | 地址、重试                           |
-| `use-sleep-blocker`  | 播放期间阻止系统休眠                               | 播放行为                             |
-| `use-media-download` | 录制发起（走原始 RTMP 直存文件，不经本地转封装）   | 页面播放链路                         |
-| `use-live-danmaku`   | 双源弹幕订阅与投放                                 | 播放行为、气泡层渲染                 |
-| `use-danmaku-layer`  | 弹幕层锚定（左下气泡 / 左上互动榜）、字号自适应    | 弹幕内容与生命周期                   |
+| composable           | 负责                                                        | 不负责                               |
+| -------------------- | ----------------------------------------------------------- | ------------------------------------ |
+| `use-live-session`   | 拉详情、补拉聊天室 ID、开/停转流会话、界面状态同步          | 播放器实例、重试节奏、轮询、弹幕订阅 |
+| `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位                          | 地址来源、错误处理策略               |
+| `use-stream-retry`   | 重试节奏（默认 2s × 3，决策走纯函数）                       | 具体恢复逻辑（由 attempt 注入）      |
+| `use-live-polling`   | 已播时长、在线人数定时刷新                                  | 播放行为本身                         |
+| `use-video-rotation` | 旋转 / 容器全屏 / 播放暂停 / 音量                           | 地址、重试                           |
+| `use-sleep-blocker`  | 播放期间阻止系统休眠                                        | 播放行为                             |
+| `use-media-download` | 录制发起（走原始 RTMP 直存文件，不经本地转封装）            | 页面播放链路                         |
+| `use-live-danmaku`   | 双源弹幕订阅与投放                                          | 播放行为、气泡层渲染                 |
+| `use-danmaku-layer`  | 弹幕层锚定与摆放（画面内 / 左侧黑边）、字号自适应、宽度上限 | 弹幕内容与生命周期                   |
+
+弹幕层的几何全在 `computeDanmakuLayout`（纯函数）：字号按渲染区短边等比缩放，三档封顶——迷你窗 10–14px、非全屏播放窗 12–14px、全屏 12–18px（窗口态面积小，沿用 18px 上限会和全屏一样大、显得拥挤）；摆放取全局偏好 `danmakuPlacement`（`video` 画面内 / `left` 左侧黑边），黑边窄于 220px 时自行回落画面内、入口按钮只在 `canFloatLeft` 时出现；公演（B 站）弹幕另限宽 33vw，防单条横跨整块画面。直播与回放共用，迷你浮窗不传 `placement`。
 
 ## 7. 实现约定（易错点）
 
@@ -190,7 +192,7 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 
 ### 7.6 开播前的 FFmpeg 校验只做一次
 
-`stores/float-players.ts` 的 `openLive` 是四个开播入口（直播列表 / 公演页 / 成员页 / 房间分享卡）的唯一汇聚点，`use-live-guard` 的 `checkLiveReady()` 接在这里，新增入口无需接线；`openPlayback` 不做该校验——回放走 mpegts 直连，不经过 FFmpeg 转封装。判定口径与启动门禁、下载守卫共用 `window.mainAPI.getFfmpegStatus`（`inspectFfmpegDir`），不要另起一套。
+`stores/float-players.ts` 的 `openLive` 是四个开播入口（直播列表 / 公演页 / 房间资料卡 / 房间分享卡）的唯一汇聚点，`use-live-guard` 的 `checkLiveReady()` 接在这里，新增入口无需接线；`openPlayback` 不做该校验——回放走 mpegts 直连，不经过 FFmpeg 转封装。判定口径与启动门禁、下载守卫共用 `window.mainAPI.getFfmpegStatus`（`inspectFfmpegDir`），不要另起一套。
 
 ## 8. 弹幕链路
 
@@ -213,4 +215,4 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 
 ## 10. 链路验证
 
-三条播放链已埋 debug 日志，scope 对照表登记在 `utils/debug.ts` 头部：`live`（直播链与双源弹幕收发）、`show`（status 分流与 B 站房间映射）、`playback`（回放链）。渲染层由 `import.meta.env.DEV` 门控，`npm run dev` 即输出（`[DBG]` 前缀，故意不用 `console.debug`——后者默认被 DevTools Verbose 过滤器隐藏）；主进程由 `is.dev || DESKTOP48_VERBOSE=1` 门控；IPC 层由 `handleTraced` 自动记录通道名/参数摘要/耗时/错误。排查时在 `getLiveOne()` 处设断点逐步步进，调用栈面板会完整呈现链路与各变量取值。
+三条播放链已埋 debug 日志，scope 对照表登记在 `utils/debug.ts` 头部；播放相关的是 `live`（直播链与双源弹幕收发）、`show`（status 分流与 B 站房间映射）、`playback`（回放链），同表另有 `net`（所有链共用的请求层）、`list` / `load-more`（列表分页）、`tasks`（下载录制）、`pocket-auth` / `pocket-rooms` / `rooms-page`（房间链）。渲染层由 `import.meta.env.DEV` 门控，`npm run dev` 即输出（`[DBG]` 前缀，故意不用 `console.debug`——后者默认被 DevTools Verbose 过滤器隐藏）；主进程由 `is.dev || DESKTOP48_VERBOSE=1` 门控；IPC 层由 `handleTraced` 自动记录通道名/参数摘要/耗时/错误。排查时在 `getLiveOne()` 处设断点逐步步进，调用栈面板会完整呈现链路与各变量取值。

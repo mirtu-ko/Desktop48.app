@@ -3,13 +3,15 @@
  * pocketapi / h5 的根路径会被网关或 WAF 误判，因此使用真实业务端点。pocketapi
  * 分别以站点身份、App 身份、App 身份 + 登录态探测，用 403 差异定位地区策略或身份限制。
  * 4xx/5xx 的响应体摘要用于区分边缘拦截页与业务响应；端点变更需与业务地址同步。
+ * 成员名单是唯一的多来源目标：按主→备顺序探测，全部来源挂掉才判该行不可用（见 net-diagnose-chain.ts）。
  */
 import type { ClientRequest } from 'electron'
 import { Buffer } from 'node:buffer'
 import { ANDROID_DEVICE } from '@common/android-device'
-import { LIVE_LIST_URL } from '@common/pocket-api-urls'
+import { ALL_MEMBER_SNAPSHOT_URL, ALL_MEMBER_URL, LIVE_LIST_URL } from '@common/pocket-api-urls'
 import { net } from 'electron'
 import { log } from './logger'
+import { resolveSources } from './net-diagnose-chain'
 import { getToken, pocketAppHeaders } from './pocket48/pocket-auth'
 
 /** 单个探测结果（IPC 契约对端：preload/ipc-contract.d.ts）。 */
@@ -30,6 +32,8 @@ interface DiagnoseTarget {
   method: 'GET' | 'POST'
   body?: object
   headers?: Record<string, string>
+  /** 备源：主源未拿到 < 400 响应时按序续探，全部来源失败才判该行不可用 */
+  fallbacks?: Omit<DiagnoseTarget, 'fallbacks'>[]
 }
 
 type ProbeResult = Omit<NetDiagnoseItem, 'label' | 'url' | 'ms'>
@@ -49,10 +53,19 @@ const SERVICE_TARGETS: DiagnoseTarget[] = [
   { label: 'CGT48 曲库', url: 'https://www.cgt48.com/json/music_snh.json', method: 'GET' },
 ]
 
-const MEMBERS_JSONP: DiagnoseTarget = {
-  label: '成员名单 jsonp',
-  url: 'https://h5.48.cn/resource/jsonp/allmembers.php?gid=10',
-  method: 'GET',
+/**
+ * 成员名单探测链：静态快照为主、jsonp 接口为备（与 apis.ts 的 ALL_MEMBER_SOURCES 同序）。
+ * 两条都是业务真在用的地址，任一条通就代表「更新成员数据库」能拿到名单，
+ * 所以诊断也按主次判：主源挂、备源顶上时该行仍算正常。
+ */
+function memberListTarget(headers?: Record<string, string>): DiagnoseTarget {
+  return {
+    label: '成员名单（快照 / jsonp）',
+    url: ALL_MEMBER_SNAPSHOT_URL,
+    method: 'GET',
+    headers,
+    fallbacks: [{ label: '成员名单 jsonp', url: ALL_MEMBER_URL, method: 'GET', headers }],
+  }
 }
 
 const DIAGNOSE_TIMEOUT = 8 * 1000
@@ -85,7 +98,7 @@ async function buildTargets(): Promise<DiagnoseTarget[]> {
     log('[net-diagnose] App 身份对照行组装失败，本轮只探站点身份', error)
   }
 
-  targets.push({ ...MEMBERS_JSONP, headers: appHeaders })
+  targets.push(memberListTarget(appHeaders))
   return [...targets, ...SERVICE_TARGETS]
 }
 
@@ -172,8 +185,24 @@ function probe(target: DiagnoseTarget): Promise<NetDiagnoseItem> {
   })
 }
 
+/**
+ * 按主→备顺序探测一条目标：任一来源拿到 < 400 即结束，全部失败才判该行不可用。
+ * 结论字段与说明由 resolveSources 合成——主源可用时它就是结果本身，与单源目标无差别。
+ */
+async function probeChain(target: DiagnoseTarget): Promise<NetDiagnoseItem> {
+  const chain: DiagnoseTarget[] = [target, ...(target.fallbacks ?? [])]
+  const results: NetDiagnoseItem[] = []
+  for (const source of chain) {
+    const result = await probe(source)
+    results.push(result)
+    if (result.status !== null && result.status < 400)
+      break
+  }
+  return resolveSources(target.label, results)
+}
+
 /** 并发探测全部目标；单个目标失败不影响其余结果。 */
 export async function diagnoseTargets(): Promise<NetDiagnoseItem[]> {
   const targets = await buildTargets()
-  return Promise.all(targets.map(probe))
+  return Promise.all(targets.map(probeChain))
 }

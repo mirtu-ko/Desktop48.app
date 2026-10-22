@@ -183,7 +183,8 @@ async function handleCopyDiagnose() {
     const verdict = diagnoseVerdict(item)
     const status = item.status === null ? '无响应' : `HTTP ${item.status}`
     const note = diagnoseNote(item)
-    return `${item.label}（${item.url}）: ${status} · ${item.ms}ms · ${verdict.label}${note ? ` · ${note}` : ''}${item.error ? ` · ${item.error}` : ''}${item.detail ? ` · 响应体: ${item.detail}` : ''}`
+    // detail 可能是 4xx/5xx 的响应体摘要，也可能是多来源目标的主备说明，不额外加前缀
+    return `${item.label}（${item.url}）: ${status} · ${item.ms}ms · ${verdict.label}${note ? ` · ${note}` : ''}${item.error ? ` · ${item.error}` : ''}${item.detail ? ` · ${item.detail}` : ''}`
   })
   const text = [
     `应用版本: ${appVersion.value}`,

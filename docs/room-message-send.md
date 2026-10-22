@@ -101,9 +101,11 @@
 
 发送侧的三条业务规则：
 
-- **冷却 1500ms**（`SEND_INTERVAL_MS`）：超了直接拒「发送太快」；发送失败会把冷却清零。
-- **目标校验**：serverId/channelId 必须与当前连接一致，否则「发送目标已变化，请重新连接」。
+- **冷却 1500ms**（`SEND_INTERVAL_MS`）：超了直接拒「发送太快，请稍后再试」；发送失败会把冷却清零。这只是客户端的点击防抖，**不是**官方冷却——真正的限流是服务端房间级 `cdTime`（`room/info` 的 `userFunction`，常规房间 10s、禁言房 30s），别把 1.5s 当节奏上限去用。
+- **目标校验**：serverId/channelId 必须仍是当前会话订阅的频道，否则「房间连接已失效，请重新进入房间」。
 - **连接失效**：token 变更、连接断开都要求重连后重试。
+
+**回显三源去重**：发送 ACK 只回 `msgIdClient` / `msgIdServer` / 时刻，正文与发言者资料由主进程用发送入参合成一条回显返回；它与 `24/11` 推送、HTTP 轮询回包共用同一归一化，按 `msgIdClient` 去重，哪条先到都只显示一次。ACK 回显不受消息范围过滤（发送就要有回音），推送那条则照常过范围过滤。
 
 ### 1.4 删除自己发的消息（这条是 HTTP）
 
@@ -133,7 +135,7 @@ yaya_msg 有「自定义发言身份」（`common/sender-profile.js`）：把 `n
 
 | 维度       | 本项目现状                                                         | 目标                                                  | 缺口                                                                                           |
 | ---------- | ------------------------------------------------------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| 收房间消息 | HTTP 轮询 5s（`use-pocket-rooms.ts`）                              | 同上（阶段二可选改 QChat 实时）                       | 无需动                                                                                         |
+| 收房间消息 | HTTP 轮询 5s（`use-pocket-rooms.ts`）                              | 同上 + 连接后的 QChat 实时推送                        | 已实现（推送 / ACK / 轮询共用一条消息流）                                                      |
 | 频道标识   | 已有 `serverId` / `channelId`（`im/server/jump` + seine 频道列表） | 同上                                                  | 无需动                                                                                         |
 | IM 凭据    | `getImCredentials()` → `accid` + `imToken`                         | 同上                                                  | 无需动（token 仅在主进程，天然合规）                                                           |
 | appKey     | `IM_APP_KEY` 常量（两个 APK 硬编码同值）                           | 同上                                                  | 无需动                                                                                         |
@@ -190,7 +192,7 @@ yaya_msg 有「自定义发言身份」（`common/sender-profile.js`）：把 `n
 
 - `utils/pocket-room-message.ts`：`PocketRoomMessageView` 增 `msgIdClient` / `msgTime`（保留原 `id` 不变，兼容去重键）。
 - `composables/use-pocket-rooms.ts`：暴露 `sendMessage` / `deleteOwnMessage`，维护发送态（发送中/冷却/错误），发送成功后乐观插入。
-- `pages/Rooms.vue`：聊天区底部加输入条（`el-input` + 发送钮），回复态（引用摘要 + 取消），未登录/小房间锁态下禁用。
+- `pages/Rooms.vue`：聊天区底部加输入条（`el-input` + 发送钮），回复态（引用摘要 + 取消），未登录 / 小房间锁态不可用；房间禁言时不隐藏输入条，只换占位文案并拦在点击前（建连会白顶一次手机端）。
 
 **测试**（`test/`，纯逻辑优先）
 
@@ -236,6 +238,6 @@ yaya_msg 有「自定义发言身份」（`common/sender-profile.js`）：把 `n
 | 删消息       | `POST im/api/v1/team/msg/delete`                                                                                                                                         |
 | 房间信息     | `POST im/api/v1/im/team/room/info`（`{ channelId }`）                                                                                                                    |
 | LBS（QChat） | `https://lbs.netease.im/lbs/conf.jsp`（聊天室是 `lbs/chat.jsp`）                                                                                                         |
-| 发言冷却     | 1500ms（参考实现值）                                                                                                                                                     |
+| 发言冷却     | 客户端 1500ms（`SEND_INTERVAL_MS`，点击防抖）；服务端房间级 `cdTime`：常规 10s / 禁言房 30s                                                                              |
 | 服务号/指令  | NIM 登录 `2/2`；取 QChat 地址 `24/1`；QChat 登录 `24/2`；订阅 `25/9`\|`24/15`；发消息 `24/10`；实时推送 `24/11`；心跳 `1/2`                                              |
 | 应答匹配     | 应答帧回填请求自己的 `serial` **与** 服务号/指令号（实测 `24/10`、`25/9`）；`serial` 每条连接独立从 2 起，故匹配须连 s/c 一起比，否则同 serial 的 `24/11` 推送会顶替应答 |

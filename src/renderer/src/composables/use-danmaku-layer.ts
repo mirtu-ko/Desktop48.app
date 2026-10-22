@@ -38,10 +38,12 @@ export interface DanmakuLayerLayout {
  */
 export function computeDanmakuLayout(
   rect: DanmakuLayerRect | null,
-  options: { compact: boolean, placement: DanmakuPlacement },
+  options: { compact: boolean, fullscreen: boolean, placement: DanmakuPlacement },
 ): DanmakuLayerLayout {
-  const { compact, placement } = options
-  const [min, max] = compact ? [10, 14] : [12, 18]
+  const { compact, fullscreen, placement } = options
+  // 非全屏播放窗面积小，若仍沿用 18px 上限，在 1080p / 2K 显示器上会和全屏几乎一样大，
+  // 相对小窗显得拥挤；窗口态封顶 14px，全屏再放开到 18px。
+  const [min, max] = compact ? [10, 14] : fullscreen ? [12, 18] : [12, 14]
   const shortSide = rect ? Math.min(rect.width, rect.height) : 0
   const fontSize = Math.min(max, Math.max(min, Math.round(shortSide * FONT_RATIO)))
 
@@ -91,6 +93,7 @@ export function computeDanmakuLayout(
 export function useDanmakuLayer(options: {
   videoRect: () => DanmakuLayerRect | null
   compact: () => boolean
+  fullscreen: () => boolean
   placement?: () => DanmakuPlacement
   /** 额外宽度上限（CSS 长度）；不传则沿用布局自身的 width */
   maxWidth?: () => string | undefined
@@ -99,6 +102,7 @@ export function useDanmakuLayer(options: {
 
   const layout = computed(() => computeDanmakuLayout(videoRect(), {
     compact: compact(),
+    fullscreen: options.fullscreen(),
     placement: options.placement?.() ?? 'video',
   }))
 

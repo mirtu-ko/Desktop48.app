@@ -11,7 +11,7 @@ import { useSettingsNav } from './use-settings-nav'
  * 判定口径与下载前的 useDownloadGuard 完全一致（window.mainAPI.getFfmpegStatus），
  * 文案共用 describeFfmpegProblem，不会出现「启动说可用、点开直播说不可用」两套说法。
  *
- * 入口收敛在 stores/float-players.ts 的 openLive（直播列表 / 公演页 / 成员页 / 房间分享卡
+ * 入口收敛在 stores/float-players.ts 的 openLive（直播列表 / 公演页 / 房间资料卡 / 房间分享卡
  * 都经它），校验只需在那里接一次。只校验 FFmpeg——看直播不落盘，不涉及下载目录。
  *
  * ★ 跨进程：getFfmpegStatus 对端 main/ipc/register-system-ipc.ts，
