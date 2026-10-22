@@ -1,11 +1,13 @@
+import type { PocketRoomQChatMessage } from '@preload/ipc-contract'
 import { describe, expect, it } from 'vitest'
 /**
  * 房间频道消息归一化（pocket-room-message.ts）：
  * CustomMessageV2 → PocketRoomMessageView，覆盖 msgType 分支、extInfo 解析与兜底；
- * 左列最新消息预览（lastMsgList.msgContent → 文案）与消息流共用同一套类型分发。
+ * 左列最新消息预览（lastMsgList.msgContent → 文案）与消息流共用同一套类型分发；
+ * QChat 实时推送（24/11）改写成 HTTP 链路原始形状后复用同一套归一。
  */
 
-import { isPlaceholderText, liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview, pocketRoomCopyTargets } from '../src/renderer/src/utils/pocket-room-message'
+import { isPlaceholderText, liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview, normalizePocketRoomQChatMessage, pocketRoomCopyTargets } from '../src/renderer/src/utils/pocket-room-message'
 
 /** 构造一条房间消息：extInfo.bodys 可传对象（自动 JSON 化） */
 function roomMessage(msgType: string, options: {
@@ -544,5 +546,148 @@ describe('pocket-room-message / 可复制内容', () => {
 
     const system = normalizePocketRoomMessage(roomMessage('DISABLE_SPEAK'))!
     expect(pocketRoomCopyTargets(system)).toEqual([])
+  })
+})
+
+/**
+ * QChat 实时推送归一化（normalizePocketRoomQChatMessage）：推送 / 发送回显 /
+ * HTTP 回包三源共用同一套类型分发，按 msgIdClient 同一 id 键去重。
+ */
+describe('pocket-room-message / QChat 实时推送（24/11）', () => {
+  /** 传输层消息（主进程 nim-qchat.ts 解码出的形状） */
+  function qchatMessage(overrides: Partial<PocketRoomQChatMessage> = {}): PocketRoomQChatMessage {
+    return {
+      serverId: 'srv-1',
+      channelId: 'ch-1',
+      fromAccount: 'acc-1',
+      fromClientType: 0,
+      fromNick: '粉丝甲',
+      time: 1728000009,
+      type: 0,
+      body: '',
+      attachment: '',
+      ext: '',
+      msgIdClient: 'qc-1',
+      msgIdServer: 'qs-1',
+      ...overrides,
+    }
+  }
+
+  it('线路类型 0 = 文本：body 即正文，发送者资料取顶层字段', () => {
+    const view = normalizePocketRoomQChatMessage(qchatMessage({
+      body: '大家晚安',
+      ext: JSON.stringify({ user: { userId: 42, nickName: '粉丝甲', level: 12 } }),
+    }))!
+
+    expect(view.kind).toBe('text')
+    expect(view.text).toBe('大家晚安')
+    expect(view.nick).toBe('粉丝甲')
+    expect(view.userId).toBe('42')
+    expect(view.level).toBe(12)
+  })
+
+  it('time 是协议原值（秒）：小于 1e12 乘 1000 归一成毫秒', () => {
+    expect(normalizePocketRoomQChatMessage(qchatMessage({ time: 1728000009, body: 'x' }))!.msgTime)
+      .toBe(1728000009000)
+    // 已是毫秒（>= 1e12）不放大：老回包 / 混合量纲都不炸
+    expect(normalizePocketRoomQChatMessage(qchatMessage({ time: 1728000009000, body: 'x' }))!.msgTime)
+      .toBe(1728000009000)
+  })
+
+  it('线路类型 100 = 自定义回复：正文在 attachment，引用块照常解析', () => {
+    const view = normalizePocketRoomQChatMessage(qchatMessage({
+      type: 100,
+      attachment: JSON.stringify({
+        messageType: 'REPLY',
+        replyInfo: { replyName: '成员乙', replyText: '谢谢应援', text: '不客气～' },
+      }),
+    }))!
+
+    expect(view.kind).toBe('reply')
+    expect(view.text).toBe('不客气～')
+    expect(view.quote).toEqual({ nick: '成员乙', text: '谢谢应援', isGift: false })
+  })
+
+  it('线路类型 100 = 礼物回复：giftReplyInfo → 礼物摘要引用', () => {
+    const view = normalizePocketRoomQChatMessage(qchatMessage({
+      type: 100,
+      attachment: JSON.stringify({
+        messageType: 'GIFTREPLY',
+        giftReplyInfo: {
+          replyName: '成员丙',
+          replyText: '',
+          text: '收到小心心',
+          giftInfo: { giftName: '小心心', giftNum: 3 },
+        },
+      }),
+    }))!
+
+    expect(view.kind).toBe('reply')
+    expect(view.text).toBe('收到小心心')
+    expect(view.quote).toEqual({ nick: '成员丙', text: '[礼物] 小心心 x3', isGift: true })
+  })
+
+  it('线路类型 1/2/3 = 图片/语音/视频：正文在 attachment，媒体直链照常提取', () => {
+    const image = normalizePocketRoomQChatMessage(qchatMessage({
+      type: 1,
+      attachment: JSON.stringify({ url: '/mediasource/a.jpg', w: 800, h: 600 }),
+    }))!
+    expect(image.kind).toBe('image')
+    expect(image.text).toBe('[图片消息]')
+    expect(image.imageUrl).toBe('https://source.48.cn/mediasource/a.jpg')
+    expect(image.imageWidth).toBe(800)
+
+    const audio = normalizePocketRoomQChatMessage(qchatMessage({
+      type: 2,
+      attachment: JSON.stringify({ url: '/MediaSource/Voice/a.m4a' }),
+    }))!
+    expect(audio.kind).toBe('audio')
+    expect(audio.audioUrl).toBe('https://mp4.48.cn/MediaSource/Voice/a.m4a')
+
+    const video = normalizePocketRoomQChatMessage(qchatMessage({
+      type: 3,
+      attachment: JSON.stringify({ url: '/MediaSource/Video/v.mp4', coverUrl: '/cover.jpg' }),
+    }))!
+    expect(video.kind).toBe('video')
+    expect(video.videoUrl).toBe('https://mp4.48.cn/MediaSource/Video/v.mp4')
+    expect(video.videoPoster).toBe('https://source.48.cn/cover.jpg')
+  })
+
+  it('dELETE 删除通知：实时链路同样过滤，不展示', () => {
+    expect(normalizePocketRoomQChatMessage(qchatMessage({
+      type: 100,
+      attachment: JSON.stringify({ messageType: 'DELETE' }),
+    }))).toBeNull()
+  })
+
+  it('attachment 解不出 JSON（协议演进）：走占位文案，不把原始串当正文', () => {
+    const view = normalizePocketRoomQChatMessage(qchatMessage({ type: 100, attachment: 'not-json' }))!
+
+    expect(view.text).toBe('[新消息]')
+  })
+
+  it('id 键与 HTTP 侧一致：同 msgIdClient 的消息不管哪条链路回来都只显示一次', () => {
+    const viaQChat = normalizePocketRoomQChatMessage(qchatMessage({ msgIdClient: 'same-id', body: '同一条' }))!
+    const viaHttp = normalizePocketRoomMessage({
+      msgIdServer: 'qs-1',
+      msgIdClient: 'same-id',
+      msgType: 'TEXT',
+      msgTime: 1728000009000,
+      bodys: '同一条',
+    })!
+
+    expect(viaQChat.id).toBe(viaHttp.id)
+    expect(viaQChat.msgIdClient).toBe('same-id')
+    // 正文两边同源（推送 body 即 HTTP bodys 的纯文本形态）
+    expect(viaQChat.text).toBe(viaHttp.text)
+  })
+
+  it('缺字段兜底：空 ext / 空昵称不炸，userId 回退 fromAccount', () => {
+    const view = normalizePocketRoomQChatMessage(qchatMessage({ body: 'hi', fromNick: '', ext: '' }))!
+
+    expect(view.text).toBe('hi')
+    expect(view.nick).toBe('口袋用户')
+    // ext 没有 user 时，QChat 线路的发送者身份就是 fromAccount
+    expect(view.userId).toBe('acc-1')
   })
 })

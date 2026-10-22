@@ -2,10 +2,16 @@
  * 口袋48账号 IPC 通道注册：只接线，登录/凭证逻辑归 main/pocket48/pocket-auth.ts。
  * 通道清单与 preload/index.ts 的 mainAPI 契约一一对应，两边改动请同步。
  */
-import type { PocketClientProfileId } from '@preload/ipc-contract'
+import type { PocketClientProfileId, PocketRoomReplyTarget } from '@preload/ipc-contract'
 import type { IpcMainInvokeEvent } from 'electron'
 import * as pocketAuth from '../pocket48/pocket-auth'
 import { handlePocketDanmakuStart, handlePocketDanmakuStop, resetPocketDanmakuSessions } from '../pocket48/pocket-danmaku'
+import {
+  handleRoomQChatEnter,
+  handleRoomQChatLeave,
+  resetRoomQChatSessions,
+  sendRoomMessage,
+} from '../pocket48/pocket-room-qchat'
 import * as pocketUnread from '../pocket48/pocket-unread'
 import { broadcastIpc } from './send'
 import { handleTraced } from './trace'
@@ -17,6 +23,8 @@ export function registerPocketIPC(): void {
   // 轮询对 token 失效走「整轮冻结、未读不丢」，那是给瞬时网络故障的，真失效不适用
   pocketAuth.setAuthExpiredNotifier(() => {
     pocketUnread.clearAccountUnread()
+    // 房间 QChat 长连接用的是已作废 token 的旧档身份，一并断掉
+    resetRoomQChatSessions()
     broadcastIpc('pocketAuthExpired')
   })
   handleTraced('pocketSendSms', (
@@ -43,6 +51,7 @@ export function registerPocketIPC(): void {
   handleTraced('pocketLogout', () => {
     // 凭证既然要删，按该凭证建立的聊天室长连接（含进房身份）也一并断掉
     resetPocketDanmakuSessions()
+    resetRoomQChatSessions()
     // 未读即刻清空广播，不等下一轮 60s 检测
     pocketUnread.clearAccountUnread()
     return pocketAuth.logout()
@@ -61,6 +70,10 @@ export function registerPocketIPC(): void {
   // 成员房间（口袋 App「房间」频道留言流，非直播间弹幕）：频道解析 + 历史消息拉取
   handleTraced('pocketGetRoomChannel', (_event: IpcMainInvokeEvent, userId: number) =>
     pocketAuth.getRoomChannel(userId))
+  // 房间发言权限（room/info 的 userFunction）：房主开房间级禁言时 sendText=false。
+  // 渲染层据此在输入框直接显示禁言、并且不再引导 QChat 建连（建连会顶掉手机端）
+  handleTraced('pocketGetRoomPermissions', (_event: IpcMainInvokeEvent, channelId: string) =>
+    pocketAuth.getRoomPermissions(channelId))
   handleTraced('pocketGetRoomMessages', (
     _event: IpcMainInvokeEvent,
     channelId: string,
@@ -99,6 +112,25 @@ export function registerPocketIPC(): void {
     pocketAuth.getRoomQuestion(channelId))
   handleTraced('pocketCheckRoomAnswer', (_event: IpcMainInvokeEvent, channelId: string, questionId: string, answer: string) =>
     pocketAuth.checkRoomAnswer(channelId, questionId, answer))
+  // 房间消息发送（QChat 圈组长连接，见 pocket-room-qchat.ts）：进房订阅 / 离房退订 /
+  // 发言 / 删自己消息。删除走 HTTP（服务端按 accId 校验），其余走 QChat 24/10
+  handleTraced('pocketRoomQChatEnter', (event: IpcMainInvokeEvent, serverId: string, channelId: string) =>
+    handleRoomQChatEnter(serverId, channelId, event.sender))
+  handleTraced('pocketRoomQChatLeave', (event: IpcMainInvokeEvent, serverId: string, channelId: string) =>
+    handleRoomQChatLeave(serverId, channelId, event.sender))
+  handleTraced('pocketSendRoomMessage', (
+    _event: IpcMainInvokeEvent,
+    serverId: string,
+    channelId: string,
+    text: string,
+    reply?: PocketRoomReplyTarget,
+  ) => sendRoomMessage(serverId, channelId, text, reply))
+  handleTraced('pocketDeleteRoomMessage', (
+    _event: IpcMainInvokeEvent,
+    channelId: string,
+    msgIdClient: string,
+    msgTime: number,
+  ) => pocketAuth.deleteRoomMessage(channelId, msgIdClient, msgTime))
   handleTraced('pocketMarkRead', (_event: IpcMainInvokeEvent, userId: number, target?: 'room' | 'small') =>
     pocketUnread.markRead(userId, target))
 }

@@ -15,8 +15,9 @@
  * - 房间预览：im/team/classic/last/message/get 批量拉各频道最后一条消息（一次请求）；
  * - 房间消息：im/team/message/list/{homeowner,all} HTTP 拉取（msgTime 倒序，nextTime 游标翻历史），
  *   对应「只看房主 / 全部消息」两档范围；homeowner 会混入官方系统账号，已过滤。
- *   参考实现的实时推送走 QChat 长连接（另一套 NIM 协议），本版本以轮询替代，
- *   覆盖「查看房间消息」场景——注意与浮窗播放器的直播间弹幕是两套体系。
+ *   实时消息走 QChat 长连接（另一套 NIM 协议，见 main/pocket48/nim-qchat.ts）：
+ *   进房订阅、收发消息与删除自己，推送（24/11）与 5s 轮询按 msgIdClient 双源去重，
+ *   轮询同时是实时链路的兜底（断线 / 未识别类型的消息都靠它补齐）；
  * - 临时房间：成员详情卡底栏入口经 `/rooms?member=<userId>` 带进来的成员，可能不在关注
  *   名单里，只活在本次会话内存中（见 openTemporaryRoom / closeTemporaryRoom），
  *   频道解析缓存见 services/room-channel.ts。
@@ -24,7 +25,7 @@
  * 失败一律静默降级：频道解析/消息拉取失败只影响右侧消息区，左侧列表照常可用；
  * 唯一例外是 token 失效（重新登录才能恢复），直接上抛让整页报错。
  */
-import type { PocketRoomChannel, PocketRoomLastMessage, PocketRoomQuestion } from '@preload/ipc-contract'
+import type { PocketRoomBatch, PocketRoomChannel, PocketRoomLastMessage, PocketRoomPermission, PocketRoomQChatStatus, PocketRoomQuestion, PocketRoomReplyTarget } from '@preload/ipc-contract'
 import type { LiveListItem } from '@renderer/services/api-types'
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import { OFFICIAL_POCKET_USER_ID } from '@common/pocket-rooms'
@@ -37,7 +38,7 @@ import { pocketAuthState, refreshPocketAuthState } from '@renderer/stores/pocket
 import { unreadCountOf, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import { debugLog } from '@renderer/utils/debug'
 
-import { liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview } from '@renderer/utils/pocket-room-message'
+import { isPlaceholderText, liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview, normalizePocketRoomQChatMessage } from '@renderer/utils/pocket-room-message'
 import { isSmallRoomUnlocked, markSmallRoomUnlocked } from '@renderer/utils/small-room-unlock'
 import Tools from '@renderer/utils/tools'
 import { useIntervalFn } from '@vueuse/core'
@@ -79,6 +80,8 @@ export type PocketRoomChatStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 /** 房间新消息轮询间隔：参考实现通知轮询 2s，这里取 5s 平衡实时性与接口压力 */
 const MESSAGE_POLL_MS = 5_000
+/** 发送冷却（与主进程 pocket-room-qchat.ts 的 SEND_INTERVAL_MS 同值）：镜像只为按钮禁用态 */
+const SEND_COOLDOWN_MS = 1500
 
 /** 上翻连续零新增多少次才认定到头：单次零新增可能是边界/重发同页的假信号 */
 const HISTORY_MISS_LIMIT = 2
@@ -184,6 +187,46 @@ export function usePocketRooms() {
 
   /** 当前房间的频道（轮询/加载更多用）；null = 未选中或解析失败 */
   let activeChannel: { serverId: string, channelId: string } | null = null
+
+  // ===== 房间发言（QChat 长连接）=====
+  /**
+   * 当前频道的发言权限（room/info 的 userFunction，服务端按当前账号算好）。
+   * null = 未知（还没拉到 / 未登录 / 小房间暗号未通过 / 接口异常）——一律按可发言处理，
+   * 让服务端拒绝兜底；只有明确 false 才禁用输入。
+   */
+  const roomPermission = ref<PocketRoomPermission | null>(null)
+  /**
+   * 能否在本房间发文字：false = 房主开了房间级禁言（或个人禁言）。
+   * 供输入框直接显示禁言态，并在点击前就拦住 QChat 建连（建连会顶掉手机端）。
+   */
+  const canSpeak = computed(() => roomPermission.value?.sendText !== false)
+  /** 正在拉权限的频道 id：切房后旧回包不得覆盖新房间 */
+  let permissionChannelId = ''
+  /**
+   * 用户是否已确认「连接云信会挤掉其他登录端」。默认 false：进房只跑 HTTP 轮询，
+   * 不建连、不订阅；点聊天框确认后置位，登出即复位。
+   */
+  const qchatOptIn = ref(false)
+  /**
+   * QChat 连接状态：确认连接后由主进程经 pocketRoomBatch 推进
+   * （connecting → connected；断线 disconnected → reconnecting，重连成功后订阅自动恢复）。
+   * disconnected 时发送不可用（输入条禁用并给出原因）。
+   */
+  const qchatStatus = ref<PocketRoomQChatStatus>('disconnected')
+  /** 连接状态附言（重连次数 / 失败原因）；空串 = 无 */
+  const qchatHint = ref('')
+  /** 已订阅的 QChat 频道（同步中的在途值以 activeChannel 为准，见 syncQChatChannel） */
+  let qchatChannel: { serverId: string, channelId: string } | null = null
+  /** 发送中（防重复提交；按钮 loading 态） */
+  const sendBusy = ref(false)
+  /**
+   * 发送冷却剩余毫秒（与主进程 SEND_INTERVAL_MS 同口径的镜像）：主进程按会话限流，
+   * 渲染层照抄一份只为按钮禁用态与倒数文案——真遇到并发发送，主进程的拒绝是最终防线。
+   */
+  const sendCooldownLeft = ref(0)
+  let cooldownTimer: ReturnType<typeof setTimeout> | undefined
+  /** 回复态：选中了某条消息准备回复；null = 普通发言（输入条上方显示引用摘要） */
+  const replyTarget = ref<PocketRoomReplyTarget | null>(null)
   /** 已加载消息的去重键集合：轮增量与翻历史共用，防重复插入 */
   let messageKeys = new Set<string>()
   /** 更早历史游标；0 = 下次上翻改用最早持有消息作探测游标（非「没有更多」） */
@@ -392,6 +435,7 @@ export function usePocketRooms() {
     if (selectedUserId.value !== null && !next.some(room => room.userId === selectedUserId.value)) {
       selectedUserId.value = null
       clearChat()
+      void syncQChatChannel()
     }
   })
 
@@ -475,6 +519,7 @@ export function usePocketRooms() {
         rooms.value = []
         selectedUserId.value = null
         clearChat()
+        void syncQChatChannel()
         return
       }
       const { ids, followSourceOf } = await loadFollowedIds()
@@ -543,6 +588,7 @@ export function usePocketRooms() {
       if (!stillSelected && selectedUserId.value !== null) {
         selectedUserId.value = null
         clearChat()
+        void syncQChatChannel()
       }
     }
     catch (error) {
@@ -629,6 +675,12 @@ export function usePocketRooms() {
     essenceLoading.value = false
     chatStatus.value = 'idle'
     chatStatusText.value = ''
+    // 发言态随房间清空：回复目标与冷却都不属于下一个房间
+    replyTarget.value = null
+    // 发言权限也属于房间：清空后回到「未知 = 可发言」，避免上个房间的禁言态残留
+    roomPermission.value = null
+    permissionChannelId = ''
+    clearSendCooldown()
   }
 
   /**
@@ -669,6 +721,276 @@ export function usePocketRooms() {
     }
     return fresh.length
   }
+
+  // ===== 房间发言：连接同步 / 发送 / 删除（QChat）=====
+
+  /** 自己发的消息（userId 口径见 normalizePocketRoomMessage；删除入口只对自己的展示） */
+  function isOwnMessage(message: PocketRoomMessageView): boolean {
+    const myId = pocketAuthState.value.userId
+    return !!myId && !!message.userId && message.userId === myId
+  }
+
+  /**
+   * 可回复的消息：有 msgIdClient 的文本 / 回复 / 礼物消息，且正文非占位
+   * （eligibility 对齐参考实现——媒体消息没有可引用的文字，引用块会只剩空壳）。
+   */
+  function canReplyMessage(message: PocketRoomMessageView): boolean {
+    return !!message.msgIdClient
+      && (message.kind === 'text' || message.kind === 'reply' || message.kind === 'gift')
+      && !isPlaceholderText(message.text)
+  }
+
+  /** 可删除的消息：自己发的，且 ID 与时刻齐全（删除接口三者都要） */
+  function canDeleteMessage(message: PocketRoomMessageView): boolean {
+    return isOwnMessage(message) && !!message.msgIdClient && message.msgTime > 0
+  }
+
+  /** 进入回复态：登记被回复消息摘要（msgIdClient 服务端据此关联原消息） */
+  function startReply(message: PocketRoomMessageView): void {
+    if (!canReplyMessage(message))
+      return
+    replyTarget.value = {
+      msgIdClient: message.msgIdClient,
+      senderName: message.nick || '用户',
+      text: message.text,
+    }
+  }
+
+  function cancelReply(): void {
+    replyTarget.value = null
+  }
+
+  /** 开冷却倒数（自调度 setTimeout，到点自行收尾；切房/卸载由 clearCooldown 收） */
+  function startSendCooldown(): void {
+    const until = Date.now() + SEND_COOLDOWN_MS
+    const tick = () => {
+      const left = until - Date.now()
+      if (left <= 0) {
+        sendCooldownLeft.value = 0
+        cooldownTimer = undefined
+        return
+      }
+      sendCooldownLeft.value = left
+      cooldownTimer = setTimeout(tick, 200)
+    }
+    tick()
+  }
+
+  function clearSendCooldown(): void {
+    if (cooldownTimer) {
+      clearTimeout(cooldownTimer)
+      cooldownTimer = undefined
+    }
+    sendCooldownLeft.value = 0
+  }
+
+  /**
+   * QChat 订阅与 activeChannel 对齐（唯一收敛点，串行执行防切房竞态）。
+   * 顺序与主进程约定一致：**先订新房再退旧房**——旧频道若是最后一条订阅，
+   * 先退会整条连接销毁，每次切房都要重连。连接状态走 pocketRoomBatch，这里只管调用与兜底；
+   * 失败不抛——发送不可用而已，HTTP 轮询仍是消息链路的兜底。
+   */
+  let qchatSyncChain: Promise<void> = Promise.resolve()
+
+  function syncQChatChannel(): Promise<void> {
+    qchatSyncChain = qchatSyncChain.then(reconcileQChatChannel).catch((error) => {
+      debugLog('pocket-rooms', '房间频道订阅同步失败', error)
+    })
+    return qchatSyncChain
+  }
+
+  /**
+   * 用户确认后连接当前房间（置位 optIn 并同步订阅）。
+   * 确认文案在页面层——这里只管「确认之后就按已授权处理」，失败原因经 qchatHint 回传。
+   */
+  async function connectRoomQChat(): Promise<{ ok: boolean, message?: string }> {
+    const target = activeChannel
+    if (!target)
+      return { ok: false, message: '请先进入房间' }
+    if (!loggedIn.value)
+      return { ok: false, message: '登录口袋48账号后才能发言' }
+    qchatOptIn.value = true
+    await syncQChatChannel()
+    // 以订阅表为准判断成败：qchatChannel 只在 enter 回包 ok 时更新，
+    // 而连接状态由主进程异步推送，回包这一刻可能还没到
+    const settled = qchatChannel
+    if (!settled || settled.serverId !== target.serverId || settled.channelId !== target.channelId)
+      return { ok: false, message: qchatHint.value || '房间连接失败' }
+    return { ok: true }
+  }
+
+  /**
+   * 主动断开房间 QChat：撤销连接授权并退订当前频道（连接按需销毁）。
+   * 断开后本页回到只看模式：消息继续走 HTTP 轮询，不再顶掉手机等其他设备。
+   */
+  async function disconnectRoomQChat(): Promise<void> {
+    qchatOptIn.value = false
+    replyTarget.value = null
+    clearSendCooldown()
+    qchatStatus.value = 'disconnected'
+    qchatHint.value = ''
+    // 走同一收敛点退订当前频道：reconcileQChatChannel 见 optIn=false 会退旧房
+    await syncQChatChannel()
+  }
+
+  async function leaveQChatChannel(channel: { serverId: string, channelId: string }): Promise<void> {
+    try {
+      await window.mainAPI.pocketRoomQChatLeave(channel.serverId, channel.channelId)
+    }
+    catch (error) {
+      debugLog('pocket-rooms', '退订房间频道失败', error)
+    }
+  }
+
+  async function reconcileQChatChannel(): Promise<void> {
+    const next = activeChannel
+    const previous = qchatChannel
+    if (next && !qchatOptIn.value) {
+      // 未确认连接：不建连、不订阅，消息走 HTTP 轮询。确认后由 connectRoomQChat 触发
+      if (previous)
+        await leaveQChatChannel(previous)
+      qchatChannel = null
+      qchatStatus.value = 'disconnected'
+      return
+    }
+    const sameChannel = !!next && !!previous && next.serverId === previous.serverId && next.channelId === previous.channelId
+    if (sameChannel || (!next && !previous))
+      return
+    if (next) {
+      let entered = false
+      try {
+        const result = await window.mainAPI.pocketRoomQChatEnter(next.serverId, next.channelId)
+        entered = result.ok
+        if (!result.ok && activeChannel === next) {
+          qchatStatus.value = 'disconnected'
+          qchatHint.value = result.message || '房间连接失败'
+        }
+      }
+      catch (error) {
+        if (activeChannel === next) {
+          qchatStatus.value = 'disconnected'
+          qchatHint.value = error instanceof Error ? error.message : String(error)
+        }
+      }
+      if (activeChannel !== next) {
+        // 订阅回包期间又切了房：本次订阅已无用，退掉（旧房的退订交给后续同步）
+        if (entered)
+          await leaveQChatChannel(next)
+        return
+      }
+      if (entered) {
+        qchatChannel = next
+        qchatHint.value = ''
+      }
+    }
+    // 只有成功换到新房（或本就要退房）才退旧房：换房失败时旧订阅仍是唯一链路，
+    // 不能退。退房 / 卸载时 qchatChannel 还指着旧频道，无条件退并清空跟踪
+    if (previous && (!next || qchatChannel !== previous))
+      await leaveQChatChannel(previous)
+    if (!activeChannel) {
+      qchatChannel = null
+      qchatStatus.value = 'disconnected'
+    }
+  }
+
+  /**
+   * 在当前房间发言（文字 / 回复）。走 QChat 长连接（主进程 24/10），
+   * ACK 带回一条发送回显（正文与资料由主进程用发送入参补全）——立即插入消息流；
+   * 24/11 推送回显与 HTTP 轮询回包按 msgIdClient 去重，哪条先到都只显示一次。
+   */
+  async function sendMessage(text: string): Promise<{ ok: boolean, message?: string }> {
+    const channel = activeChannel
+    if (!channel || chatStatus.value !== 'ready')
+      return { ok: false, message: '请先进入房间' }
+    if (!loggedIn.value)
+      return { ok: false, message: '登录口袋48账号后才能发言' }
+    if (!qchatOptIn.value)
+      return { ok: false, message: '请先点击聊天框连接房间' }
+    // 服务端已明确禁言：入口已拦住，这里是并发/时序变化时的兜底
+    if (!canSpeak.value)
+      return { ok: false, message: '房主已开启全员禁言，暂时不能发言' }
+    if (sendBusy.value)
+      return { ok: false }
+    const body = text.trim()
+    if (!body)
+      return { ok: false }
+    const reply = replyTarget.value
+    sendBusy.value = true
+    try {
+      const result = await window.mainAPI.pocketSendRoomMessage(channel.serverId, channel.channelId, body, reply ?? undefined)
+      // 回包期间已切房：旧频道的 ACK 不得插进新房间的消息流
+      if (activeChannel !== channel)
+        return { ok: true }
+      // 自己刚发的消息不受「只看房主」过滤：发送就要有回音（房主过滤是给「看别人」的）
+      const view = normalizePocketRoomQChatMessage(result.message)
+      if (view)
+        mergeMessages([view], 'append')
+      replyTarget.value = null
+      startSendCooldown()
+      return { ok: true }
+    }
+    catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+    finally {
+      sendBusy.value = false
+    }
+  }
+
+  /**
+   * 删除自己发的消息（HTTP；服务端按 accId 校验只能删自己的）。
+   * 本地立即摘除，id 留在去重键里——服务端传播延迟内轮询回包仍会带上它，不放回屏上。
+   */
+  async function deleteOwnMessage(message: PocketRoomMessageView): Promise<{ ok: boolean, message?: string }> {
+    const channel = activeChannel
+    if (!channel)
+      return { ok: false, message: '请先进入房间' }
+    if (!canDeleteMessage(message))
+      return { ok: false, message: '只能删除自己发送的消息' }
+    try {
+      await window.mainAPI.pocketDeleteRoomMessage(channel.channelId, message.msgIdClient, message.msgTime)
+    }
+    catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+    messages.value = messages.value.filter(item => item.id !== message.id)
+    return { ok: true }
+  }
+
+  /**
+   * 实时推送的可见性（与 HTTP 两档口径对齐）：「全部消息」全收；
+   * 「只看房主」只收房主与自己——homeowner 链路本就不返回其他成员的发言，
+   * 实时链路不过滤会让两档口径不一致（同样一条消息，轮询能显示、推送不能）。
+   */
+  function visibleInScope(view: PocketRoomMessageView): boolean {
+    if (messageScope.value === 'all')
+      return true
+    const ownerId = selectedUserId.value === null ? '' : String(selectedUserId.value)
+    return view.userId === ownerId || isOwnMessage(view)
+  }
+
+  /**
+   * QChat 事件批次（主进程推给订阅了该账号房间会话的窗口）：连接状态 + 频道消息。
+   * 消息只认当前订阅频道与 ready 态——切房瞬间可能收到旧频道的尾包；首屏拉取中
+   * （replace）插进来的消息会被回包顶掉（去重键已登记但不在新页里），交给轮询补齐。
+   */
+  function onRoomBatch(batch: PocketRoomBatch): void {
+    if (batch.kind === 'status') {
+      qchatStatus.value = batch.status
+      qchatHint.value = batch.message || ''
+      return
+    }
+    if (chatStatus.value !== 'ready' || !activeChannel)
+      return
+    const message = batch.message
+    if (message.channelId !== activeChannel.channelId || message.serverId !== activeChannel.serverId)
+      return
+    const view = normalizePocketRoomQChatMessage(message)
+    if (view && visibleInScope(view))
+      mergeMessages([view], 'append')
+  }
+
+  const stopRoomBatch = window.mainAPI.pocketRoomBatch(onRoomBatch)
 
   /** 已持有消息里最早的 msgTime（>0）；作上翻游标的兜底探测点 */
   function earliestHeldMsgTime(): number {
@@ -957,14 +1279,35 @@ export function usePocketRooms() {
     resumeMessagePoll()
   }
 
+  /**
+   * 拉取当前频道发言权限（进房时与消息并行，不阻塞消息渲染）。
+   * 失败一律保持「未知」：小房间暗号未通过（status 2001）、网络异常都只影响输入框提示，
+   * 不能把「没查到」当成「被禁言」——真禁言时服务端发送会拒绝，主进程也会回错误文案。
+   */
+  async function loadRoomPermission(channelId: string): Promise<void> {
+    permissionChannelId = channelId
+    roomPermission.value = null
+    try {
+      const permission = await window.mainAPI.pocketGetRoomPermissions(channelId)
+      // 回包期间已切房：旧频道的权限不得贴到新房间的输入框上
+      if (permissionChannelId !== channelId)
+        return
+      roomPermission.value = permission
+    }
+    catch (error) {
+      debugLog('pocket-rooms', '房间发言权限拉取失败', error)
+    }
+  }
+
   /** 在选中成员下打开指定频道（大房间或小房间）：首屏拉取 + 启动轮询 */
   async function openChannel(userId: number, channel: { serverId: string, channelId: string }) {
     const requestId = selectRequestId
     activeChannel = channel
     chatStatus.value = 'loading'
     chatStatusText.value = ''
-    // 精华与首屏消息并行：精华失败只影响顶部条，不拖垮消息流
+    // 精华、首屏消息、发言权限三路并行：禁言态晚到也不影响消息先显示
     void fetchEssencePage(channel, 'replace')
+    void loadRoomPermission(channel.channelId)
     try {
       await fetchRoomPage(channel, 0, 'replace')
     }
@@ -1001,6 +1344,9 @@ export function usePocketRooms() {
     chatStatus.value = 'ready'
     chatStatusText.value = ''
     resumeMessagePoll()
+    // 进房不连 QChat：消息走 HTTP 轮询。用户点聊天框确认后才建连（会挤掉其他登录端），
+    // 见 connectRoomQChat；退旧房在 sync 内部后置，见 reconcileQChatChannel
+    void syncQChatChannel()
   }
 
   /**
@@ -1023,8 +1369,11 @@ export function usePocketRooms() {
     viewMode.value = 'room'
     smallChannel.value = null
     smallQuestion.value = null
-    if (userId === null)
+    if (userId === null) {
+      // 退房（点空白处取消选中）：同步退掉 QChat 订阅，连接交给主进程按需销毁
+      void syncQChatChannel()
       return
+    }
     void ensureSmallChannel(userId)
 
     const requestId = selectRequestId
@@ -1085,6 +1434,7 @@ export function usePocketRooms() {
     if (selectedUserId.value === temp.userId) {
       selectedUserId.value = null
       clearChat()
+      void syncQChatChannel()
     }
   }
 
@@ -1298,8 +1648,14 @@ export function usePocketRooms() {
     })
   }
 
-  // 登录态变化（在设置页登录/退出后回到本页）：重新首灌
-  watch(loggedIn, () => void load())
+  // 登录态变化（在设置页登录/退出后回到本页）：重新首灌；退出即撤回连接授权并退订
+  watch(loggedIn, (value) => {
+    if (!value) {
+      qchatOptIn.value = false
+      void syncQChatChannel()
+    }
+    void load()
+  })
 
   // 切换消息范围：接口按范围过滤，只能重拉当前频道最近一页（未选中时切了也无需动作）。
   // 走 reloadMessagesForScope —— 频道没变，不必 clearChat + 重开（会连带清掉与范围无关的精华）。
@@ -1319,7 +1675,7 @@ export function usePocketRooms() {
     void reloadMessagesForScope()
   })
 
-  // 卸载/作用域销毁：停轮询（消息区状态随页面销毁自然废弃）
+  // 卸载/作用域销毁：停轮询、退 QChat 订阅（消息区状态随页面销毁自然废弃）
   onScopeDispose(() => {
     loadRequestId++
     selectRequestId++
@@ -1327,6 +1683,11 @@ export function usePocketRooms() {
     releaseLiveStatusPolling?.()
     releaseLiveStatusPolling = null
     pauseMessagePoll()
+    stopRoomBatch()
+    clearSendCooldown()
+    // 先清空跟踪目标再同步：不清的话 reconcile 看到「同房」直接返回，订阅不退
+    activeChannel = null
+    void syncQChatChannel()
   })
 
   return {
@@ -1371,5 +1732,23 @@ export function usePocketRooms() {
     loadMoreHistory,
     openSharedLive,
     isSharedLiveOnAir,
+
+    qchatStatus,
+    qchatHint,
+    qchatOptIn,
+    /** 当前房间是否允许发言（房主房间级禁言时 false，输入框据此禁用并跳过建连） */
+    canSpeak,
+    connectRoomQChat,
+    disconnectRoomQChat,
+    sendBusy,
+    sendCooldownLeft,
+    replyTarget,
+    isOwnMessage,
+    canReplyMessage,
+    canDeleteMessage,
+    startReply,
+    cancelReply,
+    sendMessage,
+    deleteOwnMessage,
   }
 }

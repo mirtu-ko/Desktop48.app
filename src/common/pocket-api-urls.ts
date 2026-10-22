@@ -82,3 +82,9 @@ export const ROOM_LAST_MESSAGE_URL = `${ORIGIN}/im/api/v1/team/classic/last/mess
  * 与参考实现 yaya_msg 的请求体一致（`{ channelId, serverId, nextTime, limit }`）。
  */
 export const ROOM_ESSENCE_MESSAGE_URL = `${ORIGIN}/im/api/v1/team/essence/message/list`
+/**
+ * 删除自己发的房间消息（HTTP；房间发言本身走云信 QChat，删除是唯一的 HTTP 写操作）。
+ * 服务端按 accId 校验只能删自己的。参考实现 yaya_msg 同款，请求体
+ * `{ accId, msgIdClient, channelId, msgTime }`。
+ */
+export const ROOM_MSG_DELETE_URL = `${ORIGIN}/im/api/v1/team/msg/delete`

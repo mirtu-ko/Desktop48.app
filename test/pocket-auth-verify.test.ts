@@ -8,10 +8,12 @@ import {
   getRoomChannel,
   getRoomLastMessages,
   getRoomMessages,
+  getRoomSenderProfile,
   getServerChannels,
   loginByCode,
   loginByToken,
   MASTER_PASSCODE,
+  resetRoomSenderProfile,
   sendSms,
   unfollowMember,
   verifyLogin,
@@ -151,6 +153,8 @@ beforeEach(() => {
   env.written = null
   env.stored = { ...STORED }
   env.replies = defaultReplies()
+  // 发言资料是模块级缓存：别让上一例的结果漏到下一例
+  resetRoomSenderProfile()
 })
 
 describe('pocket-auth verifyLogin', () => {
@@ -561,6 +565,37 @@ describe('pocket-auth 客户端身份（主 App Android 档 + seine Android 档�
       expect(headers.pa).toBeTruthy()
       expect(headers.token).toBe('test-token')
     }
+  })
+})
+
+/**
+ * 房间发言者资料（ext.user）：等级 / 身份组 / 徽章只有 reload 会给，
+ * 缓存策略决定「一次瞬时失败会不会让整个登录会话的发言资料都停在降级值」。
+ */
+describe('pocket-auth 房间发言资料', () => {
+  it('reload 失败时按登录态兜底，且不把降级值写进缓存', async () => {
+    env.replies['user/info/reload'] = { networkError: true }
+    await expect(getRoomSenderProfile()).resolves.toMatchObject({
+      userId: '10001',
+      nickname: '旧昵称',
+      level: 0,
+      vip: false,
+      badge: [],
+    })
+
+    // 恢复后必须拿到真实资料；若失败时缓存了 base，这里仍是 level 0
+    env.replies['user/info/reload'] = {
+      status: 200,
+      body: { status: 200, success: true, content: { level: 9, roleId: 2, vip: true, badge: ['勋章'] } },
+    }
+    await expect(getRoomSenderProfile()).resolves.toMatchObject({ level: 9, roleId: 2, vip: true, badge: ['勋章'] })
+  })
+
+  it('补全成功后缓存，后续发言不再重复请求', async () => {
+    await getRoomSenderProfile()
+    const requestsAfterFirst = env.requests.filter(item => item.url.includes('user/info/reload')).length
+    await getRoomSenderProfile()
+    expect(env.requests.filter(item => item.url.includes('user/info/reload'))).toHaveLength(requestsAfterFirst)
   })
 })
 

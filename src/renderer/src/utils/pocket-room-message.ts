@@ -5,11 +5,15 @@
  * - 弹幕消息来自 NIM 直播聊天室长连接，字段是 fromNick/user/giftInfo 等；
  * - 房间消息来自 im/team/message/list/homeowner，正文 bodys 多为 JSON 字符串，
  *   发送者资料在 extInfo.user（userId/nickName/avatar/level/roleId）。
+ * - 房间消息也有实时来源：QChat 长连接推送（24/11），见 normalizePocketRoomQChatMessage
+ *   ——同样改写成这里的原始形状，共用同一套归一规则。
  *
  * 归一规则对齐参考实现 yaya_msg 的消息解析：msgType 分发 + bodys JSON 兜底，
  * 未识别类型不丢（兜底 [新消息]），DELETE 类通知无展示价值直接过滤。
  * 用户原文里的表情占位符（[爱心] 等）统一在这里换成 emoji，见 data/pocket-emojis.ts。
  */
+
+import type { PocketRoomQChatMessage } from '@preload/ipc-contract'
 
 import { replacePocketEmoji } from '../data/pocket-emojis'
 
@@ -45,6 +49,8 @@ export interface PocketRoomQuote {
 export interface PocketRoomMessageView {
   /** 去重键：msgIdClient || msgIdServer || msgTime */
   id: string
+  /** 客户端消息 ID（UUID 去横杠）；空串 = 接口未回（老消息 / 降级回包） */
+  msgIdClient: string
   kind: PocketRoomMessageKind
   text: string
   userId: string
@@ -457,6 +463,7 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
 
   return {
     id: str(msg.msgIdClient) || str(msg.msgIdServer) || String(num(msg.msgTime)),
+    msgIdClient: str(msg.msgIdClient),
     kind,
     text,
     userId,
@@ -483,6 +490,47 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
     liveCover,
     liveIsPlayback,
   }
+}
+
+/** QChat 线路类型 → 媒体类 msgType（参考实现的 type 1/2/3，正文在 attachment） */
+const QCHAT_WIRE_MEDIA_TYPES: Record<number, string> = { 1: 'IMAGE', 2: 'AUDIO', 3: 'VIDEO' }
+
+/**
+ * 归一化 QChat 长连接推送消息（24/11）→ 展示模型。
+ *
+ * 做法与参考实现一致：把传输层消息**改写成 HTTP 拉取那条链路的原始形状**
+ * （msgType + bodys + extInfo + 各 ID 字段），再走 normalizePocketRoomMessage——
+ * 两套来源共用同一份类型分发与媒体解析，不为实时推送另养一套规则。
+ * 映射口径（对齐参考实现的实时归一化）：
+ * - 线路类型 0 = 文本，body 即正文；
+ * - 线路类型 1/2/3 = 图片/语音/视频，正文在 attachment；
+ * - 线路类型 100 = 自定义，msgType 取 attachment.messageType（REPLY / GIFTREPLY /
+ *   FLIPCARD / LIVEPUSH…），正文整体在 attachment——与 HTTP 侧 bodys 同构。
+ *
+ * time 是协议原值（**秒**，参考实现同款判据）：小于 1e12 视为秒、乘 1000 归一成毫秒，
+ * 与 HTTP 侧 msgTime 同一量纲（排序、日期分隔线、时刻展示都按毫秒）。
+ * id 键取 msgIdClient，与发送 ACK 回显、HTTP 回包同一键空间——三源按 messageKeys 去重，
+ * 自己发的消息不管经哪条链路回来都只显示一次。
+ */
+export function normalizePocketRoomQChatMessage(raw: PocketRoomQChatMessage): PocketRoomMessageView | null {
+  const attachment = parseJson(raw.attachment)
+  const msgType = raw.type === 100
+    ? (str(attachment?.messageType) || 'UNKNOWN')
+    : (QCHAT_WIRE_MEDIA_TYPES[raw.type] ?? 'TEXT')
+  // 自定义消息的 attachment 解不出 JSON（协议演进）：塞 '{}' 走占位文案，
+  // 不把原始串当正文展示
+  const bodys = raw.type === 100 ? (attachment ? raw.attachment : '{}') : (raw.type === 0 ? raw.body : raw.attachment)
+  const time = num(raw.time)
+  return normalizePocketRoomMessage({
+    msgType,
+    bodys,
+    extInfo: raw.ext,
+    senderName: raw.fromNick,
+    senderId: raw.fromAccount,
+    msgIdClient: raw.msgIdClient,
+    msgIdServer: raw.msgIdServer,
+    msgTime: time > 0 && time < 1e12 ? time * 1000 : time,
+  })
 }
 
 /** msgType → 消息类别（气泡样式）；text/system 之外的都归到对应磁贴 */

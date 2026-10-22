@@ -10,7 +10,8 @@ const props = defineProps<{
   /** 视口坐标（右键时的光标位置） */
   x: number
   y: number
-  items: Array<{ key: string, label: string, icon: Component }>
+  /** danger = 破坏性动作（删除），配色与普通动作分开 */
+  items: Array<{ key: string, label: string, icon: Component, danger?: boolean }>
 }>()
 
 const emit = defineEmits<{
@@ -83,6 +84,7 @@ useEventListener(window, 'resize', () => emit('close'))
         type="button"
         role="menuitem"
         class="msg-menu-item"
+        :class="{ 'msg-menu-item--danger': item.danger }"
         @click="emit('pick', item.key)"
       >
         <el-icon :size="13">
@@ -137,6 +139,24 @@ useEventListener(window, 'resize', () => emit('close'))
 
     .el-icon {
       color: var(--brand-primary);
+    }
+  }
+
+  /* 破坏性动作：红色常驻（不靠 hover 才显形），避免误点 */
+  &--danger {
+    color: var(--el-color-danger);
+
+    .el-icon {
+      color: var(--el-color-danger);
+    }
+
+    &:hover {
+      color: var(--el-color-danger);
+      background: color-mix(in srgb, var(--el-color-danger) 12%, transparent);
+
+      .el-icon {
+        color: var(--el-color-danger);
+      }
     }
   }
 }

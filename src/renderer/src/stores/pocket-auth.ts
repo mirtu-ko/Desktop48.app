@@ -15,6 +15,7 @@ const LOGGED_OUT: PocketAuthState = {
   loggedIn: false,
   nickname: '',
   avatar: '',
+  userId: '',
   mobileMasked: '',
   clientProfile: DEFAULT_POCKET_CLIENT_PROFILE,
   plainFallback: false,

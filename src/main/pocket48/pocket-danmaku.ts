@@ -3,7 +3,7 @@
  *
  * 与 B 站弹幕（bilibili/danmaku-session.ts）同一套「会话 + 订阅者」模式：
  * 同一聊天室多个窗口共用一条连接，渲染层按 chatroomId 过滤事件批次。
- * 凭据（accid + imToken）由主进程内部取用，渲染层接触不到。
+ * 凭据（accid + imToken）与常量 appKey 由主进程内部取用，渲染层接触不到。
  *
  * 进房身份随登录档位（`nimIdentityFor(currentClientProfile())`）：会话建立时取一次并
  * 写入客户端，此后该连接不再变。档位切换必须经「登出 → 重新登录」，故登录态变更时由
@@ -15,10 +15,7 @@ import { sendIpc } from '../ipc/send'
 import { debug, error } from '../logger'
 import { nimIdentityFor } from './client-profile'
 import { NimChatroomClient } from './nim-chatroom'
-import { currentClientProfile, getImCredentials } from './pocket-auth'
-
-/** 口袋48 直播聊天室的网易云信 appKey（社区多项目一致） */
-const CHATROOM_APP_KEY = '632feff1f4c838541ab75195d1ceb3fa'
+import { currentClientProfile, getImCredentials, IM_APP_KEY } from './pocket-auth'
 
 interface PocketDanmakuSession {
   chatroomId: string
@@ -97,7 +94,7 @@ export async function handlePocketDanmakuStart(chatroomId: string, liveId: strin
   subscribe(session, sender)
 
   const client = new NimChatroomClient({
-    appKey: CHATROOM_APP_KEY,
+    appKey: IM_APP_KEY,
     account: credentials.accid,
     token: credentials.token,
     roomId: roomKey,

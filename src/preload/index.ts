@@ -1,5 +1,5 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
-import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketClientProfileId, PocketDanmakuBatch, PocketUnreadBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
+import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketClientProfileId, PocketDanmakuBatch, PocketRoomBatch, PocketRoomReplyTarget, PocketUnreadBatch, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 /**
@@ -165,6 +165,7 @@ const api = {
   pocketFollowMember: (userId: number) => invokeIpc('pocketFollowMember', userId),
   pocketUnfollowMember: (userId: number) => invokeIpc('pocketUnfollowMember', userId),
   pocketGetRoomChannel: (userId: number) => invokeIpc('pocketGetRoomChannel', userId),
+  pocketGetRoomPermissions: (channelId: string) => invokeIpc('pocketGetRoomPermissions', channelId),
   pocketGetRoomMessages: (channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all') =>
     invokeIpc('pocketGetRoomMessages', channelId, serverId, nextTime, scope),
   pocketGetRoomEssenceMessages: (channelId: string, serverId: string, nextTime?: number) =>
@@ -179,6 +180,17 @@ const api = {
   // pocketAuthExpired 由 IpcEventMap 派生：主进程清失效凭证时广播
   pocketAuthExpired: (callback: () => void) =>
     onIpc('pocketAuthExpired', callback),
+
+  // 房间消息发送（QChat 圈组长连接）：对端 main/pocket48/pocket-room-qchat.ts
+  pocketRoomQChatEnter: (serverId: string, channelId: string) => invokeIpc('pocketRoomQChatEnter', serverId, channelId),
+  pocketRoomQChatLeave: (serverId: string, channelId: string) => invokeIpc('pocketRoomQChatLeave', serverId, channelId),
+  pocketSendRoomMessage: (serverId: string, channelId: string, text: string, reply?: PocketRoomReplyTarget) =>
+    invokeIpc('pocketSendRoomMessage', serverId, channelId, text, reply),
+  pocketDeleteRoomMessage: (channelId: string, msgIdClient: string, msgTime: number) =>
+    invokeIpc('pocketDeleteRoomMessage', channelId, msgIdClient, msgTime),
+  // pocketRoomBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
+  pocketRoomBatch: (callback: (_batch: PocketRoomBatch) => void) =>
+    onIpc('pocketRoomBatch', callback),
 
   // ===== 房间未读 =====
   // 对端：main/pocket48/pocket-unread.ts（主进程唯一真相，检测不受窗口失焦节流）
