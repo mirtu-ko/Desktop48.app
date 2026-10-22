@@ -133,4 +133,7 @@ export function registerPocketIPC(): void {
   ) => pocketAuth.deleteRoomMessage(channelId, msgIdClient, msgTime))
   handleTraced('pocketMarkRead', (_event: IpcMainInvokeEvent, userId: number, target?: 'room' | 'small') =>
     pocketUnread.markRead(userId, target))
+  // 只读水位：进房画未读分割线（必须在 markRead 之前取，见 pocket-unread.getReadMark）
+  handleTraced('pocketReadMark', (_event: IpcMainInvokeEvent, userId: number, target?: 'room' | 'small') =>
+    pocketUnread.getReadMark(userId, target))
 }

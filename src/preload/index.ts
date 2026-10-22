@@ -201,6 +201,7 @@ const api = {
   pocketCheckRoomAnswer: (channelId: string, questionId: string, answer: string) =>
     invokeIpc('pocketCheckRoomAnswer', channelId, questionId, answer),
   pocketMarkRead: (userId: number, target?: 'room' | 'small') => invokeIpc('pocketMarkRead', userId, target),
+  pocketReadMark: (userId: number, target?: 'room' | 'small') => invokeIpc('pocketReadMark', userId, target),
   // pocketUnreadBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   pocketUnreadBatch: (callback: (_state: PocketUnreadBatch) => void) =>
     onIpc('pocketUnreadBatch', callback),
