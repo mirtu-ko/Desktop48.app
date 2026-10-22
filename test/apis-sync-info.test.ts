@@ -26,11 +26,17 @@ const updateOkBody = JSON.stringify({
 /** 风控拦下 callback 时返回的是站点 HTML 错误页，不是 JSON */
 const wafHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head></html>'
 
-function stubNet(options: { update?: string, allMembers?: string, allMembersError?: Error } = {}) {
+function stubNet(options: { update?: string, snapshot?: string, snapshotError?: Error, allMembers?: string, allMembersError?: Error } = {}) {
   // 形参类型对齐真实契约（preload 的 saveMemberData）：否则 mock.calls 是空元组，
   // 取第 0 个实参在类型上不成立
   const saveMemberData = vi.fn(async (_content: Partial<MemberDataContent>) => ({ ok: true }))
   const netRequest = vi.fn(async (payload: { url: string }) => {
+    // 主源是静态快照：不显式给内容时按「快照挂了」处理，老用例因此专测兜底路径
+    if (payload.url === ApiUrls.ALL_MEMBER_SNAPSHOT_URL) {
+      if (options.snapshot !== undefined)
+        return options.snapshot
+      throw options.snapshotError ?? new Error('502 Bad Gateway')
+    }
     if (payload.url === ApiUrls.ALL_MEMBER_URL) {
       if (options.allMembersError)
         throw options.allMembersError
@@ -42,6 +48,11 @@ function stubNet(options: { update?: string, allMembers?: string, allMembersErro
     mainAPI: { getConfig: async () => 'Mozilla/5.0 (test)', netRequest, saveMemberData },
   })
   return { netRequest, saveMemberData }
+}
+
+/** 本次请求打到了哪些 URL（用来验证「主源可用就不该再打备源」） */
+function requestedUrls(netRequest: ReturnType<typeof stubNet>['netRequest']) {
+  return netRequest.mock.calls.map(call => (call[0] as { url: string }).url)
 }
 
 /** 取本次上送给主进程的载荷（缺 key = 跳过该分节，主进程保留旧值） */
@@ -110,6 +121,58 @@ describe('apis.syncInfo 的补充源降级', () => {
     await expect(Apis.syncInfo()).rejects.toThrow('服务端异常')
 
     expect(saveMemberData).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 补充源有两级：h5.48.cn 的静态快照（resource/json/allmembers_0.jsonp，主）→ jsonp 接口（备）。
+ * 两者回包同构，区别只在可用性——接口在 2026-10 长时间 502，快照照常 200。
+ * 这里锁定的是「主源能用就别打备源」与「主源任何形式的失败都要退到备源」。
+ */
+describe('apis.syncInfo 的补充源优先级', () => {
+  const snapshotBody = 'get_members_success({"total":"2","rows":[{"sid":"10337","sname":"曹可甜"},{"sid":"30001","sname":"乙"}]})'
+  const apiBody = 'cb({"total":"1","rows":[{"sid":"99999","sname":"丙"}]})'
+
+  it('快照可用时只用快照，不再请求接口', async () => {
+    const { netRequest, saveMemberData } = stubNet({ snapshot: snapshotBody, allMembers: apiBody })
+
+    await Apis.syncInfo()
+
+    expect(requestedUrls(netRequest)).not.toContain(ApiUrls.ALL_MEMBER_URL)
+    expect(savedPayload(saveMemberData).allmembers).toHaveLength(2)
+  })
+
+  it('快照返回空名单时退到接口（空名单不等于「官网没人」）', async () => {
+    const { netRequest, saveMemberData } = stubNet({ snapshot: 'cb({"total":"0","rows":[]})', allMembers: apiBody })
+
+    await Apis.syncInfo()
+
+    expect(requestedUrls(netRequest)).toContain(ApiUrls.ALL_MEMBER_URL)
+    expect(savedPayload(saveMemberData).allmembers).toEqual([{ sid: '99999', sname: '丙' }])
+  })
+
+  it('快照 502 时退到接口', async () => {
+    const { netRequest, saveMemberData } = stubNet({ snapshotError: new Error('状态码 502'), allMembers: apiBody })
+
+    await Apis.syncInfo()
+
+    expect(requestedUrls(netRequest)).toEqual([
+      ApiUrls.UPDATE_INFO_URL,
+      ApiUrls.ALL_MEMBER_SNAPSHOT_URL,
+      ApiUrls.ALL_MEMBER_URL,
+    ])
+    expect(savedPayload(saveMemberData).allmembers).toEqual([{ sid: '99999', sname: '丙' }])
+  })
+
+  it('两个来源都挂：试满两次后不带 allmembers，主分节照常落库', async () => {
+    const { netRequest, saveMemberData } = stubNet({ snapshot: wafHtml, allMembers: wafHtml })
+
+    await expect(Apis.syncInfo()).resolves.toBeTruthy()
+
+    expect(requestedUrls(netRequest)).toContain(ApiUrls.ALL_MEMBER_SNAPSHOT_URL)
+    expect(requestedUrls(netRequest)).toContain(ApiUrls.ALL_MEMBER_URL)
+    expect('allmembers' in savedPayload(saveMemberData)).toBe(false)
+    expect(savedPayload(saveMemberData).starInfo).toEqual([{ userId: 1, realName: '甲' }])
   })
 })
 

@@ -40,30 +40,42 @@ async function fetchAllMembers<T>(url: string): Promise<T[]> {
 }
 
 /**
- * 补充源专用：失败或拿到空名单都返回 undefined，调用方据此不带该 key 上送。
+ * 成员名单的来源，按优先级排列：静态快照优先，jsonp 接口兜底。
+ *
+ * 两者是同一份发布产物：回包同构（`函数名({total, rows})`）、字段一个不差。
+ * 快照是 `resource/json/` 下的静态文件，接口 502 期间它照常可用（2026-10-22 实测：接口 502、快照 200 / 941KB / 761 行），
+ * 所以拿它当主源；接口只在快照尚未随发布更新时兜底。
+ */
+const ALL_MEMBER_SOURCES = [ApiUrls.ALL_MEMBER_SNAPSHOT_URL, ApiUrls.ALL_MEMBER_URL]
+
+/**
+ * 补充源专用：按优先级逐个来源试，失败或拿到空名单就换下一个，全部失败返回 undefined（调用方据此不带该 key 上送）。
  * 空名单也算失败——接口正常时恒有 700+ 条，`[]` 只可能来自异常响应，
  * 而 saveMemberData 的 `if (content.allmembers)` 对 `[]` 判真，上送会清空已落库的名单。
- * 这条 jsonp 链路不走 pocketapi 的瞬时失败重试，被风控返回 HTML 时 JSON.parse 会抛，异常只能在这里收敛。
+ * 这条链路不走 pocketapi 的瞬时失败重试，被风控返回 HTML 时 JSON.parse 会抛，异常只能在这里收敛。
  */
 async function fetchAllMembersOrSkip(): Promise<AllMemberItem[] | undefined> {
-  try {
-    const rows = await fetchAllMembers<AllMemberItem>(ApiUrls.ALL_MEMBER_URL)
-    if (rows.length === 0) {
-      console.error('[apis.ts]allmembers 返回空名单，按失败处理（保留库中旧数据）')
-      return undefined
+  for (const url of ALL_MEMBER_SOURCES) {
+    try {
+      const rows = await fetchAllMembers<AllMemberItem>(url)
+      if (rows.length === 0) {
+        console.error('[apis.ts]allmembers 返回空名单，换下一个来源:', url)
+        continue
+      }
+      debugLog('net', 'allmembers 拉取完成', url, rows.length)
+      return rows
     }
-    debugLog('net', 'allmembers 拉取完成', rows.length)
-    return rows
+    catch (e: any) {
+      console.error('[apis.ts]allmembers 来源失败，换下一个:', url, e?.message || e)
+    }
   }
-  catch (e: any) {
-    console.error('[apis.ts]allmembers 拉取失败，跳过本次补充源:', e?.message || e)
-    return undefined
-  }
+  console.error('[apis.ts]allmembers 全部来源失败，跳过本次补充源')
+  return undefined
 }
 
 /**
  * 同步成员信息：拉取并落库（database.json 的 starInfo/teamInfo/groupInfo），
- * 同时从 h5.48.cn 的 allmembers.php 拉取补充成员名单一并存库。
+ * 同时从 h5.48.cn 拉取补充成员名单（静态快照为主、接口兜底，见 ALL_MEMBER_SOURCES）一并存库。
  * 落库成功后广播 members-updated（见 event-bus.ts），依赖成员树的页面据此作废缓存。
  *
  * allmembers 是**次要数据源**：它返回 undefined 时只跳过本次补充，9 个主分节照常落库

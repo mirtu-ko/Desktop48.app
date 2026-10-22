@@ -2,7 +2,7 @@
  * 站点请求的接口地址（渲染层 `Apis.*` 使用，无状态常量）。
  *
  * pocketapi 域地址统一由 `src/common/pocket-api-urls.ts` 提供（与主进程同源，说明见该文件）；
- * 这里只保留**其它域名**的两条：成员名单 jsonp（h5.48.cn）与曲库静态 JSON（cgt48.com）。
+ * 这里只保留**其它域名**的几条：成员名单（h5.48.cn 的静态快照与 jsonp 接口）与曲库静态 JSON（cgt48.com）。
  *
  * 登录 / 发码 / 关注 / 签到 / 行程 / 消息 / IM 会话等地址在主进程（`main/pocket48/pocket-auth.ts`）。
  *
@@ -21,7 +21,8 @@ const ApiUrls = {
   // 成员数据同步（starInfo / teamInfo 等分节的全量拉取）
   UPDATE_INFO_URL,
 
-  // 成员名单 jsonp 与曲库静态 JSON
+  // 成员名单：静态快照为主、jsonp 接口为备（两者同构，见 apis.ts 的 ALL_MEMBER_SOURCES）
+  ALL_MEMBER_SNAPSHOT_URL: 'https://h5.48.cn/resource/json/allmembers_0.jsonp',
   ALL_MEMBER_URL: 'https://h5.48.cn/resource/jsonp/allmembers.php?gid=00',
   MUSIC_LIST_URL: 'https://www.cgt48.com/json/music_snh.json',
 }
