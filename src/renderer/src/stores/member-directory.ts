@@ -18,6 +18,7 @@
 import type { MemberDetail } from '@renderer/utils/member-merge'
 import EventBus from '@renderer/services/event-bus'
 import { mergeMembers } from '@renderer/utils/member-merge'
+import { applyElectionRanks } from '@renderer/utils/member-ranking'
 import Tools from '@renderer/utils/tools'
 import { useMemberTreeStore } from './member-tree'
 
@@ -47,7 +48,8 @@ async function fetchIndex(): Promise<DirectorySnapshot> {
     // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts
     const [tree, payload] = await Promise.all([loadTree(), window.mainAPI.getAllMembers()])
     const members: DirectoryIndex = new Map()
-    for (const member of mergeMembers(tree, payload?.allmembers)) {
+    // 排名同样过一遍本地总选表：详情抽屉读的是这份目录，缺了它抽屉里就没有皇冠名次
+    for (const member of applyElectionRanks(mergeMembers(tree, payload?.allmembers))) {
       if (member.userId !== undefined)
         members.set(member.userId, member)
     }

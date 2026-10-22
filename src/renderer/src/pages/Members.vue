@@ -22,6 +22,7 @@ import { monthBirthdays } from '@renderer/utils/member-birthday'
 import { excludeMembers } from '@renderer/utils/member-exclude'
 import { memberCardKey } from '@renderer/utils/member-list'
 import { buildAdjuncts, mergeMembers } from '@renderer/utils/member-merge'
+import { applyElectionRanks } from '@renderer/utils/member-ranking'
 import { SORT_OPTIONS } from '@renderer/utils/member-sort'
 import { STATS_ALL_SCOPE } from '@renderer/utils/member-stats'
 import { useEventListener } from '@vueuse/core'
@@ -200,7 +201,7 @@ async function fetchMembers() {
       loadTree(),
       window.mainAPI.getAllMembers(),
     ])
-    const merged = mergeMembers(tree, payload?.allmembers)
+    const merged = applyElectionRanks(mergeMembers(tree, payload?.allmembers))
     // 在取数出口一次性屏蔽非 48 系衍生团体（丝芭影视 / 燃烧吧团魂 / Error404Girls / 新星闪耀计划）：
     // 列表分区、人数文案、生日墙、数据看板全部读 members，在这里滤掉就不必每处消费点各滤一遍
     members.value = excludeMembers([...merged, ...buildAdjuncts(merged, tree, payload?.adjuncts)])

@@ -6,8 +6,9 @@
  * - 主进程 App 域请求：`main/pocket48/pocket-auth.ts` → `postPocket`（Android 档客户端伪装头 + pa + token）
  *
  * 此前两边各写一份（`getLiveOne` 即为重复项），端点变更需同时改两处；现集中于此。
- * 边界：h5.48.cn 的成员 jsonp 与 cgt48.com 的曲库属**其它域名**，留在渲染层 api-urls.ts；
- * B 站链路、网易云信 lbs、主进程域名白名单（allowed-hosts.ts）各有独立域名体系，不并入本文件。
+ * 边界：cgt48.com 的曲库属**其它域名**，留在渲染层 api-urls.ts；B 站链路、网易云信 lbs、
+ * 主进程域名白名单（allowed-hosts.ts）各有独立域名体系，不并入本文件。
+ * 成员名单（h5.48.cn）虽不在 pocketapi 域，但同步与网络诊断两地共用，一并放这里。
  */
 
 /** pocketapi 统一 origin：域名变更只需改这一处 */
@@ -25,6 +26,16 @@ export const LIVE_ONE_URL = `${ORIGIN}/live/api/v1/live/getLiveOne`
 // ===== 成员数据同步（starInfo / teamInfo 等分节的全量拉取） =====
 
 export const UPDATE_INFO_URL = `${ORIGIN}/user/api/v1/client/update/group_team_star`
+
+// ===== 成员名单（h5.48.cn，非 pocketapi 域；同步与网络诊断共用同一组地址） =====
+
+/**
+ * 静态快照（主源）：一次 941KB 的全量名单，34 字段与下方 jsonp 接口同构。
+ * 接口自 2026-10 起常态 502 时它仍可用，`apis.ts` 的 ALL_MEMBER_SOURCES 以它打头。
+ */
+export const ALL_MEMBER_SNAPSHOT_URL = 'https://h5.48.cn/resource/json/allmembers_0.jsonp'
+/** jsonp 接口（备源）：动态名单，需 App 身份头 */
+export const ALL_MEMBER_URL = 'https://h5.48.cn/resource/jsonp/allmembers.php?gid=00'
 
 // ===== 账号 / 登录（主进程 pocket-auth 调用） =====
 

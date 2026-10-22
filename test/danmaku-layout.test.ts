@@ -9,23 +9,35 @@ const PORTRAIT_WINDOW: DanmakuLayerRect = { left: 426, top: 0, width: 427, heigh
 /** 横屏画面：铺满容器，没有黑边 */
 const LANDSCAPE: DanmakuLayerRect = { left: 0, top: 0, width: 1920, height: 1080, bottom: 0 }
 
-function layout(rect: DanmakuLayerRect | null, placement: 'video' | 'left' = 'video', compact = false) {
-  return computeDanmakuLayout(rect, { compact, placement })
+function layout(
+  rect: DanmakuLayerRect | null,
+  placement: 'video' | 'left' = 'video',
+  compact = false,
+  fullscreen = true,
+) {
+  return computeDanmakuLayout(rect, { compact, fullscreen, placement })
 }
 
 describe('computeDanmakuLayout', () => {
   it('横屏按短边取字号，宽度铺满画面渲染区', () => {
     const result = layout(LANDSCAPE)
-    expect(result.fontSize).toBe(20)
+    expect(result.fontSize).toBe(18)
     expect(result.width).toBe('1920.0px')
     expect(result.left).toBe('12.0px')
     expect(result.bottom).toBe('46.0px')
   })
 
+  it('横屏非全屏时缩短边缩放，但字号封顶 14px', () => {
+    // 1080p 显示器上的初始播放窗约 864×486；同一系数会得到 16px，相对画幅偏大
+    const windowed: DanmakuLayerRect = { left: 0, top: 0, width: 864, height: 486, bottom: 0 }
+    expect(layout(windowed, 'video', false, false).fontSize).toBe(14)
+    expect(layout(windowed, 'video', false, true).fontSize).toBe(16)
+  })
+
   it('竖屏字号按宽度缩放，不因高度撑满而顶到上限', () => {
-    // 短边 427 × 0.033 ≈ 14px：按高度算会是 25 → 被 20 上限截住，相对画面大一圈
+    // 短边 427 × 0.033 ≈ 14px：按高度算会是 25 → 被 18 上限截住，相对画面大一圈
     expect(layout(PORTRAIT_WINDOW).fontSize).toBe(14)
-    expect(layout(PORTRAIT).fontSize).toBe(20)
+    expect(layout(PORTRAIT).fontSize).toBe(18)
   })
 
   it('左侧栏贴屏幕最左，宽度铺满屏幕（不按黑边收窄）', () => {
@@ -63,6 +75,7 @@ describe('useDanmakuLayer', () => {
     const layer = useDanmakuLayer({
       videoRect: () => PORTRAIT,
       compact: () => false,
+      fullscreen: () => true,
       placement: () => 'left',
     })
     expect(layer.topLeft.value).toEqual({ left: '12px', top: '12px' })
@@ -72,6 +85,7 @@ describe('useDanmakuLayer', () => {
     const layer = useDanmakuLayer({
       videoRect: () => PORTRAIT,
       compact: () => false,
+      fullscreen: () => true,
       placement: () => 'video',
     })
     expect(layer.topLeft.value).toEqual({ left: '668.0px', top: '12.0px' })

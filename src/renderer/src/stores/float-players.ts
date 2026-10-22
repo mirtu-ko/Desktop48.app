@@ -5,7 +5,7 @@
  *
  * 开播前在这里做一次 FFmpeg 校验（见 use-live-guard）：直播播放依赖主进程 FFmpeg 转流，
  * 环境不可用时开出来的窗口只会停在加载态，不如就地拦下并引导到设置页。
- * 四个开播入口（直播列表 / 公演页 / 成员页 / 房间分享卡）都经 openLive，因此只需接一处。
+ * 四个开播入口（直播列表 / 公演页 / 房间资料卡 / 房间分享卡）都经 openLive，因此只需接一处。
  */
 import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 import { useLiveGuard } from '@renderer/composables/use-live-guard'

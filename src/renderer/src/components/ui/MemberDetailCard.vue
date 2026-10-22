@@ -80,7 +80,15 @@ const stats = computed<StatCell[]>(() => {
   if (!member)
     return []
   return [
-    { key: 'rank', label: '总选排名', value: member.ranking ? `第 ${member.ranking} 名` : '', crown: true },
+    {
+      key: 'rank',
+      // 排名取自随包的历届总选表，同一份数据里带得出年份：标上届次，避免把旧届成绩读成最新一届
+      label: '总选排名',
+      value: member.ranking
+        ? `第 ${member.ranking} 名${member.rankingYear ? ` · ${member.rankingYear}` : ''}`
+        : '',
+      crown: true,
+    },
     { key: 'period', label: '期数', value: member.periodName, crown: false },
     { key: 'height', label: '身高', value: member.height ? `${member.height}cm` : '', crown: false },
     {
@@ -856,7 +864,7 @@ function openRoom() {
   white-space: pre-line;
 }
 
-/* ===== 经历：竖向时间轴（首节点用队色实心强调） ===== */
+/* ===== 经历：竖向时间轴（末节点＝最新一条，用队色实心强调） ===== */
 .timeline {
   position: relative;
   margin: 0;
@@ -870,7 +878,7 @@ function openRoom() {
     bottom: 10px;
     left: 4px;
     width: 1px;
-    background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 8%, transparent));
+    background: linear-gradient(0deg, var(--accent), color-mix(in srgb, var(--accent) 8%, transparent));
   }
 
   li {
@@ -895,7 +903,7 @@ function openRoom() {
       box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
     }
 
-    &:first-child::before {
+    &:last-child::before {
       background: var(--accent);
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
     }
