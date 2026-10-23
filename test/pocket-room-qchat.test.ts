@@ -14,7 +14,7 @@ import {
  * 只验会话表的状态机——真正的 TCP 行为不在这层。
  */
 
-const { clientMock, authMock, sendMock } = vi.hoisted(() => ({
+const { clientMock, authMock, sendMock, expireAuthMock } = vi.hoisted(() => ({
   clientMock: {
     /** 构造出的客户端实例（按序） */
     instances: [] as Array<{
@@ -50,9 +50,14 @@ const { clientMock, authMock, sendMock } = vi.hoisted(() => ({
     credentialsImpl: null as null | (() => Promise<{ accid: string, token: string }>),
   },
   sendMock: { calls: [] as unknown[][] },
+  expireAuthMock: vi.fn(),
 }))
 
 vi.mock('../src/main/pocket48/nim-qchat', () => ({
+  isFatalAuthError: (error: unknown) => {
+    const code = (error as { code?: number } | null)?.code
+    return code === 302 || code === 403 || code === 422
+  },
   NimQChatClient: class {
     connected = false
     options: Record<string, unknown>
@@ -104,6 +109,7 @@ vi.mock('../src/main/pocket48/pocket-auth', () => ({
   getImCredentials: async () => (authMock.credentialsImpl ? authMock.credentialsImpl() : authMock.credentials),
   getRoomSenderProfile: async () => authMock.profile,
   currentClientProfile: () => 'pocket48',
+  expireStoredAuth: expireAuthMock,
 }))
 
 vi.mock('../src/main/pocket48/client-profile', () => ({
@@ -141,6 +147,12 @@ function fakeSender(): FakeSender {
   return sender as unknown as FakeSender
 }
 
+function codedError(message: string, code: number): Error & { code: number } {
+  const error = new Error(message) as Error & { code: number }
+  error.code = code
+  return error
+}
+
 beforeEach(() => {
   clientMock.instances = []
   clientMock.connectImpl = null
@@ -149,6 +161,7 @@ beforeEach(() => {
   authMock.credentialsImpl = null
   authMock.credentials = { accid: 'acc-me', token: 'im-token' }
   sendMock.calls = []
+  expireAuthMock.mockClear()
   vi.useFakeTimers()
 })
 
@@ -214,6 +227,32 @@ describe('pocket-room-qchat / 进房订阅', () => {
     expect(result.ok).toBe(false)
     expect(result.message).toBe('IM 凭据已失效')
     expect(clientMock.instances).toHaveLength(0)
+  })
+
+  it('建连返回认证错误：清凭证并按登录过期提示', async () => {
+    clientMock.connectImpl = async () => {
+      throw codedError('NIM 登录失败（302）', 302)
+    }
+
+    const result = await handleRoomQChatEnter('111', '222', fakeSender())
+
+    expect(result).toEqual({ ok: false, message: '登录已过期，请重新登录口袋48账号' })
+    expect(expireAuthMock).toHaveBeenCalledTimes(1)
+    expect(clientMock.instances[0].destroyCalls).toBe(1)
+  })
+
+  it('频道订阅 403：只回订阅失败，不把用户踢下线', async () => {
+    clientMock.subscribeImpl = async () => {
+      throw codedError('订阅房间频道被拒（403）', 403)
+    }
+    const sender = fakeSender()
+
+    const result = await handleRoomQChatEnter('111', '222', sender)
+
+    expect(result).toEqual({ ok: false, message: '订阅房间频道被拒（403）' })
+    expect(expireAuthMock).not.toHaveBeenCalled()
+    expect(sender.listenerCount()).toBe(0)
+    expect(clientMock.instances[0].destroyCalls).toBe(1)
   })
 })
 

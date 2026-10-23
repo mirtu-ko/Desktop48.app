@@ -117,6 +117,8 @@ export interface NimQChatClientOptions {
   onDisconnected?: () => void
   onReconnecting?: (attempt: number) => void
   onError?: (error: Error) => void
+  /** 致命凭证/认证错误（如 302 Token失效、403 禁止访问、422 账号封禁），自动重连已停止 */
+  onFatalAuthError?: (error: Error) => void
   onMessage?: (message: QChatRawMessage) => void
 }
 
@@ -875,6 +877,11 @@ export class NimQChatClient {
       // 不会出现两条 establish 并发互毁会话
       this.connect().catch((error: Error) => {
         this.reportError(error)
+        if (isFatalAuthError(error)) {
+          this.destroy()
+          this.options.onFatalAuthError?.(error)
+          return
+        }
         if (!this.stopped)
           this.scheduleReconnect()
       })
@@ -908,4 +915,17 @@ function channelKey(serverId: string, channelId: string): string {
 function isSubscribeRejected(error: unknown): boolean {
   const code = (error as { code?: number } | null)?.code
   return code === 403 || code === 404
+}
+
+/** 云信不可恢复的认证类致命错误码（302 凭证失效、403 禁止访问、422 账号封禁） */
+export const FATAL_AUTH_CODES = new Set([302, 403, 422])
+
+/** 判定是否为凭证失效或不可恢复的账号认证错误（重试无意义，必须立即停止重连） */
+export function isFatalAuthError(error: unknown): boolean {
+  if (!error)
+    return false
+  if (error instanceof Error && error.message.includes('缺少云信'))
+    return true
+  const code = (error as { code?: number } | null)?.code
+  return typeof code === 'number' && FATAL_AUTH_CODES.has(code)
 }

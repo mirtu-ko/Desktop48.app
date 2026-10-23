@@ -22,8 +22,8 @@ import type { WebContents } from 'electron'
 import { sendIpc } from '../ipc/send'
 import { debug } from '../logger'
 import { nimIdentityFor } from './client-profile'
-import { NimQChatClient } from './nim-qchat'
-import { currentClientProfile, getImCredentials, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
+import { isFatalAuthError, NimQChatClient } from './nim-qchat'
+import { currentClientProfile, expireStoredAuth, getImCredentials, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
 import { buildRoomSendInput } from './room-message-payload'
 
 /** 发送冷却（参考实现同值）：官方 App 亦有限流，桌面端取保守值；发送失败即清零 */
@@ -106,6 +106,7 @@ export async function handleRoomQChatEnter(
   let createdChannel: ChannelState | null = null
   let enteredChannel: ChannelState | null = null
   let addedSubscriber = false
+  let connectAuthExpired = false
   let session: RoomSession | null = null
   try {
     const credentials = await getImCredentials()
@@ -125,6 +126,16 @@ export async function handleRoomQChatEnter(
         onConnected: () => pushBatch(session!, { kind: 'status', status: 'connected' }),
         onReconnecting: attempt => pushBatch(session!, { kind: 'status', status: 'reconnecting', message: `第 ${attempt} 次重连` }),
         onDisconnected: () => pushBatch(session!, { kind: 'status', status: 'disconnected' }),
+        onFatalAuthError: () => {
+          pushBatch(session!, {
+            kind: 'status',
+            status: 'disconnected',
+            message: '登录已过期，请重新登录口袋48账号',
+          })
+          if (sessions.get(session!.accid) === session)
+            sessions.delete(session!.accid)
+          expireStoredAuth()
+        },
         // 建连途中的错误不是「已断开」：状态该留在 connecting，失败由 enter 的返回值表达。
         // 此时推 disconnected 会让指示先闪一下再跳回，且与随后 ok=false 的提示自相矛盾
         onError: (err) => {
@@ -168,6 +179,10 @@ export async function handleRoomQChatEnter(
       try {
         await client.connect()
       }
+      catch (error) {
+        connectAuthExpired = isFatalAuthError(error)
+        throw error
+      }
       finally {
         session.establishing = false
       }
@@ -194,6 +209,10 @@ export async function handleRoomQChatEnter(
         sessions.delete(session.accid)
     }
     const message = error instanceof Error ? error.message : String(error)
+    if (connectAuthExpired) {
+      expireStoredAuth()
+      return { ok: false, message: '登录已过期，请重新登录口袋48账号' }
+    }
     debug(`[pocket-room-qchat] 进入房间连接失败：${message}`)
     return { ok: false, message }
   }

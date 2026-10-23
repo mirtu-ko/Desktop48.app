@@ -598,7 +598,7 @@ export function logout(): void {
 }
 
 /** token 判失效：删凭证文件（过期无恢复手段，重登必然覆盖）+ 广播各窗复位镜像 */
-function expireStoredAuth(): void {
+export function expireStoredAuth(): void {
   deleteStoredCredentials()
   serverChannelCache.clear()
   resetRoomSenderProfile()
