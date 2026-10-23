@@ -120,9 +120,19 @@ export interface NimQChatClientOptions {
   /** 致命凭证/认证错误（如 302 Token失效、403 禁止访问、422 账号封禁），自动重连已停止 */
   onFatalAuthError?: (error: Error) => void
   onMessage?: (message: QChatRawMessage) => void
+  /** 仅供测试：替换 TCP 会话实现，缺省走 CommonlinkSession（生产不传） */
+  sessionFactory?: SessionFactory
 }
 
-interface TcpAddress {
+/** 一条 commonlink 会话的最小契约：真实实现是 CommonlinkSession，测试可注入假会话 */
+export interface QChatSession {
+  connected: boolean
+  connect: () => Promise<void>
+  request: (serviceId: number, commandId: number, body: Buffer, failureMessage: string) => Promise<WirePacket>
+  destroy: () => void
+}
+
+export interface TcpAddress {
   host: string
   port: number
 }
@@ -376,7 +386,7 @@ async function requestNimAddress(appKey: string, account: string, sdkVersion: nu
 
 // ===== 单条 commonlink 会话（一条 TCP：握手 → 登录 → 请求/响应 + 心跳） =====
 
-interface SessionOptions {
+export interface SessionOptions {
   address: TcpAddress
   loginPacket: Buffer
   loginServiceId: number
@@ -385,8 +395,10 @@ interface SessionOptions {
   loginLabel: string
   onPacket?: (packet: WirePacket) => void
   /** 已登录过的会话断开；带上会话自身，供上层识别「是不是当前这条」（非当前会话的关闭要忽略） */
-  onClose: (session: CommonlinkSession) => void
+  onClose: (session: QChatSession) => void
 }
+
+export type SessionFactory = (options: SessionOptions) => QChatSession
 
 interface PendingRequest {
   /** 登记时的服务号 / 指令号：命中 serial 只是必要条件，s/c 对得上才是这条请求的应答 */
@@ -408,7 +420,7 @@ export function isRequestResponse(
   return request.serviceId === frame.serviceId && request.commandId === frame.commandId
 }
 
-class CommonlinkSession {
+class CommonlinkSession implements QChatSession {
   connected = false
 
   private socket: net.Socket | null = null
@@ -655,8 +667,8 @@ export class NimQChatClient {
   connected = false
 
   private options: NimQChatClientOptions
-  private nimSession: CommonlinkSession | null = null
-  private qchatSession: CommonlinkSession | null = null
+  private nimSession: QChatSession | null = null
+  private qchatSession: QChatSession | null = null
   /** 已订阅频道：断线重连后按此表恢复 */
   private subscriptions = new Map<string, ChannelSubscription>()
   private stopped = true
@@ -753,6 +765,11 @@ export class NimQChatClient {
     this.destroySessions()
   }
 
+  /** 建会话：生产走真实 TCP（CommonlinkSession），测试可经 options.sessionFactory 注入假会话 */
+  private createSession(options: SessionOptions): QChatSession {
+    return this.options.sessionFactory ? this.options.sessionFactory(options) : new CommonlinkSession(options)
+  }
+
   /**
    * 双会话建立 + 订阅恢复；任一步失败即整体作废（静默清理，不触发重连）。
    * 登录身份恒为 AOS（属性 3 = 1，见 buildNimLoginPacket）；这一步会顶掉同账号的其他在线设备。
@@ -766,7 +783,7 @@ export class NimQChatClient {
       const address = await requestNimAddress(appKey, account, nim.sdkVersion)
       const deviceId = pocketDeviceId()
 
-      const nimSession = new CommonlinkSession({
+      const nimSession = this.createSession({
         address,
         loginPacket: buildNimLoginPacket({ appKey, account, token, deviceId, nim }),
         loginServiceId: SERVICE_NIM,
@@ -789,7 +806,7 @@ export class NimQChatClient {
       if (!qchatAddresses.length)
         throw new Error('云信没有返回 QChat 连接地址')
 
-      const qchatSession = new CommonlinkSession({
+      const qchatSession = this.createSession({
         address: parseTcpAddress(qchatAddresses[0]),
         loginPacket: buildQChatLoginPacket({ appKey, account, token, deviceId, nim }),
         loginServiceId: SERVICE_QCHAT,
@@ -812,22 +829,31 @@ export class NimQChatClient {
       this.qchatSession = qchatSession
       await qchatSession.connect()
 
+      // 置位必须在恢复订阅之前：subscribeChannel 以 connected 为守卫，晚于循环会让
+      // 每条恢复都抛「房间连接已断开」——订阅表条目还在、线上零订阅，随后照样广播
+      // connected（HTTP 轮询还能跑，界面上看不出异常）
+      this.connected = true
+      this.everConnected = true
+      this.reconnectAttempt = 0
+
       // 重连后恢复订阅（访客/成员身份重判，subscribeChannel 内部会更新订阅表）
       const restoring = [...this.subscriptions.values()]
+      let restored = 0
       for (const subscription of restoring) {
         try {
           await this.subscribeChannel(subscription.serverId, subscription.channelId)
+          restored++
         }
         catch (error) {
           this.reportError(error instanceof Error ? error : new Error(String(error)))
         }
       }
 
-      this.connected = true
-      this.everConnected = true
-      this.reconnectAttempt = 0
-      debug(`[nim-qchat] QChat 已连接：账号=${account} 订阅=${this.subscriptions.size}`)
-      this.options.onConnected?.()
+      // 「已连接」的语义是「订阅可用」，所以这句必须晚于恢复：先报已连接再恢复，
+      // 渲染层就会在收不到推送的状态下显示正常。恢复期间若连接又断了，不再补报
+      debug(`[nim-qchat] QChat 已连接：账号=${account} 订阅恢复=${restored}/${restoring.length}`)
+      if (this.connected)
+        this.options.onConnected?.()
     }
     catch (error) {
       this.destroySessions()
@@ -849,7 +875,7 @@ export class NimQChatClient {
    * 只认当前两条会话的关闭——上一次建立尝试残留的 socket 会在事件循环的任意时刻补到，
    * 放行会连「新会话」一起误杀。
    */
-  private handleSessionClose(session: CommonlinkSession): void {
+  private handleSessionClose(session: QChatSession): void {
     if (session !== this.nimSession && session !== this.qchatSession)
       return
     if (this.stopped)
