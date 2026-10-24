@@ -1404,8 +1404,9 @@ body,
  * 的绝对定位父上会解析成 auto，必须定死，面板宽度才不会随内容抖动 */
 .danmaku-list {
   position: absolute;
-  /* 贴窗口顶：不跟画面渲染区顶边的黑边下沉 */
-  top: 12px;
+  /* 贴窗口顶：不跟画面渲染区顶边的黑边下沉；与 use-danmaku-layer 的 MARGIN 同值，
+     互动榜锚点按该常量注入，差几像素两者就错行 */
+  top: 10px;
   z-index: 10;
   /* 盒子被拉伸到整个可用高度，必须显式声明，否则挡住视频的双击全屏 */
   pointer-events: none;

@@ -80,8 +80,9 @@ export function computeDanmakuLayout(
     fontSize,
     left: `${(rect.left + MARGIN).toFixed(1)}px`,
     bottom,
-    // 宽度锚渲染区并让出左右两侧的内缩量：竖屏下容器远宽于画面，气泡两端都不越黑边
-    width: `${(rect.width - MARGIN * 2).toFixed(1)}px`,
+    // 宽度锚渲染区并让出左右两侧的内缩量：竖屏下容器远宽于画面，气泡两端都不越黑边；
+    // 渲染区窄于两倍内缩量时兜底 0，负宽度会被 CSS 整条忽略、反而退回兜底宽度
+    width: `${Math.max(0, rect.width - MARGIN * 2).toFixed(1)}px`,
     floating,
     canFloatLeft,
   }

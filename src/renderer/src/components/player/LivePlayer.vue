@@ -201,7 +201,7 @@ function toggleDanmaku() {
 }
 
 // ── 互动榜单（口袋 LIVEUPDATE 消息）─────────────────────────────
-// 榜单不进气泡层，独立显示在画面右上角（.player-actions 下方）；可由胶囊开关收起。
+// 榜单不进气泡层，独立锚画面左边缘、贴窗口顶（悬于气泡层正上方并左对齐）；可由胶囊开关收起。
 // 同报文的 online / allMoney 路由到胶囊在线人数与榜单面板的礼物流水段
 const rankUsers = ref<PocketRankUser[]>([])
 const rankVisible = ref(true)

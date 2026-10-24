@@ -81,6 +81,12 @@ describe('computeDanmakuLayout', () => {
     expect(result.bottom).toBe('46px')
   })
 
+  it('渲染区窄于两倍内缩量时宽度兜底 0，不产出负值', () => {
+    // 负宽度会被 CSS 整条忽略、退回 min(90%, 37em) 兜底，面板宽度反而失控
+    const tiny: DanmakuLayerRect = { left: 0, top: 0, width: 12, height: 800, bottom: 0 }
+    expect(layout(tiny).width).toBe('0.0px')
+  })
+
   it('紧凑档字号上下限更小', () => {
     const mini: DanmakuLayerRect = { left: 0, top: 0, width: 300, height: 200, bottom: 0 }
     expect(layout(mini, 'video', true).fontSize).toBe(10)
