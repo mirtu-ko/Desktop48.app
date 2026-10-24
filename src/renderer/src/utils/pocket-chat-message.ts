@@ -5,9 +5,11 @@
  * 类型标识在 attach/custom 承载的业务扩展里（messageType），发送者资料在扩展的 user 字段里，
  * 且不同消息类型的扩展结构不一致 —— 参考社区实现（yk1z/yaya_msg 的解析规则）用 TS 重写，
  * 逐字段兜底后归一成四类：弹幕 / 礼物 / 系统 / 榜单。
- * 榜单（LIVEUPDATE）不进气泡层，由调用方路由到独立的榜单面板。
+ * 榜单（LIVEUPDATE）不进气泡层，由调用方路由到独立的榜单面板；同报文携带的实时在线人数
+ * 与累计礼物流水经 liveOnline / liveAllMoney 透传，供播放器在线人数与榜单面板消费。
  *
  * 归一失败（无法识别类型且无文本）返回 null，调用方直接丢弃。
+ * 下播（CLOSELIVE）与换流信号（INFORM_PULL_STREAM）同样不进气泡层，由宿主执行关播 / 重建。
  */
 
 /** 归一后的聊天室消息 */
@@ -25,9 +27,36 @@ export interface PocketChatMessage {
   avatar?: string
   /** kind='rank' 时的互动榜单用户（按名次升序）；其余 kind 不携带 */
   rankUsers?: PocketRankUser[]
+  /** LIVEUPDATE 实时在线人数（liveUpdateInfo.online）；非榜单消息不携带 */
+  liveOnline?: number
+  /** LIVEUPDATE 累计礼物流水（liveUpdateInfo.allMoney）；非榜单消息不携带 */
+  liveAllMoney?: number
+  /** 禁言/拉黑通知（DISABLE_SPEAK）：宿主门控后按 op 动作，不进气泡层 */
+  disableSpeak?: PocketDisableNotice
+  /** 主播下播（CLOSELIVE）：宿主立即关播，不进气泡层 */
+  liveEnd?: boolean
+  /** 连麦/PK 换流信号（INFORM_PULL_STREAM）：宿主拉详情重建流，不进气泡层 */
+  liveRestream?: boolean
 }
 
-/** 互动榜单条目（LIVEUPDATE 消息的 topList） */
+/**
+ * 禁言/拉黑/踢出通知（DISABLE_SPEAK，对应官方 DisableNotify）。
+ * 官方有两条通道（analysis_live_message_types.md §3.6）：
+ * 消息版（云信聊天室，即本链路）只对 KITOUT 有动作——targetId==本人时提示+关播；
+ * 通知版（CustomNotify）才对 MUTE/BLACK 有动作——提示+重取详情，但我们未订阅该通道。
+ * 故消息版照单全收：服务端若双通道下发，禁言/拉黑同样生效（无害冗余）。
+ * 门控放宿主：管理员操作需与房主 userId 比对，踢出需与本人 userId 比对
+ */
+export interface PocketDisableNotice {
+  /** 操作类型（官方 OpTypeEnum）：1=禁言（提示+重取详情） 2=拉黑（提示+关播） 3=踢出（提示+关播） */
+  op: 1 | 2 | 3
+  /** 操作者类型：1=成员 2=管理员；缺失按成员放行（报文未实测，保功能优先） */
+  operatorType: number
+  /** 操作者 userId：管理员操作时需与房主比对；缺失为空串（管理员门控不放过） */
+  operatorId: string
+  /** 被操作者 userId（踢出门控用）：与当前登录用户比对，非本人则忽略；缺失为空串（按本人兜底） */
+  targetId: string
+}
 export interface PocketRankUser {
   userId: string
   userName: string
@@ -41,7 +70,51 @@ export interface PocketRankUser {
 
 const BARRAGE_PREFIX = 'BARRAGE_'
 const GIFT_PREFIXES = ['PRESENT_', 'GIFT_']
-const IGNORED_TYPES = new Set(['DISABLE_SPEAK'])
+
+/**
+ * 连麦/PK 消息类型（官方 z7/a 门禁集合 + 类型表，共 14 类）：由 cohost 模块消费，
+ * 官方明确不进聊天列表。我们不做连麦 UI，除 INFORM_PULL_STREAM（换流信号，
+ * 宿主拿它拉详情重建）外全部静默丢弃，避免兜底分支把它们刷成系统气泡
+ */
+const COHOST_SILENT_TYPES = new Set([
+  'MICROPHONE_CONNECTION_AGREE_V2',
+  'MICROPHONE_CONNECTION_FINISH_V2',
+  'MICROPHONE_CONNECTION_SCORE',
+  'MICROPHONE_CONNECTION_SETTLEMENT',
+  'MULTI_MIC_PK_AGREE',
+  'MULTI_MIC_PK_FINISH',
+  'MULTI_MIC_PK_REFUSE',
+  'MULTI_MIC_PK_SCORE',
+  'MULTI_MIC_PK_START',
+  'MULTI_MIC_PK_SUCCESS',
+  'MULTI_MIC_PK_TIMEOUT',
+  'SETTLEMENT_HOST_EXIT',
+  'SETTLEMENT_MEMBER_EXIT',
+])
+
+/**
+ * 解析 DISABLE_SPEAK 的禁言/拉黑/踢出通知：opType / operatorType / operatorId / targetId。
+ * 字段与 messageType 同源平铺在 custom JSON（官方 AppIMMessage 同名字段）。
+ * opType 缺失保守按禁言；targetId 缺失为空串，由宿主按本人兜底
+ */
+function extractDisableNotice(extension: Record<string, unknown>): PocketDisableNotice {
+  const rawOp = toFiniteCount(extension.opType ?? extension.op_type)
+  return {
+    op: rawOp === 2 ? 2 : rawOp === 3 ? 3 : 1,
+    operatorType: toFiniteCount(extension.operatorType ?? extension.operator_type) ?? 1,
+    operatorId: strLoose(extension.operatorId ?? extension.operator_id),
+    targetId: strLoose(extension.targetId ?? extension.target_id),
+  }
+}
+
+/** 解析 LIVEUPDATE 的实时在线人数与累计礼物流水：liveUpdateInfo.online / .allMoney */
+export function extractLiveUpdateStats(extension: Record<string, unknown>): { online?: number, allMoney?: number } {
+  const updateInfo = parseJson(extension.liveUpdateInfo) || parseJson(extension.liveUpdate) || {}
+  return {
+    online: toFiniteCount(updateInfo.online),
+    allMoney: toFiniteCount(updateInfo.allMoney),
+  }
+}
 
 /** 解析 LIVEUPDATE 消息的互动榜单：liveUpdateInfo.topList[].user */
 export function extractRankUsers(extension: Record<string, unknown>): PocketRankUser[] {
@@ -67,6 +140,14 @@ export function extractRankUsers(extension: Record<string, unknown>): PocketRank
       users.push({ userId, userName, avatar, level: level || undefined, money: money || undefined })
   }
   return users
+}
+
+/** 数值字段宽松转换：数字或数字字符串均可；缺失 / 非有限数返回 undefined */
+function toFiniteCount(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '')
+    return undefined
+  const num = typeof value === 'number' ? value : Number.parseFloat(String(value))
+  return Number.isFinite(num) ? num : undefined
 }
 
 /** 深度解析 JSON 字符串；非字符串或解析失败返回 null */
@@ -195,19 +276,35 @@ export function normalizePocketChatMessage(
   if (expected && sourceId && sourceId !== expected)
     return null
 
-  if (messageType === 'CLOSELIVE')
-    return { kind: 'system', text: '直播已结束', nick: '', userId: '' }
+  // 连麦/PK 换流信号：官方直接换流地址；我们的推流地址主体不变、token 变，
+  // 故只当「拉详情换 token」的触发器，报文里的 pullStream 字段不采信
+  if (messageType === 'INFORM_PULL_STREAM')
+    return { kind: 'system', text: '', nick: '', userId: '', liveRestream: true }
 
-  // 互动榜单变化：不进气泡层（高频），由宿主路由到右上角榜单面板
-  if (messageType === 'LIVEUPDATE') {
-    const rankUsers = extractRankUsers(extension)
-    if (!rankUsers.length)
-      return null
-    return { kind: 'rank', text: '', nick: '', userId: '', rankUsers }
+  // 连麦/PK 其余消息：官方交 cohost 模块、不进消息流，静默丢弃
+  if (COHOST_SILENT_TYPES.has(messageType))
+    return null
+
+  if (messageType === 'CLOSELIVE')
+    return { kind: 'system', text: '直播已结束', nick: '', userId: '', liveEnd: true }
+
+  // 被禁言/拉黑/踢出：官方消息版只对踢出有动作，禁言/拉黑在通知版；两条通道的行为
+  // 都由 disableSpeak 标记上抛给宿主门控后执行，消息本身不进气泡层
+  if (messageType === 'DISABLE_SPEAK') {
+    const notice = extractDisableNotice(extension)
+    const text = notice.op === 2 ? '你已被拉黑' : notice.op === 3 ? '你已经被踢出直播间' : '你已被禁言'
+    return { kind: 'system', text, nick: '', userId: '', disableSpeak: notice }
   }
 
-  if (IGNORED_TYPES.has(messageType))
-    return null
+  // 互动榜单变化：不进气泡层（高频），由宿主路由到右上角榜单面板。
+  // online / allMoney 与 topList 同报文但可独立变化：无榜单但有实时字段时仍要下发
+  if (messageType === 'LIVEUPDATE') {
+    const rankUsers = extractRankUsers(extension)
+    const stats = extractLiveUpdateStats(extension)
+    if (!rankUsers.length && stats.online === undefined && stats.allMoney === undefined)
+      return null
+    return { kind: 'rank', text: '', nick: '', userId: '', rankUsers, liveOnline: stats.online, liveAllMoney: stats.allMoney }
+  }
 
   // 进场提示：liveIntoPromptDescribe 即描述语（如「进入了房间」），用户在扩展 user 字段。
   // 昵称放 nick 字段（渲染层作作者前缀样式），正文只留动作描述

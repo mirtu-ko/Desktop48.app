@@ -80,7 +80,11 @@ export type PocketRoomChatStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 /** 房间新消息轮询间隔：参考实现通知轮询 2s，这里取 5s 平衡实时性与接口压力 */
 const MESSAGE_POLL_MS = 5_000
-/** 发送冷却（与主进程 pocket-room-qchat.ts 的 SEND_INTERVAL_MS 同值）：镜像只为按钮禁用态 */
+/**
+ * 发送冷却下限（与主进程 pocket-room-qchat.ts 的 SEND_INTERVAL_MS 同值）。
+ * 实际冷却取 max(本值, 服务端房间级 cdTime)：cdTime 才是真实的限流窗口，
+ * 这里只镜像成按钮禁用态，避免用户点了才被拒。
+ */
 const SEND_COOLDOWN_MS = 1500
 
 /** 上翻连续零新增多少次才认定到头：单次零新增可能是边界/重发同页的假信号 */
@@ -762,7 +766,8 @@ export function usePocketRooms() {
 
   /** 开冷却倒数（自调度 setTimeout，到点自行收尾；切房/卸载由 clearCooldown 收） */
   function startSendCooldown(): void {
-    const until = Date.now() + SEND_COOLDOWN_MS
+    const cdMs = Math.max(SEND_COOLDOWN_MS, (roomPermission.value?.cdTime ?? 0) * 1000)
+    const until = Date.now() + cdMs
     const tick = () => {
       const left = until - Date.now()
       if (left <= 0) {

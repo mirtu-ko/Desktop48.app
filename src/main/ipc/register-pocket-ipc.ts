@@ -60,7 +60,11 @@ export function registerPocketIPC(): void {
   // （pocket-danmaku 与 verifyLogin 均在主进程内部直取 getImCredentials）
   handleTraced('pocketGetChatroomId', (_event: IpcMainInvokeEvent, liveId: string) =>
     pocketAuth.getChatroomId(liveId))
+  // 直播结束复盘（下播后浮窗结束卡的数据）：需登录 token，失败 reject 由调用方降级简版卡
+  handleTraced('pocketGetLiveResult', (_event: IpcMainInvokeEvent, liveId: string) =>
+    pocketAuth.getLiveResult(liveId))
   handleTraced('pocketVerifyLogin', () => pocketAuth.verifyLogin())
+  handleTraced('pocketCheckIn', () => pocketAuth.checkIn())
   // 关注列表（账号维度）：拉取 + 桌面端 toggle 双写；失败以 reject 报错，调用方静默降级
   handleTraced('pocketGetFollowedIds', () => pocketAuth.getFollowedIds())
   handleTraced('pocketFollowMember', (_event: IpcMainInvokeEvent, userId: number) =>

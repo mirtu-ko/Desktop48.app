@@ -66,25 +66,25 @@ describe('useDanmakuLayer 字号', () => {
 })
 
 describe('useDanmakuLayer 定位', () => {
-  it('竖屏：left/bottom 锚渲染区，width 与画面同宽（不越黑边）', () => {
+  it('竖屏：横向锚渲染区（左右各内缩），纵向贴窗口底', () => {
     const { position } = setup(makeRect(422, 700))
-    // left = (1000-422)/2 + 12，bottom = (800-700)/2 + 12（高于 MIN_BOTTOM，不被抬升）
+    // left = (1000-422)/2 + 10；width 让出左右各 10px；bottom 恒为控制条避让量
     expect(position.value).toEqual({
-      left: '301.0px',
-      bottom: '62.0px',
-      width: '422.0px',
+      left: '299.0px',
+      bottom: '46px',
+      width: '402.0px',
     })
   })
 
-  it('bottom 不低于控制条避让下限', () => {
-    // 画面贴容器底边时 bottom = 0 + 12，被 MIN_BOTTOM=46 抬升
-    const { position } = setup(makeRect(1000, 800))
-    expect(position.value.bottom).toBe('46.0px')
+  it('画面上下有黑边（顶底各 50px）也不抬高底边', () => {
+    // 同一画面贴满容器时底边不变：渲染区的 top / bottom 不参与纵向定位
+    expect(setup(makeRect(422, 700)).position.value.bottom).toBe('46px')
+    expect(setup(makeRect(1000, 800)).position.value.bottom).toBe('46px')
   })
 
   it('渲染区未就绪：left/bottom 走兜底，不注入 width（由 CSS 兜底宽度）', () => {
     const { position } = setup(null)
-    expect(position.value).toEqual({ left: '12px', bottom: '46px' })
+    expect(position.value).toEqual({ left: '10px', bottom: '46px' })
   })
 
   it('支持注入额外最大宽度', () => {

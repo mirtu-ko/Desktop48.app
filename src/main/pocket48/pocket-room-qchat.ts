@@ -22,11 +22,15 @@ import type { WebContents } from 'electron'
 import { sendIpc } from '../ipc/send'
 import { debug } from '../logger'
 import { nimIdentityFor } from './client-profile'
-import { NimQChatClient } from './nim-qchat'
-import { currentClientProfile, getImCredentials, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
+import { isFatalAuthError, NimQChatClient } from './nim-qchat'
+import { currentClientProfile, expireStoredAuth, getImCredentials, getRoomPermissions, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
 import { buildRoomSendInput } from './room-message-payload'
 
-/** 发送冷却（参考实现同值）：官方 App 亦有限流，桌面端取保守值；发送失败即清零 */
+/**
+ * 发送冷却下限（与服务端常规房间的 cdTime 同为 10s 之下的保守起点）。
+ * 实际冷却取 max(本值, 服务端房间级 cdTime)——cdTime 才是真正的限流窗口，
+ * 只按 1.5s 放行会让第二条起全被服务端拒绝。
+ */
 const SEND_INTERVAL_MS = 1500
 
 interface ChannelState {
@@ -37,13 +41,16 @@ interface ChannelState {
    * 钩子必须随订阅一起摘：切房 A→B→A 会重新登记订阅，只删订阅者不摘钩子会逐次累积。
    */
   subscribers: Map<WebContents, () => void>
+  /** 本频道上次发送时刻：冷却按房间算（服务端 cdTime 是房间级） */
+  lastSentAt: number
+  /** 服务端房间级发言冷却（毫秒），进房预热写入；0 = 未知，按本地下限 */
+  cooldownMs: number
 }
 
 interface RoomSession {
   client: NimQChatClient
   accid: string
   channels: Map<string, ChannelState>
-  lastSentAt: number
   /** 首次连接 / 重连进行中：此间的 onError 不代表「已断开」，别推 disconnected 翻转指示 */
   establishing: boolean
 }
@@ -93,6 +100,22 @@ async function leaveChannel(session: RoomSession, key: string, sender: WebConten
 }
 
 /**
+ * 进房时预热本频道的服务端冷却（cdTime）。
+ *
+ * 不阻塞进房：权限回包晚到只影响「下一条消息的冷却长度」，不影响订阅与首屏。
+ * 失败静默——拉不到就按本地下限走，真发快了服务端仍会拒绝兜底。
+ */
+function primeChannelCooldown(channel: ChannelState): void {
+  void getRoomPermissions(channel.channelId).then((permission) => {
+    const cdMs = (permission?.cdTime ?? 0) * 1000
+    if (cdMs > channel.cooldownMs)
+      channel.cooldownMs = cdMs
+  }).catch((error) => {
+    debug(`[pocket-room-qchat] 拉取发言冷却失败，按本地下限处理：${error instanceof Error ? error.message : String(error)}`)
+  })
+}
+
+/**
  * 进入房间频道：确保当前账号的 QChat 会话存在、连接就绪、频道已订阅。
  * 连接过程的状态（connecting / connected / reconnecting）经 pocketRoomBatch 送达；
  * 失败返回 !ok 与原因，由调用方决定提示（不抛到渲染层栈外）。
@@ -106,6 +129,7 @@ export async function handleRoomQChatEnter(
   let createdChannel: ChannelState | null = null
   let enteredChannel: ChannelState | null = null
   let addedSubscriber = false
+  let connectAuthExpired = false
   let session: RoomSession | null = null
   try {
     const credentials = await getImCredentials()
@@ -125,6 +149,16 @@ export async function handleRoomQChatEnter(
         onConnected: () => pushBatch(session!, { kind: 'status', status: 'connected' }),
         onReconnecting: attempt => pushBatch(session!, { kind: 'status', status: 'reconnecting', message: `第 ${attempt} 次重连` }),
         onDisconnected: () => pushBatch(session!, { kind: 'status', status: 'disconnected' }),
+        onFatalAuthError: () => {
+          pushBatch(session!, {
+            kind: 'status',
+            status: 'disconnected',
+            message: '登录已过期，请重新登录口袋48账号',
+          })
+          if (sessions.get(session!.accid) === session)
+            sessions.delete(session!.accid)
+          expireStoredAuth()
+        },
         // 建连途中的错误不是「已断开」：状态该留在 connecting，失败由 enter 的返回值表达。
         // 此时推 disconnected 会让指示先闪一下再跳回，且与随后 ok=false 的提示自相矛盾
         onError: (err) => {
@@ -138,7 +172,7 @@ export async function handleRoomQChatEnter(
         },
         onMessage: (message: PocketRoomQChatMessage) => pushBatch(session!, { kind: 'message', message }),
       })
-      activeSession = { client, accid: credentials.accid, channels: new Map(), lastSentAt: 0, establishing: false }
+      activeSession = { client, accid: credentials.accid, channels: new Map(), establishing: false }
       sessions.set(credentials.accid, activeSession)
     }
     session = activeSession
@@ -146,7 +180,7 @@ export async function handleRoomQChatEnter(
     const client = session.client
     let channel = session.channels.get(key)
     if (!channel) {
-      channel = { serverId, channelId, subscribers: new Map() }
+      channel = { serverId, channelId, subscribers: new Map(), lastSentAt: 0, cooldownMs: 0 }
       session.channels.set(key, channel)
       createdChannel = channel
     }
@@ -168,6 +202,10 @@ export async function handleRoomQChatEnter(
       try {
         await client.connect()
       }
+      catch (error) {
+        connectAuthExpired = isFatalAuthError(error)
+        throw error
+      }
       finally {
         session.establishing = false
       }
@@ -175,6 +213,7 @@ export async function handleRoomQChatEnter(
     // 新房频道才需要显式订阅；重连后的订阅恢复由客户端内部订阅表完成
     if (createdChannel)
       await client.subscribeChannel(serverId, channelId)
+    primeChannelCooldown(channel)
     return { ok: true }
   }
   catch (error) {
@@ -194,6 +233,10 @@ export async function handleRoomQChatEnter(
         sessions.delete(session.accid)
     }
     const message = error instanceof Error ? error.message : String(error)
+    if (connectAuthExpired) {
+      expireStoredAuth()
+      return { ok: false, message: '登录已过期，请重新登录口袋48账号' }
+    }
     debug(`[pocket-room-qchat] 进入房间连接失败：${message}`)
     return { ok: false, message }
   }
@@ -222,7 +265,7 @@ function findSessionByChannel(serverId: string, channelId: string): RoomSession 
 }
 
 /**
- * 在房间频道发言。冷却 1500ms；目标频道必须是当前订阅表内的频道；
+ * 在房间频道发言。冷却 = max(1.5s, 服务端房间级 cdTime)；目标频道必须是当前订阅表内的频道；
  * 发言资料（ext.user）首次发送时拉取并缓存（level / roleId 等字段 reload 才给）。
  * 返回值带一条**发送回显**（ACK 只回 ID 与时刻，正文与资料由发送入参补全，
  * 思路同参考实现）：渲染层按 24/11 同一形状归一插入，与推送回显、HTTP 回包
@@ -235,14 +278,18 @@ export async function sendRoomMessage(
   reply?: PocketRoomReplyTarget,
 ): Promise<PocketRoomSendResult> {
   const session = findSessionByChannel(serverId, channelId)
-  if (!session)
+  const channel = session?.channels.get(channelKey(serverId, channelId))
+  if (!session || !channel)
     throw new Error('房间连接已失效，请重新进入房间')
   const now = Date.now()
-  if (now - session.lastSentAt < SEND_INTERVAL_MS)
-    throw new Error('发送太快，请稍后再试')
+  // cdTime 是服务端真正的限流窗口（常规房间 10s），只按本地下限放行等于把拒绝留给服务端
+  const cooldownMs = Math.max(SEND_INTERVAL_MS, channel.cooldownMs)
+  const waitMs = channel.lastSentAt + cooldownMs - now
+  if (channel.lastSentAt > 0 && waitMs > 0)
+    throw new Error(`发送太快，请 ${Math.ceil(waitMs / 1000)} 秒后再试`)
   const profile = await getRoomSenderProfile()
   const input = buildRoomSendInput({ serverId, channelId, text, reply, profile })
-  session.lastSentAt = now
+  channel.lastSentAt = now
   try {
     const result = await session.client.sendMessage(input)
     debug(`[pocket-room-qchat] 已发送：${channelKey(serverId, channelId)} msgIdClient=${result.msgIdClient}`)
@@ -267,8 +314,8 @@ export async function sendRoomMessage(
     }
   }
   catch (error) {
-    // 失败清零冷却：网络抖动不该让用户干等 1.5s
-    session.lastSentAt = 0
+    // 失败清零冷却：网络抖动不该让用户干等一整个 cdTime
+    channel.lastSentAt = 0
     throw error
   }
 }

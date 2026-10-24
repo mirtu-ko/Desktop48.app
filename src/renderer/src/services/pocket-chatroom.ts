@@ -108,11 +108,42 @@ async function startEntry(entry: ChatroomEntry): Promise<void> {
 }
 
 /**
+ * 把一条原始报文走「归一 → fan-out」全链（与主进程推送同一路径）。
+ * 返回是否送达订阅者：无在册会话（未连接）或归一丢弃均返回 false。
+ */
+function dispatchRawMessage(chatroomId: string, raw: Record<string, unknown>): boolean {
+  const entry = entries.get(chatroomId)
+  if (!entry || entry.dead)
+    return false
+  // 归一只做一次（同房间 liveId 一致，结果相同），再 fan-out
+  const normalized = normalizePocketChatMessage(raw, entry.liveId)
+  if (!normalized) {
+    if (import.meta.env.DEV)
+      debugLog('live', '口袋弹幕: 归一丢弃', raw)
+    return false
+  }
+  for (const subscriber of [...entry.subscribers])
+    subscriber.onMessage(normalized)
+  return true
+}
+
+/**
  * 建立聊天室会话（订阅）。任何一步失败都走 onStatus('disconnected')，
  * 不抛错 —— 调用方无需 try/catch，弹幕失败不该打扰直播播放。
  * 同房间已有活跃/在途会话时直接复用（fan-out 给新订阅者，不重连、不双订阅）。
  */
 export function connectPocketChatroom(options: PocketChatSessionOptions): PocketChatSession {
+  // dev 测试注入：伪造主进程原始报文走真实链路（CLOSELIVE / DISABLE_SPEAK 等免等实测）；
+  // 挂这里而非模块顶层——测试环境 stubGlobal 在此之前，顶层访问 window 会炸
+  if (import.meta.env.DEV && !window.__injectPocketRaw) {
+    window.__injectPocketRaw = (raw, chatroomId) => {
+      const target = chatroomId ?? [...entries.keys()][0] ?? ''
+      const delivered = !!target && dispatchRawMessage(target, raw)
+      debugLog('live', delivered ? `测试注入成功（chatroomId=${target}）` : `测试注入未送达（在册会话：${[...entries.keys()].join(', ') || '无'}）`, raw)
+      return delivered
+    }
+  }
+
   let entry = entries.get(options.chatroomId)
   // 墓碑不复用：顶替在册记录，重起一条新会话（主进程侧按 chatroomId 去重，不会双连接）
   if (!entry || entry.dead) {
@@ -144,17 +175,8 @@ export function connectPocketChatroom(options: PocketChatSessionOptions): Pocket
           subscriber.onStatus?.(batch.status ?? 'connecting', batch.message)
         return
       }
-      for (const raw of batch.items ?? []) {
-        // 归一只做一次（同房间 liveId 一致，结果相同），再 fan-out
-        const normalized = normalizePocketChatMessage(raw as unknown as Record<string, unknown>, current.liveId)
-        if (!normalized) {
-          if (import.meta.env.DEV)
-            debugLog('live', '口袋弹幕: 归一丢弃', raw)
-          continue
-        }
-        for (const subscriber of [...current.subscribers])
-          subscriber.onMessage(normalized)
-      }
+      for (const raw of batch.items ?? [])
+        dispatchRawMessage(current.chatroomId, raw as unknown as Record<string, unknown>)
       if (import.meta.env.DEV)
         debugLog('live', `口袋弹幕: 批次 ${batch.items?.length ?? 0} 条 → ${current.subscribers.size} 个订阅者`)
     })
@@ -179,4 +201,14 @@ export function disconnectPocketChatroom(chatroomId: string): void {
   // 拷贝后再遍历：removeSubscriber 会改 subscribers
   for (const subscriber of [...entry.subscribers])
     removeSubscriber(entry, subscriber)
+}
+
+declare global {
+  interface Window {
+    /**
+     * dev 测试注入（connectPocketChatroom 在 dev 下挂载）：伪造一条主进程原始报文，
+     * 走与真实推送完全相同的归一 + fan-out；单会话时可省略 chatroomId，返回是否送达。
+     */
+    __injectPocketRaw?: (raw: Record<string, unknown>, chatroomId?: string) => boolean
+  }
 }

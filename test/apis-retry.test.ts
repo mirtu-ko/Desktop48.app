@@ -13,17 +13,18 @@ vi.mock('element-plus', () => ({ ElMessage: { error: messageMock } }))
 vi.mock('@renderer/utils/debug', () => ({ debugLog: vi.fn() }))
 
 /** 网络层返回体（apis 期望的是 utf-8 字符串，信封解析在 apis 内完成） */
-interface NetResult { body?: string, error?: Error }
+interface NetResult { body?: string, status?: number, error?: Error }
 
 /**
  * 顺序消费预设的响应；用完后沿用最后一个，方便断言"调用了几次"。
+ * 回包形状对齐 preload 契约：状态码与正文分开，非 2xx 由 request.ts 判成 HttpError。
  */
 function stubNet(results: NetResult[]) {
   const netRequest = vi.fn(async () => {
     const result = results.length > 1 ? results.shift()! : results[0]
     if (result.error)
       throw result.error
-    return result.body!
+    return { status: result.status ?? 200, body: result.body!, headers: {} }
   })
   vi.stubGlobal('window', {
     mainAPI: {
@@ -91,6 +92,27 @@ describe('apis.live 的瞬时失败重试', () => {
 
     expect(netRequest).toHaveBeenCalledTimes(1)
     expect(messageMock).toHaveBeenCalledWith('该成员直播已被删除')
+  })
+
+  it('429 限流不重试：直接提示「请求过于频繁」', async () => {
+    // 限流窗口里再连打 3 次只会把窗口拖长；主进程已按 Retry-After 让整域冷却
+    const netRequest = stubNet([{ status: 429, body: 'rate limited' }])
+
+    await expect(Apis.live('123')).rejects.toThrow('HTTP 429')
+
+    expect(netRequest).toHaveBeenCalledTimes(1)
+    expect(messageMock).toHaveBeenCalledWith('请求过于频繁，请稍后再试')
+  })
+
+  it('502 仍是瞬时故障：按预算重试', async () => {
+    const netRequest = stubNet([{ status: 502, body: '' }, { body: okBody }])
+
+    const assertion = expect(Apis.live('123')).resolves.toEqual({ onlineNum: 1067 })
+    await settleRetries()
+    await assertion
+
+    expect(netRequest).toHaveBeenCalledTimes(2)
+    expect(messageMock).not.toHaveBeenCalled()
   })
 
   it('silent：最终失败也不弹提示（后台轮询不打扰用户）', async () => {

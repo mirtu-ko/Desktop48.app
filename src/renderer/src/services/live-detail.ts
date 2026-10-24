@@ -56,6 +56,8 @@ export interface LiveDetailView {
    * 口袋互动消息弹幕的会话锚点；缺失/公演恒 undefined。
    */
   chatroomId?: string
+  /** 房主 userId（仅 user 源）：禁言/拉黑通知门控比对管理员操作者用 */
+  ownerUserId?: string
 }
 
 export interface LoadLiveDetailOptions {
@@ -108,6 +110,7 @@ function fromUserLive(
     chatroomId: toChatroomId((raw as { chatroomId?: unknown }).chatroomId)
       || toChatroomId((raw as { roomId?: unknown }).roomId)
       || undefined,
+    ownerUserId: String(raw.user.userId ?? '').trim() || undefined,
   }
 }
 

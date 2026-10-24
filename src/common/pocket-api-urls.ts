@@ -22,6 +22,11 @@ export const OPEN_LIVE_LIST_URL = `${ORIGIN}/live/api/v1/live/getOpenLiveList`
 export const OPEN_LIVE_URL = `${ORIGIN}/live/api/v1/live/getOpenLiveOne`
 /** 直播详情：仅带 token 的请求才返回 chatroomId（实测无 token 时 roomId 恒 0 且无 chatroomId 字段） */
 export const LIVE_ONE_URL = `${ORIGIN}/live/api/v1/live/getLiveOne`
+/**
+ * 直播结束复盘（下播后浮窗展示的总观看 / 本场时长 / 礼物流水 / 榜单前三）：
+ * 必须带登录 token（实测无 token 服务端报 400「缺少请求参数」）；进行中也可查，下播即时可用
+ */
+export const LIVE_RESULT_URL = `${ORIGIN}/live/api/v1/live/result`
 
 // ===== 成员数据同步（starInfo / teamInfo 等分节的全量拉取） =====
 
@@ -46,6 +51,8 @@ export const SMS_LOGIN_URL = `${ORIGIN}/user/api/v2/login/app/app_login`
 export const TOKEN_CHECK_URL = `${ORIGIN}/user/api/v1/user/info/reload`
 /** 口袋钱包余额：验证登录态时顺带展示，接口失败不影响登录态判定 */
 export const USER_MONEY_URL = `${ORIGIN}/user/api/v1/user/money`
+/** 每日签到（口袋 App 的「每日礼品」）：成功返回成长值 / 鸡腿 / 鸡翅奖励 */
+export const CHECKIN_URL = `${ORIGIN}/user/api/v1/checkin`
 /** 关注成员 ID 列表（账号维度，一次性返回无分页；只给 ID，详情由本地成员树解析） */
 export const FRIENDS_IDS_URL = `${ORIGIN}/user/api/v1/friendships/friends/id`
 /** 关注 / 取消关注成员（桌面端 toggle 双写用） */

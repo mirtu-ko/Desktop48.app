@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { LiveListItemView } from '@renderer/services/api-types'
-import { StarFilled, VideoCameraFilled } from '@element-plus/icons-vue'
+import { StarFilled, UserFilled, VideoCameraFilled } from '@element-plus/icons-vue'
 import Tools from '@renderer/utils/tools'
+import { formatViewNum } from '@renderer/utils/view-num'
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -56,6 +57,15 @@ const liveBadge = computed(() => {
         </template>
       </el-image>
       <span class="live-badge" :class="`live-badge--${liveBadge.type}`">{{ liveBadge.text }}</span>
+      <!-- 在线人数：列表接口 onlineUserNum 快照，零额外请求；回放条目无此字段自动不显示 -->
+      <span
+        v-if="item.onlineUserNum && item.onlineUserNum > 0"
+        class="online-badge"
+        :title="`${item.onlineUserNum} 人在线`"
+      >
+        <el-icon :size="12"><UserFilled /></el-icon>
+        <span>{{ formatViewNum(item.onlineUserNum) }}</span>
+      </span>
       <span v-if="item.duration" class="duration-badge" :title="`直播时长 ${item.duration}`">
         {{ item.duration }}
       </span>
@@ -187,6 +197,25 @@ const liveBadge = computed(() => {
     color: #fff;
     font-size: 13px;
     line-height: 1;
+    backdrop-filter: blur(4px);
+  }
+
+  /* 在线人数：封面左下角（时长在右下、已关注在右上，互不遮挡）；黑底白字同时长角标 */
+  .online-badge {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: var(--radius-xs);
+    background: rgba(0, 0, 0, 70%);
+    color: #fff;
+    font-size: 13px;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
     backdrop-filter: blur(4px);
   }
 
