@@ -17,8 +17,8 @@ const FONT_RATIO = 0.033
 const MARGIN = 12
 // bottom 下限：避开底部控制条
 const MIN_BOTTOM = 46
-// 左侧黑边最小宽度：更窄时一列排不下几个字，不如留在画面内
-const MIN_LEFT_BAR = 220
+// 左侧黑边最小宽度：低于 60px 时难以形成独立栏，不如留在画面内
+const MIN_LEFT_BAR = 60
 
 export interface DanmakuLayerLayout {
   fontSize: number

@@ -163,7 +163,7 @@ danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveE
 
 直播已播时长只有一个消费者，计时逻辑已内联到 `LivePlayer.vue`；在线人数仍由 IM 推送更新，不走轮询。
 
-弹幕层的几何全在 `computeDanmakuLayout`（纯函数）：字号按渲染区短边等比缩放，三档封顶——迷你窗 10–14px、非全屏播放窗 12–14px、全屏 12–18px（窗口态面积小，沿用 18px 上限会和全屏一样大、显得拥挤）；摆放取全局偏好 `danmakuPlacement`（`video` 画面内 / `left` 左侧黑边），黑边窄于 220px 时自行回落画面内、入口按钮只在 `canFloatLeft` 时出现；公演（B 站）弹幕另限宽 33vw，防单条横跨整块画面。直播与回放共用，迷你浮窗不传 `placement`。
+弹幕层的几何全在 `computeDanmakuLayout`（纯函数）：字号按渲染区短边等比缩放，三档封顶——迷你窗 10–14px、非全屏播放窗 12–14px、全屏 12–18px（窗口态面积小，沿用 18px 上限会和全屏一样大、显得拥挤）；摆放取全局偏好 `danmakuPlacement`（`video` 画面内 / `left` 左侧黑边），黑边窄于 60px 时自行回落画面内、入口按钮只在 `canFloatLeft` 时出现；公演（B 站）弹幕另限宽 33vw，防单条横跨整块画面。直播与回放共用，迷你浮窗不传 `placement`。
 
 ### 6.1 下播结束态与复盘数据
 

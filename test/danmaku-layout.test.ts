@@ -49,12 +49,20 @@ describe('computeDanmakuLayout', () => {
     expect(result.bottom).toBe('46.0px')
   })
 
-  it('黑边过窄时回落画面内，但仍记录「能否浮到左侧」', () => {
-    const narrow: DanmakuLayerRect = { left: 100, top: 0, width: 607, height: 1080, bottom: 0 }
+  it('黑边低于 60px 时回落画面内，但仍记录「能否浮到左侧」', () => {
+    const narrow: DanmakuLayerRect = { left: 59, top: 0, width: 607, height: 1080, bottom: 0 }
     const result = layout(narrow, 'left')
     expect(result.canFloatLeft).toBe(false)
     expect(result.floating).toBe(false)
-    expect(result.left).toBe('112.0px')
+    expect(result.left).toBe('71.0px')
+  })
+
+  it('黑边达到 60px 边界时允许左侧摆放', () => {
+    const edge: DanmakuLayerRect = { left: 60, top: 0, width: 607, height: 1080, bottom: 0 }
+    const result = layout(edge, 'left')
+    expect(result.canFloatLeft).toBe(true)
+    expect(result.floating).toBe(true)
+    expect(result.left).toBe('12px')
   })
 
   it('渲染区未知时不给宽度，交给 .danmaku-list 的 CSS 兜底', () => {

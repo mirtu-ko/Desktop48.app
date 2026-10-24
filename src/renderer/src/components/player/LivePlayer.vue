@@ -136,7 +136,7 @@ const {
   videoRect: () => videoRect.value,
   compact: () => props.compact,
   fullscreen: () => isFullscreen.value,
-  // 黑边不够宽（videoRect.left < 220）时由 computeDanmakuLayout 自行回落画面内，
+  // 黑边不够宽（videoRect.left < 60）时由 computeDanmakuLayout 自行回落画面内，
   // 与全屏无关：窗口态下竖屏直播同样留得出左侧栏
   placement: () => danmakuPlacement.value,
   // 公演 B 站弹幕可能很长；限制在窗口宽度的 33%，避免单条横跨整块画面
