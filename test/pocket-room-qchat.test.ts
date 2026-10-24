@@ -14,7 +14,7 @@ import {
  * 只验会话表的状态机——真正的 TCP 行为不在这层。
  */
 
-const { clientMock, authMock, sendMock } = vi.hoisted(() => ({
+const { clientMock, authMock, sendMock, expireAuthMock } = vi.hoisted(() => ({
   clientMock: {
     /** 构造出的客户端实例（按序） */
     instances: [] as Array<{
@@ -48,11 +48,18 @@ const { clientMock, authMock, sendMock } = vi.hoisted(() => ({
     },
     /** getImCredentials 抛错（凭据失效） */
     credentialsImpl: null as null | (() => Promise<{ accid: string, token: string }>),
+    /** channelId → 服务端发言权限（cdTime 决定真实冷却；未设置 = 未知，按本地下限） */
+    permissions: {} as Record<string, { cdTime: number }>,
   },
   sendMock: { calls: [] as unknown[][] },
+  expireAuthMock: vi.fn(),
 }))
 
 vi.mock('../src/main/pocket48/nim-qchat', () => ({
+  isFatalAuthError: (error: unknown) => {
+    const code = (error as { code?: number } | null)?.code
+    return code === 302 || code === 403 || code === 422
+  },
   NimQChatClient: class {
     connected = false
     options: Record<string, unknown>
@@ -103,7 +110,12 @@ vi.mock('../src/main/pocket48/pocket-auth', () => ({
   IM_APP_KEY: 'fixed-app-key',
   getImCredentials: async () => (authMock.credentialsImpl ? authMock.credentialsImpl() : authMock.credentials),
   getRoomSenderProfile: async () => authMock.profile,
+  getRoomPermissions: async (channelId: string) => {
+    const permission = authMock.permissions[channelId]
+    return permission ? { sendText: true, roomRole: '0', followFlag: true, ...permission } : null
+  },
   currentClientProfile: () => 'pocket48',
+  expireStoredAuth: expireAuthMock,
 }))
 
 vi.mock('../src/main/pocket48/client-profile', () => ({
@@ -141,6 +153,12 @@ function fakeSender(): FakeSender {
   return sender as unknown as FakeSender
 }
 
+function codedError(message: string, code: number): Error & { code: number } {
+  const error = new Error(message) as Error & { code: number }
+  error.code = code
+  return error
+}
+
 beforeEach(() => {
   clientMock.instances = []
   clientMock.connectImpl = null
@@ -148,7 +166,9 @@ beforeEach(() => {
   clientMock.sendImpl = null
   authMock.credentialsImpl = null
   authMock.credentials = { accid: 'acc-me', token: 'im-token' }
+  authMock.permissions = {}
   sendMock.calls = []
+  expireAuthMock.mockClear()
   vi.useFakeTimers()
 })
 
@@ -214,6 +234,32 @@ describe('pocket-room-qchat / 进房订阅', () => {
     expect(result.ok).toBe(false)
     expect(result.message).toBe('IM 凭据已失效')
     expect(clientMock.instances).toHaveLength(0)
+  })
+
+  it('建连返回认证错误：清凭证并按登录过期提示', async () => {
+    clientMock.connectImpl = async () => {
+      throw codedError('NIM 登录失败（302）', 302)
+    }
+
+    const result = await handleRoomQChatEnter('111', '222', fakeSender())
+
+    expect(result).toEqual({ ok: false, message: '登录已过期，请重新登录口袋48账号' })
+    expect(expireAuthMock).toHaveBeenCalledTimes(1)
+    expect(clientMock.instances[0].destroyCalls).toBe(1)
+  })
+
+  it('频道订阅 403：只回订阅失败，不把用户踢下线', async () => {
+    clientMock.subscribeImpl = async () => {
+      throw codedError('订阅房间频道被拒（403）', 403)
+    }
+    const sender = fakeSender()
+
+    const result = await handleRoomQChatEnter('111', '222', sender)
+
+    expect(result).toEqual({ ok: false, message: '订阅房间频道被拒（403）' })
+    expect(expireAuthMock).not.toHaveBeenCalled()
+    expect(sender.listenerCount()).toBe(0)
+    expect(clientMock.instances[0].destroyCalls).toBe(1)
   })
 })
 
@@ -394,9 +440,24 @@ describe('pocket-room-qchat / 发送', () => {
     await sendRoomMessage('111', '222', '第一条')
 
     await vi.advanceTimersByTimeAsync(1400)
-    await expect(sendRoomMessage('111', '222', '太快')).rejects.toThrow('发送太快，请稍后再试')
+    await expect(sendRoomMessage('111', '222', '太快')).rejects.toThrow('发送太快，请')
 
     await vi.advanceTimersByTimeAsync(200)
+    await expect(sendRoomMessage('111', '222', '第二条')).resolves.toMatchObject({ msgIdServer: 'ack-server-1' })
+  })
+
+  it('服务端 cdTime 才是真实窗口：1.5s 后仍拒发，满 10s 才放行', async () => {
+    // 实测口径：常规房间 userFunction.cdTime=10，只按本地 1.5s 放行等于把拒绝全留给服务端
+    authMock.permissions['222'] = { cdTime: 10 }
+    await enter()
+    // 进房预热是后台任务：先让权限回包落地，再发第一条
+    await vi.advanceTimersByTimeAsync(0)
+    await sendRoomMessage('111', '222', '第一条')
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await expect(sendRoomMessage('111', '222', '太快')).rejects.toThrow('发送太快，请 8 秒后再试')
+
+    await vi.advanceTimersByTimeAsync(8100)
     await expect(sendRoomMessage('111', '222', '第二条')).resolves.toMatchObject({ msgIdServer: 'ack-server-1' })
   })
 

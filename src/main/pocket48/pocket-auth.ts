@@ -22,11 +22,13 @@ import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  CHECKIN_URL,
   FRIEND_ADD_URL,
   FRIEND_REMOVE_URL,
   FRIENDS_IDS_URL,
   IM_USER_INFO_URL,
   LIVE_ONE_URL,
+  LIVE_RESULT_URL,
   ROOM_ANSWER_VERIFY_URL,
   ROOM_ESSENCE_MESSAGE_URL,
   ROOM_INFO_URL,
@@ -69,6 +71,15 @@ const TOKEN_INVALID_STATUSES = new Set([401003, 401004, 401005])
  */
 const SERVER_CHANNEL_TTL = 60 * 1000
 const serverChannelCache = new Map<string, { list: PocketServerChannel[], at: number }>()
+
+/**
+ * 房间发言权限短缓存：进房预热（主进程按 cdTime 限流）与渲染层输入框提示各要一次，
+ * 同一次进房会把同一个 room/info 打两遍。30s 足够合并这一次，又不会让「刚被禁言」
+ * 晚太久才反映到输入框上（真发出去服务端仍会拒绝兜底）。
+ */
+const ROOM_PERMISSION_TTL = 30 * 1000
+const roomPermissionCache = new Map<string, { value: PocketRoomPermission | null, at: number }>()
+const roomPermissionInflight = new Map<string, Promise<PocketRoomPermission | null>>()
 
 /**
  * 凭证失效广播钩子：IPC 层注入广播函数（见 register-pocket-ipc.ts），默认空实现便于单测直跑。
@@ -340,7 +351,7 @@ function extractToken(stored: StoredAuth | null): string {
     token = stored.tokenPlain || ''
   }
   // 仅开发环境打印 token，生产环境不落日志（token 本身是机密）
-  // debug('[pocket-auth] 解密后的 token：', token)
+  debug('[pocket-auth] 解密后的 token：', token)
   return token
 }
 
@@ -593,14 +604,18 @@ function deleteStoredCredentials(): void {
 export function logout(): void {
   deleteStoredCredentials()
   serverChannelCache.clear()
+  roomPermissionCache.clear()
+  roomPermissionInflight.clear()
   resetRoomSenderProfile()
   log('[pocket-auth] 已退出登录')
 }
 
 /** token 判失效：删凭证文件（过期无恢复手段，重登必然覆盖）+ 广播各窗复位镜像 */
-function expireStoredAuth(): void {
+export function expireStoredAuth(): void {
   deleteStoredCredentials()
   serverChannelCache.clear()
+  roomPermissionCache.clear()
+  roomPermissionInflight.clear()
   resetRoomSenderProfile()
   log('[pocket-auth] token 已失效，本地凭证已清除')
   notifyAuthExpired()
@@ -620,16 +635,26 @@ export interface PocketVerifyResult {
   level: string
   imOk: boolean
   imAccid: string
-  /** 口袋钱包（元）；moneyOk=false 时三个余额无意义（接口失败不影响登录态判定） */
+  /** 鸡腿余额；moneyOk=false 时三个余额无意义（接口失败不影响登录态判定） */
   moneyOk: boolean
   moneyPay: number
   moneyFree: number
   moneyTotal: number
+  /** 鸡翅数量（成长值）；user/info/reload 的 support 字段 */
+  support: string
   /** 社交资料：服务端不返回的字段为空串，UI 据此隐藏对应条目 */
   fans: string
   likes: string
   signature: string
   message: string
+}
+
+/** 每日签到奖励；服务端字段缺失或非法时按 0 处理 */
+export interface PocketCheckInResult {
+  addExp: number
+  addMoney: number
+  addSupport: number
+  days: number
 }
 
 /** 社交资料提取：服务端不同接口字段名不统一，逐个兜底；缺失返回空串 */
@@ -672,6 +697,13 @@ function pickMoney(content: Record<string, unknown> | undefined | null): { money
   return { moneyPay, moneyFree, moneyTotal: num('moneyTotal') || moneyPay + moneyFree }
 }
 
+/** 读取非负数字段；服务端可能以 number 或数字字符串返回 */
+function pickNonNegativeNumber(content: Record<string, unknown>, key: string): number {
+  const value = content[key]
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+}
+
 /**
  * 验证登录是否有效：真实请求需要登录的接口——
  * 1. user/info/reload（token 校验 + 资料 + 社交数据）；2. im/userinfo（弹幕聊天室凭据链路）；
@@ -690,6 +722,7 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
     moneyPay: 0,
     moneyFree: 0,
     moneyTotal: 0,
+    support: '',
     fans: '',
     likes: '',
     signature: '',
@@ -709,6 +742,7 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
   const c = (envelope.content || {}) as Record<string, unknown>
   const user = (c.userInfo || c.user || c) as Record<string, unknown>
   const social = pickSocialStats(user)
+  const support = pickNonNegativeNumber(user, 'support')
   // 验证通过即用服务端最新资料回写本地（用户可能改过头像/昵称），token 不动
   refreshStoredProfile(info)
   let imOk = false
@@ -743,10 +777,30 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
     imAccid,
     moneyOk,
     ...money,
+    support: String(support),
     fans: social.fans,
     likes: social.likes,
     signature: social.signature,
     message: imOk ? '登录有效' : `登录有效，但互动消息凭据获取失败：${imMessage}`,
+  }
+}
+
+/** 每日签到：调用唯一的签到接口，奖励字段由服务端返回；重复签到的判定也在服务端 */
+export async function checkIn(): Promise<PocketCheckInResult> {
+  const token = getToken()
+  if (!token)
+    throw new Error('未登录口袋48账号')
+  const envelope = await postPocket<Record<string, unknown>>(CHECKIN_URL, {}, token)
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throwAuthExpired()
+  if (!isEnvelopeOk(envelope))
+    throw new Error(envelope.message || '签到失败')
+  const content = (envelope.content || {}) as Record<string, unknown>
+  return {
+    addExp: pickNonNegativeNumber(content, 'addExp'),
+    addMoney: pickNonNegativeNumber(content, 'addMoney'),
+    addSupport: pickNonNegativeNumber(content, 'addSupport'),
+    days: pickNonNegativeNumber(content, 'days'),
   }
 }
 
@@ -837,6 +891,29 @@ export async function getChatroomId(liveId: string): Promise<string> {
   // 兜底 roomId（yaya 同款）：0 表示无聊天室，绝不能当真值——'0' 去连聊天室必然失败
   const roomId = Number(content.roomId)
   return Number.isFinite(roomId) && roomId > 0 ? String(roomId) : ''
+}
+
+/**
+ * 拉直播结束复盘（live/result）：下播后浮窗展示的总观看 / 本场时长 / 礼物流水 / 榜单前三。
+ * 必须带登录 token（实测无 token 服务端报 400「缺少请求参数」）；进行中也可查，下播即时可用。
+ * 未登录抛错（调用方降级简版结束卡），token 失效抛「登录已过期」。
+ * 字段类型以报文为准：liveTime / totalMoney / liveId 实测都是字符串，bean 声明的 long/int 不可信，
+ * 故这里原样回传 content，宽松解析归渲染层 live-result.ts。
+ */
+export async function getLiveResult(liveId: string): Promise<Record<string, unknown>> {
+  const token = getToken()
+  if (!token)
+    throw new Error('未登录口袋48账号')
+  const envelope = await postPocket<Record<string, unknown>>(
+    LIVE_RESULT_URL,
+    { liveId: String(liveId) },
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throwAuthExpired()
+  if (!envelope.success)
+    throw new Error(envelope.message || '获取直播复盘失败')
+  return envelope.content || {}
 }
 
 // ===== 成员房间（口袋 App「房间」频道的留言流，与直播间弹幕是两套体系） =====
@@ -965,8 +1042,31 @@ export interface PocketRoomPermission {
  * 拉取当前账号在指定频道的发言权限。
  * 未登录/无频道号返回 null；小房间暗号未通过时服务端回 status 2001，按失败上抛，
  * 调用方一律按「未知」处理（不据此禁用输入，最终仍由服务端拒绝兜底）。
+ *
+ * 走 30s 缓存并合并并发请求（见 ROOM_PERMISSION_TTL）：发送路径与进房预热都会读它，
+ * 没有缓存就变成每条消息多打一次 room/info。
  */
 export async function getRoomPermissions(channelId: string): Promise<PocketRoomPermission | null> {
+  const cached = roomPermissionCache.get(channelId)
+  if (cached && Date.now() - cached.at < ROOM_PERMISSION_TTL)
+    return cached.value
+  const pending = roomPermissionInflight.get(channelId)
+  if (pending)
+    return pending
+
+  const task = fetchRoomPermissions(channelId).then((value) => {
+    roomPermissionCache.set(channelId, { value, at: Date.now() })
+    return value
+  })
+  const guarded = task.finally(() => {
+    if (roomPermissionInflight.get(channelId) === guarded)
+      roomPermissionInflight.delete(channelId)
+  })
+  roomPermissionInflight.set(channelId, guarded)
+  return guarded
+}
+
+async function fetchRoomPermissions(channelId: string): Promise<PocketRoomPermission | null> {
   const token = getToken()
   if (!token || !channelId)
     return null

@@ -9,6 +9,7 @@ import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
 import { useUpdater } from '@renderer/composables/use-updater'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
 import {
+  checkInPocket,
   loginByPastedToken,
   loginBySmsCode,
   logoutPocket,
@@ -64,7 +65,6 @@ const { state: updaterState, checking: updaterChecking, version: appVersion, che
 const {
   syncing: followSyncing,
   syncPulled: followSyncPulled,
-  syncTotal: followSyncTotal,
   syncError: followSyncError,
   sync: syncPocketFollow,
   syncIfStale: syncPocketFollowIfStale,
@@ -81,6 +81,30 @@ async function handleSyncFollow() {
     return
   }
   ElMessage.error(followSyncError.value || '拉取关注失败，请稍后重试')
+}
+
+const checkingIn = ref(false)
+
+/** 每日签到：奖励文案以服务端返回为准，重复签到的提示也由服务端给出 */
+async function handleCheckIn() {
+  if (checkingIn.value)
+    return
+  checkingIn.value = true
+  try {
+    const result = await checkInPocket()
+    const rewards = [`成长值 +${result.addExp}`, `鸡翅 +${result.addSupport}`]
+    if (result.addMoney > 0)
+      rewards.push(`鸡腿 +${result.addMoney}`)
+    const days = result.days > 0 ? `，累计签到 ${result.days} 天` : ''
+    ElMessage.success(`签到成功：${rewards.join('，')}${days}`)
+  }
+  catch (error) {
+    debugLog('pocket-auth', '签到失败：', error)
+    ElMessage.warning(pocketAuthErrorMessage(error))
+  }
+  finally {
+    checkingIn.value = false
+  }
 }
 
 onMounted(async () => {
@@ -481,11 +505,6 @@ const savedDays = computed(() => {
   return Math.max(0, Math.floor((Date.now() - savedAt) / 86_400_000))
 })
 
-/** 金额：千分位 + 两位小数（元） */
-function formatMoney(value: number): string {
-  return value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
 /** 计数：千分位整数；非数字原样返回 */
 function formatCount(value: string): string {
   const parsed = Number(value)
@@ -786,12 +805,6 @@ function hideLogo(event: Event) {
               <template v-if="pocketAuthState.loggedIn">
                 账号<template v-if="pocketAuthState.mobileMasked">
                   （{{ pocketAuthState.mobileMasked }}）
-                </template><template v-if="followSyncing">
-                  · 正在拉取口袋关注…
-                </template><template v-else-if="followSyncError">
-                  · 口袋关注拉取失败
-                </template><template v-else-if="followSyncPulled !== null">
-                  · 口袋关注已拉取（{{ followSyncPulled }} 人，合并后 {{ followSyncTotal }} 人）
                 </template>
               </template>
               <template v-else>
@@ -810,10 +823,10 @@ function hideLogo(event: Event) {
                 明文存储
               </el-tag>
               <el-button
-                :loading="followSyncing"
-                @click="handleSyncFollow"
+                :loading="checkingIn"
+                @click="handleCheckIn"
               >
-                拉取关注
+                签到
               </el-button>
               <el-button
                 type="danger"
@@ -1500,20 +1513,20 @@ function hideLogo(event: Event) {
         </p>
 
         <div class="verify-stats">
-          <div class="verify-stat verify-stat--money">
+          <div class="verify-stat">
             <div class="stat-value">
-              {{ verifyResult.moneyOk ? `¥${formatMoney(verifyResult.moneyTotal)}` : '—' }}
+              {{ verifyResult.moneyOk ? formatCount(String(verifyResult.moneyTotal)) : '—' }}
             </div>
             <div class="stat-label">
-              口袋钱包
+              鸡腿
             </div>
-            <div class="stat-sub">
-              <template v-if="verifyResult.moneyOk">
-                付费 ¥{{ formatMoney(verifyResult.moneyPay) }} · 免费 ¥{{ formatMoney(verifyResult.moneyFree) }}
-              </template>
-              <template v-else>
-                获取失败
-              </template>
+          </div>
+          <div class="verify-stat">
+            <div class="stat-value">
+              {{ verifyResult.support ? formatCount(verifyResult.support) : '—' }}
+            </div>
+            <div class="stat-label">
+              鸡翅
             </div>
           </div>
           <div v-if="verifyResult.fans" class="verify-stat">
@@ -1537,7 +1550,7 @@ function hideLogo(event: Event) {
         <div class="verify-links">
           <div class="verify-link">
             <span class="verify-link-name">互动消息</span>
-            <span class="verify-link-desc">直播弹幕 / 礼物 / 榜单</span>
+            <span class="verify-link-desc">直播弹幕 / 房间功能 / 签到</span>
             <span class="verify-link-state" :class="verifyResult.imOk ? 'is-ok' : 'is-bad'">
               {{ verifyResult.imOk ? '可用' : '不可用' }}
             </span>
@@ -1552,6 +1565,13 @@ function hideLogo(event: Event) {
       </div>
 
       <template #footer>
+        <el-button
+          v-if="verifyResult?.valid"
+          :loading="followSyncing"
+          @click="handleSyncFollow"
+        >
+          拉取关注
+        </el-button>
         <el-button @click="verifyDialogVisible = false">
           关闭
         </el-button>
@@ -2448,7 +2468,7 @@ function hideLogo(event: Event) {
   color: var(--el-text-color-secondary);
 }
 
-/* 统计瓦片：钱包为主（flex 权重更大），粉丝 / 获赞按服务端返回有无展示 */
+/* 统计瓦片：鸡腿 / 鸡翅始终展示，粉丝 / 获赞按服务端返回有无展示 */
 .verify-stats {
   display: flex;
   gap: 10px;
@@ -2474,16 +2494,6 @@ function hideLogo(event: Event) {
     font-size: 11px;
     color: var(--el-text-color-secondary);
   }
-
-  .stat-sub {
-    margin-top: 2px;
-    font-size: 10px;
-    color: var(--el-text-color-placeholder);
-  }
-}
-
-.verify-stat--money {
-  flex: 1.4;
 }
 
 /* 功能链路：互动消息是弹幕功能的实际依赖，单独一行给出可用性 */

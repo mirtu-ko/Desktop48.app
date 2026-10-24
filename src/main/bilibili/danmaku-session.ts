@@ -130,13 +130,13 @@ async function initSession(session: DanmakuSession): Promise<void> {
   ])
   const realRoomId = roomInfo?.data?.room_id
   if (typeof realRoomId !== 'number' || !Number.isFinite(realRoomId))
-    throw new Error(`未取到 B 站房间号（room_id=${session.roomId}, code=${roomInfo?.code}）`)
+    throw new TypeError(`未取到 B 站房间号（room_id=${session.roomId}, code=${roomInfo?.code}）`)
 
   const nav = await fetchBilibiliJson(WBI_NAV_URL)
   const imgUrl = nav?.data?.wbi_img?.img_url
   const subUrl = nav?.data?.wbi_img?.sub_url
   if (typeof imgUrl !== 'string' || typeof subUrl !== 'string')
-    throw new Error('未取到 WBI 签名口令')
+    throw new TypeError('未取到 WBI 签名口令')
 
   const query = buildWbiQuery(
     { id: realRoomId, type: 0 },

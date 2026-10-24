@@ -1,4 +1,4 @@
-import type { PocketRankUser } from '@renderer/utils/pocket-chat-message'
+import type { PocketDisableNotice, PocketRankUser } from '@renderer/utils/pocket-chat-message'
 import { useLiveDanmakuOverlay } from '@renderer/composables/use-danmaku-overlay'
 import { connectPocketChatroom, disconnectPocketChatroom } from '@renderer/services/pocket-chatroom'
 import { ensurePocketAuthState, pocketAuthState } from '@renderer/stores/pocket-auth'
@@ -26,6 +26,14 @@ export function useLiveDanmaku(options: {
   enabled: () => boolean
   /** 互动榜单更新（LIVEUPDATE 消息）：路由到右上角榜单面板，不进气泡层；空数组 = 清空 */
   onRank?: (users: PocketRankUser[]) => void
+  /** LIVEUPDATE 实时字段（在线人数 / 累计礼物流水）：与榜单同报文，可独立于榜单变化 */
+  onLiveUpdate?: (update: { online?: number, allMoney?: number }) => void
+  /** 被禁言/拉黑（DISABLE_SPEAK）：宿主门控后按 op 动作（禁言重取详情 / 拉黑关播） */
+  onDisableSpeak?: (notice: PocketDisableNotice) => void
+  /** 主播下播（CLOSELIVE）：宿主立即关播（官方同构），不进气泡层 */
+  onLiveEnd?: () => void
+  /** 连麦/PK 换流信号（INFORM_PULL_STREAM）：宿主拉详情重建流，不进气泡层 */
+  onLiveRestream?: () => void
 }) {
   const { items: danmakuItems, push, tick, reset } = useLiveDanmakuOverlay()
 
@@ -86,9 +94,26 @@ export function useLiveDanmaku(options: {
         }
       },
       onMessage: (message) => {
-        // 榜单消息单独路由：右上角榜单面板，不进气泡层
+        // 榜单消息单独路由：右上角榜单面板，不进气泡层。
+        // 实时字段与榜单同报文但可独立变化：无榜单时也要下发在线人数
         if (message.kind === 'rank') {
-          options.onRank?.(message.rankUsers ?? [])
+          if (message.rankUsers?.length)
+            options.onRank?.(message.rankUsers)
+          if (message.liveOnline !== undefined || message.liveAllMoney !== undefined)
+            options.onLiveUpdate?.({ online: message.liveOnline, allMoney: message.liveAllMoney })
+          return
+        }
+        // 禁言/拉黑：宿主门控后提示并按 op 动作，气泡层不展示
+        if (message.kind === 'system' && message.disableSpeak) {
+          options.onDisableSpeak?.(message.disableSpeak)
+          return
+        }
+        // 下播 / 换流信号：宿主关播或重建流，气泡层不展示
+        if (message.kind === 'system' && (message.liveEnd || message.liveRestream)) {
+          if (message.liveEnd)
+            options.onLiveEnd?.()
+          else
+            options.onLiveRestream?.()
           return
         }
         pocketReceivedCount++
@@ -200,5 +225,6 @@ export function useLiveDanmaku(options: {
 
   sync()
 
-  return { danmakuItems }
+  // stop 额外暴露给宿主：下播进结束态时主动收摊（停订阅 + 清气泡 + 清榜单），不等卸载
+  return { danmakuItems, stop }
 }

@@ -6,6 +6,8 @@ import {
   buildQChatMessageProperties,
   buildQChatSubscriptionBody,
   decodeQChatStringArray,
+  FATAL_AUTH_CODES,
+  isFatalAuthError,
   isRequestResponse,
   normalizeQChatMessage,
   readSubscribeFailures,
@@ -277,5 +279,45 @@ describe('nim-qchat / 编解码互通', () => {
     expect(decoded.get(10)?.toString()).toBe('互通验证')
     // 空值属性在编码时被跳过，与构造侧一致
     expect(decoded.has(11)).toBe(false)
+  })
+})
+
+describe('nim-qchat / isFatalAuthError 认证致命错误判定', () => {
+  it('状态码 302/403/422 判定为致命认证错误（重试无意义）', () => {
+    expect(FATAL_AUTH_CODES.has(302)).toBe(true)
+    expect(FATAL_AUTH_CODES.has(403)).toBe(true)
+    expect(FATAL_AUTH_CODES.has(422)).toBe(true)
+
+    const err302 = new Error('登录失败（302）')
+    ;(err302 as Error & { code?: number }).code = 302
+    expect(isFatalAuthError(err302)).toBe(true)
+
+    const err403 = new Error('登录失败（403）')
+    ;(err403 as Error & { code?: number }).code = 403
+    expect(isFatalAuthError(err403)).toBe(true)
+
+    const err422 = new Error('账号被封禁（422）')
+    ;(err422 as Error & { code?: number }).code = 422
+    expect(isFatalAuthError(err422)).toBe(true)
+  })
+
+  it('缺少 AppKey/Token 错误判定为致命认证错误', () => {
+    expect(isFatalAuthError(new Error('缺少云信 AppKey、账号或令牌'))).toBe(true)
+  })
+
+  it('常规网络错误或可重试状态码（408 超时、500 服务端异常）不判定为致命错误', () => {
+    expect(isFatalAuthError(new Error('connect ECONNREFUSED'))).toBe(false)
+    expect(isFatalAuthError(new Error('网络请求超时'))).toBe(false)
+
+    const err408 = new Error('请求超时（408）')
+    ;(err408 as Error & { code?: number }).code = 408
+    expect(isFatalAuthError(err408)).toBe(false)
+
+    const err500 = new Error('服务器内部错误（500）')
+    ;(err500 as Error & { code?: number }).code = 500
+    expect(isFatalAuthError(err500)).toBe(false)
+
+    expect(isFatalAuthError(null)).toBe(false)
+    expect(isFatalAuthError(undefined)).toBe(false)
   })
 })

@@ -1,24 +1,29 @@
 <script setup lang="ts">
-import type { PocketRankUser } from '@renderer/utils/pocket-chat-message'
+import type { LiveResultView } from '@renderer/services/live-result'
+import type { PocketDisableNotice, PocketRankUser } from '@renderer/utils/pocket-chat-message'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { useDanmakuLayer } from '@renderer/composables/use-danmaku-layer'
 import { useLiveDanmaku } from '@renderer/composables/use-live-danmaku'
 import { useLivePlayer } from '@renderer/composables/use-live-player'
-import { useLivePolling } from '@renderer/composables/use-live-polling'
 import { useLiveSession } from '@renderer/composables/use-live-session'
 import useMediaDownload from '@renderer/composables/use-media-download'
 import { dispatchMediaShortcut } from '@renderer/composables/use-media-shortcuts'
+import { useOnlinePoll } from '@renderer/composables/use-online-poll'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useStreamRetry } from '@renderer/composables/use-stream-retry'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import EventBus from '@renderer/services/event-bus'
+import { loadLiveResult } from '@renderer/services/live-result'
 import { danmakuPlacement, ensureDanmakuPlacement, setDanmakuPlacement } from '@renderer/stores/danmaku-placement'
+import { pocketAuthState } from '@renderer/stores/pocket-auth'
 import { debugLog } from '@renderer/utils/debug'
 import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
+import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
 import { durationBucket, trackEvent } from '@renderer/utils/umami'
+import { formatViewNum } from '@renderer/utils/view-num'
 
-import { useEventListener } from '@vueuse/core'
+import { useDocumentVisibility, useEventListener, useIntervalFn } from '@vueuse/core'
 
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
@@ -52,6 +57,12 @@ const nativeVideo = ref<HTMLVideoElement | null>(null)
 const nativeAudio = ref<HTMLAudioElement | null>(null)
 const videoBoxRef = ref<HTMLElement | null>(null)
 const mediaLoading = ref(true)
+// 下播结束态：停流后画面切复盘卡片（官方 LiveCloseFragment 同构），用户点关闭才关窗
+const liveEnded = ref(false)
+/** 复盘数据（live/result）；null = 没拉到（未登录 / 接口失败），结束卡降级简版 */
+const liveResult = ref<LiveResultView | null>(null)
+/** 结束卡头像加载失败记账（按 userId）：回退用户名首字母 */
+const failedEndAvatars = reactive(new Set<string>())
 // 鼠标悬浮才响应快捷键：同屏可能有多个浮窗播放器，否则一次按键会把它们全部转一遍。
 // 触发策略与 PlaybackPlayer 不同（它走根节点焦点制），但按键分派共用 use-media-shortcuts。
 const hovered = ref(false)
@@ -126,7 +137,7 @@ const {
   videoRect: () => videoRect.value,
   compact: () => props.compact,
   fullscreen: () => isFullscreen.value,
-  // 黑边不够宽（videoRect.left < 220）时由 computeDanmakuLayout 自行回落画面内，
+  // 黑边不够宽（videoRect.left < 60）时由 computeDanmakuLayout 自行回落画面内，
   // 与全屏无关：窗口态下竖屏直播同样留得出左侧栏
   placement: () => danmakuPlacement.value,
   // 公演 B 站弹幕可能很长；限制在窗口宽度的 33%，避免单条横跨整块画面
@@ -140,14 +151,21 @@ function toggleDanmakuPlacement() {
   trackEvent('danmaku:placement', { placement: next })
 }
 
-// ── 直播轮询：已播时长 + 在线人数 ────────────────────────────────
-const polling = useLivePolling({
-  startTime: () => props.startTime,
-  liveId: () => props.liveId,
-  skipOnlineNum: () => props.source === 'open',
-  onUnavailable: closeUnavailableLive,
+// ── 已播时长（在线人数不走轮询，见下方 LIVEUPDATE）──────────────
+const elapsedTime = ref(0)
+const elapsedTimer = useIntervalFn(() => {
+  elapsedTime.value = Date.now() - props.startTime
+}, 1000, { immediate: false, immediateCallback: true })
+const liveElapsedText = computed(() => {
+  const totalSeconds = Math.max(0, Math.floor(elapsedTime.value / 1000))
+  return formatMediaTime(totalSeconds)
 })
-const { liveElapsedText, onlineNum } = polling
+
+// 在线人数：首帧来自会话详情；登录用户由口袋 LIVEUPDATE 推送实时更新（与官方 App 同构），
+// 游客没有 IM 会话，改走定时轮询（见下方「游客在线人数轮询」）；开放公演接口恒不带故显示为空
+const onlineNum = ref(0)
+/** 累计礼物流水（LIVEUPDATE.allMoney）：0 = 未收到，榜单面板不显示该段 */
+const liveAllMoney = ref(0)
 
 // ── 直播会话：详情获取 + 本地 HTTP-FLV 生命周期 ──────────────────
 const session = useLiveSession({
@@ -158,7 +176,7 @@ const session = useLiveSession({
   isDisposed: isManuallyUnmounted,
   onAvatar: avatarUrl => emit('avatar', avatarUrl),
   onOnlineNum: (num) => {
-    polling.onlineNum.value = num
+    onlineNum.value = num
   },
   // 详情都取不到通常意味着直播已下架：广播通知列表页刷新
   onUnavailable: closeUnavailableLive,
@@ -169,7 +187,7 @@ const session = useLiveSession({
 
 // 详情展示状态直接解构给模板（解构出的仍是 ref，不丢响应性）。
 // localPlaybackUrl = 本地 HTTP-FLV 地址，下方 watch 盯着它重建播放器
-const { localPlaybackUrl, coverImage, realName, carousels, carouselTime, chatroomId } = session
+const { localPlaybackUrl, coverImage, realName, carousels, carouselTime, chatroomId, ownerUserId, activeRtmpUrl } = session
 
 // 弹幕订阅须在 session 之后创建：口袋源读 session.chatroomId，同步时立即求值
 const pocketChatroomId = computed(() => (props.source === 'user' ? chatroomId.value : ''))
@@ -184,13 +202,66 @@ function toggleDanmaku() {
 }
 
 // ── 互动榜单（口袋 LIVEUPDATE 消息）─────────────────────────────
-// 榜单不进气泡层，独立显示在画面右上角（.player-actions 下方）；可由胶囊开关收起
+// 榜单不进气泡层，独立锚画面左边缘、贴窗口顶（悬于气泡层正上方并左对齐）；可由胶囊开关收起。
+// 同报文的 online / allMoney 路由到胶囊在线人数与榜单面板的礼物流水段
 const rankUsers = ref<PocketRankUser[]>([])
 const rankVisible = ref(true)
 /** 加载失败的榜单头像（按 userId 记账）：回退首字母占位 */
 const failedRankAvatars = reactive(new Set<string>())
 
-const { danmakuItems } = useLiveDanmaku({
+// ── 结束卡三围（复盘权威值优先，回落本地已采集的数据）────────────────
+/** 本场时长：复盘 liveTime（毫秒）优先，回落本地已播时长 */
+const endDurationText = computed(() => {
+  const liveTime = liveResult.value?.liveTime ?? 0
+  return liveTime > 0 ? formatMediaTime(Math.floor(liveTime / 1000)) : liveElapsedText.value
+})
+/** 总观看：只有复盘有（口径见 live-result 注释，0 = 没拉到，不显示该段） */
+const endOnline = computed(() => liveResult.value?.liveOnline ?? 0)
+/** 总礼物：复盘 totalMoney 优先，回落 LIVEUPDATE 累计流水 */
+const endGift = computed(() => liveResult.value?.totalMoney || liveAllMoney.value)
+/** 榜单前三：与互动榜同构，头像/昵称/贡献值 */
+const endTopUsers = computed(() => liveResult.value?.topUsers.slice(0, 3) ?? [])
+
+/**
+ * 被禁言/拉黑/踢出（DISABLE_SPEAK，官方 LiveStreamV2Fragment 同构）：
+ * 踢出（官方消息版唯一动作）——targetId==本人才关播，非本人（含自己 ID 缺失）不动；
+ * 禁言/拉黑（官方通知版语义，服务端若双发则经消息版到达）——门控后提示，
+ * 禁言重取详情（刷新失败静默，不影响播放），拉黑关浮窗（不重取）
+ */
+async function handleDisableSpeak(notice: PocketDisableNotice) {
+  if (notice.op === 3) {
+    if (notice.targetId && notice.targetId !== pocketAuthState.value.userId)
+      return
+    ElMessage.warning('你已经被踢出直播间')
+    emit('close')
+    return
+  }
+  // 门控：成员操作直接放行，管理员须是房主本人，其余不放行
+  if (notice.operatorType === 2) {
+    if (!ownerUserId.value || notice.operatorId !== ownerUserId.value)
+      return
+  }
+  else if (notice.operatorType !== 1) {
+    return
+  }
+  if (notice.op === 2) {
+    ElMessage.warning('你已被拉黑')
+    emit('close')
+    return
+  }
+  ElMessage.warning('你已被禁言')
+  try {
+    const data = await session.fetchLiveDetail()
+    if (isManuallyUnmounted.value || liveEnded.value)
+      return
+    session.applyLiveDetail(data)
+  }
+  catch (error) {
+    debugLog('live', `①直播:禁言后重取详情失败 ${error}`)
+  }
+}
+
+const { danmakuItems, stop: stopDanmaku } = useLiveDanmaku({
   roomId: () => danmakuRoomId.value,
   liveId: () => props.liveId,
   pocketRoomId: () => pocketChatroomId.value,
@@ -202,6 +273,34 @@ const { danmakuItems } = useLiveDanmaku({
     if (!users.length)
       failedRankAvatars.clear()
   },
+  onLiveUpdate: ({ online, allMoney }) => {
+    // 0 视为无效值不采纳：人数不会瞬间泄为 0，接了只会让显示消失
+    if (online !== undefined && online > 0)
+      onlineNum.value = online
+    if (allMoney !== undefined)
+      liveAllMoney.value = allMoney
+  },
+  onDisableSpeak: handleDisableSpeak,
+  onLiveEnd: closeLiveEnded,
+  onLiveRestream: handleLiveRestream,
+})
+
+// ── 游客在线人数轮询 ────────────────────────────────────────────
+// 未登录拿不到 LIVEUPDATE，人数否则会一直停在进房首帧；90s 补拉一次详情、只取 onlineNum。
+// 交给 use-online-poll 计时：可见 / 已登录 / 结束态翻转时自动启停
+const documentVisibility = useDocumentVisibility()
+useOnlinePoll({
+  enabled: () => props.source === 'user'
+    && !pocketAuthState.value.loggedIn
+    && !liveEnded.value
+    && !isManuallyUnmounted.value
+    && documentVisibility.value === 'visible',
+  // 只取这一个字段：详情里的 playStreamPath 一旦应用就是重建流
+  fetchOnline: async () => (await session.fetchLiveDetail({ silent: true })).onlineNum,
+  onOnline: (num) => {
+    onlineNum.value = num
+  },
+  onError: error => debugLog('live', `①直播:游客在线人数刷新失败（静默，下次轮询再试） ${error}`),
 })
 
 // ── mpegts 播放器实例 ────────────────────────────────────────────
@@ -217,7 +316,8 @@ const player = useLivePlayer({
 
 // ── 断流重试状态机 ───────────────────────────────────────────────
 const retry = useStreamRetry({
-  isDisposed: () => isManuallyUnmounted.value,
+  // 结束态后不再安排任何重试：停流触发的错误事件与在途 attempt 都必须失效
+  isDisposed: () => isManuallyUnmounted.value || liveEnded.value,
   mediaLoading,
   attempt: recoverStream,
   onExhausted: handleRetryExhausted,
@@ -228,7 +328,8 @@ async function recoverStream() {
   debugLog('live', `①直播:重试恢复尝试（第 ${retry.retryCount.value + 1} 次）`)
   try {
     const data = await session.fetchLiveDetail()
-    if (isManuallyUnmounted.value)
+    // 拉详情期间可能已进结束态（CLOSELIVE 与断流常结伴而来）：此时再重建就是把停掉的流拉回来
+    if (isManuallyUnmounted.value || liveEnded.value)
       return
     session.applyLiveDetail(data)
     await session.restartLiveStream(data.playStreamPath)
@@ -276,6 +377,9 @@ function rebuildMedia() {
 
 /** 媒体元素/FLV 错误统一处理：网络错误保持 loading 重试，致命错误先销毁播放器 */
 function handleStreamError(reason: string, isNetwork: boolean) {
+  // 结束态后停流必然触发错误事件：不再进重试链，否则会把已结束的直播反复重拉
+  if (liveEnded.value)
+    return
   // Umami 事件：播放器错误（网络类会自动进重试，这里记的是发生频率而非后果）
   trackEvent('player:error', { type: 'live', network: isNetwork ? 1 : 0 })
   if (isNetwork) {
@@ -290,12 +394,79 @@ function handleStreamError(reason: string, isNetwork: boolean) {
   retry.schedule()
 }
 
-/** 重试耗尽视为直播结束：停流、广播下架、关闭 tab */
-function handleRetryExhausted() {
-  debugLog('live', `①直播:重试耗尽（${retry.retryCount.value} 次），视为直播结束：停流 → 广播下架 → 关闭浮窗`)
+/**
+ * 进入下播结束态（官方 LiveCloseFragment 同构：停流后画面切结束卡，用户点关闭才关窗）。
+ * 两个入口：CLOSELIVE 快路径（服务端推送即达）与重试耗尽兜底（未登录 / 公演 / 消息丢失）。
+ * 去重：两条路径可能结伴到达（下播时推流中断必触发错误）。
+ */
+async function enterLiveEnded() {
+  if (liveEnded.value)
+    return
+  liveEnded.value = true
+  debugLog('live', `①直播:进入结束态（liveId=${props.liveId}），停流并拉复盘`)
+  // 先收摊再拉复盘：计时 / 重试 / 弹幕会话全部停掉，停流触发的错误事件被 liveEnded 拦下
+  elapsedTimer.pause()
+  retry.reset()
+  stopDanmaku()
   session.stopStreamNow()
+  player.destroyPlayer()
+  player.resetMediaElement()
+  mediaLoading.value = false
   EventBus.emit('live-unavailable', props.liveId)
-  emit('close')
+  // 游客（未登录）拿不到复盘：接口必须带 token，必然 400 —— 直接停在简版卡，不白跑一次
+  if (!pocketAuthState.value.loggedIn) {
+    debugLog('live', '①直播:未登录，跳过复盘拉取，展示简版结束卡')
+    return
+  }
+  try {
+    const result = await loadLiveResult(props.liveId)
+    if (isManuallyUnmounted.value)
+      return
+    liveResult.value = result
+  }
+  catch (error) {
+    // 未登录 / 接口失败都降级简版卡：本地已有的主播名 + 已播时长也够交代这一场
+    debugLog('live', `①直播:复盘拉取失败，降级简版结束卡 ${error}`)
+  }
+}
+
+/** 重试耗尽视为直播结束（兜底路径）：进结束态展示复盘，不再直接关窗 */
+function handleRetryExhausted() {
+  debugLog('live', `①直播:重试耗尽（${retry.retryCount.value} 次），视为直播结束，进入结束态`)
+  void enterLiveEnded()
+}
+
+/** 主播下播（CLOSELIVE，官方收到即切结束态）：进结束态展示复盘，不再直接关窗 */
+function closeLiveEnded() {
+  debugLog('live', `①直播:收到 CLOSELIVE，直播结束（liveId=${props.liveId}）`)
+  void enterLiveEnded()
+}
+
+/**
+ * 连麦/PK 换流信号（INFORM_PULL_STREAM）：推流地址主体不变、token 变，
+ * 拉详情拿新 token 重建本地会话；地址没变则跳过（服务端推了信号但详情未变）。
+ * 不走重试计数——重建失败才转重试链兜底；下播判决归 CLOSELIVE 与重试耗尽
+ */
+async function handleLiveRestream() {
+  debugLog('live', '①直播:收到换流信号（连麦/PK），拉详情换 token 重建流')
+  mediaLoading.value = true
+  try {
+    const data = await session.fetchLiveDetail()
+    if (isManuallyUnmounted.value || liveEnded.value)
+      return
+    session.applyLiveDetail(data)
+    if (data.playStreamPath === activeRtmpUrl.value) {
+      debugLog('live', '①直播:换流信号但详情地址未变，跳过重建')
+      mediaLoading.value = false
+      return
+    }
+    await session.restartLiveStream(data.playStreamPath)
+  }
+  catch (error) {
+    // 换流期间详情失败不关窗（可能是瞬时抖动）：交给断流重试链兜底
+    debugLog('live', `①直播:换流重建失败，转重试链兜底 ${error}`)
+    retry.schedule()
+  }
 }
 
 // ── 录制 ─────────────────────────────────────────────────────────
@@ -351,8 +522,7 @@ async function resumeLive() {
   if (isManuallyUnmounted.value)
     return
   await acquireSleepBlocker()
-  polling.startElapsedTimer()
-  polling.startOnlineNumTimer()
+  elapsedTimer.resume()
   // 播放器仍在则直接续播，否则按缓存地址重建或全量拉流
   if (player.hasPlayer()) {
     player.play()
@@ -389,7 +559,7 @@ onUnmounted(() => {
   // 先 dispose：所有在途异步回包（详情响应、开会话响应）立即失效
   session.dispose()
   retry.clearTimer()
-  polling.stopAll()
+  elapsedTimer.pause()
   if (playerWatchStopHandle) {
     playerWatchStopHandle()
     playerWatchStopHandle = null
@@ -438,10 +608,11 @@ onUnmounted(() => {
           @volumechange="onVolumeChange"
         />
       </div>
-      <!-- 直播弹幕（B 站公演源 + 口袋互动消息）：与 video-wrapper 同级，故不参与画面旋转；left/bottom 由脚本锚画面左下角。
+      <!-- 直播弹幕（B 站公演源 + 口袋互动消息）：与 video-wrapper 同级，故不参与画面旋转；
+           left/width 由脚本锚画面左右（不越黑边），上下贴窗口（画面上下有黑边时照旧铺上去）。
            加载中一并隐藏：加载蒙层要盖住全部浮层，气泡不悬在加载态上 -->
       <div
-        v-show="showDanmaku && !mediaLoading"
+        v-show="showDanmaku && !mediaLoading && !liveEnded"
         class="danmaku-list"
         :class="{ 'is-compact': compact }"
         :style="{ fontSize: `${danmakuFontSize}px`, ...danmakuPosition }"
@@ -449,15 +620,49 @@ onUnmounted(() => {
         <DanmakuBubbles :items="danmakuItems" :compact="compact" :plain="danmakuFloating" />
       </div>
 
+      <!-- 下播结束态：复盘卡片盖住画面（官方 LiveCloseFragment 同构）——停流后仍停留，
+           用户点关闭才关窗；复盘没拉到（未登录/接口失败）时退化为简版卡（标题+时长+关闭） -->
+      <div v-if="liveEnded" class="live-end" :class="{ 'is-compact': compact }">
+        <div class="live-end__title">
+          直播已结束
+        </div>
+        <div class="live-end__name" :title="realName">
+          {{ realName }}
+        </div>
+        <div class="live-end__stats">
+          <span class="live-end__stat">时长 {{ endDurationText }}</span>
+          <span v-if="endOnline > 0" class="live-end__stat">总观看 {{ formatViewNum(endOnline) }}</span>
+          <span v-if="endGift > 0" class="live-end__stat">礼物 {{ formatViewNum(endGift) }}</span>
+        </div>
+        <div v-if="endTopUsers.length" class="live-end__tops">
+          <div v-for="(item, index) in endTopUsers" :key="item.user.userId || index" class="live-end__top">
+            <img
+              v-if="item.user.userAvatar && !failedEndAvatars.has(item.user.userId || String(index))"
+              class="live-end__avatar"
+              :src="Tools.sourceUrl(item.user.userAvatar)"
+              referrerpolicy="no-referrer"
+              alt=""
+              @error="failedEndAvatars.add(item.user.userId || String(index))"
+            >
+            <span v-else class="live-end__avatar live-end__avatar--fallback">{{ (item.user.userName || '神')[0] }}</span>
+            <span class="live-end__top-name" :title="item.user.userName">{{ item.user.userName }}</span>
+            <span class="live-end__top-money">{{ item.money.toLocaleString() }}</span>
+          </div>
+        </div>
+        <button class="live-end__close" @click="emit('close')">
+          关闭
+        </button>
+      </div>
+
       <PlayerLoading
-        v-if="mediaLoading"
+        v-if="mediaLoading && !liveEnded"
         :masked="isRadio"
         :background="coverImage"
         label="正在加载直播"
         hint="连接直播源中，请稍候"
       />
       <!-- 悬浮按钮整组随加载隐藏：蒙层盖住全部浮层，且流就绪前录制无从谈起 -->
-      <div v-show="!mediaLoading" class="player-actions">
+      <div v-show="!mediaLoading && !liveEnded" class="player-actions">
         <RotationControls
           v-if="liveType === 1"
           :angle="rotationAngle"
@@ -477,9 +682,9 @@ onUnmounted(() => {
         </el-tooltip>
       </div>
 
-      <!-- 互动榜单：口袋 LIVEUPDATE 消息驱动，锚画面渲染区左上角 —— 悬于弹幕气泡层正上方并左对齐 -->
+      <!-- 互动榜单：口袋 LIVEUPDATE 消息驱动，锚画面左边缘、贴窗口顶 —— 悬于弹幕气泡层正上方并左对齐 -->
       <div
-        v-if="rankUsers.length && !mediaLoading"
+        v-if="rankUsers.length && !mediaLoading && !liveEnded"
         v-show="rankVisible"
         class="rank-panel"
         :style="rankPosition"
@@ -487,6 +692,10 @@ onUnmounted(() => {
         <div class="rank-panel__title">
           <MediaIcon name="trophy" :size="13" />
           <span>互动榜</span>
+          <!-- 累计礼物流水（LIVEUPDATE.allMoney）：标题行右端，未收到时不占位 -->
+          <span v-if="liveAllMoney > 0" class="rank-panel__gift" :title="`本场累计礼物 ${liveAllMoney.toLocaleString()}`">
+            礼物 {{ formatViewNum(liveAllMoney) }}
+          </span>
         </div>
         <div
           v-for="(user, index) in rankUsers.slice(0, 10)"
@@ -516,7 +725,7 @@ onUnmounted(() => {
 
       <!-- 控制条：LIVE 状态段走 #leading 插槽；加载期间整条隐藏（连接中不显示 LIVE 状态） -->
       <MiniControls
-        v-if="!mediaLoading"
+        v-if="!mediaLoading && !liveEnded"
         :playing="playing"
         :muted="muted"
         :is-fullscreen="isFullscreen"
@@ -571,7 +780,7 @@ onUnmounted(() => {
         </template>
       </MiniControls>
 
-      <div v-if="rotateHint" class="rotate-hint">
+      <div v-if="rotateHint && !liveEnded" class="rotate-hint">
         {{ rotateHint }}
       </div>
     </div>
@@ -603,6 +812,159 @@ onUnmounted(() => {
 
 .video-box-background {
   background: #0c0c0c;
+}
+
+/* 下播结束卡：盖住整块画面（官方 LiveCloseFragment 同构）——停流后仍停留，点关闭才关窗。
+   实色深底不用磨砂：悬在视频上的 backdrop-filter 每帧成本高（与榜单面板同一理由） */
+.live-end {
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  background: #0c0c0c;
+  color: #fff;
+  text-align: center;
+  user-select: none;
+}
+
+.live-end__title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.live-end__name {
+  max-width: 100%;
+  font-size: 14px;
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 三围（时长 / 总观看 / 礼物）：芯片横排，空间不够整组换行 */
+.live-end__stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.live-end__stat {
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 榜单前三：头像 + 昵称 + 贡献值，金色贡献值与互动榜同语言 */
+.live-end__tops {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  max-width: 260px;
+  margin-top: 2px;
+}
+
+.live-end__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.live-end__avatar {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.live-end__avatar--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.live-end__top-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  opacity: 0.9;
+}
+
+.live-end__top-money {
+  flex: none;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #f7ba2a;
+}
+
+/* 关闭：品牌渐变胶囊；纯动作按钮，无状态语义 */
+.live-end__close {
+  margin-top: 4px;
+  padding: 6px 20px;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: 13px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
+  cursor: pointer;
+}
+
+.live-end__close:hover {
+  filter: brightness(1.12);
+}
+
+/* compact 小浮窗：收紧间距与字号，榜单同步缩小保留（窄窗高度够，只省横向） */
+.live-end.is-compact {
+  gap: 6px;
+  padding: 10px;
+}
+
+.live-end.is-compact .live-end__title {
+  font-size: 16px;
+}
+
+.live-end.is-compact .live-end__name {
+  font-size: 13px;
+}
+
+.live-end.is-compact .live-end__stat {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.live-end.is-compact .live-end__tops {
+  gap: 3px;
+  max-width: 100%;
+}
+
+.live-end.is-compact .live-end__top {
+  gap: 6px;
+  font-size: 12px;
+}
+
+.live-end.is-compact .live-end__avatar {
+  width: 20px;
+  height: 20px;
 }
 
 /* LIVE 状态段：内嵌在 MiniControls 胶囊最左段的芯片（样式作用于插槽内容）。
@@ -653,7 +1015,7 @@ onUnmounted(() => {
 
 .rank-panel {
   position: absolute;
-  /* left / top 由脚本锚画面渲染区左上角（useDanmakuLayer.topLeft，与气泡层同一内缩量） */
+  /* left / top 由脚本注入（useDanmakuLayer.topLeft）：锚画面左边缘、贴窗口顶，与气泡层同一内缩量 */
   z-index: 29;
   min-width: 132px;
   max-width: 248px;
@@ -677,6 +1039,15 @@ onUnmounted(() => {
   font-weight: 600;
   color: #f7ba2a;
   border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+/* 累计礼物流水（LIVEUPDATE.allMoney）：推到标题行右端，金色与贡献值列同语言 */
+.rank-panel__gift {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #f7ba2a;
 }
 
 .rank-panel__row {

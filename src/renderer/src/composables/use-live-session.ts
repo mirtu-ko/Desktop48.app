@@ -35,7 +35,7 @@ export function useLiveSession(options: {
   isDisposed: Ref<boolean>
   /** 头像上报给浮窗头部（fp-bar）展示 */
   onAvatar: (avatarUrl: string) => void
-  /** 详情携带的在线人数上抛（归 use-live-polling 所有） */
+  /** 详情携带的在线人数上抛（首帧；实时值走 IM LIVEUPDATE 推送） */
   onOnlineNum: (num: number) => void
   /** 详情获取失败（通常直播已下架）：列表刷新 + 关闭浮窗 */
   onUnavailable: () => void
@@ -55,6 +55,10 @@ export function useLiveSession(options: {
   const userAvatar = ref('')
   /** 口袋聊天室 ID（getLiveOne 详情携带）：口袋互动弹幕的会话锚点；空串 = 无（公演/回放/已结束） */
   const chatroomId = ref('')
+  /** 房主 userId（getLiveOne 详情携带）：禁言/拉黑通知门控比对管理员操作者用；换场必须清空防串场 */
+  const ownerUserId = ref('')
+  /** 当前会话在用的远程 RTMP 地址：换流信号时比对用（连麦时地址主体不变、token 变） */
+  const activeRtmpUrl = ref('')
   /** 电台轮播图与切换间隔（毫秒） */
   const carousels = ref<string[]>([])
   const carouselTime = ref(5000)
@@ -66,6 +70,7 @@ export function useLiveSession(options: {
   function applyLiveDetail(view: LiveDetailView) {
     coverImage.value = view.coverUrl
     chatroomId.value = view.chatroomId || ''
+    ownerUserId.value = view.ownerUserId || ''
     // 电台无轮播图时回退封面单张展示（live-stream.ts 内 resolveCarouselImages 的既定契约）
     carousels.value = resolveCarouselImages(
       options.isRadio(),
@@ -86,8 +91,9 @@ export function useLiveSession(options: {
    * 取直播详情并归一成 LiveDetailView（open 走公演接口，user 走个人直播接口）。
    * 返回值里的 playStreamPath 是**远程 rtmp 地址**（不是本地播放地址）。
    * 异常原样上抛：业务错误（直播已下架）由调用方判别后关窗。
+   * fetchOptions.silent = 后台轮询（游客刷在线人数）用，失败不弹统一提示。
    */
-  async function fetchLiveDetail(): Promise<LiveDetailView> {
+  async function fetchLiveDetail(fetchOptions?: { silent?: boolean }): Promise<LiveDetailView> {
     const source = options.source() === 'open' ? 'open' : 'user'
     debugLog('live', `②拉详情: source=${source} → ${source === 'open' ? 'openLive 接口（多档清晰度数组，需选流）' : 'getLiveOne 接口（单档 rtmp 地址）'}`, `liveId=${options.liveId()}`)
     const view = await loadLiveDetail({
@@ -95,6 +101,7 @@ export function useLiveSession(options: {
       source,
       stream: 'live',
       avatarUrl: options.avatarUrl(),
+      silent: fetchOptions?.silent,
     })
     debugLog('live', `②拉详情: 归一结果 streamType=${view.streamType ?? '单档'} cover=${view.coverUrl ? '有' : '无'}`, view)
     return view
@@ -186,6 +193,7 @@ export function useLiveSession(options: {
   async function restartLiveStream(rtmpUrl: string) {
     const requestId = ++activeStreamRequestId
     debugLog('live', `session 重建直播流（第 ${streamRestartToken.value + 1} 次）, rtmp=${rtmpUrl}`)
+    activeRtmpUrl.value = rtmpUrl
     options.onBeforeRebuild()
     await stopCurrentLiveStream()
     if (options.isDisposed.value || requestId !== activeStreamRequestId)
@@ -246,6 +254,8 @@ export function useLiveSession(options: {
     carousels,
     carouselTime,
     chatroomId,
+    ownerUserId,
+    activeRtmpUrl,
     fetchLiveDetail,
     applyLiveDetail,
     getLiveOne,

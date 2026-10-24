@@ -151,8 +151,8 @@ function sendEcho(overrides: { body?: string, msgIdClient?: string, time?: numbe
 
 /**
  * setup() 创建的 effectScope：afterEach 必须停掉。
- * 否则上个用例的 api 实例（watch(loggedIn) → load）会在全局 stub 卸载后
- * 被 afterEach 的 setLoggedIn(true) 唤醒，打出 window is not defined 噪音。
+ * 停不掉的实例（watch(loggedIn) → load）会在下个用例翻登录态时被唤醒，
+ * 那时全局 stub 已卸载，打出 window is not defined 噪音。
  */
 let activeScope: ReturnType<typeof effectScope> | null = null
 /**
@@ -201,6 +201,12 @@ interface SetupOptions {
 }
 
 async function setup(options: SetupOptions = {}) {
+  // 同一用例内可能重复 setup（换一套回包重跑）：先停掉上一个实例。
+  // 否则 activeScope 被覆盖后旧实例的 watch(loggedIn) 会一直存活，
+  // 到下一个用例翻登录态时被唤醒，那时 window stub 已经不在了
+  activeScope?.stop()
+  activeScope = null
+
   const calls = {
     pocketFollowedIds: 0,
     livePages: [] as string[],
@@ -427,6 +433,7 @@ afterEach(() => {
     extra.stop()
   vi.unstubAllGlobals()
   vi.clearAllMocks()
+  // 登录态是模块级单例：收尾必须在实例全部 stop 之后，翻转才不会唤醒 watch(loggedIn)
   authMock.setLoggedIn(true)
 })
 
@@ -1980,6 +1987,25 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
 
     // 冷却到点归零（自调度 tick 收尾；末次 tick 落在 1600ms 档）
     await vi.advanceTimersByTimeAsync(1600)
+    expect(api.sendCooldownLeft.value).toBe(0)
+  })
+
+  it('冷却跟服务端 cdTime 走：房间要求 10s 时，本地下限过了仍不可发', async () => {
+    const { api } = await setup({
+      ...sendFixture(),
+      roomPermissions: { 'ch-10001': { sendText: true, cdTime: 10, roomRole: '0', followFlag: true } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.connectRoomQChat()
+
+    expect(await api.sendMessage('第一条')).toEqual({ ok: true })
+    await vi.advanceTimersByTimeAsync(1600)
+    // 1.5s 本地下限已过，但服务端窗口没到：镜像必须跟 cdTime，否则用户点了才被拒
+    expect(api.sendCooldownLeft.value).toBeGreaterThan(0)
+
+    await vi.advanceTimersByTimeAsync(8_600)
     expect(api.sendCooldownLeft.value).toBe(0)
   })
 

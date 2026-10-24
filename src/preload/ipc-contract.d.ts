@@ -26,6 +26,18 @@ export interface NetRequestOptions {
   body?: string
 }
 
+/**
+ * 网络请求回包：状态码与响应头必须原样回到渲染层。
+ *
+ * 主进程不能把非 2xx 统一抛成 Error——跨 IPC 的 reject 只保留 message，
+ * 状态码会丢，渲染层就无法区分「429 该停」与「502 该重试」。
+ */
+export interface NetResponse {
+  status: number
+  body: string
+  headers: Record<string, string>
+}
+
 // 网络诊断结果随契约一起暴露（渲染端设置页诊断列表消费）
 export type { NetDiagnoseItem }
 
@@ -237,16 +249,26 @@ export interface PocketVerifyResult {
   level: string
   imOk: boolean
   imAccid: string
-  /** 口袋钱包（元）；moneyOk=false 时三个余额无意义（接口失败不影响登录态判定） */
+  /** 鸡腿余额；moneyOk=false 时三个余额无意义（接口失败不影响登录态判定） */
   moneyOk: boolean
   moneyPay: number
   moneyFree: number
   moneyTotal: number
+  /** 鸡翅数量（成长值）；user/info/reload 的 support 字段 */
+  support: string
   /** 社交资料：服务端不返回的字段为空串，UI 据此隐藏对应条目 */
   fans: string
   likes: string
   signature: string
   message: string
+}
+
+/** 每日签到奖励（POST /user/api/v1/checkin） */
+export interface PocketCheckInResult {
+  addExp: number
+  addMoney: number
+  addSupport: number
+  days: number
 }
 
 /** 成员的房间频道（team server + channel）：口袋 App「房间」留言流的订阅目标 */
@@ -458,7 +480,7 @@ export type { TaskSnapshot }
 export type { FfmpegProblem, FfmpegStatus }
 
 interface StaticIpcInvokeMap {
-  netRequest: InvokeSpec<[options: NetRequestOptions], string>
+  netRequest: InvokeSpec<[options: NetRequestOptions], NetResponse>
   /** 网络诊断：对核心服务域名逐一发轻量 GET，返回状态码/耗时/失败原因（对端：main/net-diagnose.ts） */
   netDiagnose: InvokeSpec<[], NetDiagnoseItem[]>
   saveMemberData: InvokeSpec<[content: Partial<MemberDataContent>], { ok: true }>
@@ -523,8 +545,16 @@ interface StaticIpcInvokeMap {
   pocketLogout: InvokeSpec<[], void>
   /** 取直播的聊天室 id（需登录，无 token 的详情接口拿不到）；未登录返回空串，过期 reject */
   pocketGetChatroomId: InvokeSpec<[liveId: string], string>
+  /**
+   * 拉直播结束复盘（live/result，需登录）：总观看 / 本场时长 / 礼物流水 / 榜单前三，
+   * 原样回传上游 content（字段是字符串数字，宽松解析归渲染层 live-result.ts）；
+   * 未登录 / 接口失败 reject，调用方降级简版结束卡
+   */
+  pocketGetLiveResult: InvokeSpec<[liveId: string], Record<string, unknown>>
   /** 验证登录有效性：真实请求 token 校验与 IM 凭据两个需登录接口 */
   pocketVerifyLogin: InvokeSpec<[], PocketVerifyResult>
+  /** 每日签到；重复签到 / 网络异常等失败以 reject 报错 */
+  pocketCheckIn: InvokeSpec<[], PocketCheckInResult>
   /** 拉取账号关注成员 ID 列表（只给 ID，详情由本地成员树解析）；未登录空数组，过期 reject */
   pocketGetFollowedIds: InvokeSpec<[], number[]>
   /** 关注成员（桌面端 toggle 双写）；失败 reject，调用方静默降级 */

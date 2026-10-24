@@ -101,7 +101,7 @@ mpegts 解析 FLV → MSE → <video> → oncanplay → 加载态解除
 
 **③ 播放窗记录**（主进程 `records`，键为 `kind:liveId`）：`{ win, payload, aspectFitted, userResized }`。`stores/float-players.ts` 对外只暴露 `openLive` / `openPlayback` 两个语义入口。
 
-**④ 详情归一化 `LiveDetail`**：公演接口返回 `playStreams` 多档清晰度、个人直播返回单地址，`fetchLiveDetail` 归一为同一结构（`playStreamPath` / `coverPath` / `user` / `liveId` / `onlineNum`（仅 user）/ `carousels`（仅电台）），后续代码不再区分来源；`applyLiveDetail` 消费它写界面状态，在线人数经 `onOnlineNum` 上抛 `use-live-polling`。主进程返回 `{ url /* http://127.0.0.1:.../live/xxx.flv */, liveId }`。
+**④ 详情归一化 `LiveDetail`**：公演接口返回 `playStreams` 多档清晰度、个人直播返回单地址，`fetchLiveDetail` 归一为同一结构（`playStreamPath` / `coverPath` / `user` / `liveId` / `onlineNum`（仅 user）/ `carousels`（仅电台）），后续代码不再区分来源；`applyLiveDetail` 消费它写界面状态，在线人数经 `onOnlineNum` 上浮窗（首帧值），实时刷新走云信 LIVEUPDATE 推送（`liveUpdateInfo.online`，与官方 App 同构；未登录/公演无 IM 会话时保持首帧）。主进程返回 `{ url /* http://127.0.0.1:.../live/xxx.flv */, liveId }`。
 
 ## 3. 两类地址的区分
 
@@ -122,7 +122,7 @@ mpegts 解析 FLV → MSE → <video> → oncanplay → 加载态解除
 
 ```
 关闭播放窗 → 窗口销毁 → LivePlayer.onUnmounted
-   ├─ session.dispose() / retry.clearTimer() / polling.stopAll()
+   ├─ session.dispose() / retry.reset() / elapsedTimer.pause()
    └─ player.destroyPlayer() / releaseSleepBlocker()
 HTTP 连接断开 → http-server 的 req/res close → SIGKILL FFmpeg（响应级）
 handleStopLiveStream → stopProcess(优雅写 'q') → 2s 未退 SIGTERM → 再失败 SIGKILL（会话级）
@@ -137,29 +137,44 @@ handleStopLiveStream → stopProcess(优雅写 'q') → 2s 未退 SIGTERM → �
 
 ```
 session ──onSessionStart──▶ beginSession ──▶ retry.reset() + mediaLoading=true
-session ──onBeforeRebuild─▶ rebuildMedia ──▶ retry.clearTimer() + player.destroyPlayer()
-session ──onAvatar/onOnlineNum/onUnavailable─▶ 标题栏 / polling / 下架+关窗
+session ──onBeforeRebuild─▶ rebuildMedia ──▶ retry.reset() + player.destroyPlayer()
+session ──onAvatar/onOnlineNum/onUnavailable─▶ 标题栏 / 在线人数首帧 / 下架+关窗
 player  ──onCanPlay───────▶ onPlayerCanPlay ──▶ retry.isRecoveringStream=false
 player  ──onError─────────▶ handleStreamError ──▶ 网络错保持 loading / 致命错销毁播放器 → retry.schedule()
 retry   ──attempt─────────▶ recoverStream ──▶ fetchLiveDetail + applyLiveDetail + restartLiveStream
-retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopStreamNow + 'live-unavailable' + emit('close')
+retry   ──onExhausted─────▶ handleRetryExhausted ──▶ enterLiveEnded
+danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveEnded
 ```
 
-建议阅读顺序：先读 `beginSession` / `rebuildMedia` / `handleStreamError` / `onPlayerCanPlay` / `recoverStream` / `handleRetryExhausted` 六个 handler，再回看 `useXxx({...})` 的参数。
+`enterLiveEnded`（下播结束态，见 §6.1）是「直播终结」的唯一出口：停流停计时停弹幕 → 广播 `live-unavailable` → 拉复盘切结束卡。**不再 `emit('close')`**——官方 `LiveCloseFragment` 就是覆盖在播放器上的结束页，用户点关闭才关窗；`closeUnavailableLive`（详情明确反馈下架，如 `10049 已被删除`）是错误态不是结束态，仍立即关窗。
+
+建议阅读顺序：先读 `beginSession` / `rebuildMedia` / `handleStreamError` / `onPlayerCanPlay` / `recoverStream` / `enterLiveEnded` 六个 handler，再回看 `useXxx({...})` 的参数。
 
 | composable           | 负责                                                        | 不负责                               |
 | -------------------- | ----------------------------------------------------------- | ------------------------------------ |
 | `use-live-session`   | 拉详情、补拉聊天室 ID、开/停转流会话、界面状态同步          | 播放器实例、重试节奏、轮询、弹幕订阅 |
 | `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位                          | 地址来源、错误处理策略               |
 | `use-stream-retry`   | 重试节奏（默认 2s × 3，决策走纯函数）                       | 具体恢复逻辑（由 attempt 注入）      |
-| `use-live-polling`   | 已播时长、在线人数定时刷新                                  | 播放行为本身                         |
 | `use-video-rotation` | 旋转 / 容器全屏 / 播放暂停 / 音量                           | 地址、重试                           |
 | `use-sleep-blocker`  | 播放期间阻止系统休眠                                        | 播放行为                             |
 | `use-media-download` | 录制发起（走原始 RTMP 直存文件，不经本地转封装）            | 页面播放链路                         |
 | `use-live-danmaku`   | 双源弹幕订阅与投放                                          | 播放行为、气泡层渲染                 |
 | `use-danmaku-layer`  | 弹幕层锚定与摆放（画面内 / 左侧黑边）、字号自适应、宽度上限 | 弹幕内容与生命周期                   |
 
-弹幕层的几何全在 `computeDanmakuLayout`（纯函数）：字号按渲染区短边等比缩放，三档封顶——迷你窗 10–14px、非全屏播放窗 12–14px、全屏 12–18px（窗口态面积小，沿用 18px 上限会和全屏一样大、显得拥挤）；摆放取全局偏好 `danmakuPlacement`（`video` 画面内 / `left` 左侧黑边），黑边窄于 220px 时自行回落画面内、入口按钮只在 `canFloatLeft` 时出现；公演（B 站）弹幕另限宽 33vw，防单条横跨整块画面。直播与回放共用，迷你浮窗不传 `placement`。
+直播已播时长只有一个消费者，计时逻辑已内联到 `LivePlayer.vue`；在线人数仍由 IM 推送更新，不走轮询。
+
+弹幕层的几何全在 `computeDanmakuLayout`（纯函数）：字号按渲染区短边等比缩放，三档封顶——迷你窗 10–14px、非全屏播放窗 12–14px、全屏 12–18px（窗口态面积小，沿用 18px 上限会和全屏一样大、显得拥挤）；摆放取全局偏好 `danmakuPlacement`（`video` 画面内 / `left` 左侧黑边），黑边窄于 60px 时自行回落画面内、入口按钮只在 `canFloatLeft` 时出现；公演（B 站）弹幕另限宽 33vw，防单条横跨整块画面。直播与回放共用，迷你浮窗不传 `placement`。
+
+### 6.1 下播结束态与复盘数据
+
+主播下播有两条判决路径：`CLOSELIVE` 消息（服务端推送即达，仅 user 源有口袋 IM 会话）与断流重试耗尽（兜底：未登录 / 公演 / 消息丢失）。二者都进 `enterLiveEnded`：
+
+1. **收摊**：停已播计时、复位重试状态机、停弹幕会话（`useLiveDanmaku` 额外暴露的 `stop`）、停流并销毁播放器。此后 `handleStreamError` 与所有在途 `fetchLiveDetail` 回包都被 `liveEnded` 拦下——停流必然触发错误事件，不拦就会把已结束的直播反复重拉。
+2. **广播 `live-unavailable`**：列表页据此把该直播移出进行中（与下架同一通道，Lives 页只关心刷新）。
+3. **拉复盘**：`POST live/api/v1/live/result`（body `{ liveId }`，**必须带登录 token**，实测无 token 报 400「缺少请求参数」）→ 主进程 `pocketGetLiveResult` 原样回传 content → 渲染层 `services/live-result.ts` 宽松解析。字段类型以报文为准：`liveTime` / `totalMoney` / `liveId` 实测都是**字符串**数字，官方 bean 声明的 long/int 不可信。进行中也可查，下播即时可用，无结算延迟。
+4. **结束卡**（`.live-end`，z-index 35 盖住整块画面，官方 `LiveCloseFragment` 同构）：标题「直播已结束」+ 主播名 + 时长 / 总观看 / 礼物三围芯片 + 榜单前三（与互动榜同构）+ 关闭按钮。时长取复盘 `liveTime`（毫秒）优先、回落本地已播时长；礼物取复盘 `totalMoney` 优先、回落 LIVEUPDATE 累计流水；compact 小浮窗（viewportWidth < 420，默认竖屏直播窗 360 宽故恒真，拉宽越过 420 后回落普通播放窗字号档位）榜单缩小保留——榜单仅三项竖排、约 74px 高，窄窗高度足够，当初砍掉是过度收紧。复盘拉不到（未登录直接跳过请求——接口必须带 token；接口失败）时降级简版卡，**不因此关窗**。
+
+`liveOnline` 是本场累计观看（下播时即终值），结束卡作「总观看」展示；与实时推送的 `onlineNum`（当前在线）不同口径。
 
 ## 7. 实现约定（易错点）
 
@@ -177,9 +192,9 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 
 ### 7.4 详情失败统一走 `onUnavailable`
 
-`getLiveOne` 的 `try/catch` 里，详情接口失败通常意味着直播已下架。错误提示由 `services/apis.ts` 的 `request()` 统一弹窗（3 秒同文案去重），此处不重复弹，只广播 `live-unavailable` 让列表页刷新并 `emit('close')` 关窗；重试耗尽走同一路径。
+`getLiveOne` 的 `try/catch` 里，详情接口失败通常意味着直播已下架。错误提示由 `services/apis.ts` 的 `request()` 统一弹窗（3 秒同文案去重），此处不重复弹，只广播 `live-unavailable` 让列表页刷新并 `emit('close')` 关窗。
 
-⚠️ 只有确定性失败才该走这条路：pocketapi 的 `getLiveOne` 会随机返回 `{status:1017}`（同一份 body 约 1/3 命中，与参数、频率、并发无关，2026-09-13 实测），若原样当成下架会无故关播，故 `request()` 对 1017 与网络层异常默认重试 3 次（退避 400/800/1200ms）；`10049 该成员直播已被删除` 等业务结论不重试，立即上抛。在线人数轮询用 `Apis.live(liveId, { silent: true })`。
+⚠️ 只有确定性失败才该走这条路：pocketapi 的 `getLiveOne` 会随机返回 `{status:1017}`（同一份 body 约 1/3 命中，与参数、频率、并发无关，2026-09-13 实测），若原样当成下架会无故关播，故 `request()` 对 1017 与网络层异常默认重试 3 次（退避 400/800/1200ms）；`10049 该成员直播已被删除` 等业务结论不重试，立即上抛。**下架（错误态）与下播（结束态）是两条路**：前者立即关窗，后者进结束卡停流展示复盘，见 §6.1。
 
 ### 7.5 上游推流中断（连麦等）只能从媒体元素侧感知
 
@@ -188,7 +203,7 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 - 本地响应没有 `Content-Length`，mpegts 判定为 LOADING_COMPLETE 而非 Early-EOF，不抛 ERROR；随后 `endOfStream()` 把时长校正到最后一段，播完缓冲即触发 `ended`（伴随 `pause`，观感是「停住 + 暂停」）。
 - 触发点取媒体元素的 `onended`（直播正常播放时永远不会 ended），一律按网络错误上抛 → `retry.schedule()` → `recoverStream` 重新拉详情拿到**新签名地址**重建。
 - ⚠️ 不要改用 mpegts 的 `LOADING_COMPLETE` 兜底：`enableWorker: true` 时 worker 回传的包只有 `{ msg, event }`、不带 `extraData`，主线程按 `'extraData' in packet` 判断后直接丢弃该事件。
-- 重试计数语义是「连续失败次数」，必须在 canplay 时清零，否则一场直播里累计断流 3 次（连麦很容易做到）会被误判为「已结束」并关窗。
+- 重试计数语义是「连续失败次数」，必须在 canplay 时清零，否则一场直播里累计断流 3 次（连麦很容易做到）会被误判为「已结束」并切入结束态。
 
 ### 7.6 开播前的 FFmpeg 校验只做一次
 
@@ -203,7 +218,7 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 | 公演（`source='open'`）     | B 站弹幕       | `bilibiliRoomId`（payload 携带）      | `main/bilibili/danmaku-session.ts` |
 | 个人直播（`source='user'`） | 口袋48互动消息 | `chatroomId`（use-live-session 补拉） | `main/pocket48/pocket-danmaku.ts`  |
 
-两源由 `use-live-danmaku` 统一订阅，投放到同一气泡层；口袋的 LIVEUPDATE 消息不进气泡层，路由到左上角互动榜面板。口袋源走自研网易云信 TCP 客户端（`nim-chatroom.ts`），需登录口袋账号；进房身份（SDK 版本与包名）随登录档位取自 `client-profile.ts` 的 `nim` 字段，与 HTTP 请求报同一家客户端，登录态变更时旧会话会被断开。
+两源由 `use-live-danmaku` 统一订阅，投放到同一气泡层；口袋的 LIVEUPDATE 不进气泡层，路由到左上角互动榜面板（同报文的 online / allMoney 驱动胶囊在线人数与礼物流水段）。CLOSELIVE 与 INFORM_PULL_STREAM 同样不进气泡层：前者宿主切入下播结束态（停流 + 广播刷新列表 + 复盘卡，见 §6.1），后者宿主拉详情拿新 token 重建流（连麦/PK 时地址主体不变、token 变；地址未变则跳过），其余 13 类连麦/PK 消息按官方门禁集合静默丢弃。口袋源走自研网易云信 TCP 客户端（`nim-chatroom.ts`），需登录口袋账号；进房身份（SDK 版本与包名）随登录档位取自 `client-profile.ts` 的 `nim` 字段，与 HTTP 请求报同一家客户端，登录态变更时旧会话会被断开。
 
 **B 站房间号三级解析**（`utils/bilibili-room.ts`，从严到宽，全部落空则无弹幕）：① `teamList[0].groupId` 查团体房间表（`common/bilibili-rooms.ts`）；② 标题/副标题文本匹配，先团体名（SNH48…）再队伍名（TEAM X…，接口的 teamName 不含团体名）；③ 在线兜底：主进程拉五个官方直播间信息（`bilibiliRoomInfos` IPC，缓存 5 分钟），只取在播中的房间，与公演名书名号段互配命中——teamList 为空的公演（新生公演、生日会等）靠这层发现。
 

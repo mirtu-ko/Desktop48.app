@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  checkIn,
   checkRoomAnswer,
   followMember,
   getAuthState,
@@ -118,7 +119,7 @@ const STORED = {
   savedAt: 1_700_000_000_000,
 }
 
-/** 默认响应三件套：资料（扁平 content）+ IM 凭据 + 钱包 */
+/** 默认响应：资料（扁平 content）+ IM 凭据 + 钱包 + 签到 */
 function defaultReplies() {
   return {
     'user/info/reload': {
@@ -131,6 +132,7 @@ function defaultReplies() {
           userId: 10002,
           avatar: 'https://example.com/new.png',
           level: 7,
+          support: 456,
           fansNum: 12345,
           likeCount: 678,
           signature: '今天也要元气满满',
@@ -144,6 +146,10 @@ function defaultReplies() {
     'user/money': {
       status: 200,
       body: { status: 200, success: true, content: { moneyPay: 12.5, moneyFree: 3, moneyTotal: 15.5 } },
+    },
+    'user/api/v1/checkin': {
+      status: 200,
+      body: { status: 200, success: true, content: { addExp: 10, addMoney: 5, addSupport: 20, days: 3 } },
     },
   }
 }
@@ -170,6 +176,7 @@ describe('pocket-auth verifyLogin', () => {
     expect(result.moneyPay).toBe(12.5)
     expect(result.moneyFree).toBe(3)
     expect(result.moneyTotal).toBe(15.5)
+    expect(result.support).toBe('456')
     expect(result.fans).toBe('12345')
     expect(result.likes).toBe('678')
     expect(result.signature).toBe('今天也要元气满满')
@@ -277,6 +284,25 @@ describe('pocket-auth verifyLogin', () => {
     expect(state.loggedIn).toBe(true)
     expect(state.savedAt).toBe(STORED.savedAt)
     expect(state.mobileMasked).toBe('138****8000')
+  })
+})
+
+describe('pocket-auth checkIn', () => {
+  it('返回签到奖励并携带登录 token', async () => {
+    const result = await checkIn()
+    expect(result).toEqual({ addExp: 10, addMoney: 5, addSupport: 20, days: 3 })
+    const request = env.requests.find(item => item.url.includes('user/api/v1/checkin'))
+    expect(request?.body).toEqual({})
+    expect(request?.headers.token).toBe('test-token')
+  })
+
+  it('token 失效时清除本地凭证并拒绝', async () => {
+    env.replies['user/api/v1/checkin'] = {
+      status: 200,
+      body: { status: 401005, success: false, message: 'token 失效' },
+    }
+    await expect(checkIn()).rejects.toThrow('登录已过期，请重新登录口袋48账号')
+    expect(env.written).toBeNull()
   })
 })
 

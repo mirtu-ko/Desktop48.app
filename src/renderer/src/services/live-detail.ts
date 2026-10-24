@@ -56,6 +56,8 @@ export interface LiveDetailView {
    * 口袋互动消息弹幕的会话锚点；缺失/公演恒 undefined。
    */
   chatroomId?: string
+  /** 房主 userId（仅 user 源）：禁言/拉黑通知门控比对管理员操作者用 */
+  ownerUserId?: string
 }
 
 export interface LoadLiveDetailOptions {
@@ -67,6 +69,8 @@ export interface LoadLiveDetailOptions {
   avatarUrl?: string
   /** 开播时间（毫秒时间戳）：一直播 HLS 路径按此日期重写，仅 source=user 时生效 */
   startTime?: number
+  /** 静默请求：失败不弹统一提示（在线人数轮询这类后台调用用），仅 source=user 生效 */
+  silent?: boolean
 }
 
 /** 聊天室 id 归一：0 / 负数 / 空都是「无」。无 token 的详情 roomId 恒 0，绝不能当真值（'0' 去连聊天室必然失败） */
@@ -108,6 +112,7 @@ function fromUserLive(
     chatroomId: toChatroomId((raw as { chatroomId?: unknown }).chatroomId)
       || toChatroomId((raw as { roomId?: unknown }).roomId)
       || undefined,
+    ownerUserId: String(raw.user.userId ?? '').trim() || undefined,
   }
 }
 
@@ -147,8 +152,9 @@ export async function loadLiveDetail({
   stream,
   avatarUrl,
   startTime,
+  silent,
 }: LoadLiveDetailOptions): Promise<LiveDetailView> {
   if (source === 'open')
     return fromOpenLive(liveId, await Apis.openLive(liveId), avatarUrl, stream)
-  return fromUserLive(liveId, await Apis.live(liveId), startTime)
+  return fromUserLive(liveId, await Apis.live(liveId, { silent }), startTime)
 }

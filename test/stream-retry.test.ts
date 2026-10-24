@@ -165,7 +165,7 @@ describe('useStreamRetry 恢复态复位', () => {
 })
 
 describe('useStreamRetry 重试耗尽', () => {
-  it('计满上限后走 onExhausted：停加载、提示直播已结束、不再安排重试', async () => {
+  it('计满上限后走 onExhausted：停加载、不再安排重试', async () => {
     const { retry, attempt, mediaLoading, onExhausted } = setup()
     attempt.mockRejectedValue(new Error('boom'))
 
@@ -181,7 +181,8 @@ describe('useStreamRetry 重试耗尽', () => {
     expect(onExhausted).toHaveBeenCalledTimes(1)
     expect(mediaLoading.value).toBe(false)
     expect(retry.isRecoveringStream.value).toBe(false)
-    expect(warningMock).toHaveBeenCalledWith('直播已结束')
+    // 结束提示归组件的结束卡（自带「直播已结束」），这里不再另弹
+    expect(warningMock).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(RETRY_DELAY * 5)
     expect(attempt).toHaveBeenCalledTimes(3)

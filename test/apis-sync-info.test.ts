@@ -30,19 +30,21 @@ function stubNet(options: { update?: string, snapshot?: string, snapshotError?: 
   // 形参类型对齐真实契约（preload 的 saveMemberData）：否则 mock.calls 是空元组，
   // 取第 0 个实参在类型上不成立
   const saveMemberData = vi.fn(async (_content: Partial<MemberDataContent>) => ({ ok: true }))
+  // 回包形状对齐 preload 契约：状态码与正文分开（非 2xx 由 request.ts 判成 HttpError）
+  const ok = (body: string) => ({ status: 200, body, headers: {} })
   const netRequest = vi.fn(async (payload: { url: string }) => {
     // 主源是静态快照：不显式给内容时按「快照挂了」处理，老用例因此专测兜底路径
     if (payload.url === ApiUrls.ALL_MEMBER_SNAPSHOT_URL) {
       if (options.snapshot !== undefined)
-        return options.snapshot
+        return ok(options.snapshot)
       throw options.snapshotError ?? new Error('502 Bad Gateway')
     }
     if (payload.url === ApiUrls.ALL_MEMBER_URL) {
       if (options.allMembersError)
         throw options.allMembersError
-      return options.allMembers ?? ''
+      return ok(options.allMembers ?? '')
     }
-    return options.update ?? updateOkBody
+    return ok(options.update ?? updateOkBody)
   })
   vi.stubGlobal('window', {
     mainAPI: { getConfig: async () => 'Mozilla/5.0 (test)', netRequest, saveMemberData },

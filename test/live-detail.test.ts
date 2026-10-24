@@ -95,6 +95,14 @@ describe('loadLiveDetail（详情加载与归一）', () => {
 
       expect(view.userAvatar).toBe('https://source.48.cn/avatar/1.jpg')
     })
+
+    it('silent 透传给详情接口（游客人数轮询失败不该弹提示）', async () => {
+      liveMock.mockResolvedValue(userDetail())
+
+      await loadLiveDetail({ liveId: 'a', source: 'user', stream: 'live', silent: true })
+
+      expect(liveMock).toHaveBeenCalledWith('a', { silent: true })
+    })
   })
 
   describe('open 源（开放公演 / 公演回放）', () => {
