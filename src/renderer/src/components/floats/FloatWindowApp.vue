@@ -65,7 +65,7 @@ watchEffect(() => {
 
 // 窄窗标记，仅供播放器内部使用（弹幕延迟控件 / 弹幕列表在窄窗下换排布）；
 // 标题栏不消费它 —— 标题栏窄窗由 flex 自然压缩处理。
-const compact = computed(() => viewportWidth.value < 600)
+const compact = computed(() => viewportWidth.value < 420)
 
 /** 窗口控制通道按 event.sender 定位，作用于本窗而非主窗口 */
 function onClose() {

@@ -609,7 +609,7 @@ onUnmounted(() => {
           <span v-if="endOnline > 0" class="live-end__stat">总观看 {{ formatViewNum(endOnline) }}</span>
           <span v-if="endGift > 0" class="live-end__stat">礼物 {{ formatViewNum(endGift) }}</span>
         </div>
-        <div v-if="endTopUsers.length && !compact" class="live-end__tops">
+        <div v-if="endTopUsers.length" class="live-end__tops">
           <div v-for="(item, index) in endTopUsers" :key="item.user.userId || index" class="live-end__top">
             <img
               v-if="item.user.userAvatar && !failedEndAvatars.has(item.user.userId || String(index))"
@@ -808,14 +808,14 @@ onUnmounted(() => {
 }
 
 .live-end__title {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
   letter-spacing: 1px;
 }
 
 .live-end__name {
   max-width: 100%;
-  font-size: 13px;
+  font-size: 14px;
   opacity: 0.85;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -831,10 +831,10 @@ onUnmounted(() => {
 }
 
 .live-end__stat {
-  padding: 3px 10px;
+  padding: 4px 12px;
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.1);
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -853,13 +853,13 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .live-end__avatar {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   object-fit: cover;
 }
@@ -894,11 +894,11 @@ onUnmounted(() => {
 /* 关闭：品牌渐变胶囊；纯动作按钮，无状态语义 */
 .live-end__close {
   margin-top: 4px;
-  padding: 5px 18px;
+  padding: 6px 20px;
   border: none;
   border-radius: var(--radius-pill);
   font-family: inherit;
-  font-size: 12px;
+  font-size: 13px;
   color: #fff;
   background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
   cursor: pointer;
@@ -908,23 +908,38 @@ onUnmounted(() => {
   filter: brightness(1.12);
 }
 
-/* compact 小浮窗：榜单行已在模板里让位，这里再收紧间距与字号，只留三围与关闭 */
+/* compact 小浮窗：收紧间距与字号，榜单同步缩小保留（窄窗高度够，只省横向） */
 .live-end.is-compact {
   gap: 6px;
   padding: 10px;
 }
 
 .live-end.is-compact .live-end__title {
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .live-end.is-compact .live-end__name {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .live-end.is-compact .live-end__stat {
-  padding: 2px 8px;
-  font-size: 11px;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.live-end.is-compact .live-end__tops {
+  gap: 3px;
+  max-width: 100%;
+}
+
+.live-end.is-compact .live-end__top {
+  gap: 6px;
+  font-size: 12px;
+}
+
+.live-end.is-compact .live-end__avatar {
+  width: 20px;
+  height: 20px;
 }
 
 /* LIVE 状态段：内嵌在 MiniControls 胶囊最左段的芯片（样式作用于插槽内容）。
