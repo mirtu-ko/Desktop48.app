@@ -10,7 +10,7 @@ import Tools from '@renderer/utils/tools'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-/** 成员详情卡片（两个数据源合并后的唯一详情页）：starInfo 出头像 / 写真 / 微博 / 状态，allmembers 补排名 / 经历 / 口头禅 / 公司。队色以 --accent / --ring 注入卡片根 */
+/** 成员详情卡片（两个数据源合并后的唯一详情页）：starInfo 出头像 / 写真 / 微博 / 状态，allmembers 补排名 / 经历 / Catchphrase / 公司。队色以 --accent / --ring 注入卡片根 */
 const props = defineProps<{
   member: MemberDetail | null
   blocked?: boolean
@@ -421,7 +421,7 @@ function openRoom() {
 
           <section v-if="member.catchPhrase" class="sec">
             <div class="section-title">
-              口头禅
+              Catchphrase
             </div>
             <p class="quote">
               {{ member.catchPhrase }}
@@ -851,7 +851,7 @@ function openRoom() {
   }
 }
 
-/* ===== 口头禅：队色引用块 ===== */
+/* ===== Catchphrase：队色引用块 ===== */
 .quote {
   margin: 0;
   padding: 10px 14px;
@@ -1072,7 +1072,7 @@ function openRoom() {
 }
 
 /* 信息栏逐块上浮，步长与专辑卡一致。
- * 上限 6：stats / 微博 / 基础资料 / 特长·爱好 / 口头禅 / 经历 最多六块，
+ * 上限 6：stats / 微博 / 基础资料 / 特长·爱好 / Catchphrase / 经历 最多六块，
  * 少写一块的话最后那块会退回 delay 0，反而排在前面先出现 */
 .info {
   @for $i from 1 through 6 {

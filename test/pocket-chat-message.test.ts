@@ -82,9 +82,21 @@ describe('pocket-chat-message.normalizePocketChatMessage', () => {
     expect(normalizePocketChatMessage(msg)?.text).toBe('赠送 1 × 「星愿」🎁')
   })
 
-  it('closeLive 消息归一为系统消息', () => {
+  it('closeLive 归一为下播系统消息（宿主关播，不进气泡层）', () => {
     const msg = { type: 'custom', custom: JSON.stringify({ messageType: 'CLOSELIVE' }) }
-    expect(normalizePocketChatMessage(msg)).toEqual({ kind: 'system', text: '直播已结束', nick: '', userId: '' })
+    expect(normalizePocketChatMessage(msg)).toEqual({ kind: 'system', text: '直播已结束', nick: '', userId: '', liveEnd: true })
+  })
+
+  it('informPullStream 归一为换流信号（宿主拉详情重建，不进气泡层）', () => {
+    const msg = { type: 'custom', custom: JSON.stringify({ messageType: 'INFORM_PULL_STREAM', pullStream: 'rtmp://x' }) }
+    expect(normalizePocketChatMessage(msg)).toEqual({ kind: 'system', text: '', nick: '', userId: '', liveRestream: true })
+  })
+
+  it('连麦/PK 其余消息静默丢弃（官方交 cohost 模块，不进消息流）', () => {
+    for (const messageType of ['MICROPHONE_CONNECTION_AGREE_V2', 'MULTI_MIC_PK_START', 'MULTI_MIC_PK_SCORE', 'SETTLEMENT_HOST_EXIT']) {
+      const msg = { type: 'custom', custom: JSON.stringify({ messageType, text: 'x' }) }
+      expect(normalizePocketChatMessage(msg), messageType).toBeNull()
+    }
   })
 
   it('disableSpeak 归一为禁言系统消息（宿主门控后提示 + 重取详情）', () => {

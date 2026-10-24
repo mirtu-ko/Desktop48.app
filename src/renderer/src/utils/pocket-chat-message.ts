@@ -9,6 +9,7 @@
  * 与累计礼物流水经 liveOnline / liveAllMoney 透传，供播放器在线人数与榜单面板消费。
  *
  * 归一失败（无法识别类型且无文本）返回 null，调用方直接丢弃。
+ * 下播（CLOSELIVE）与换流信号（INFORM_PULL_STREAM）同样不进气泡层，由宿主执行关播 / 重建。
  */
 
 /** 归一后的聊天室消息 */
@@ -32,6 +33,10 @@ export interface PocketChatMessage {
   liveAllMoney?: number
   /** 禁言/拉黑通知（DISABLE_SPEAK）：宿主门控后按 op 动作，不进气泡层 */
   disableSpeak?: PocketDisableNotice
+  /** 主播下播（CLOSELIVE）：宿主立即关播，不进气泡层 */
+  liveEnd?: boolean
+  /** 连麦/PK 换流信号（INFORM_PULL_STREAM）：宿主拉详情重建流，不进气泡层 */
+  liveRestream?: boolean
 }
 
 /**
@@ -65,6 +70,27 @@ export interface PocketRankUser {
 
 const BARRAGE_PREFIX = 'BARRAGE_'
 const GIFT_PREFIXES = ['PRESENT_', 'GIFT_']
+
+/**
+ * 连麦/PK 消息类型（官方 z7/a 门禁集合 + 类型表，共 14 类）：由 cohost 模块消费，
+ * 官方明确不进聊天列表。我们不做连麦 UI，除 INFORM_PULL_STREAM（换流信号，
+ * 宿主拿它拉详情重建）外全部静默丢弃，避免兜底分支把它们刷成系统气泡
+ */
+const COHOST_SILENT_TYPES = new Set([
+  'MICROPHONE_CONNECTION_AGREE_V2',
+  'MICROPHONE_CONNECTION_FINISH_V2',
+  'MICROPHONE_CONNECTION_SCORE',
+  'MICROPHONE_CONNECTION_SETTLEMENT',
+  'MULTI_MIC_PK_AGREE',
+  'MULTI_MIC_PK_FINISH',
+  'MULTI_MIC_PK_REFUSE',
+  'MULTI_MIC_PK_SCORE',
+  'MULTI_MIC_PK_START',
+  'MULTI_MIC_PK_SUCCESS',
+  'MULTI_MIC_PK_TIMEOUT',
+  'SETTLEMENT_HOST_EXIT',
+  'SETTLEMENT_MEMBER_EXIT',
+])
 
 /**
  * 解析 DISABLE_SPEAK 的禁言/拉黑/踢出通知：opType / operatorType / operatorId / targetId。
@@ -250,8 +276,17 @@ export function normalizePocketChatMessage(
   if (expected && sourceId && sourceId !== expected)
     return null
 
+  // 连麦/PK 换流信号：官方直接换流地址；我们的推流地址主体不变、token 变，
+  // 故只当「拉详情换 token」的触发器，报文里的 pullStream 字段不采信
+  if (messageType === 'INFORM_PULL_STREAM')
+    return { kind: 'system', text: '', nick: '', userId: '', liveRestream: true }
+
+  // 连麦/PK 其余消息：官方交 cohost 模块、不进消息流，静默丢弃
+  if (COHOST_SILENT_TYPES.has(messageType))
+    return null
+
   if (messageType === 'CLOSELIVE')
-    return { kind: 'system', text: '直播已结束', nick: '', userId: '' }
+    return { kind: 'system', text: '直播已结束', nick: '', userId: '', liveEnd: true }
 
   // 被禁言/拉黑/踢出：官方消息版只对踢出有动作，禁言/拉黑在通知版；两条通道的行为
   // 都由 disableSpeak 标记上抛给宿主门控后执行，消息本身不进气泡层

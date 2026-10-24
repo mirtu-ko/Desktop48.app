@@ -30,6 +30,10 @@ export function useLiveDanmaku(options: {
   onLiveUpdate?: (update: { online?: number, allMoney?: number }) => void
   /** 被禁言/拉黑（DISABLE_SPEAK）：宿主门控后按 op 动作（禁言重取详情 / 拉黑关播） */
   onDisableSpeak?: (notice: PocketDisableNotice) => void
+  /** 主播下播（CLOSELIVE）：宿主立即关播（官方同构），不进气泡层 */
+  onLiveEnd?: () => void
+  /** 连麦/PK 换流信号（INFORM_PULL_STREAM）：宿主拉详情重建流，不进气泡层 */
+  onLiveRestream?: () => void
 }) {
   const { items: danmakuItems, push, tick, reset } = useLiveDanmakuOverlay()
 
@@ -102,6 +106,14 @@ export function useLiveDanmaku(options: {
         // 禁言/拉黑：宿主门控后提示并按 op 动作，气泡层不展示
         if (message.kind === 'system' && message.disableSpeak) {
           options.onDisableSpeak?.(message.disableSpeak)
+          return
+        }
+        // 下播 / 换流信号：宿主关播或重建流，气泡层不展示
+        if (message.kind === 'system' && (message.liveEnd || message.liveRestream)) {
+          if (message.liveEnd)
+            options.onLiveEnd?.()
+          else
+            options.onLiveRestream?.()
           return
         }
         pocketReceivedCount++

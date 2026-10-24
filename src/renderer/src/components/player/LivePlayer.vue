@@ -174,7 +174,7 @@ const session = useLiveSession({
 
 // 详情展示状态直接解构给模板（解构出的仍是 ref，不丢响应性）。
 // localPlaybackUrl = 本地 HTTP-FLV 地址，下方 watch 盯着它重建播放器
-const { localPlaybackUrl, coverImage, realName, carousels, carouselTime, chatroomId, ownerUserId } = session
+const { localPlaybackUrl, coverImage, realName, carousels, carouselTime, chatroomId, ownerUserId, activeRtmpUrl } = session
 
 // 弹幕订阅须在 session 之后创建：口袋源读 session.chatroomId，同步时立即求值
 const pocketChatroomId = computed(() => (props.source === 'user' ? chatroomId.value : ''))
@@ -255,6 +255,8 @@ const { danmakuItems } = useLiveDanmaku({
       liveAllMoney.value = allMoney
   },
   onDisableSpeak: handleDisableSpeak,
+  onLiveEnd: closeLiveEnded,
+  onLiveRestream: handleLiveRestream,
 })
 
 // ── mpegts 播放器实例 ────────────────────────────────────────────
@@ -349,6 +351,42 @@ function handleRetryExhausted() {
   session.stopStreamNow()
   EventBus.emit('live-unavailable', props.liveId)
   emit('close')
+}
+
+/** 主播下播（CLOSELIVE，官方收到即切结束态）：停流 → 广播刷新列表 → 关浮窗 */
+function closeLiveEnded() {
+  debugLog('live', `①直播:收到 CLOSELIVE，直播结束（liveId=${props.liveId}）`)
+  session.stopStreamNow()
+  EventBus.emit('live-unavailable', props.liveId)
+  ElMessage.info('直播已结束')
+  emit('close')
+}
+
+/**
+ * 连麦/PK 换流信号（INFORM_PULL_STREAM）：推流地址主体不变、token 变，
+ * 拉详情拿新 token 重建本地会话；地址没变则跳过（服务端推了信号但详情未变）。
+ * 不走重试计数——重建失败才转重试链兜底；下播判决归 CLOSELIVE 与重试耗尽
+ */
+async function handleLiveRestream() {
+  debugLog('live', '①直播:收到换流信号（连麦/PK），拉详情换 token 重建流')
+  mediaLoading.value = true
+  try {
+    const data = await session.fetchLiveDetail()
+    if (isManuallyUnmounted.value)
+      return
+    session.applyLiveDetail(data)
+    if (data.playStreamPath === activeRtmpUrl.value) {
+      debugLog('live', '①直播:换流信号但详情地址未变，跳过重建')
+      mediaLoading.value = false
+      return
+    }
+    await session.restartLiveStream(data.playStreamPath)
+  }
+  catch (error) {
+    // 换流期间详情失败不关窗（可能是瞬时抖动）：交给断流重试链兜底
+    debugLog('live', `①直播:换流重建失败，转重试链兜底 ${error}`)
+    retry.schedule()
+  }
 }
 
 // ── 录制 ─────────────────────────────────────────────────────────

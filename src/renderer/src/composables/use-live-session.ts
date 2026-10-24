@@ -57,6 +57,8 @@ export function useLiveSession(options: {
   const chatroomId = ref('')
   /** 房主 userId（getLiveOne 详情携带）：禁言/拉黑通知门控比对管理员操作者用；换场必须清空防串场 */
   const ownerUserId = ref('')
+  /** 当前会话在用的远程 RTMP 地址：换流信号时比对用（连麦时地址主体不变、token 变） */
+  const activeRtmpUrl = ref('')
   /** 电台轮播图与切换间隔（毫秒） */
   const carousels = ref<string[]>([])
   const carouselTime = ref(5000)
@@ -189,6 +191,7 @@ export function useLiveSession(options: {
   async function restartLiveStream(rtmpUrl: string) {
     const requestId = ++activeStreamRequestId
     debugLog('live', `session 重建直播流（第 ${streamRestartToken.value + 1} 次）, rtmp=${rtmpUrl}`)
+    activeRtmpUrl.value = rtmpUrl
     options.onBeforeRebuild()
     await stopCurrentLiveStream()
     if (options.isDisposed.value || requestId !== activeStreamRequestId)
@@ -250,6 +253,7 @@ export function useLiveSession(options: {
     carouselTime,
     chatroomId,
     ownerUserId,
+    activeRtmpUrl,
     fetchLiveDetail,
     applyLiveDetail,
     getLiveOne,
