@@ -1,16 +1,18 @@
 import { FLOAT_WINDOW_HASH_PATH } from '@common/float-window'
-import ElementPlus from 'element-plus'
 import { createApp } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import FloatWindowApp from './components/floats/FloatWindowApp.vue'
 import { installSettingsRouter } from './composables/use-settings-nav'
+import { installElement } from './plugins/element-plus'
 import routes from './routes'
 import { installFloatPlayers } from './stores/float-players'
 import { installTasks } from './stores/tasks'
 import { trackEvent, trackPage } from './utils/umami'
 
-import 'element-plus/dist/index.css'
+// 只引 Element Plus 的变量层与基础重置，组件样式随 plugins/element-plus 按需进入；
+// 必须排在 app.scss 之前——app.scss 的 --el-* 覆盖已提特异性，顺序不再决定胜负，但仍保持「基础在前」的直觉
+import 'element-plus/theme-chalk/base.css'
 import './assets/css/app.scss'
 
 // 独立播放窗与主窗口复用同一份 index.html，靠 hash 分流：命中 FLOAT_WINDOW_HASH_PATH 即播放窗。
@@ -24,7 +26,9 @@ if (window.location.hash.slice(1).startsWith(FLOAT_WINDOW_HASH_PATH)) {
   // 也不会把本窗发起的任务同步给主窗口的下载页。
   // silent：播放窗只静默镜像，完成提示留给发起窗口弹，避免两个窗口各弹一次。
   installTasks({ silent: true })
-  createApp(FloatWindowApp).use(ElementPlus).mount('#app')
+  const floatApp = createApp(FloatWindowApp)
+  installElement(floatApp)
+  floatApp.mount('#app')
   // 播放窗没有 router，打开即视作一次页面访问（记到 /#/float 下，便于看播放窗打开量）
   trackPage(window.location.hash.slice(1) || FLOAT_WINDOW_HASH_PATH)
 }
@@ -36,7 +40,8 @@ else {
     routes,
   })
 
-  app.use(router).use(ElementPlus)
+  app.use(router)
+  installElement(app)
 
   // Umami 上报：
   // hash 路由（数据范围详见 utils/umami.ts 头注释）；afterEach 对首次导航同样触发
