@@ -100,6 +100,8 @@ export interface LiveListItem {
   liveMode?: number
   /** 时长显示串（上游已格式化，如 '2:02:05'）：直接渲染，勿再经 formatMediaTime */
   duration?: string
+  /** 列表接口自带的人气快照（仅进行中直播有；回放列表无此字段） */
+  onlineUserNum?: number
   [key: string]: unknown
 }
 
@@ -132,6 +134,8 @@ export interface LiveCarousels {
 export interface LiveDetailUser {
   userName: string
   userAvatar: string
+  /** 主播 userId：禁言/拉黑通知门控比对管理员操作者用（官方 LiveDetailBean$User 同名字段） */
+  userId?: string
 }
 
 export interface LiveDetail {

@@ -87,12 +87,42 @@ describe('pocket-chat-message.normalizePocketChatMessage', () => {
     expect(normalizePocketChatMessage(msg)).toEqual({ kind: 'system', text: '直播已结束', nick: '', userId: '' })
   })
 
-  it('disableSpeak 类型直接丢弃', () => {
+  it('disableSpeak 归一为禁言系统消息（宿主门控后提示 + 重取详情）', () => {
     const msg = { type: 'custom', custom: JSON.stringify({ messageType: 'DISABLE_SPEAK', text: 'x' }) }
-    expect(normalizePocketChatMessage(msg)).toBeNull()
+    // opType/operatorType 缺失：保守按禁言 + 成员操作（报文未实测，保功能优先）
+    expect(normalizePocketChatMessage(msg)).toEqual({
+      kind: 'system',
+      text: '你已被禁言',
+      nick: '',
+      userId: '',
+      disableSpeak: { op: 1, operatorType: 1, operatorId: '', targetId: '' },
+    })
   })
 
-  it('liveUpdate 无榜单数据时丢弃', () => {
+  it('disableSpeak opType=2 归一为拉黑（宿主关播，不重取详情）', () => {
+    const msg = {
+      type: 'custom',
+      custom: JSON.stringify({
+        messageType: 'DISABLE_SPEAK',
+        opType: 2,
+        operatorType: '2',
+        operatorId: 167706829,
+      }),
+    }
+    expect(normalizePocketChatMessage(msg)?.disableSpeak).toEqual({ op: 2, operatorType: 2, operatorId: '167706829', targetId: '' })
+    expect(normalizePocketChatMessage(msg)?.text).toBe('你已被拉黑')
+  })
+
+  it('disableSpeak opType=3 归一为踢出（官方消息版唯一动作：targetId==本人时关播）', () => {
+    const msg = {
+      type: 'custom',
+      custom: JSON.stringify({ messageType: 'DISABLE_SPEAK', opType: 3, targetId: 12345 }),
+    }
+    expect(normalizePocketChatMessage(msg)?.disableSpeak).toEqual({ op: 3, operatorType: 1, operatorId: '', targetId: '12345' })
+    expect(normalizePocketChatMessage(msg)?.text).toBe('你已经被踢出直播间')
+  })
+
+  it('liveUpdate 无榜单无实时字段时丢弃', () => {
     const msg = { type: 'custom', custom: JSON.stringify({ messageType: 'LIVEUPDATE', text: 'x' }) }
     expect(normalizePocketChatMessage(msg)).toBeNull()
   })
@@ -104,6 +134,8 @@ describe('pocket-chat-message.normalizePocketChatMessage', () => {
         messageType: 'LIVEUPDATE',
         liveUpdateInfo: {
           liveId: 995010563687649280,
+          online: 159,
+          allMoney: 12034,
           topList: [
             { user: { userId: 167706829, userName: '许愿大', avatar: 'https://img.example/a.jpg' } },
             { user: { userId: 42, userName: '路人甲' } },
@@ -117,12 +149,36 @@ describe('pocket-chat-message.normalizePocketChatMessage', () => {
     }
     const result = normalizePocketChatMessage(msg)
     expect(result?.kind).toBe('rank')
+    expect(result?.liveOnline).toBe(159)
+    expect(result?.liveAllMoney).toBe(12034)
     expect(result?.rankUsers).toEqual([
       { userId: '167706829', userName: '许愿大', avatar: 'https://img.example/a.jpg' },
       { userId: '42', userName: '路人甲', avatar: '' },
       { userId: '859171', userName: '阿琂是谁🍥', avatar: '/avatar/2026/0601/859171.jpg', level: 16 },
       { userId: '8050966600', userName: '嘉木相思·木子', avatar: '/avatar/2026/0725/8050966600.jpg', level: 13, money: 20 },
     ])
+  })
+
+  it('liveUpdate 只有实时字段（无榜单）时也下发：在线人数与礼物流水独立于榜单变化', () => {
+    const msg = {
+      type: 'custom',
+      custom: JSON.stringify({ messageType: 'LIVEUPDATE', liveUpdateInfo: { liveId: 1, online: 165, topList: [] } }),
+    }
+    const result = normalizePocketChatMessage(msg)
+    expect(result?.kind).toBe('rank')
+    expect(result?.liveOnline).toBe(165)
+    expect(result?.liveAllMoney).toBeUndefined()
+    expect(result?.rankUsers).toEqual([])
+  })
+
+  it('liveUpdate 实时字段为数字字符串时也能解析', () => {
+    const msg = {
+      type: 'custom',
+      custom: JSON.stringify({ messageType: 'LIVEUPDATE', liveUpdateInfo: { online: '238', allMoney: '0' } }),
+    }
+    const result = normalizePocketChatMessage(msg)
+    expect(result?.liveOnline).toBe(238)
+    expect(result?.liveAllMoney).toBe(0)
   })
 
   it('弹幕扩展带 level 时透传等级，无 level 不携带字段', () => {

@@ -101,7 +101,7 @@ mpegts 解析 FLV → MSE → <video> → oncanplay → 加载态解除
 
 **③ 播放窗记录**（主进程 `records`，键为 `kind:liveId`）：`{ win, payload, aspectFitted, userResized }`。`stores/float-players.ts` 对外只暴露 `openLive` / `openPlayback` 两个语义入口。
 
-**④ 详情归一化 `LiveDetail`**：公演接口返回 `playStreams` 多档清晰度、个人直播返回单地址，`fetchLiveDetail` 归一为同一结构（`playStreamPath` / `coverPath` / `user` / `liveId` / `onlineNum`（仅 user）/ `carousels`（仅电台）），后续代码不再区分来源；`applyLiveDetail` 消费它写界面状态，在线人数经 `onOnlineNum` 上抛 `use-live-polling`。主进程返回 `{ url /* http://127.0.0.1:.../live/xxx.flv */, liveId }`。
+**④ 详情归一化 `LiveDetail`**：公演接口返回 `playStreams` 多档清晰度、个人直播返回单地址，`fetchLiveDetail` 归一为同一结构（`playStreamPath` / `coverPath` / `user` / `liveId` / `onlineNum`（仅 user）/ `carousels`（仅电台）），后续代码不再区分来源；`applyLiveDetail` 消费它写界面状态，在线人数经 `onOnlineNum` 上浮窗（首帧值），实时刷新走云信 LIVEUPDATE 推送（`liveUpdateInfo.online`，与官方 App 同构；未登录/公演无 IM 会话时保持首帧）。主进程返回 `{ url /* http://127.0.0.1:.../live/xxx.flv */, liveId }`。
 
 ## 3. 两类地址的区分
 
@@ -138,7 +138,7 @@ handleStopLiveStream → stopProcess(优雅写 'q') → 2s 未退 SIGTERM → �
 ```
 session ──onSessionStart──▶ beginSession ──▶ retry.reset() + mediaLoading=true
 session ──onBeforeRebuild─▶ rebuildMedia ──▶ retry.clearTimer() + player.destroyPlayer()
-session ──onAvatar/onOnlineNum/onUnavailable─▶ 标题栏 / polling / 下架+关窗
+session ──onAvatar/onOnlineNum/onUnavailable─▶ 标题栏 / 在线人数首帧 / 下架+关窗
 player  ──onCanPlay───────▶ onPlayerCanPlay ──▶ retry.isRecoveringStream=false
 player  ──onError─────────▶ handleStreamError ──▶ 网络错保持 loading / 致命错销毁播放器 → retry.schedule()
 retry   ──attempt─────────▶ recoverStream ──▶ fetchLiveDetail + applyLiveDetail + restartLiveStream
@@ -152,7 +152,7 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 | `use-live-session`   | 拉详情、补拉聊天室 ID、开/停转流会话、界面状态同步          | 播放器实例、重试节奏、轮询、弹幕订阅 |
 | `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位                          | 地址来源、错误处理策略               |
 | `use-stream-retry`   | 重试节奏（默认 2s × 3，决策走纯函数）                       | 具体恢复逻辑（由 attempt 注入）      |
-| `use-live-polling`   | 已播时长、在线人数定时刷新                                  | 播放行为本身                         |
+| `use-live-polling`   | 已播时长每秒刷新（在线人数改 IM 推送，不轮询）              | 播放行为本身                         |
 | `use-video-rotation` | 旋转 / 容器全屏 / 播放暂停 / 音量                           | 地址、重试                           |
 | `use-sleep-blocker`  | 播放期间阻止系统休眠                                        | 播放行为                             |
 | `use-media-download` | 录制发起（走原始 RTMP 直存文件，不经本地转封装）            | 页面播放链路                         |
@@ -179,7 +179,7 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 
 `getLiveOne` 的 `try/catch` 里，详情接口失败通常意味着直播已下架。错误提示由 `services/apis.ts` 的 `request()` 统一弹窗（3 秒同文案去重），此处不重复弹，只广播 `live-unavailable` 让列表页刷新并 `emit('close')` 关窗；重试耗尽走同一路径。
 
-⚠️ 只有确定性失败才该走这条路：pocketapi 的 `getLiveOne` 会随机返回 `{status:1017}`（同一份 body 约 1/3 命中，与参数、频率、并发无关，2026-09-13 实测），若原样当成下架会无故关播，故 `request()` 对 1017 与网络层异常默认重试 3 次（退避 400/800/1200ms）；`10049 该成员直播已被删除` 等业务结论不重试，立即上抛。在线人数轮询用 `Apis.live(liveId, { silent: true })`。
+⚠️ 只有确定性失败才该走这条路：pocketapi 的 `getLiveOne` 会随机返回 `{status:1017}`（同一份 body 约 1/3 命中，与参数、频率、并发无关，2026-09-13 实测），若原样当成下架会无故关播，故 `request()` 对 1017 与网络层异常默认重试 3 次（退避 400/800/1200ms）；`10049 该成员直播已被删除` 等业务结论不重试，立即上抛。
 
 ### 7.5 上游推流中断（连麦等）只能从媒体元素侧感知
 

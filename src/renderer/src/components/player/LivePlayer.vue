@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { PocketRankUser } from '@renderer/utils/pocket-chat-message'
+import type { PocketDisableNotice, PocketRankUser } from '@renderer/utils/pocket-chat-message'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { useDanmakuLayer } from '@renderer/composables/use-danmaku-layer'
 import { useLiveDanmaku } from '@renderer/composables/use-live-danmaku'
@@ -13,10 +13,12 @@ import { useStreamRetry } from '@renderer/composables/use-stream-retry'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import EventBus from '@renderer/services/event-bus'
 import { danmakuPlacement, ensureDanmakuPlacement, setDanmakuPlacement } from '@renderer/stores/danmaku-placement'
+import { pocketAuthState } from '@renderer/stores/pocket-auth'
 import { debugLog } from '@renderer/utils/debug'
 import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
 import Tools from '@renderer/utils/tools'
 import { durationBucket, trackEvent } from '@renderer/utils/umami'
+import { formatViewNum } from '@renderer/utils/view-num'
 
 import { useEventListener } from '@vueuse/core'
 
@@ -140,14 +142,17 @@ function toggleDanmakuPlacement() {
   trackEvent('danmaku:placement', { placement: next })
 }
 
-// ── 直播轮询：已播时长 + 在线人数 ────────────────────────────────
+// ── 已播时长（在线人数不走轮询，见下方 LIVEUPDATE）──────────────
 const polling = useLivePolling({
   startTime: () => props.startTime,
-  liveId: () => props.liveId,
-  skipOnlineNum: () => props.source === 'open',
-  onUnavailable: closeUnavailableLive,
 })
-const { liveElapsedText, onlineNum } = polling
+const { liveElapsedText } = polling
+
+// 在线人数：首帧来自会话详情，实时值来自口袋 LIVEUPDATE 推送（与官方 App 同构）；
+// 未登录 / 开放公演无 IM 会话时保持首帧值，open 接口恒不带故显示为空
+const onlineNum = ref(0)
+/** 累计礼物流水（LIVEUPDATE.allMoney）：0 = 未收到，榜单面板不显示该段 */
+const liveAllMoney = ref(0)
 
 // ── 直播会话：详情获取 + 本地 HTTP-FLV 生命周期 ──────────────────
 const session = useLiveSession({
@@ -158,7 +163,7 @@ const session = useLiveSession({
   isDisposed: isManuallyUnmounted,
   onAvatar: avatarUrl => emit('avatar', avatarUrl),
   onOnlineNum: (num) => {
-    polling.onlineNum.value = num
+    onlineNum.value = num
   },
   // 详情都取不到通常意味着直播已下架：广播通知列表页刷新
   onUnavailable: closeUnavailableLive,
@@ -169,7 +174,7 @@ const session = useLiveSession({
 
 // 详情展示状态直接解构给模板（解构出的仍是 ref，不丢响应性）。
 // localPlaybackUrl = 本地 HTTP-FLV 地址，下方 watch 盯着它重建播放器
-const { localPlaybackUrl, coverImage, realName, carousels, carouselTime, chatroomId } = session
+const { localPlaybackUrl, coverImage, realName, carousels, carouselTime, chatroomId, ownerUserId } = session
 
 // 弹幕订阅须在 session 之后创建：口袋源读 session.chatroomId，同步时立即求值
 const pocketChatroomId = computed(() => (props.source === 'user' ? chatroomId.value : ''))
@@ -184,11 +189,51 @@ function toggleDanmaku() {
 }
 
 // ── 互动榜单（口袋 LIVEUPDATE 消息）─────────────────────────────
-// 榜单不进气泡层，独立显示在画面右上角（.player-actions 下方）；可由胶囊开关收起
+// 榜单不进气泡层，独立显示在画面右上角（.player-actions 下方）；可由胶囊开关收起。
+// 同报文的 online / allMoney 路由到胶囊在线人数与榜单面板的礼物流水段
 const rankUsers = ref<PocketRankUser[]>([])
 const rankVisible = ref(true)
 /** 加载失败的榜单头像（按 userId 记账）：回退首字母占位 */
 const failedRankAvatars = reactive(new Set<string>())
+
+/**
+ * 被禁言/拉黑/踢出（DISABLE_SPEAK，官方 LiveStreamV2Fragment 同构）：
+ * 踢出（官方消息版唯一动作）——targetId==本人才关播，非本人（含自己 ID 缺失）不动；
+ * 禁言/拉黑（官方通知版语义，服务端若双发则经消息版到达）——门控后提示，
+ * 禁言重取详情（刷新失败静默，不影响播放），拉黑关浮窗（不重取）
+ */
+async function handleDisableSpeak(notice: PocketDisableNotice) {
+  if (notice.op === 3) {
+    if (notice.targetId && notice.targetId !== pocketAuthState.value.userId)
+      return
+    ElMessage.warning('你已经被踢出直播间')
+    emit('close')
+    return
+  }
+  // 门控：成员操作直接放行，管理员须是房主本人，其余不放行
+  if (notice.operatorType === 2) {
+    if (!ownerUserId.value || notice.operatorId !== ownerUserId.value)
+      return
+  }
+  else if (notice.operatorType !== 1) {
+    return
+  }
+  if (notice.op === 2) {
+    ElMessage.warning('你已被拉黑')
+    emit('close')
+    return
+  }
+  ElMessage.warning('你已被禁言')
+  try {
+    const data = await session.fetchLiveDetail()
+    if (isManuallyUnmounted.value)
+      return
+    session.applyLiveDetail(data)
+  }
+  catch (error) {
+    debugLog('live', `①直播:禁言后重取详情失败 ${error}`)
+  }
+}
 
 const { danmakuItems } = useLiveDanmaku({
   roomId: () => danmakuRoomId.value,
@@ -202,6 +247,14 @@ const { danmakuItems } = useLiveDanmaku({
     if (!users.length)
       failedRankAvatars.clear()
   },
+  onLiveUpdate: ({ online, allMoney }) => {
+    // 0 视为无效值不采纳：人数不会瞬间泄为 0，接了只会让显示消失
+    if (online !== undefined && online > 0)
+      onlineNum.value = online
+    if (allMoney !== undefined)
+      liveAllMoney.value = allMoney
+  },
+  onDisableSpeak: handleDisableSpeak,
 })
 
 // ── mpegts 播放器实例 ────────────────────────────────────────────
@@ -352,7 +405,6 @@ async function resumeLive() {
     return
   await acquireSleepBlocker()
   polling.startElapsedTimer()
-  polling.startOnlineNumTimer()
   // 播放器仍在则直接续播，否则按缓存地址重建或全量拉流
   if (player.hasPlayer()) {
     player.play()
@@ -487,6 +539,10 @@ onUnmounted(() => {
         <div class="rank-panel__title">
           <MediaIcon name="trophy" :size="13" />
           <span>互动榜</span>
+          <!-- 累计礼物流水（LIVEUPDATE.allMoney）：标题行右端，未收到时不占位 -->
+          <span v-if="liveAllMoney > 0" class="rank-panel__gift" :title="`本场累计礼物 ${liveAllMoney.toLocaleString()}`">
+            礼物 {{ formatViewNum(liveAllMoney) }}
+          </span>
         </div>
         <div
           v-for="(user, index) in rankUsers.slice(0, 10)"
@@ -677,6 +733,15 @@ onUnmounted(() => {
   font-weight: 600;
   color: #f7ba2a;
   border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+/* 累计礼物流水（LIVEUPDATE.allMoney）：推到标题行右端，金色与贡献值列同语言 */
+.rank-panel__gift {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #f7ba2a;
 }
 
 .rank-panel__row {
