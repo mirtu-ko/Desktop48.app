@@ -8,6 +8,8 @@ const PORTRAIT: DanmakuLayerRect = { left: 656, top: 0, width: 607, height: 1080
 const PORTRAIT_WINDOW: DanmakuLayerRect = { left: 426, top: 0, width: 427, height: 760, bottom: 0 }
 /** 横屏画面：铺满容器，没有黑边 */
 const LANDSCAPE: DanmakuLayerRect = { left: 0, top: 0, width: 1920, height: 1080, bottom: 0 }
+/** 16:9 画面落在更高的窗口里：上下各 60px 黑边 */
+const LETTERBOX: DanmakuLayerRect = { left: 0, top: 60, width: 1280, height: 720, bottom: 60 }
 
 function layout(
   rect: DanmakuLayerRect | null,
@@ -19,12 +21,19 @@ function layout(
 }
 
 describe('computeDanmakuLayout', () => {
-  it('横屏按短边取字号，宽度铺满画面渲染区', () => {
+  it('横屏按短边取字号，左右各内缩后宽度落在画面内', () => {
     const result = layout(LANDSCAPE)
     expect(result.fontSize).toBe(18)
-    expect(result.width).toBe('1920.0px')
-    expect(result.left).toBe('12.0px')
-    expect(result.bottom).toBe('46.0px')
+    expect(result.width).toBe('1900.0px')
+    expect(result.left).toBe('10.0px')
+    expect(result.bottom).toBe('46px')
+  })
+
+  it('画面上下有黑边时底边仍贴窗口，不随渲染区抬升', () => {
+    // bottom 与渲染区无关：上下黑边留得再宽，气泡也照旧铺到控制条上方
+    expect(layout(LETTERBOX).bottom).toBe('46px')
+    expect(layout(LETTERBOX).left).toBe('10.0px')
+    expect(layout(LETTERBOX).width).toBe('1260.0px')
   })
 
   it('横屏非全屏时缩短边缩放，但字号封顶 14px', () => {
@@ -43,10 +52,10 @@ describe('computeDanmakuLayout', () => {
   it('左侧栏贴屏幕最左，宽度铺满屏幕（不按黑边收窄）', () => {
     const result = layout(PORTRAIT, 'left')
     expect(result.floating).toBe(true)
-    expect(result.left).toBe('12px')
-    // 宽度只让出左右各 12px 的留白：长句不折行，短句仍落在黑边内
-    expect(result.width).toBe('calc(100% - 24px)')
-    expect(result.bottom).toBe('46.0px')
+    expect(result.left).toBe('10px')
+    // 宽度只让出左右各 10px 的留白：长句不折行，短句仍落在黑边内
+    expect(result.width).toBe('calc(100% - 20px)')
+    expect(result.bottom).toBe('46px')
   })
 
   it('黑边低于 60px 时回落画面内，但仍记录「能否浮到左侧」', () => {
@@ -54,7 +63,7 @@ describe('computeDanmakuLayout', () => {
     const result = layout(narrow, 'left')
     expect(result.canFloatLeft).toBe(false)
     expect(result.floating).toBe(false)
-    expect(result.left).toBe('71.0px')
+    expect(result.left).toBe('69.0px')
   })
 
   it('黑边达到 60px 边界时允许左侧摆放', () => {
@@ -62,13 +71,13 @@ describe('computeDanmakuLayout', () => {
     const result = layout(edge, 'left')
     expect(result.canFloatLeft).toBe(true)
     expect(result.floating).toBe(true)
-    expect(result.left).toBe('12px')
+    expect(result.left).toBe('10px')
   })
 
   it('渲染区未知时不给宽度，交给 .danmaku-list 的 CSS 兜底', () => {
     const result = layout(null)
     expect(result.width).toBeUndefined()
-    expect(result.left).toBe('12px')
+    expect(result.left).toBe('10px')
     expect(result.bottom).toBe('46px')
   })
 
@@ -86,16 +95,17 @@ describe('useDanmakuLayer', () => {
       fullscreen: () => true,
       placement: () => 'left',
     })
-    expect(layer.topLeft.value).toEqual({ left: '12px', top: '12px' })
+    expect(layer.topLeft.value).toEqual({ left: '10px', top: '10px' })
   })
 
-  it('画面内模式下互动榜锚在渲染区左上角', () => {
+  it('画面内模式下互动榜锚渲染区左边缘、贴近窗口顶', () => {
     const layer = useDanmakuLayer({
       videoRect: () => PORTRAIT,
       compact: () => false,
       fullscreen: () => true,
       placement: () => 'video',
     })
-    expect(layer.topLeft.value).toEqual({ left: '668.0px', top: '12.0px' })
+    // 纵向与气泡层同口径贴窗口，不跟画面顶边的黑边下沉
+    expect(layer.topLeft.value).toEqual({ left: '666.0px', top: '10px' })
   })
 })

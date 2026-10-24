@@ -13,9 +13,9 @@ export interface DanmakuLayerRect {
 // 弹幕字号随画面渲染区短边等比缩放的系数：竖屏直播高度≈窗口全高，按高度算会顶到上限，
 // 短边与画面宽度同阶，气泡占画面的比例在横竖屏下才均匀
 const FONT_RATIO = 0.033
-// 弹幕条距画面左 / 下边的内缩量
-const MARGIN = 12
-// bottom 下限：避开底部控制条
+// 弹幕层距画面左 / 右 / 顶边的内缩量
+const MARGIN = 10
+// 距容器底边的避让量：让开底部控制条。纵向一律按窗口算，不跟画面渲染区抬升
 const MIN_BOTTOM = 46
 // 左侧黑边最小宽度：低于 60px 时难以形成独立栏，不如留在画面内
 const MIN_LEFT_BAR = 60
@@ -34,7 +34,9 @@ export interface DanmakuLayerLayout {
 
 /**
  * 弹幕层的字号与几何（纯函数，便于直接测）。
- * 画面内锚视频渲染区左下角；左侧栏贴屏幕最左、宽度铺满屏幕。
+ * 横向锚视频渲染区：起点内缩在画面左侧，宽度收到画面内，左右黑边再宽也不进；
+ * 纵向贴窗口：盒子从窗口顶铺到控制条上方，画面上下有黑边时照旧铺上去
+ * （故 rect 的 top / bottom 不参与计算）；左侧栏模式整列移去屏幕最左、宽度铺满屏幕。
  */
 export function computeDanmakuLayout(
   rect: DanmakuLayerRect | null,
@@ -49,18 +51,17 @@ export function computeDanmakuLayout(
 
   const canFloatLeft = rect !== null && rect.left >= MIN_LEFT_BAR
   const floating = placement === 'left' && canFloatLeft
+  const bottom = `${MIN_BOTTOM}px`
 
   if (!rect) {
     return {
       fontSize,
       left: `${MARGIN}px`,
-      bottom: `${MIN_BOTTOM}px`,
+      bottom,
       floating,
       canFloatLeft,
     }
   }
-
-  const bottom = `${Math.max(MIN_BOTTOM, rect.bottom + MARGIN).toFixed(1)}px`
 
   if (floating) {
     return {
@@ -79,8 +80,8 @@ export function computeDanmakuLayout(
     fontSize,
     left: `${(rect.left + MARGIN).toFixed(1)}px`,
     bottom,
-    // 宽度锚渲染区：竖屏下容器远宽于画面，气泡不得越过黑边
-    width: `${rect.width.toFixed(1)}px`,
+    // 宽度锚渲染区并让出左右两侧的内缩量：竖屏下容器远宽于画面，气泡两端都不越黑边
+    width: `${(rect.width - MARGIN * 2).toFixed(1)}px`,
     floating,
     canFloatLeft,
   }
@@ -120,8 +121,9 @@ export function useDanmakuLayer(options: {
   const floating = computed(() => layout.value.floating)
 
   /**
-   * 画面渲染区左上角锚点（与 position 同一内缩量）：互动榜单面板悬于气泡层正上方并左对齐用。
-   *  左侧栏模式下跟着气泡层一起去屏幕左上角，两者不能一个在画面上、一个在黑边里
+   * 弹幕层左上角锚点（与 position 同一内缩量）：互动榜单面板悬于气泡层正上方并左对齐用。
+   *  左侧栏模式下跟着气泡层一起去屏幕左上角，两者不能一个在画面上、一个在黑边里；
+   *  画面内模式横向锚渲染区、纵向贴窗口顶，与气泡层的纵向口径一致
    */
   const topLeft = computed(() => {
     if (layout.value.floating)
@@ -132,7 +134,7 @@ export function useDanmakuLayer(options: {
 
     return {
       left: `${(rect.left + MARGIN).toFixed(1)}px`,
-      top: `${(rect.top + MARGIN).toFixed(1)}px`,
+      top: `${MARGIN}px`,
     }
   })
 

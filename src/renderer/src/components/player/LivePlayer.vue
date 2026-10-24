@@ -584,7 +584,8 @@ onUnmounted(() => {
           @volumechange="onVolumeChange"
         />
       </div>
-      <!-- 直播弹幕（B 站公演源 + 口袋互动消息）：与 video-wrapper 同级，故不参与画面旋转；left/bottom 由脚本锚画面左下角。
+      <!-- 直播弹幕（B 站公演源 + 口袋互动消息）：与 video-wrapper 同级，故不参与画面旋转；
+           left/width 由脚本锚画面左右（不越黑边），上下贴窗口（画面上下有黑边时照旧铺上去）。
            加载中一并隐藏：加载蒙层要盖住全部浮层，气泡不悬在加载态上 -->
       <div
         v-show="showDanmaku && !mediaLoading && !liveEnded"
@@ -657,7 +658,7 @@ onUnmounted(() => {
         </el-tooltip>
       </div>
 
-      <!-- 互动榜单：口袋 LIVEUPDATE 消息驱动，锚画面渲染区左上角 —— 悬于弹幕气泡层正上方并左对齐 -->
+      <!-- 互动榜单：口袋 LIVEUPDATE 消息驱动，锚画面左边缘、贴窗口顶 —— 悬于弹幕气泡层正上方并左对齐 -->
       <div
         v-if="rankUsers.length && !mediaLoading && !liveEnded"
         v-show="rankVisible"
@@ -990,7 +991,7 @@ onUnmounted(() => {
 
 .rank-panel {
   position: absolute;
-  /* left / top 由脚本锚画面渲染区左上角（useDanmakuLayer.topLeft，与气泡层同一内缩量） */
+  /* left / top 由脚本注入（useDanmakuLayer.topLeft）：锚画面左边缘、贴窗口顶，与气泡层同一内缩量 */
   z-index: 29;
   min-width: 132px;
   max-width: 248px;
