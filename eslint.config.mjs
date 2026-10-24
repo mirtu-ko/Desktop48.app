@@ -16,6 +16,9 @@ export default antfu({
     'vue/eqeqeq': ['error', 'always', { null: 'ignore' }],
     'eqeqeq': ['error', 'always', { null: 'ignore' }],
     'no-console': ['error', { allow: ['error'] }],
+    // v10 新增：调用/三元/嵌套一出现就强制逐项换行（阈值仅管元素个数与行宽），
+    // 会把紧凑的单行数组拆散，与全仓库既有风格冲突；只关这一条，其余保持默认
+    'antfu/reasonable-newline': 'off',
   },
 }, {
   files: [
