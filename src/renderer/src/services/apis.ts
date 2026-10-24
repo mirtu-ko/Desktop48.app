@@ -13,7 +13,7 @@ import { debugLog } from '@renderer/utils/debug'
 import { ElMessage } from 'element-plus'
 import ApiUrls from './api-urls'
 import EventBus from './event-bus'
-import Request from './request'
+import Request, { HttpError } from './request'
 
 /**
  * 解析 h5.48.cn 的 jsonp 响应。真实接口返回形如 `callback({...})` 的包裹文本，
@@ -279,6 +279,19 @@ async function requestOnce<T>(url: string, data: object, headers: Record<string,
     responseBody = await Request.post(url, data, headers)
   }
   catch (e: any) {
+    if (e instanceof HttpError) {
+      // 429 是「该停」而不是「该重试」：服务端限流窗口已生效，再打只会把窗口拖长。
+      // 主进程已按 Retry-After 让整域冷却（main/net-rate-limit.ts）
+      if (e.status === 429)
+        return { ok: false, message: '请求过于频繁，请稍后再试', retryable: false, cause: e }
+      // 5xx / 408 才是瞬时故障；其余 4xx 是请求本身的问题，重试没有意义
+      return {
+        ok: false,
+        message: `网络请求失败：${e.message}`,
+        retryable: e.status === 408 || e.status >= 500,
+        cause: e,
+      }
+    }
     // 网络层失败（超时/断网/主进程拒绝），调用方大多只静默 console，这里统一兜底提示
     return { ok: false, message: `网络请求失败：${e?.message || '未知错误'}`, retryable: true, cause: e }
   }

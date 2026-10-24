@@ -26,6 +26,18 @@ export interface NetRequestOptions {
   body?: string
 }
 
+/**
+ * 网络请求回包：状态码与响应头必须原样回到渲染层。
+ *
+ * 主进程不能把非 2xx 统一抛成 Error——跨 IPC 的 reject 只保留 message，
+ * 状态码会丢，渲染层就无法区分「429 该停」与「502 该重试」。
+ */
+export interface NetResponse {
+  status: number
+  body: string
+  headers: Record<string, string>
+}
+
 // 网络诊断结果随契约一起暴露（渲染端设置页诊断列表消费）
 export type { NetDiagnoseItem }
 
@@ -468,7 +480,7 @@ export type { TaskSnapshot }
 export type { FfmpegProblem, FfmpegStatus }
 
 interface StaticIpcInvokeMap {
-  netRequest: InvokeSpec<[options: NetRequestOptions], string>
+  netRequest: InvokeSpec<[options: NetRequestOptions], NetResponse>
   /** 网络诊断：对核心服务域名逐一发轻量 GET，返回状态码/耗时/失败原因（对端：main/net-diagnose.ts） */
   netDiagnose: InvokeSpec<[], NetDiagnoseItem[]>
   saveMemberData: InvokeSpec<[content: Partial<MemberDataContent>], { ok: true }>

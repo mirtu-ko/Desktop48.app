@@ -21,20 +21,43 @@ const SITE_USER_AGENT = `Mozilla/5.0 (Linux; Android ${ANDROID_DEVICE.osVersion}
 type NetRequestPayload = Parameters<typeof window.mainAPI.netRequest>[0]
 
 /**
- * dev-only 网络追踪：记录每个跨进程网络请求的 url / 耗时 / 失败原因，
+ * 非 2xx 响应。
+ *
+ * 状态码必须一路带到调用方的重试判断里：429 是「该停」而不是「该重试」，
+ * 旧实现把非 2xx 当网络故障，会在限流窗口里再连打 3 次。
+ * 主进程收到 429 已按 Retry-After 让整域冷却（main/net-rate-limit.ts），这里只管不重试。
+ */
+export class HttpError extends Error {
+  readonly status: number
+
+  constructor(status: number, url: string) {
+    super(`请求失败 HTTP ${status}: ${url}`)
+    this.name = 'HttpError'
+    this.status = status
+  }
+}
+
+/**
+ * dev-only 网络追踪：记录每个跨进程网络请求的 url / 状态码 / 耗时 / 失败原因，
  * 与主进程 [ipc] tracer 对称——排查「接口挂了还是解析挂了」时先看这里。
  */
 async function tracedNetRequest(payload: NetRequestPayload): Promise<string> {
   const startedAt = performance.now()
+  const elapsed = () => `${(performance.now() - startedAt).toFixed(0)}ms`
+  let response: Awaited<ReturnType<typeof window.mainAPI.netRequest>>
   try {
-    const response = await window.mainAPI.netRequest(payload)
-    debugLog('net', payload.method, payload.url, payload.body, `${(performance.now() - startedAt).toFixed(0)}ms`)
-    return response
+    response = await window.mainAPI.netRequest(payload)
   }
   catch (e: any) {
-    debugLog('net', payload.method, payload.url, payload.body, `失败(${(performance.now() - startedAt).toFixed(0)}ms):`, e?.message || e)
+    debugLog('net', payload.method, payload.url, payload.body, `失败(${elapsed()}):`, e?.message || e)
     throw e
   }
+  if (response.status < 200 || response.status >= 300) {
+    debugLog('net', payload.method, payload.url, payload.body, `HTTP ${response.status}`, elapsed())
+    throw new HttpError(response.status, payload.url)
+  }
+  debugLog('net', payload.method, payload.url, payload.body, response.status, elapsed())
+  return response.body
 }
 
 /**

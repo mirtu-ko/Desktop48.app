@@ -72,6 +72,15 @@ const SERVER_CHANNEL_TTL = 60 * 1000
 const serverChannelCache = new Map<string, { list: PocketServerChannel[], at: number }>()
 
 /**
+ * 房间发言权限短缓存：进房预热（主进程按 cdTime 限流）与渲染层输入框提示各要一次，
+ * 同一次进房会把同一个 room/info 打两遍。30s 足够合并这一次，又不会让「刚被禁言」
+ * 晚太久才反映到输入框上（真发出去服务端仍会拒绝兜底）。
+ */
+const ROOM_PERMISSION_TTL = 30 * 1000
+const roomPermissionCache = new Map<string, { value: PocketRoomPermission | null, at: number }>()
+const roomPermissionInflight = new Map<string, Promise<PocketRoomPermission | null>>()
+
+/**
  * 凭证失效广播钩子：IPC 层注入广播函数（见 register-pocket-ipc.ts），默认空实现便于单测直跑。
  * 失效即广播，各窗口登录态镜像同步复位。
  */
@@ -594,6 +603,8 @@ function deleteStoredCredentials(): void {
 export function logout(): void {
   deleteStoredCredentials()
   serverChannelCache.clear()
+  roomPermissionCache.clear()
+  roomPermissionInflight.clear()
   resetRoomSenderProfile()
   log('[pocket-auth] 已退出登录')
 }
@@ -602,6 +613,8 @@ export function logout(): void {
 export function expireStoredAuth(): void {
   deleteStoredCredentials()
   serverChannelCache.clear()
+  roomPermissionCache.clear()
+  roomPermissionInflight.clear()
   resetRoomSenderProfile()
   log('[pocket-auth] token 已失效，本地凭证已清除')
   notifyAuthExpired()
@@ -1005,8 +1018,31 @@ export interface PocketRoomPermission {
  * 拉取当前账号在指定频道的发言权限。
  * 未登录/无频道号返回 null；小房间暗号未通过时服务端回 status 2001，按失败上抛，
  * 调用方一律按「未知」处理（不据此禁用输入，最终仍由服务端拒绝兜底）。
+ *
+ * 走 30s 缓存并合并并发请求（见 ROOM_PERMISSION_TTL）：发送路径与进房预热都会读它，
+ * 没有缓存就变成每条消息多打一次 room/info。
  */
 export async function getRoomPermissions(channelId: string): Promise<PocketRoomPermission | null> {
+  const cached = roomPermissionCache.get(channelId)
+  if (cached && Date.now() - cached.at < ROOM_PERMISSION_TTL)
+    return cached.value
+  const pending = roomPermissionInflight.get(channelId)
+  if (pending)
+    return pending
+
+  const task = fetchRoomPermissions(channelId).then((value) => {
+    roomPermissionCache.set(channelId, { value, at: Date.now() })
+    return value
+  })
+  const guarded = task.finally(() => {
+    if (roomPermissionInflight.get(channelId) === guarded)
+      roomPermissionInflight.delete(channelId)
+  })
+  roomPermissionInflight.set(channelId, guarded)
+  return guarded
+}
+
+async function fetchRoomPermissions(channelId: string): Promise<PocketRoomPermission | null> {
   const token = getToken()
   if (!token || !channelId)
     return null

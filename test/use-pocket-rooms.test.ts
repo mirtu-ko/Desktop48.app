@@ -1983,6 +1983,25 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     expect(api.sendCooldownLeft.value).toBe(0)
   })
 
+  it('冷却跟服务端 cdTime 走：房间要求 10s 时，本地下限过了仍不可发', async () => {
+    const { api } = await setup({
+      ...sendFixture(),
+      roomPermissions: { 'ch-10001': { sendText: true, cdTime: 10, roomRole: '0', followFlag: true } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    await api.connectRoomQChat()
+
+    expect(await api.sendMessage('第一条')).toEqual({ ok: true })
+    await vi.advanceTimersByTimeAsync(1600)
+    // 1.5s 本地下限已过，但服务端窗口没到：镜像必须跟 cdTime，否则用户点了才被拒
+    expect(api.sendCooldownLeft.value).toBeGreaterThan(0)
+
+    await vi.advanceTimersByTimeAsync(8_600)
+    expect(api.sendCooldownLeft.value).toBe(0)
+  })
+
   it('发送失败：如实回错，消息不入列，不开冷却', async () => {
     const { api } = await setup(sendFixture())
     await api.load()

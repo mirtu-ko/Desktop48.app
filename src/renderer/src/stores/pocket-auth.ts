@@ -122,7 +122,7 @@ export function pocketAuthErrorMessage(error: unknown): string {
   const ipcMatch = /Error invoking remote method '[^']+': Error: (.*)/s.exec(text)
   const message = (ipcMatch?.[1] ?? text.replace(/^Error:\s*/, '')).trim()
   if (message.includes('今日已领取') || message.includes('今日已签到'))
-    return '今天已经签到啦，明天再来～'
+    return '今日已领取，明天再来'
   return message || '操作失败，请稍后重试'
 }
 

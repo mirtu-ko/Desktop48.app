@@ -100,7 +100,7 @@ async function handleCheckIn() {
   }
   catch (error) {
     debugLog('pocket-auth', '签到失败：', error)
-    ElMessage.info(pocketAuthErrorMessage(error))
+    ElMessage.warning(pocketAuthErrorMessage(error))
   }
   finally {
     checkingIn.value = false
