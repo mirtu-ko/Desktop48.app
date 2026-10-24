@@ -172,7 +172,7 @@ danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveE
 1. **收摊**：停已播计时、复位重试状态机、停弹幕会话（`useLiveDanmaku` 额外暴露的 `stop`）、停流并销毁播放器。此后 `handleStreamError` 与所有在途 `fetchLiveDetail` 回包都被 `liveEnded` 拦下——停流必然触发错误事件，不拦就会把已结束的直播反复重拉。
 2. **广播 `live-unavailable`**：列表页据此把该直播移出进行中（与下架同一通道，Lives 页只关心刷新）。
 3. **拉复盘**：`POST live/api/v1/live/result`（body `{ liveId }`，**必须带登录 token**，实测无 token 报 400「缺少请求参数」）→ 主进程 `pocketGetLiveResult` 原样回传 content → 渲染层 `services/live-result.ts` 宽松解析。字段类型以报文为准：`liveTime` / `totalMoney` / `liveId` 实测都是**字符串**数字，官方 bean 声明的 long/int 不可信。进行中也可查，下播即时可用，无结算延迟。
-4. **结束卡**（`.live-end`，z-index 35 盖住整块画面，官方 `LiveCloseFragment` 同构）：标题「直播已结束」+ 主播名 + 时长 / 总观看 / 礼物三围芯片 + 榜单前三（与互动榜同构）+ 关闭按钮。时长取复盘 `liveTime`（毫秒）优先、回落本地已播时长；礼物取复盘 `totalMoney` 优先、回落 LIVEUPDATE 累计流水；compact 小浮窗（viewportWidth < 420，默认竖屏直播窗 360 宽故恒真，拉宽越过 420 后回落普通播放窗字号档位）榜单缩小保留——榜单仅三项竖排、约 74px 高，窄窗高度足够，当初砍掉是过度收紧。复盘拉不到（未登录 / 接口失败）时降级简版卡，**不因此关窗**。
+4. **结束卡**（`.live-end`，z-index 35 盖住整块画面，官方 `LiveCloseFragment` 同构）：标题「直播已结束」+ 主播名 + 时长 / 总观看 / 礼物三围芯片 + 榜单前三（与互动榜同构）+ 关闭按钮。时长取复盘 `liveTime`（毫秒）优先、回落本地已播时长；礼物取复盘 `totalMoney` 优先、回落 LIVEUPDATE 累计流水；compact 小浮窗（viewportWidth < 420，默认竖屏直播窗 360 宽故恒真，拉宽越过 420 后回落普通播放窗字号档位）榜单缩小保留——榜单仅三项竖排、约 74px 高，窄窗高度足够，当初砍掉是过度收紧。复盘拉不到（未登录直接跳过请求——接口必须带 token；接口失败）时降级简版卡，**不因此关窗**。
 
 `liveOnline` 是本场累计观看（下播时即终值），结束卡作「总观看」展示；与实时推送的 `onlineNum`（当前在线）不同口径。
 

@@ -394,6 +394,11 @@ async function enterLiveEnded() {
   player.resetMediaElement()
   mediaLoading.value = false
   EventBus.emit('live-unavailable', props.liveId)
+  // 游客（未登录）拿不到复盘：接口必须带 token，必然 400 —— 直接停在简版卡，不白跑一次
+  if (!pocketAuthState.value.loggedIn) {
+    debugLog('live', '①直播:未登录，跳过复盘拉取，展示简版结束卡')
+    return
+  }
   try {
     const result = await loadLiveResult(props.liveId)
     if (isManuallyUnmounted.value)
