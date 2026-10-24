@@ -50,8 +50,8 @@
 
   /* ===== z-index 分层表：全项目堆叠层级一览，新增层先在此登记 =====
    * 1-9    组件内微层：卡片徽章/标签、播放器内 loading 与占位（局部堆叠，互不越界）
-   * 10-29  播放器浮层（相对 video-box 定位）：loading/封面层(10) < 旋转提示(25)
-   *        < MiniControls 控制条(20) ≈ player-actions 悬浮按钮(30)
+   * 10-35  播放器浮层（相对 video-box 定位）：loading/封面层(10) < 旋转提示(25)
+   *        < MiniControls 控制条(20) ≈ player-actions 悬浮按钮(30) < 下播结束卡(35)
    * 30-89  页内浮动件：弹幕侧栏开关(30)、页内磨砂浮动 Dock/TabBar(6 属容器内微层)
    * 90-99  全局固定浮层：FloatAudioBar 迷你播放条(99)、BackTopButton 回顶按钮(95)、
    *        DownloadsEntry 下载入口(96)

@@ -225,5 +225,6 @@ export function useLiveDanmaku(options: {
 
   sync()
 
-  return { danmakuItems }
+  // stop 额外暴露给宿主：下播进结束态时主动收摊（停订阅 + 清气泡 + 清榜单），不等卸载
+  return { danmakuItems, stop }
 }

@@ -28,6 +28,7 @@ import {
   FRIENDS_IDS_URL,
   IM_USER_INFO_URL,
   LIVE_ONE_URL,
+  LIVE_RESULT_URL,
   ROOM_ANSWER_VERIFY_URL,
   ROOM_ESSENCE_MESSAGE_URL,
   ROOM_INFO_URL,
@@ -890,6 +891,29 @@ export async function getChatroomId(liveId: string): Promise<string> {
   // 兜底 roomId（yaya 同款）：0 表示无聊天室，绝不能当真值——'0' 去连聊天室必然失败
   const roomId = Number(content.roomId)
   return Number.isFinite(roomId) && roomId > 0 ? String(roomId) : ''
+}
+
+/**
+ * 拉直播结束复盘（live/result）：下播后浮窗展示的总观看 / 本场时长 / 礼物流水 / 榜单前三。
+ * 必须带登录 token（实测无 token 服务端报 400「缺少请求参数」）；进行中也可查，下播即时可用。
+ * 未登录抛错（调用方降级简版结束卡），token 失效抛「登录已过期」。
+ * 字段类型以报文为准：liveTime / totalMoney / liveId 实测都是字符串，bean 声明的 long/int 不可信，
+ * 故这里原样回传 content，宽松解析归渲染层 live-result.ts。
+ */
+export async function getLiveResult(liveId: string): Promise<Record<string, unknown>> {
+  const token = getToken()
+  if (!token)
+    throw new Error('未登录口袋48账号')
+  const envelope = await postPocket<Record<string, unknown>>(
+    LIVE_RESULT_URL,
+    { liveId: String(liveId) },
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throwAuthExpired()
+  if (!envelope.success)
+    throw new Error(envelope.message || '获取直播复盘失败')
+  return envelope.content || {}
 }
 
 // ===== 成员房间（口袋 App「房间」频道的留言流，与直播间弹幕是两套体系） =====

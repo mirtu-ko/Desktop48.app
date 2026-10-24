@@ -1,13 +1,12 @@
 import type { Ref } from 'vue'
 import { nextRetryAttempt } from '@renderer/utils/live-stream'
 import { trackEvent } from '@renderer/utils/umami'
-import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
 /**
  * 直播断流重试状态机：
  * 统一重试节奏（定时器串行，避免并发重连），计满 maxRetries 次后
- * 走 onExhausted（提示直播结束 + 停流 + 关闭浮窗）。
+ * 走 onExhausted（组件在此切下播结束态：停流 → 复盘卡片，不再直接关窗）。
  * 重试决策用纯函数 nextRetryAttempt，见 utils/live-stream.ts。
  */
 export function useStreamRetry(options: {
@@ -17,7 +16,7 @@ export function useStreamRetry(options: {
   mediaLoading: Ref<boolean>
   /** 单次恢复尝试：拉详情 → 重建流。抛错视为本次失败，进入下一次重试 */
   attempt: () => Promise<void>
-  /** 重试耗尽：组件在此停流、广播下架、关闭浮窗 */
+  /** 重试耗尽：组件在此停流并切下播结束态（复盘卡片自带「直播已结束」，不再另弹提示） */
   onExhausted: () => void
 }) {
   const maxRetries = options.maxRetries ?? 3
@@ -68,7 +67,6 @@ export function useStreamRetry(options: {
       isRecoveringStream.value = false
       // Umami 事件：重试预算耗尽 = 这场直播没能救回来
       trackEvent('live:fail', { retries: maxRetries })
-      ElMessage.warning('直播已结束')
       options.onExhausted()
       return
     }

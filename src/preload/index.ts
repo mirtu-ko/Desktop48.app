@@ -164,6 +164,7 @@ const api = {
   pocketGetAuthState: () => invokeIpc('pocketGetAuthState'),
   pocketLogout: () => invokeIpc('pocketLogout'),
   pocketGetChatroomId: (liveId: string) => invokeIpc('pocketGetChatroomId', liveId),
+  pocketGetLiveResult: (liveId: string) => invokeIpc('pocketGetLiveResult', liveId),
   pocketVerifyLogin: () => invokeIpc('pocketVerifyLogin'),
   pocketCheckIn: () => invokeIpc('pocketCheckIn'),
   pocketGetFollowedIds: () => invokeIpc('pocketGetFollowedIds'),

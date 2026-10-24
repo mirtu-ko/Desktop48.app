@@ -545,6 +545,12 @@ interface StaticIpcInvokeMap {
   pocketLogout: InvokeSpec<[], void>
   /** 取直播的聊天室 id（需登录，无 token 的详情接口拿不到）；未登录返回空串，过期 reject */
   pocketGetChatroomId: InvokeSpec<[liveId: string], string>
+  /**
+   * 拉直播结束复盘（live/result，需登录）：总观看 / 本场时长 / 礼物流水 / 榜单前三，
+   * 原样回传上游 content（字段是字符串数字，宽松解析归渲染层 live-result.ts）；
+   * 未登录 / 接口失败 reject，调用方降级简版结束卡
+   */
+  pocketGetLiveResult: InvokeSpec<[liveId: string], Record<string, unknown>>
   /** 验证登录有效性：真实请求 token 校验与 IM 凭据两个需登录接口 */
   pocketVerifyLogin: InvokeSpec<[], PocketVerifyResult>
   /** 每日签到；重复签到 / 网络异常等失败以 reject 报错 */
