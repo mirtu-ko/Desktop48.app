@@ -8,6 +8,7 @@ import { useLivePlayer } from '@renderer/composables/use-live-player'
 import { useLiveSession } from '@renderer/composables/use-live-session'
 import useMediaDownload from '@renderer/composables/use-media-download'
 import { dispatchMediaShortcut } from '@renderer/composables/use-media-shortcuts'
+import { useOnlinePoll } from '@renderer/composables/use-online-poll'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useStreamRetry } from '@renderer/composables/use-stream-retry'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
@@ -22,7 +23,7 @@ import Tools from '@renderer/utils/tools'
 import { durationBucket, trackEvent } from '@renderer/utils/umami'
 import { formatViewNum } from '@renderer/utils/view-num'
 
-import { useEventListener, useIntervalFn } from '@vueuse/core'
+import { useDocumentVisibility, useEventListener, useIntervalFn } from '@vueuse/core'
 
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
@@ -160,8 +161,8 @@ const liveElapsedText = computed(() => {
   return formatMediaTime(totalSeconds)
 })
 
-// 在线人数：首帧来自会话详情，实时值来自口袋 LIVEUPDATE 推送（与官方 App 同构）；
-// 未登录 / 开放公演无 IM 会话时保持首帧值，open 接口恒不带故显示为空
+// 在线人数：首帧来自会话详情；登录用户由口袋 LIVEUPDATE 推送实时更新（与官方 App 同构），
+// 游客没有 IM 会话，改走定时轮询（见下方「游客在线人数轮询」）；开放公演接口恒不带故显示为空
 const onlineNum = ref(0)
 /** 累计礼物流水（LIVEUPDATE.allMoney）：0 = 未收到，榜单面板不显示该段 */
 const liveAllMoney = ref(0)
@@ -282,6 +283,24 @@ const { danmakuItems, stop: stopDanmaku } = useLiveDanmaku({
   onDisableSpeak: handleDisableSpeak,
   onLiveEnd: closeLiveEnded,
   onLiveRestream: handleLiveRestream,
+})
+
+// ── 游客在线人数轮询 ────────────────────────────────────────────
+// 未登录拿不到 LIVEUPDATE，人数否则会一直停在进房首帧；90s 补拉一次详情、只取 onlineNum。
+// 交给 use-online-poll 计时：可见 / 已登录 / 结束态翻转时自动启停
+const documentVisibility = useDocumentVisibility()
+useOnlinePoll({
+  enabled: () => props.source === 'user'
+    && !pocketAuthState.value.loggedIn
+    && !liveEnded.value
+    && !isManuallyUnmounted.value
+    && documentVisibility.value === 'visible',
+  // 只取这一个字段：详情里的 playStreamPath 一旦应用就是重建流
+  fetchOnline: async () => (await session.fetchLiveDetail({ silent: true })).onlineNum,
+  onOnline: (num) => {
+    onlineNum.value = num
+  },
+  onError: error => debugLog('live', `①直播:游客在线人数刷新失败（静默，下次轮询再试） ${error}`),
 })
 
 // ── mpegts 播放器实例 ────────────────────────────────────────────

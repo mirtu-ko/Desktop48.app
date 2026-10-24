@@ -91,8 +91,9 @@ export function useLiveSession(options: {
    * 取直播详情并归一成 LiveDetailView（open 走公演接口，user 走个人直播接口）。
    * 返回值里的 playStreamPath 是**远程 rtmp 地址**（不是本地播放地址）。
    * 异常原样上抛：业务错误（直播已下架）由调用方判别后关窗。
+   * fetchOptions.silent = 后台轮询（游客刷在线人数）用，失败不弹统一提示。
    */
-  async function fetchLiveDetail(): Promise<LiveDetailView> {
+  async function fetchLiveDetail(fetchOptions?: { silent?: boolean }): Promise<LiveDetailView> {
     const source = options.source() === 'open' ? 'open' : 'user'
     debugLog('live', `②拉详情: source=${source} → ${source === 'open' ? 'openLive 接口（多档清晰度数组，需选流）' : 'getLiveOne 接口（单档 rtmp 地址）'}`, `liveId=${options.liveId()}`)
     const view = await loadLiveDetail({
@@ -100,6 +101,7 @@ export function useLiveSession(options: {
       source,
       stream: 'live',
       avatarUrl: options.avatarUrl(),
+      silent: fetchOptions?.silent,
     })
     debugLog('live', `②拉详情: 归一结果 streamType=${view.streamType ?? '单档'} cover=${view.coverUrl ? '有' : '无'}`, view)
     return view
