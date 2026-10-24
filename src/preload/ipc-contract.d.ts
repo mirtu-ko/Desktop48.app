@@ -237,16 +237,26 @@ export interface PocketVerifyResult {
   level: string
   imOk: boolean
   imAccid: string
-  /** 口袋钱包（元）；moneyOk=false 时三个余额无意义（接口失败不影响登录态判定） */
+  /** 鸡腿余额；moneyOk=false 时三个余额无意义（接口失败不影响登录态判定） */
   moneyOk: boolean
   moneyPay: number
   moneyFree: number
   moneyTotal: number
+  /** 鸡翅数量（成长值）；user/info/reload 的 support 字段 */
+  support: string
   /** 社交资料：服务端不返回的字段为空串，UI 据此隐藏对应条目 */
   fans: string
   likes: string
   signature: string
   message: string
+}
+
+/** 每日签到奖励（POST /user/api/v1/checkin） */
+export interface PocketCheckInResult {
+  addExp: number
+  addMoney: number
+  addSupport: number
+  days: number
 }
 
 /** 成员的房间频道（team server + channel）：口袋 App「房间」留言流的订阅目标 */
@@ -525,6 +535,8 @@ interface StaticIpcInvokeMap {
   pocketGetChatroomId: InvokeSpec<[liveId: string], string>
   /** 验证登录有效性：真实请求 token 校验与 IM 凭据两个需登录接口 */
   pocketVerifyLogin: InvokeSpec<[], PocketVerifyResult>
+  /** 每日签到；重复签到 / 网络异常等失败以 reject 报错 */
+  pocketCheckIn: InvokeSpec<[], PocketCheckInResult>
   /** 拉取账号关注成员 ID 列表（只给 ID，详情由本地成员树解析）；未登录空数组，过期 reject */
   pocketGetFollowedIds: InvokeSpec<[], number[]>
   /** 关注成员（桌面端 toggle 双写）；失败 reject，调用方静默降级 */

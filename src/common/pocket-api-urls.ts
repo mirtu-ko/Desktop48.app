@@ -46,6 +46,8 @@ export const SMS_LOGIN_URL = `${ORIGIN}/user/api/v2/login/app/app_login`
 export const TOKEN_CHECK_URL = `${ORIGIN}/user/api/v1/user/info/reload`
 /** 口袋钱包余额：验证登录态时顺带展示，接口失败不影响登录态判定 */
 export const USER_MONEY_URL = `${ORIGIN}/user/api/v1/user/money`
+/** 每日签到（口袋 App 的「每日礼品」）：成功返回成长值 / 鸡腿 / 鸡翅奖励 */
+export const CHECKIN_URL = `${ORIGIN}/user/api/v1/checkin`
 /** 关注成员 ID 列表（账号维度，一次性返回无分页；只给 ID，详情由本地成员树解析） */
 export const FRIENDS_IDS_URL = `${ORIGIN}/user/api/v1/friendships/friends/id`
 /** 关注 / 取消关注成员（桌面端 toggle 双写用） */

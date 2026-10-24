@@ -61,6 +61,7 @@ export function registerPocketIPC(): void {
   handleTraced('pocketGetChatroomId', (_event: IpcMainInvokeEvent, liveId: string) =>
     pocketAuth.getChatroomId(liveId))
   handleTraced('pocketVerifyLogin', () => pocketAuth.verifyLogin())
+  handleTraced('pocketCheckIn', () => pocketAuth.checkIn())
   // 关注列表（账号维度）：拉取 + 桌面端 toggle 双写；失败以 reject 报错，调用方静默降级
   handleTraced('pocketGetFollowedIds', () => pocketAuth.getFollowedIds())
   handleTraced('pocketFollowMember', (_event: IpcMainInvokeEvent, userId: number) =>

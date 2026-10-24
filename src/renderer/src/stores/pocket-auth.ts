@@ -1,4 +1,4 @@
-import type { PocketAuthState, PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
+import type { PocketAuthState, PocketCheckInResult, PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
 /**
  * 口袋48登录态的共享实现（模块级单例，与 stores/member-flags.ts 同一模式）。
  *
@@ -108,9 +108,21 @@ export function verifyPocketLogin(): Promise<PocketVerifyResult> {
   return window.mainAPI.pocketVerifyLogin()
 }
 
-/** 统一错误提示（登录弹窗内用 ElMessage 即可，这里收口文案） */
+/** 每日签到；奖励与重复签到提示由服务端返回 */
+export function checkInPocket(): Promise<PocketCheckInResult> {
+  return window.mainAPI.pocketCheckIn()
+}
+
+/**
+ * 统一错误提示：剥掉 Electron IPC 的 `Error invoking remote method ...` 包装，
+ * 并把服务端可预期的签到状态换成更自然的提示。
+ */
 export function pocketAuthErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error)
+  const text = error instanceof Error ? error.message : String(error)
+  const ipcMatch = /Error invoking remote method '[^']+': Error: (.*)/s.exec(text)
+  const message = (ipcMatch?.[1] ?? text.replace(/^Error:\s*/, '')).trim()
+  if (message.includes('今日已领取') || message.includes('今日已签到'))
+    return '今天已经签到啦，明天再来～'
   return message || '操作失败，请稍后重试'
 }
 

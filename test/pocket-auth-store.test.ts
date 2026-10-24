@@ -110,3 +110,17 @@ describe('pocket-auth store / 主进程失效广播复位镜像', () => {
     expect(store.pocketAuthState.value.loggedIn).toBe(false)
   })
 })
+
+describe('pocket-auth store / 错误提示', () => {
+  it('剥离 IPC 包装并把重复签到转换成自然提示', async () => {
+    const { store } = await setup(ACCOUNT_A)
+    const error = new Error(`Error invoking remote method 'pocketCheckIn': Error: 今日已领取，明天再来`)
+    expect(store.pocketAuthErrorMessage(error)).toBe('今天已经签到啦，明天再来～')
+  })
+
+  it('其他服务端原因只剥离 IPC 包装', async () => {
+    const { store } = await setup(ACCOUNT_A)
+    const error = new Error(`Error invoking remote method 'pocketCheckIn': Error: 网络请求超时`)
+    expect(store.pocketAuthErrorMessage(error)).toBe('网络请求超时')
+  })
+})

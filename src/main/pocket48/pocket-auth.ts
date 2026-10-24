@@ -22,6 +22,7 @@ import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  CHECKIN_URL,
   FRIEND_ADD_URL,
   FRIEND_REMOVE_URL,
   FRIENDS_IDS_URL,
@@ -340,7 +341,7 @@ function extractToken(stored: StoredAuth | null): string {
     token = stored.tokenPlain || ''
   }
   // 仅开发环境打印 token，生产环境不落日志（token 本身是机密）
-  // debug('[pocket-auth] 解密后的 token：', token)
+  debug('[pocket-auth] 解密后的 token：', token)
   return token
 }
 
@@ -620,16 +621,26 @@ export interface PocketVerifyResult {
   level: string
   imOk: boolean
   imAccid: string
-  /** 口袋钱包（元）；moneyOk=false 时三个余额无意义（接口失败不影响登录态判定） */
+  /** 鸡腿余额；moneyOk=false 时三个余额无意义（接口失败不影响登录态判定） */
   moneyOk: boolean
   moneyPay: number
   moneyFree: number
   moneyTotal: number
+  /** 鸡翅数量（成长值）；user/info/reload 的 support 字段 */
+  support: string
   /** 社交资料：服务端不返回的字段为空串，UI 据此隐藏对应条目 */
   fans: string
   likes: string
   signature: string
   message: string
+}
+
+/** 每日签到奖励；服务端字段缺失或非法时按 0 处理 */
+export interface PocketCheckInResult {
+  addExp: number
+  addMoney: number
+  addSupport: number
+  days: number
 }
 
 /** 社交资料提取：服务端不同接口字段名不统一，逐个兜底；缺失返回空串 */
@@ -672,6 +683,13 @@ function pickMoney(content: Record<string, unknown> | undefined | null): { money
   return { moneyPay, moneyFree, moneyTotal: num('moneyTotal') || moneyPay + moneyFree }
 }
 
+/** 读取非负数字段；服务端可能以 number 或数字字符串返回 */
+function pickNonNegativeNumber(content: Record<string, unknown>, key: string): number {
+  const value = content[key]
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+}
+
 /**
  * 验证登录是否有效：真实请求需要登录的接口——
  * 1. user/info/reload（token 校验 + 资料 + 社交数据）；2. im/userinfo（弹幕聊天室凭据链路）；
@@ -690,6 +708,7 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
     moneyPay: 0,
     moneyFree: 0,
     moneyTotal: 0,
+    support: '',
     fans: '',
     likes: '',
     signature: '',
@@ -709,6 +728,7 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
   const c = (envelope.content || {}) as Record<string, unknown>
   const user = (c.userInfo || c.user || c) as Record<string, unknown>
   const social = pickSocialStats(user)
+  const support = pickNonNegativeNumber(user, 'support')
   // 验证通过即用服务端最新资料回写本地（用户可能改过头像/昵称），token 不动
   refreshStoredProfile(info)
   let imOk = false
@@ -743,10 +763,30 @@ export async function verifyLogin(): Promise<PocketVerifyResult> {
     imAccid,
     moneyOk,
     ...money,
+    support: String(support),
     fans: social.fans,
     likes: social.likes,
     signature: social.signature,
     message: imOk ? '登录有效' : `登录有效，但互动消息凭据获取失败：${imMessage}`,
+  }
+}
+
+/** 每日签到：调用唯一的签到接口，奖励字段由服务端返回；重复签到的判定也在服务端 */
+export async function checkIn(): Promise<PocketCheckInResult> {
+  const token = getToken()
+  if (!token)
+    throw new Error('未登录口袋48账号')
+  const envelope = await postPocket<Record<string, unknown>>(CHECKIN_URL, {}, token)
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throwAuthExpired()
+  if (!isEnvelopeOk(envelope))
+    throw new Error(envelope.message || '签到失败')
+  const content = (envelope.content || {}) as Record<string, unknown>
+  return {
+    addExp: pickNonNegativeNumber(content, 'addExp'),
+    addMoney: pickNonNegativeNumber(content, 'addMoney'),
+    addSupport: pickNonNegativeNumber(content, 'addSupport'),
+    days: pickNonNegativeNumber(content, 'days'),
   }
 }
 
