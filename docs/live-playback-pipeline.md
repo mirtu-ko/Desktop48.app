@@ -122,7 +122,7 @@ mpegts 解析 FLV → MSE → <video> → oncanplay → 加载态解除
 
 ```
 关闭播放窗 → 窗口销毁 → LivePlayer.onUnmounted
-   ├─ session.dispose() / retry.clearTimer() / polling.stopAll()
+   ├─ session.dispose() / retry.clearTimer() / elapsedTimer.pause()
    └─ player.destroyPlayer() / releaseSleepBlocker()
 HTTP 连接断开 → http-server 的 req/res close → SIGKILL FFmpeg（响应级）
 handleStopLiveStream → stopProcess(优雅写 'q') → 2s 未退 SIGTERM → 再失败 SIGKILL（会话级）
@@ -152,12 +152,13 @@ retry   ──onExhausted─────▶ handleRetryExhausted ──▶ stopS
 | `use-live-session`   | 拉详情、补拉聊天室 ID、开/停转流会话、界面状态同步          | 播放器实例、重试节奏、轮询、弹幕订阅 |
 | `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位                          | 地址来源、错误处理策略               |
 | `use-stream-retry`   | 重试节奏（默认 2s × 3，决策走纯函数）                       | 具体恢复逻辑（由 attempt 注入）      |
-| `use-live-polling`   | 已播时长每秒刷新（在线人数改 IM 推送，不轮询）              | 播放行为本身                         |
 | `use-video-rotation` | 旋转 / 容器全屏 / 播放暂停 / 音量                           | 地址、重试                           |
 | `use-sleep-blocker`  | 播放期间阻止系统休眠                                        | 播放行为                             |
 | `use-media-download` | 录制发起（走原始 RTMP 直存文件，不经本地转封装）            | 页面播放链路                         |
 | `use-live-danmaku`   | 双源弹幕订阅与投放                                          | 播放行为、气泡层渲染                 |
 | `use-danmaku-layer`  | 弹幕层锚定与摆放（画面内 / 左侧黑边）、字号自适应、宽度上限 | 弹幕内容与生命周期                   |
+
+直播已播时长只有一个消费者，计时逻辑已内联到 `LivePlayer.vue`；在线人数仍由 IM 推送更新，不走轮询。
 
 弹幕层的几何全在 `computeDanmakuLayout`（纯函数）：字号按渲染区短边等比缩放，三档封顶——迷你窗 10–14px、非全屏播放窗 12–14px、全屏 12–18px（窗口态面积小，沿用 18px 上限会和全屏一样大、显得拥挤）；摆放取全局偏好 `danmakuPlacement`（`video` 画面内 / `left` 左侧黑边），黑边窄于 220px 时自行回落画面内、入口按钮只在 `canFloatLeft` 时出现；公演（B 站）弹幕另限宽 33vw，防单条横跨整块画面。直播与回放共用，迷你浮窗不传 `placement`。
 

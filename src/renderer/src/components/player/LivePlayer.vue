@@ -4,7 +4,6 @@ import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { useDanmakuLayer } from '@renderer/composables/use-danmaku-layer'
 import { useLiveDanmaku } from '@renderer/composables/use-live-danmaku'
 import { useLivePlayer } from '@renderer/composables/use-live-player'
-import { useLivePolling } from '@renderer/composables/use-live-polling'
 import { useLiveSession } from '@renderer/composables/use-live-session'
 import useMediaDownload from '@renderer/composables/use-media-download'
 import { dispatchMediaShortcut } from '@renderer/composables/use-media-shortcuts'
@@ -16,11 +15,12 @@ import { danmakuPlacement, ensureDanmakuPlacement, setDanmakuPlacement } from '@
 import { pocketAuthState } from '@renderer/stores/pocket-auth'
 import { debugLog } from '@renderer/utils/debug'
 import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
+import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
 import { durationBucket, trackEvent } from '@renderer/utils/umami'
 import { formatViewNum } from '@renderer/utils/view-num'
 
-import { useEventListener } from '@vueuse/core'
+import { useEventListener, useIntervalFn } from '@vueuse/core'
 
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
@@ -143,10 +143,14 @@ function toggleDanmakuPlacement() {
 }
 
 // ── 已播时长（在线人数不走轮询，见下方 LIVEUPDATE）──────────────
-const polling = useLivePolling({
-  startTime: () => props.startTime,
+const elapsedTime = ref(0)
+const elapsedTimer = useIntervalFn(() => {
+  elapsedTime.value = Date.now() - props.startTime
+}, 1000, { immediate: false, immediateCallback: true })
+const liveElapsedText = computed(() => {
+  const totalSeconds = Math.max(0, Math.floor(elapsedTime.value / 1000))
+  return formatMediaTime(totalSeconds)
 })
-const { liveElapsedText } = polling
 
 // 在线人数：首帧来自会话详情，实时值来自口袋 LIVEUPDATE 推送（与官方 App 同构）；
 // 未登录 / 开放公演无 IM 会话时保持首帧值，open 接口恒不带故显示为空
@@ -442,7 +446,7 @@ async function resumeLive() {
   if (isManuallyUnmounted.value)
     return
   await acquireSleepBlocker()
-  polling.startElapsedTimer()
+  elapsedTimer.resume()
   // 播放器仍在则直接续播，否则按缓存地址重建或全量拉流
   if (player.hasPlayer()) {
     player.play()
@@ -479,7 +483,7 @@ onUnmounted(() => {
   // 先 dispose：所有在途异步回包（详情响应、开会话响应）立即失效
   session.dispose()
   retry.clearTimer()
-  polling.stopAll()
+  elapsedTimer.pause()
   if (playerWatchStopHandle) {
     playerWatchStopHandle()
     playerWatchStopHandle = null
