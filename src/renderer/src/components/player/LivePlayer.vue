@@ -357,11 +357,12 @@ function beginSession() {
 function onPlayerCanPlay() {
   debugLog('live', '①直播:播放就绪（canplay），复位恢复态与重试预算')
   retry.markRecovered()
-  // Umami 事件：首次出画才算成功播放；断流重连后的 canplay 不重复计数
+  // Umami 事件：首次出画才算成功播放；断流重连后的 canplay 不重复计数。
+  // 属性也计费，只留标题
   if (!livePlayTracked) {
     livePlayTracked = true
     livePlayStartedAt = Date.now()
-    trackEvent('live:play', { source: props.source, media: isRadio.value ? 'radio' : 'video', title: realName.value })
+    trackEvent('live:play', { title: realName.value })
   }
   if (!isRadio.value)
     updateVideoDimensions()
@@ -380,7 +381,7 @@ function handleStreamError(reason: string, isNetwork: boolean) {
   // 结束态后停流必然触发错误事件：不再进重试链，否则会把已结束的直播反复重拉
   if (liveEnded.value)
     return
-  // Umami 事件：播放器错误（网络类会自动进重试，这里记的是发生频率而非后果）
+  // 网络类错误随后会自动重试，这里只记发生频率
   trackEvent('player:error', { type: 'live', network: isNetwork ? 1 : 0 })
   if (isNetwork) {
     debugLog('live', `①直播:网络错误（${reason}），保持 loading 并重试`)
@@ -566,8 +567,7 @@ onUnmounted(() => {
   }
   player.destroyPlayer()
   player.resetMediaElement()
-  // Umami 事件：观看时长分桶。浮窗整体关闭时组件同步卸载，
-  // umami script 走 sendBeacon / keepalive，正常网络下能送达
+  // 关窗即卸载，靠 sendBeacon 送达
   if (livePlayTracked) {
     trackEvent('play:duration', { type: 'live', bucket: durationBucket((Date.now() - livePlayStartedAt) / 1000) })
   }

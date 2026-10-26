@@ -28,9 +28,7 @@
         base-uri 'self';
         form-action 'none'"
     />
-    <!-- 关闭自动采集（data-auto-track），
-         改由 utils/umami.ts 的 trackPage 上报清洗后的 hash 路由。
-         注意 script 本身仍会上报语言 / 分辨率 / UA，完整数据范围见 utils/umami.ts 头注释 -->
+    <!-- 关闭自动采集（data-auto-track），改由 utils/umami.ts 的 trackPage 上报清洗后的 hash 路由 -->
     <script
       defer
       src="https://cloud.umami.is/script.js"

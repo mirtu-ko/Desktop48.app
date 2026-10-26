@@ -20,6 +20,7 @@ import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/p
 import { copyText } from '@renderer/utils/clipboard'
 import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
+import { shouldTrackRoomEnter } from '@renderer/utils/room-enter-tracker'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
 import { useDebounceFn, useDocumentVisibility, useEventListener, useResizeObserver } from '@vueuse/core'
@@ -434,7 +435,9 @@ async function settleBigRoomEnter(userId: number, unreadCount: number) {
 
 /** 点进房间（左列条目）：选中 → 清大房间未读（有未读则回底） */
 async function enterRoom(userId: number) {
-  trackEvent('rooms:enter', { starId: String(userId), starName: rooms.value.find(room => room.userId === userId)?.nickname || '' })
+  const starName = rooms.value.find(room => room.userId === userId)?.nickname || ''
+  if (shouldTrackRoomEnter(userId, starName))
+    trackEvent('rooms:enter', { starName })
   // 未读数在 markRoomRead 乐观清零前取，否则永远是 0
   const hadUnread = unreadChannelOf(userId).big
   // 换房先撤掉上一间的分割线：消息清空与水位重取之间有间隙，别让旧锚点落回新列表

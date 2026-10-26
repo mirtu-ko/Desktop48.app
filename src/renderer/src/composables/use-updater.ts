@@ -48,14 +48,12 @@ export function useUpdater() {
   /** 用户确认后下载 */
   async function download() {
     await window.mainAPI.updaterDownload()
-    // Umami 事件：用户确认下载新版本（安装转化看 update:install）
-    trackEvent('update:download', { result: 'ok' })
+    trackEvent('update:download')
   }
 
   /** 退出并安装 */
   function install() {
-    // Umami 事件：用户确认重启安装（采用链路的最后一步）
-    trackEvent('update:install', { result: 'ok' })
+    trackEvent('update:install')
     window.mainAPI.updaterInstall()
   }
 
