@@ -1,6 +1,6 @@
 /**
  * 应用自动更新封装。
- * 更新源由 electron-builder 打包写入；仅打包环境可用，macOS 走手动下载。
+ * 更新源优先走自建镜像（大陆可直连），失败再回落 GitHub；仅打包环境可用，macOS 走手动下载。
  */
 import type { ProgressInfo, UpdateCheckResult, UpdateDownloadedEvent, UpdateInfo } from 'electron-updater'
 import { existsSync } from 'node:fs'
@@ -29,12 +29,33 @@ export type UpdaterState
     | { phase: 'error', message: string }
     | { phase: 'unsupported', reason: string, url?: string }
 
-/** GitHub Release 手动下载页；仓库地址变更时需同步 publish 配置。 */
-const RELEASE_PAGE_URL = 'https://github.com/mirtu-ko/Desktop48.app/releases/latest'
+/**
+ * 镜像站：安装包与 electron-updater 的 latest*.yml 同源，由发布脚本一并上传。
+ * 换域名时这里和 electron-builder 的 artifact 命名都不用动，只改这两个常量。
+ */
+const MIRROR_BASE = 'https://dl.v2ing.com'
 
-/** GitHub latest Release API；macOS 不做应用内下载，但可用它做版本检查。 */
-const GITHUB_LATEST_RELEASE_URL = 'https://api.github.com/repos/mirtu-ko/Desktop48.app/releases/latest'
+/** 发布脚本写的版本清单（含版本号、更新说明、各平台文件名），主页也在读它。 */
+const MIRROR_MANIFEST_URL = `${MIRROR_BASE}/latest.json`
+
+/** 镜像不可用时的手动下载出路：官网下载区，比 GitHub Release 页面更适合大陆用户。 */
+const DOWNLOAD_PAGE_URL = 'https://48.v2ing.com/'
+
+/** GitHub 兜底用的仓库地址；仓库变更时需同步 electron-builder 的 publish 配置。 */
+const GITHUB_OWNER = 'mirtu-ko'
+const GITHUB_REPO = 'Desktop48.app'
+const GITHUB_RELEASE_PAGE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`
+
+/** GitHub latest Release API；镜像不可用时才用，可带上更新说明原文。 */
+const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`
 const MANUAL_CHECK_TIMEOUT_MS = 10 * 1000
+
+/**
+ * electron-updater 的更新源。generic 直接按 `${url}/latest*.yml` 取清单，
+ * 清单里是相对文件名，下载地址会拼回镜像——不需要在镜像上再放一份 app-update.yml。
+ */
+const FEED_MIRROR = { provider: 'generic', url: MIRROR_BASE } as const
+const FEED_GITHUB = { provider: 'github', owner: GITHUB_OWNER, repo: GITHUB_REPO } as const
 
 /*
  * 不单独配置请求超时：electron-updater 的 timeout 配置在当前实现中未生效。
@@ -93,11 +114,11 @@ function humanizeError(err: any): string {
   const message: string = err?.message ?? ''
 
   if (code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' || code === 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND')
-    return '未找到可用的更新包，请稍后重试或前往 GitHub 下载'
+    return '未找到可用的更新包，请稍后重试或前往官网下载'
   if (code === 'ERR_UPDATER_INVALID_VERSION' || code.startsWith('ERR_UPDATER_INVALID_'))
-    return '更新信息格式异常，请稍后重试或前往 GitHub 下载'
+    return '更新信息格式异常，请稍后重试或前往官网下载'
   if (err?.statusCode === 403)
-    return 'GitHub 访问受限或请求过于频繁，已改用 Release 页面检查；如仍失败可前往 GitHub 页面手动下载'
+    return 'GitHub 访问受限或请求过于频繁；如仍失败可前往官网手动下载'
   if (typeof err?.statusCode === 'number' && err.statusCode >= 500)
     return '更新服务器暂时不可用，请稍后重试'
   if (/timed out|timeout|ETIMEDOUT/i.test(code + message))
@@ -132,15 +153,66 @@ function isNewerVersion(next: string, current: string): boolean {
   return false
 }
 
+/** 手动检查的归一结果：版本、说明、下载入口。镜像与 GitHub 两条来源都要交出这三件事。 */
+interface ReleaseInfo {
+  version: string
+  releaseNotes: string
+  url: string
+}
+
 /** GitHub latest Release 的响应字段（只取更新检查需要的内容）。 */
 interface GithubLatestRelease {
   tag_name?: string
   body?: string | null
 }
 
+/** 发布脚本写入镜像的版本清单；这里只关心版本、说明与文件名。 */
+interface MirrorManifest {
+  version?: string
+  notes?: string | null
+  files?: { name?: string }[]
+}
+
+/** tag / version 统一成裸版本号；缺失时按 502 抛出，交给外层重试判定。 */
+function readVersion(raw: string | null | undefined, source: string): string {
+  const version = String(raw ?? '').trim().replace(/^v/i, '')
+  if (!version) {
+    const error = new Error(`${source} 缺少版本号`) as Error & { statusCode: number }
+    error.statusCode = 502
+    throw error
+  }
+  return version
+}
+
+/** 按当前架构挑安装包；清单里没有对应文件就退回官网下载区。 */
+function pickMirrorDownloadUrl(files: MirrorManifest['files']): string {
+  const suffix = process.arch === 'arm64' ? '-arm64.dmg' : '-x64.dmg'
+  const hit = files?.find(file => typeof file?.name === 'string' && file.name.endsWith(suffix))
+  return hit?.name ? `${MIRROR_BASE}/${encodeURIComponent(hit.name)}` : DOWNLOAD_PAGE_URL
+}
+
+/** 镜像最新版本：清单是 no-store 的，发布后立刻可见。 */
+async function fetchReleaseFromMirror(): Promise<ReleaseInfo> {
+  const response = await fetch(MIRROR_MANIFEST_URL, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(MANUAL_CHECK_TIMEOUT_MS),
+  })
+  if (!response.ok) {
+    const error = new Error(`镜像版本清单请求失败: HTTP ${response.status}`) as Error & { statusCode: number }
+    error.statusCode = response.status
+    throw error
+  }
+  const manifest = await response.json() as MirrorManifest
+  return {
+    version: readVersion(manifest.version, '镜像版本清单'),
+    releaseNotes: manifest.notes ?? '',
+    url: pickMirrorDownloadUrl(manifest.files),
+  }
+}
+
 /** 从 GitHub Release 页面重定向后的最终地址解析 tag；API 限流时的降级来源。 */
 async function fetchLatestReleaseFromPage(): Promise<GithubLatestRelease> {
-  const response = await fetch(RELEASE_PAGE_URL, {
+  const response = await fetch(GITHUB_RELEASE_PAGE_URL, {
     redirect: 'follow',
     signal: AbortSignal.timeout(MANUAL_CHECK_TIMEOUT_MS),
   })
@@ -157,17 +229,39 @@ async function fetchLatestReleaseFromPage(): Promise<GithubLatestRelease> {
   return { tag_name: decodeURIComponent(tag) }
 }
 
-/** 手动检查入口：优先 API（带更新说明），遇 403/429 限流时用 Release 页面兜底。 */
-async function fetchLatestRelease(): Promise<GithubLatestRelease> {
+/** GitHub 兜底：优先 API（带更新说明），遇 403/429 限流时用 Release 页面取版本号。 */
+async function fetchReleaseFromGithub(): Promise<ReleaseInfo> {
+  let release: GithubLatestRelease
   try {
-    return await fetchLatestReleaseFromApi()
+    release = await fetchLatestReleaseFromApi()
   }
   catch (err: any) {
     if (err?.statusCode === 403 || err?.statusCode === 429) {
       log('[updater] GitHub API 限流，改用 Release 页面检查版本号')
-      return fetchLatestReleaseFromPage()
+      release = await fetchLatestReleaseFromPage()
     }
-    throw err
+    else {
+      throw err
+    }
+  }
+  return {
+    version: readVersion(release.tag_name, 'GitHub Release'),
+    releaseNotes: release.body ?? '',
+    url: GITHUB_RELEASE_PAGE_URL,
+  }
+}
+
+/**
+ * 手动检查入口：镜像优先，失败一律回落 GitHub。
+ * 镜像失败不区分是否可重试——404 这类配置错误同样该让 GitHub 顶一次，再由 GitHub 的错误决定重试语义。
+ */
+async function fetchReleaseInfo(): Promise<ReleaseInfo> {
+  try {
+    return await fetchReleaseFromMirror()
+  }
+  catch (err: any) {
+    log('[updater] 镜像版本清单不可用，改用 GitHub 检查：', err?.message || err)
+    return fetchReleaseFromGithub()
   }
 }
 
@@ -192,6 +286,21 @@ let currentState: UpdaterState = { phase: 'idle' }
 /** 标记检查循环进行中；重试期间的瞬时 error 事件不应推给 UI。 */
 let checkingInProgress = false
 
+/**
+ * electron-updater 当前生效的更新源。
+ * 下载/安装沿用最后一次检查时的源，所以只在检查开始时重置回镜像，不能在 downloadUpdate 里重置。
+ */
+let activeFeed: 'mirror' | 'github' | null = null
+
+/** 切换更新源；electron-updater 的 setFeedURL 幂等，重复调用无害，但日志会啰嗦，故先判同。 */
+function applyFeed(feed: 'mirror' | 'github'): void {
+  if (activeFeed === feed)
+    return
+  activeFeed = feed
+  getAutoUpdater().setFeedURL(feed === 'mirror' ? FEED_MIRROR : FEED_GITHUB)
+  log(`[updater] 更新源切换为 ${feed === 'mirror' ? `镜像 ${MIRROR_BASE}` : 'GitHub Releases'}`)
+}
+
 /** 是否具备自动更新条件；不满足时给出原因，渲染端据此禁用按钮并说明 */
 export type UpdaterSupport
   = | { ok: true, mode: 'auto' | 'manual' }
@@ -205,13 +314,13 @@ export function resolveUpdaterSupport(): UpdaterSupport {
   const devUpdateCheckEnabled = process.env[DEV_UPDATE_CHECK_ENV] === '1'
   if (!app.isPackaged && !devUpdateCheckEnabled)
     return { ok: false, reason: '开发模式下不检查更新' }
-  // macOS 只能手动下载；dev 模式显式开启后同样走 GitHub 手动检查，便于本地验证 UI。
+  // macOS 只能手动下载；dev 模式显式开启后同样走手动检查，便于本地验证 UI。
   if (process.platform === 'darwin' || devUpdateCheckEnabled)
     return { ok: true, mode: 'manual' }
 
   // 免安装包缺少 app-update.yml，提前拦截并说明。
   if (!existsSync(path.join(process.resourcesPath, 'app-update.yml')))
-    return { ok: false, reason: '当前为免安装版，不支持自动更新（请使用安装包版本）', url: RELEASE_PAGE_URL }
+    return { ok: false, reason: '当前为免安装版，不支持自动更新（请使用安装包版本）', url: DOWNLOAD_PAGE_URL }
 
   return { ok: true, mode: 'auto' }
 }
@@ -340,6 +449,9 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
   if (support.mode === 'manual')
     return checkManualRelease({ silent: Boolean(options.silent) })
 
+  // 每次检查都从镜像开始：源在上一轮可能已经被切到 GitHub，不重置就再也回不到镜像。
+  applyFeed('mirror')
+
   let lastError: any = null
 
   checkingInProgress = true
@@ -354,6 +466,17 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
       }
       catch (err: any) {
         lastError = err
+
+        // 镜像上的清单缺失/损坏会被判成"确定性失败"，但那恰恰是最该换 GitHub 的情况，
+        // 所以先无条件换源重试一次，再谈可重试与否。
+        // 这一跳不占用重试次数：重试预算留给真正兜底的 GitHub，否则第一次退避会直接跳到 2400ms。
+        if (activeFeed === 'mirror') {
+          log('[updater] 镜像更新源不可用，改用 GitHub 重试:', err?.message || err)
+          applyFeed('github')
+          attempt -= 1
+          continue
+        }
+
         const retryable = isRetryableError(err)
         const isLast = attempt === CHECK_MAX_ATTEMPTS
 
@@ -382,7 +505,7 @@ export async function checkForUpdates(options: CheckOptions = {}): Promise<Updat
   return currentState
 }
 
-/** macOS 的手动检查；只查询 Release，不调用 electron-updater。 */
+/** macOS 的手动检查；只查询版本清单，不调用 electron-updater。 */
 async function checkManualRelease(options: CheckOptions): Promise<UpdaterState> {
   // 失败时按静默语义还原；否则启动检查一失败，UI 会永久停在 checking。
   const baseline = currentState
@@ -392,25 +515,19 @@ async function checkManualRelease(options: CheckOptions): Promise<UpdaterState> 
   try {
     for (let attempt = 1; attempt <= CHECK_MAX_ATTEMPTS; attempt++) {
       try {
-        const release = await fetchLatestRelease()
-        const version = (release.tag_name ?? '').trim().replace(/^v/i, '')
-        if (!version) {
-          const error = new Error('GitHub Release 缺少版本号') as Error & { statusCode: number }
-          error.statusCode = 502
-          throw error
-        }
+        const release = await fetchReleaseInfo()
 
-        if (!isNewerVersion(version, app.getVersion())) {
+        if (!isNewerVersion(release.version, app.getVersion())) {
           setState({ phase: 'up-to-date' })
           return currentState
         }
 
         const next: UpdaterState = {
           phase: 'available',
-          version,
-          releaseNotes: release.body ?? '',
+          version: release.version,
+          releaseNotes: release.releaseNotes,
           manualUpdate: true,
-          url: RELEASE_PAGE_URL,
+          url: release.url,
         }
         setState(next)
         return next

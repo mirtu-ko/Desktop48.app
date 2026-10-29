@@ -203,7 +203,7 @@ export type UpdaterState
     | { phase: 'checking' }
   /** 检查完成且当前没有可用更新 */
     | { phase: 'up-to-date' }
-  /** 发现新版本；manualUpdate 表示仅可引导到 GitHub 手动下载 */
+  /** 发现新版本；manualUpdate 表示只能引导到下载页手动安装（macOS） */
     | { phase: 'available', version: string, releaseNotes: string, manualUpdate?: boolean, url?: string }
   /** 正在下载 */
     | { phase: 'downloading', version: string, percent: number, bytesPerSecond: number, transferred: number, total: number }

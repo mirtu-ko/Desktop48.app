@@ -304,10 +304,10 @@ const downloadSizeText = computed(() => {
     : `${formatBytes(d.transferred)} · ${speed}`
 })
 
-/** 手动下载兜底地址；正常情况下主进程会在 available 态带上 GitHub Release 地址。 */
-const MANUAL_RELEASE_PAGE_URL = 'https://github.com/mirtu-ko/Desktop48.app/releases/latest'
+/** 手动下载兜底地址；正常情况下主进程会在 available 态带上镜像安装包直链。 */
+const MANUAL_RELEASE_PAGE_URL = 'https://48.v2ing.com/'
 
-/** available 态是否只能跳转 GitHub 手动下载（macOS 当前走该链路） */
+/** available 态是否只能跳转手动下载（macOS 当前走该链路） */
 const manualUpdateNotice = computed(() => availableUpdate.value?.manualUpdate ?? false)
 /** available 态的手动下载地址，模板与操作按钮共用 */
 const manualUpdateUrl = computed(() => availableUpdate.value?.url ?? MANUAL_RELEASE_PAGE_URL)
@@ -1081,11 +1081,11 @@ function hideLogo(event: Event) {
               </li>
             </ul>
             <p v-if="releaseNotesPreview.truncated" class="update-notes-more">
-              更多更新内容详见 GitHub Release 页面
+              更多更新内容详见官网
             </p>
             <p class="update-notice-hint">
               {{ manualUpdateNotice
-                ? 'macOS 暂不支持应用内更新，请点击「去下载」打开 GitHub 页面，下载后手动安装。'
+                ? 'macOS 暂不支持应用内更新，请点击「去下载」打开下载页，下载后手动安装。'
                 : '点击「更新版本」开始下载，下载完成后重启应用即可完成升级。' }}
             </p>
           </template>
