@@ -43,7 +43,7 @@ import {
   USER_MONEY_URL,
 } from '@common/pocket-api-urls'
 import { resolvePocketClientProfile } from '@common/pocket-client-profile'
-import { toApiId } from '@common/pocket-ids'
+import { toApiId, toMessageId } from '@common/pocket-ids'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
@@ -1306,8 +1306,8 @@ function toRoomMessages(list: unknown): PocketRoomMessage[] {
     .map((item) => {
       const extInfo = typeof item.extInfo === 'string' ? item.extInfo : JSON.stringify(item.extInfo ?? {})
       return {
-        msgIdServer: String(item.msgIdServer ?? ''),
-        msgIdClient: String(item.msgIdClient ?? ''),
+        msgIdServer: toMessageId(item.msgIdServer),
+        msgIdClient: toMessageId(item.msgIdClient),
         msgType: String(item.msgType ?? ''),
         msgTime: Number(item.msgTime) || 0,
         bodys: typeof item.bodys === 'string' ? item.bodys : JSON.stringify(item.bodys ?? ''),
@@ -1455,9 +1455,12 @@ export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRo
       serverId: String(item.serverId ?? '').trim(),
       starName: String(item.starName ?? '').trim(),
       msgContent,
-      msgKey: String(
-        item.msgidClient || item.msgIdClient || item.msgIdServer || item.msgId || item.messageId || '',
-      ).trim() || `${msgTime}:${msgContent}`,
+      msgKey: toMessageId(item.msgidClient)
+        || toMessageId(item.msgIdClient)
+        || toMessageId(item.msgIdServer)
+        || toMessageId(item.msgId)
+        || toMessageId(item.messageId)
+        || `${msgTime}:${msgContent}`,
       msgTime,
       // 只认字段真实存在的情况：该接口不回该字段，0 与「未读 0 条」必须可区分
       unreadCount: typeof item.unreadCount === 'number' && Number.isFinite(item.unreadCount)

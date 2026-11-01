@@ -433,8 +433,13 @@ const tokenForm = reactive({
   loggingIn: false,
 })
 
-/** 反爬问答题待作答：此时不允许重发（不带答案必然再回同一道题） */
-const captchaPending = computed(() => !!smsForm.captcha && !smsForm.captcha.answer)
+/**
+ * 反爬问答题待作答：不允许重发（不带答案必然再回同一道题）。
+ * 前提是有选项——题目解析失败时 options 为空，用户无从作答，不能因此禁用按钮。
+ */
+const captchaPending = computed(() =>
+  !!smsForm.captcha && smsForm.captcha.options.length > 0 && !smsForm.captcha.answer,
+)
 
 /** 日志用：手机号脱敏，避免验证码链路打点泄露完整号码；海外号码位数不一，够长即按同规则脱敏并带区号前缀 */
 function maskMobileForLog(mobile: string, area = '86'): string {
@@ -582,8 +587,10 @@ async function sendSmsCode() {
       message: result.message,
     }))
     if (result.needCaptcha) {
-      smsForm.captcha = { question: result.question, options: result.options, answer: '' }
-      ElMessage.warning('需要先完成下方验证')
+      // 选项为空 = 题目解析失败，用户无从作答：清掉，让重发按钮可点
+      const answerable = result.options.length > 0
+      smsForm.captcha = answerable ? { question: result.question, options: result.options, answer: '' } : null
+      ElMessage.warning(answerable ? '需要先完成下方验证' : '验证题目未取到，请稍后重试')
       return
     }
     smsForm.captcha = null
@@ -1558,7 +1565,7 @@ function hideLogo(event: Event) {
         </div>
 
         <div class="verify-local">
-          登录凭证：{{ pocketAuthState.plainFallback ? '明文（当前系统无加密能力）保存' : '本机安全加密保存' }}<template v-if="savedDays > 0">
+          登录凭证：{{ pocketAuthState.plainFallback ? '明文保存（保存时系统无加密能力）' : '本机安全加密保存' }}<template v-if="savedDays > 0">
             ，已保存 {{ savedDays }} 天
           </template>
         </div>

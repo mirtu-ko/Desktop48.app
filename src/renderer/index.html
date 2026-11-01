@@ -9,8 +9,9 @@
       口径说明：
       - script：只允许自身与 Umami 埋点脚本；不放开 unsafe-eval（渲染层无 eval / wasm）
       - style：'unsafe-inline' 是 Vue scoped 样式与 Element Plus 运行时注入样式所必需
-      - img/media/connect：48 系 CDN 域名由接口动态下发、无法枚举，按 https: 放开；
-        本地 HTTP-FLV 中转服务固定 127.0.0.1:8080-8090，单独放开该回环地址
+      - img/media/connect：CDN 与直播中转地址由接口下发、无法枚举，http / https 都有
+        （见 main/allowed-hosts.ts）；页面走 file://，不受混合内容限制，只放 https: 会被
+        CSP 静默拦掉（裂图 / 黑屏）。本地 HTTP-FLV 中转也落在 http: 之内。
       - worker：hls.js / mpegts.js 的分片转封装走 blob worker
     -->
     <meta
@@ -18,10 +19,10 @@
       content="default-src 'self';
         script-src 'self' https://cloud.umami.is;
         style-src 'self' 'unsafe-inline';
-        img-src 'self' data: blob: https: http://127.0.0.1:*;
-        media-src 'self' blob: https: http://127.0.0.1:*;
+        img-src 'self' data: blob: https: http:;
+        media-src 'self' blob: https: http:;
         font-src 'self' data:;
-        connect-src 'self' https: ws: wss: http://127.0.0.1:*;
+        connect-src 'self' https: http: ws: wss:;
         worker-src 'self' blob:;
         frame-src 'none';
         object-src 'none';

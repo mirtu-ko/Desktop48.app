@@ -383,12 +383,12 @@ async function setup(options: SetupOptions = {}) {
     scope,
     unreadCountOf,
     markRoomRead,
-    /** 模拟主进程未读广播（快照里只含 count > 0 的房间） */
-    setUnread: (counts: Record<number, number>) => {
+    /** 模拟主进程未读广播（快照里只含 count > 0 的房间）；latestTimes 可给各房间的最新未读时刻 */
+    setUnread: (counts: Record<number, number>, latestTimes: Record<number, number> = {}) => {
       unreadRooms.value = Object.fromEntries(
         Object.entries(counts).map(([userId, count]) => [
           userId,
-          { count, bigCount: count, smallCount: 0, latestTime: 0 },
+          { count, bigCount: count, smallCount: 0, latestTime: latestTimes[Number(userId)] ?? 0 },
         ]),
       )
     },
@@ -637,6 +637,45 @@ describe('use-pocket-rooms / 左列排序', () => {
 
     expect(api.rooms.value.map(room => [room.userId, !!room.temporary]))
       .toEqual([[10004, true], [10001, false], [10002, false], [10003, false]])
+  })
+
+  it('多个有未读：非直播档内按最新一条未读的时刻降序，昵称只兜底', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+
+    // 10002 的未读更新（时刻 200 > 100）→ 压过昵称更小的 10003 排到非直播档最前
+    setUnread({ 10002: 1, 10003: 1 }, { 10002: 200, 10003: 100 })
+    await nextTick()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+  })
+
+  it('已有未读又来新消息（latestTime 前移）：浮到非直播档最前', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+    setUnread({ 10002: 1, 10003: 1 }, { 10002: 100, 10003: 200 })
+    await nextTick()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10003, 10002])
+
+    // 10002 的未读最新时刻前移 100 → 300：即使条数不变也要浮上来
+    setUnread({ 10002: 1, 10003: 1 }, { 10002: 300, 10003: 200 })
+    await nextTick()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+  })
+
+  // 与「读掉未读不重排」同一条口径：latestTime 回落（清掉某一路未读）属于「读掉」，不抽条目
+  it('latestTime 回落不重排：条目留在原位', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+    setUnread({ 10002: 1, 10003: 1 }, { 10002: 300, 10003: 200 })
+    await nextTick()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+
+    setUnread({ 10002: 1, 10003: 1 }, { 10002: 50, 10003: 200 })
+    await nextTick()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
   })
 })
 
@@ -1803,6 +1842,7 @@ describe('use-pocket-rooms / 刷新与卸载', () => {
     const base: PocketRoomMessageView = {
       id: 'm1',
       msgIdClient: '',
+      msgIdServer: '',
       kind: 'live',
       text: '[直播分享] 小猫咪来了',
       userId: '1',

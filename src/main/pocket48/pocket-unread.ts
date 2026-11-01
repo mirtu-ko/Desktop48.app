@@ -33,6 +33,7 @@ import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
  * 未登录（凭证文件不存在）：清空未读与账号相关水位/计数并广播，重登按首见重新锚定。
  */
 import path from 'node:path'
+import { toMessageId } from '@common/pocket-ids'
 import { OFFICIAL_POCKET_USER_ID, ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app } from 'electron'
 import { Database } from '../database'
@@ -553,11 +554,10 @@ function countableMessages(messages: PocketRoomMessage[]): PocketRoomMessage[] {
 function countNewer(messages: PocketRoomMessage[], mark: ReadMark): number {
   if (!messages.length)
     return 0
-  // 按 id 定位水位那条：找到了它，它前面的就是未读；找不到说明水位那条已经沉到本页之外，
-  // 整页都比它新——条数封顶在 ROOM_MESSAGE_LIMIT（渲染层据此显示 50+）。
-  // 回包不带 msgIdServer 时退回时刻比较（首条没有 id 即视为整页无 id）
-  if (mark.msgIdServer && messages[0].msgIdServer) {
-    const index = messages.findIndex(message => message.msgIdServer === mark.msgIdServer)
+  // 落盘水位可能是旧版本写入的占位 id '0'，归一成「无 id」；回包无 id 时退回时刻比较
+  const markId = toMessageId(mark.msgIdServer)
+  if (markId && messages[0].msgIdServer) {
+    const index = messages.findIndex(message => message.msgIdServer === markId)
     return index >= 0 ? index : Math.min(messages.length, ROOM_MESSAGE_LIMIT)
   }
   const newer = messages.filter(message => message.msgTime > mark.msgTime).length
@@ -900,21 +900,6 @@ export function getState(): PocketUnreadBatch {
 }
 
 /**
- * 某频道的已读水位，供渲染层画「以下是新消息」分割线。
- * 纯只读：不推进、不写盘、不广播（store() 懒加载也只读文件）。
- * 必须在 markRead 之前调用——markRead 拉一页最新消息把水位推到当下，之后取到的就没有未读了。
- * 返回 null 的两种情形：频道还没解析出 channelId（小房间未发现）、从未锚定过（首见即锚定，一般不会）。
- */
-export function getReadMark(userId: number, target: 'room' | 'small' = 'room'): PocketRoomReadMark | null {
-  const data = store()
-  const channel = target === 'small' ? data.smallChannels[String(userId)] : data.channels[String(userId)]
-  const mark = channel?.channelId ? data.readMarks[channel.channelId] : undefined
-  if (!mark)
-    return null
-  return { msgTime: mark.msgTime, msgIdServer: mark.msgIdServer }
-}
-
-/**
  * 把某频道的已读水位推到「当下」：拉一页最新消息，取其中最新一条为水位。
  * 失败不回滚已清零的结果，改为挂起——下一轮检测先对齐水位再计数，
  * 免得刚读过的消息被当成未读复活（挂起期间该频道不计数，最多损失一论的消息）。
@@ -949,24 +934,27 @@ async function alignReadMark(channel: StoredChannel): Promise<void> {
 }
 
 /**
- * 标记房间已读（target 指定大房间或小房间）：该频道未读清零并广播，随后把它的
- * 已读水位推到「此刻」——下一轮检测数出的就是「读了之后又来的新消息」。
- * 大房间与小房间是两个独立频道、各有查看入口，进哪个清哪个；
- * 另一路的未读按频道记着，直接沿用（不必为此再拉一轮接口）。
+ * 标记房间已读（target 指定大房间或小房间）：返回**清零前**的已读水位（分割线锚点），
+ * 随后清零该频道并广播，水位推到「此刻」——下一轮数出的就是读了之后的新消息。
+ * 截锚点与推水位同一次调用完成，调用方不必打两次 IPC（中间可能被并行清零推进）。
+ * 大房间与小房间是两个独立频道、各有入口，进哪个清哪个；另一路按频道沿用。
  *
- * 不接收渲染层的消息键——渲染层拿到的那套 id 来自它自己的分页列表，与检测侧
- * 对齐用的水位不是同一次取数，混写会让已读复活（踩过）。
+ * 不接收渲染层的消息键——那套 id 来自渲染层自己的分页列表，与检测侧水位不是同一次取数，
+ * 混写会让已读复活。
  */
-export async function markRead(userId: number, target: 'room' | 'small' = 'room'): Promise<void> {
+export async function markRead(userId: number, target: 'room' | 'small' = 'room'): Promise<PocketRoomReadMark | null> {
   const data = store()
   const key = String(userId)
   const entry = data.unread[key]
   debug('[pocket-unread] markRead', key, target, '未读条数:', entry?.count ?? 0)
   // 目标频道不存在（如小房间还没被归属自愈发现）：无从对齐，无事可做
   const clearChannel = (target === 'small' ? data.smallChannels[key] : data.channels[key]) ?? null
-  if (!entry || !clearChannel?.channelId)
-    return
-  const channelId = clearChannel.channelId
+  const channelId = clearChannel?.channelId ?? ''
+  // 清零前的水位带回；频道未解析或从未锚定时为 null。落盘的占位 id '0' 一并归一
+  const mark = channelId ? data.readMarks[channelId] : undefined
+  const prev: PocketRoomReadMark | null = mark ? { msgTime: mark.msgTime, msgIdServer: toMessageId(mark.msgIdServer) } : null
+  if (!entry || !channelId)
+    return prev
   // 清零只抹掉目标通道的计数，另一路原样保留；清完立即重建快照并广播，
   // 与渲染层的乐观清零值一致，避免「角标整块消失、对齐后小房间未读又冒回来」的闪烁
   const hadUnread = (data.unreadChannels[channelId]?.count ?? 0) > 0
@@ -977,6 +965,7 @@ export async function markRead(userId: number, target: 'room' | 'small' = 'room'
   // 本就没未读的频道不必再拉一页列表：水位还在原处，新消息照常由检测轮数出来
   if (hadUnread)
     await alignReadMark(clearChannel)
+  return prev
 }
 
 /**

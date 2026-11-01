@@ -387,6 +387,13 @@ describe('pocket-room-message / 发送者与兜底', () => {
     })!.id).toBe('5')
   })
 
+  it('占位 id 0 视为「无 id」：不进去重键，也不参与按 id 定位', () => {
+    const view = normalizePocketRoomMessage({ msgIdServer: 0, msgIdClient: '0', msgType: 'TEXT', msgTime: 5, bodys: 'x' })!
+    expect(view.msgIdServer).toBe('')
+    expect(view.msgIdClient).toBe('')
+    expect(view.id).toBe('5')
+  })
+
   it('非对象输入不炸', () => {
     expect(normalizePocketRoomMessage(null)?.text).toBe('[新消息]')
     expect(normalizePocketRoomMessage('oops')?.text).toBe('[新消息]')

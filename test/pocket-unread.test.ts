@@ -245,7 +245,8 @@ describe('pocket-unread（房间未读检测）', () => {
     expect(mod.getState().total).toBe(3)
 
     // 标记已读：清零 + 广播 + 拉一页把水位推到当下（此页最新是 m4）
-    await mod.markRead(1)
+    // 返回值是**清零前**的水位（渲染层画分割线的锚点）：读前停在 m1
+    await expect(mod.markRead(1)).resolves.toEqual({ msgTime: 1_000_000, msgIdServer: 'm1' })
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
     expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
 
@@ -298,15 +299,15 @@ describe('pocket-unread（房间未读检测）', () => {
     mod.stopPocketUnread()
     expect(mod.getState().rooms['1']).toMatchObject({ count: 2, bigCount: 1, smallCount: 1 })
 
-    // 读大房间：只清大房间，小房间未读保留
+    // 读大房间：只清大房间，小房间未读保留；带回的水位是大房间自己的（m1）
     broadcasts = []
-    await mod.markRead(1, 'room')
+    await expect(mod.markRead(1, 'room')).resolves.toEqual({ msgTime: 1_000_000, msgIdServer: 'm1' })
     expect(mod.getState().rooms['1']).toMatchObject({ count: 1, bigCount: 0, smallCount: 1 })
     // 清零广播当即按频道拆分（不是先整块清零、等对齐后再补回小房间）→ 渲染层角标不闪
     expect(broadcasts[0]).toMatchObject({ rooms: { 1: { count: 1, bigCount: 0, smallCount: 1 } } })
 
-    // 读小房间：清零
-    await mod.markRead(1, 'small')
+    // 读小房间：清零；带回的水位是小房间自己的（同为 m1，两个频道各自锚定）
+    await expect(mod.markRead(1, 'small')).resolves.toEqual({ msgTime: 1_000_000, msgIdServer: 'm1' })
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
   })
 

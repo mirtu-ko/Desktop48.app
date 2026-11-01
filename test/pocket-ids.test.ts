@@ -1,4 +1,4 @@
-import { toApiId } from '@common/pocket-ids'
+import { toApiId, toMessageId } from '@common/pocket-ids'
 import { describe, expect, it } from 'vitest'
 
 describe('pocket-ids / toApiId', () => {
@@ -18,5 +18,27 @@ describe('pocket-ids / toApiId', () => {
     expect(toApiId('-1')).toBe('-1')
     expect(toApiId('1.5')).toBe('1.5')
     expect(toApiId('abc')).toBe('abc')
+  })
+})
+
+describe('pocket-ids / toMessageId', () => {
+  it('有效 id 统一成字符串（数值与字符串同形）', () => {
+    expect(toMessageId('1234567890123456789')).toBe('1234567890123456789')
+    expect(toMessageId(7261234)).toBe('7261234')
+    expect(toMessageId(' srv-1 ')).toBe('srv-1')
+  })
+
+  it('0 / \'0\' 与缺失一律归一成空串（视为「无 id」，退回时刻比较）', () => {
+    expect(toMessageId(0)).toBe('')
+    expect(toMessageId('0')).toBe('')
+    expect(toMessageId(' 0 ')).toBe('')
+    expect(toMessageId('')).toBe('')
+    expect(toMessageId(null)).toBe('')
+    expect(toMessageId(undefined)).toBe('')
+    expect(toMessageId({})).toBe('')
+  })
+
+  it('负数不做「有效 id」处理（服务端不会下发，防御性归一）', () => {
+    expect(toMessageId(-1)).toBe('')
   })
 })

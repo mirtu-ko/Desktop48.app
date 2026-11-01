@@ -166,19 +166,54 @@ async function togglePocketFollow() {
 // ===== 未读分割线（进房时的已读水位锚点）=====
 
 /**
- * 本次进房截到的未读起点（主进程已读水位 + 条数）；null = 没有未读，不画分割线。
- * 水位只在 markRead 之前取一次：markRead 会把它推到当下，进房后再取就永远是「没有未读」。
+ * 本次进房截到的未读起点（清零前的已读水位 + 条数）；null = 不画分割线。
+ * userId / target 限定归属：切房或换频道后该锚点不再参与定位。
  */
-const unreadAnchor = ref<{ msgTime: number, count: number } | null>(null)
+const unreadAnchor = ref<{
+  userId: number
+  target: 'room' | 'small'
+  /** 水位那条的服务端 id：优先按它定位（同一毫秒多条不致错位） */
+  msgIdServer: string
+  msgTime: number
+  /** 截下时的未读条数（角标口径，含封顶）：底部胶囊文案用 */
+  count: number
+  /** 补页触顶后水位仍在窗口外：分割线钉窗口顶、文案降级（见 fillUnreadWindow） */
+  beyond: boolean
+} | null>(null)
 /** 未读胶囊是否已让位：跳转过后、或用户自己上翻去找时收起（分割线本身保留） */
 const unreadJumped = ref(false)
+/**
+ * 进房 / 切频道收尾在途数：不清零前贴底监听不抢跑 markRoomRead，否则锚点截不到旧水位。
+ * 用计数而非布尔：连点两个房间时两趟收尾重叠，布尔会被先结束的一趟解掉，后一趟的分割线随之丢失。
+ */
+let entryMarkDepth = 0
+function beginEntryMark() {
+  entryMarkDepth += 1
+}
+function endEntryMark() {
+  entryMarkDepth = Math.max(0, entryMarkDepth - 1)
+}
 /** 分割线在 messages 里的下标；-1 = 不画（没有锚点，或列表里没有比水位更新的消息） */
 const unreadIndex = computed(() => {
   const anchor = unreadAnchor.value
-  if (!anchor)
+  if (!anchor || anchor.userId !== selectedUserId.value || anchor.target !== viewMode.value)
     return -1
-  return messages.value.findIndex(message => message.msgTime > anchor.msgTime)
+  const list = messages.value
+  // 优先按 id 找到水位那条，分割线落在其后（同一毫秒多条不致错位）；id 不在窗口时退回时刻比较
+  if (anchor.msgIdServer) {
+    const byId = list.findIndex(message => message.msgIdServer === anchor.msgIdServer)
+    if (byId >= 0)
+      return byId + 1 < list.length ? byId + 1 : -1
+  }
+  return list.findIndex(message => message.msgTime > anchor.msgTime)
 })
+/**
+ * 分割线以下的可见条数（「以下是 N 条新消息」）：与分割线位置一致。
+ * 不用 anchor.count——那是角标口径（只数房主发言、按一页封顶），与可见条数对不上。
+ */
+const unreadRegionCount = computed(() =>
+  unreadIndex.value >= 0 ? messages.value.length - unreadIndex.value : 0,
+)
 
 /** 分割线的 DOM 锚点（v-for 内函数 ref，元素卸载时传 null） */
 const unreadAnchorEl = ref<HTMLElement | null>(null)
@@ -187,23 +222,27 @@ function setUnreadAnchorEl(el: Element | ComponentPublicInstance | null) {
 }
 
 /**
- * 截取未读起点。必须在 markRoomRead 之前调用，否则主进程水位已被推到当下。
- * 取不到水位（频道还没解析、或从未锚定）时退回「只显示未读计数」，宁可少画也不乱画。
+ * 清零目标频道未读并截下分割线锚点：水位由 markRoomRead 原子带回（先截后推），
+ * count 由调用方在清零前取得（乐观清零后只剩 0）。回包时已切房 / 换频道则不落锚点。
  */
-async function captureUnreadAnchor(userId: number, target: 'room' | 'small', count: number) {
+async function markRoomReadCapturing(userId: number, target: 'room' | 'small', count: number) {
   unreadJumped.value = false
-  if (count <= 0) {
+  const prev = await markRoomRead(userId, target)
+  if (selectedUserId.value !== userId || viewMode.value !== target)
+    return false
+  if (count <= 0 || !prev) {
     unreadAnchor.value = null
-    return
+    return false
   }
-  try {
-    const mark = await window.mainAPI.pocketReadMark(userId, target)
-    unreadAnchor.value = mark ? { msgTime: mark.msgTime, count } : null
+  unreadAnchor.value = {
+    userId,
+    target,
+    msgIdServer: String(prev.msgIdServer ?? ''),
+    msgTime: prev.msgTime,
+    count,
+    beyond: false,
   }
-  catch (error) {
-    unreadAnchor.value = null
-    debugLog('rooms-page', '读取已读水位失败，本次不画未读分割线', error)
-  }
+  return true
 }
 
 /** 跳到未读分割线：居中显示，胶囊随即让位（分割线留着做视觉标记） */
@@ -212,28 +251,58 @@ function jumpToUnread() {
   unreadAnchorEl.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 }
 
+/** 分割线钉在窗口顶且补页触顶：水位仍在更早的未加载区域（上翻补进后恢复精确定位） */
+const unreadAnchorBeyond = computed(() =>
+  unreadAnchor.value?.beyond === true && unreadIndex.value === 0,
+)
+
+/** 分割线文案：正常报「以下是 N 条」；水位在未加载区域时降级为提示上翻 */
+const unreadDividerText = computed(() => {
+  const anchor = unreadAnchor.value
+  if (!anchor)
+    return ''
+  return unreadAnchorBeyond.value
+    ? `新消息从更早开始（${unreadText(anchor.count)} 条），上翻继续查看`
+    : `以下是 ${unreadRegionCount.value} 条新消息`
+})
+
 /**
- * 频道切换（页签）：切到哪个频道就清当前频道的未读。
+ * 频道切换（页签）：切到哪个频道就清该频道未读。
+ * 点已激活的页签直接返回——重进会覆盖原分割线并强制回底打断上翻；
+ * 上翻期间攒的未读由「回到底部即补标」清（onListScroll）。
  */
 async function onViewModeChange(mode: 'room' | 'small') {
+  if (mode === viewMode.value)
+    return
   const userId = selectedUserId.value
   if (mode !== 'room') {
-    // 小房间未读同样在 markRoomRead 清空之前取（两个频道各有自己的水位与条数）
+    // 小房间未读同样在清零前截（两个频道各有自己的水位与条数）
     const hadUnread = userId !== null ? unreadChannelOf(userId).small : 0
     unreadAnchor.value = null
-    void setViewMode(mode)
-    if (userId !== null) {
-      await captureUnreadAnchor(userId, 'small', hadUnread)
-      if (hadUnread > 0)
-        void markRoomRead(userId, 'small')
+    unreadJumped.value = false
+    beginEntryMark()
+    try {
+      void setViewMode(mode)
+      if (userId !== null && hadUnread > 0)
+        await markRoomReadCapturing(userId, 'small', hadUnread)
+    }
+    finally {
+      endEntryMark()
     }
     return
   }
   const hadUnread = userId !== null ? unreadChannelOf(userId).big : 0
   unreadAnchor.value = null
-  await setViewMode(mode)
-  if (userId !== null)
-    await settleBigRoomEnter(userId, hadUnread)
+  unreadJumped.value = false
+  beginEntryMark()
+  try {
+    await setViewMode(mode)
+    if (userId !== null)
+      await settleBigRoomEnter(userId, hadUnread)
+  }
+  finally {
+    endEntryMark()
+  }
 }
 
 /**
@@ -370,6 +439,7 @@ function onListScroll() {
   if (!el)
     return
   const prevSeen = lastSeenScrollTop
+  const wasAtBottom = atBottom.value
   lastSeenScrollTop = el.scrollTop
   const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
   // scrollTop 相对上次变小才是用户真的上滚，才允许退出钉底；
@@ -383,8 +453,15 @@ function onListScroll() {
     atBottom.value = true
   }
   // 回到底部即清空新消息计数
-  if (atBottom.value)
+  if (atBottom.value) {
     newCount.value = 0
+    // 上翻后回到底部即补标（贴底即已读，与 length 监听同口径）；只在刚回底这一刻标，
+    // 停在底部时新消息由 length 监听管
+    if (!wasAtBottom && docVisibility.value === 'visible' && entryMarkDepth === 0
+      && selectedUserId.value !== null && messages.value.length) {
+      void markRoomRead(selectedUserId.value, viewMode.value)
+    }
+  }
   // 贴近顶部自动翻更早历史；加载中 / 已到头 / 上一次还在恢复视口时不触发。
   // 加载完视口按插入增量下移（scrollTop>0），用户再上滚才会继续翻，不会连环拉满
   if (!preservingScroll && el.scrollTop < 60 && !loadingMore.value && !historyExhausted.value)
@@ -413,21 +490,25 @@ function onRoomWrapDblClick(room: PocketRoom, event: MouseEvent) {
 }
 
 /**
- * 进入大房间视图的公共收尾（点左列条目、点大房间页签共用）：
- * 与官方客户端一致，进房即清该成员**大房间**的未读（Tab 级计数职责移交房间页），
- * 小房间未读保留——它有自己的页签入口，用户点开小房间时才清。
- * 清零的前提是用户确实看得到消息：进入前大房间已有未读时，加载完成后强制回底，
- * 否则会出现「角标没了但新消息还在上面」的漏读。未读为 0 时不额外动作，
- * 交给消息流自身的贴底逻辑（同房重进不重拉，位置得以保留）。
+ * 进入大房间视图的收尾（点左列条目、点大房间页签共用）：进房即清该成员**大房间**的
+ * 未读（Tab 级计数移交房间页），小房间未读保留、留给它自己的页签入口。
+ * 首屏未加载成功（失败 / 空页）不清——用户没看到消息，角标留到重进或重试；
+ * 进房前有未读时加载完成强制回底，避免「角标没了但新消息还在上面」；
+ * 未读为 0 时交给消息流自身的贴底逻辑（同房重进不重拉，位置保留）。
  *
- * unreadCount 传条数而非布尔：画未读分割线与底部胶囊都要用它，而 markRoomRead
- * 会乐观清零，之后再查就只剩 0。
+ * unreadCount 传条数：锚点要用它，而 markRoomRead 会乐观清零，之后只剩 0。
  */
 async function settleBigRoomEnter(userId: number, unreadCount: number) {
-  // 顺序不能反：水位必须在 markRead 把「此刻」写进去之前截下来
-  await captureUnreadAnchor(userId, 'room', unreadCount)
-  void markRoomRead(userId, 'room')
+  // 没看到消息：未读保留，留到下次进房成功再清
+  if (chatStatus.value !== 'ready' || messages.value.length === 0) {
+    unreadAnchor.value = null
+    return
+  }
+  await markRoomReadCapturing(userId, 'room', unreadCount)
   if (unreadCount <= 0)
+    return
+  // 收尾期间已切房：不能把新房间的列表拽到底部
+  if (selectedUserId.value !== userId)
     return
   await nextTick()
   scrollToBottom()
@@ -442,8 +523,16 @@ async function enterRoom(userId: number) {
   const hadUnread = unreadChannelOf(userId).big
   // 换房先撤掉上一间的分割线：消息清空与水位重取之间有间隙，别让旧锚点落回新列表
   unreadAnchor.value = null
-  await selectRoom(userId)
-  await settleBigRoomEnter(userId, hadUnread)
+  unreadJumped.value = false
+  // 收尾在途时压住贴底监听，锚点要截在第一趟清零之前
+  beginEntryMark()
+  try {
+    await selectRoom(userId)
+    await settleBigRoomEnter(userId, hadUnread)
+  }
+  finally {
+    endEntryMark()
+  }
 }
 
 /**
@@ -493,12 +582,25 @@ watch(() => messages.value.length, async (len, oldLen) => {
     return
   }
   newCount.value = 0
-  // 贴底浏览即已读：主进程清掉当前视图频道（大房间/小房间）的未读并对齐基线，
-  // 广播回来后左列与 Dock 角标同步消失。上翻浏览时不标记，未读保留
-  if (selectedUserId.value !== null && messages.value.length)
+  // 贴底浏览即已读：主进程清当前视图频道未读并对齐基线，广播后角标同步消失；上翻不标记。
+  // 收尾在途时让位（见 entryMarkDepth）；窗口隐藏期间不标——用户看不见，静默清零等于吞掉
+  // 未读，回显时由 docVisibility 监听补标
+  if (docVisibility.value === 'visible' && entryMarkDepth === 0 && selectedUserId.value !== null && messages.value.length)
     void markRoomRead(selectedUserId.value, viewMode.value)
   await nextTick()
   scrollToBottom()
+})
+
+/**
+ * 回显补标：隐藏期间贴底到的消息先攒着未读（见 length 监听），回显时消息已在视口里，
+ * 按「贴底即已读」补一次标记。上翻中（!atBottom）不补——那正是没看完的样子。
+ */
+watch(docVisibility, (visibility) => {
+  if (visibility !== 'visible')
+    return
+  if (entryMarkDepth > 0 || selectedUserId.value === null || !messages.value.length || !atBottom.value)
+    return
+  void markRoomRead(selectedUserId.value, viewMode.value)
 })
 
 /**
@@ -537,6 +639,80 @@ async function onLoadMore() {
   if (historyExhausted.value)
     ElMessage.info('没有更早的消息了')
 }
+
+/**
+ * 未读补页的一页：与 onLoadMore 只差视口策略——贴底时保持贴底（与进房回底并行时，
+ * 视口换算会把人拽回旧位置），上翻中按插入增量保持视口；不弹到头提示。
+ */
+async function fillLoadPage() {
+  const el = listRef.value
+  if (!el) {
+    await loadMoreHistory()
+    return
+  }
+  const stickBottom = atBottom.value
+  const prevHeight = el.scrollHeight
+  const prevTop = el.scrollTop
+  preservingScroll = true
+  try {
+    await loadMoreHistory()
+  }
+  finally {
+    preservingScroll = false
+  }
+  await nextTick()
+  if (stickBottom && atBottom.value) {
+    scrollToBottom()
+    return
+  }
+  el.scrollTop = prevTop + (el.scrollHeight - prevHeight)
+  lastSeenScrollTop = el.scrollTop
+}
+
+/**
+ * 未读补页（触顶兜底）：`unreadIndex === 0` 说明水位那条沉在已加载窗口外（未读 ≥ 一页）。
+ * 循环补拉更早历史把它补进窗口，分割线落到真实边界、条数一并精确；补满上限仍在窗口外
+ * 则标记 `beyond`、文案降级（继续上翻补进后恢复）。
+ * 锚点对象身份即令牌：换房 / 重进换了锚点即作废在途补页。
+ */
+const UNREAD_FILL_MAX_PAGES = 4
+let fillRunningFor: typeof unreadAnchor.value = null
+
+async function fillUnreadWindow() {
+  const anchor = unreadAnchor.value
+  if (!anchor || fillRunningFor === anchor)
+    return
+  fillRunningFor = anchor
+  try {
+    for (let page = 0; page < UNREAD_FILL_MAX_PAGES; page++) {
+      if (unreadAnchor.value !== anchor || unreadIndex.value !== 0)
+        return
+      const before = messages.value.length
+      await fillLoadPage()
+      if (unreadAnchor.value !== anchor || unreadIndex.value !== 0)
+        return
+      // 到头：全部历史已在窗口里，「以下是 N 条」就是真实条数，不降级
+      if (historyExhausted.value)
+        return
+      // 无进展（加载失败 / 别的加载在途）：不误判不空转，保持原文案
+      if (messages.value.length === before)
+        return
+    }
+    // 补满上限，水位仍在窗口外：真实起点在更早，文案降级
+    if (unreadAnchor.value === anchor && unreadIndex.value === 0)
+      unreadAnchor.value = { ...anchor, beyond: true }
+  }
+  finally {
+    if (fillRunningFor === anchor)
+      fillRunningFor = null
+  }
+}
+
+// 分割线钉到窗口顶（unreadIndex 归 0）即补页；空列表先停在 -1，首屏到达后自然触发
+watch(unreadIndex, (index) => {
+  if (index === 0)
+    void fillUnreadWindow()
+})
 
 /** 头像 URL：口袋扩展给的是相对/完整路径混杂，统一过 sourceUrl */
 function avatarUrl(avatar: string) {
@@ -1411,13 +1587,13 @@ onMounted(() => {
                   <div v-if="dividerMap.get(index)" class="msg-date-pill">
                     {{ dividerMap.get(index) }}
                   </div>
-                  <!-- 未读分割线：主进程水位之后的第一条。日期分隔在前，两者重合时是「今天」+「以下是…」两层 -->
+                  <!-- 未读分割线：水位之后的第一条；日期分隔在前，重合时叠成两层。水位沉出窗口（补页触顶）时钉在窗口顶、文案降级 -->
                   <div
                     v-if="unreadAnchor && unreadIndex === index"
                     :ref="setUnreadAnchorEl"
                     class="msg-unread-pill"
                   >
-                    以下是 {{ unreadAnchor.count }} 条新消息
+                    {{ unreadDividerText }}
                   </div>
                   <div
                     class="msg-row"
@@ -1781,7 +1957,7 @@ onMounted(() => {
                 <el-icon :size="12">
                   <ArrowRight />
                 </el-icon>
-                {{ unreadAnchor.count }} 条未读
+                {{ unreadText(unreadAnchor.count) }} 条未读
               </button>
 
               <!-- 上翻历史时收到新消息的浮标：点击回底（贴在输入条上方，见 newMsgFloatStyle） -->

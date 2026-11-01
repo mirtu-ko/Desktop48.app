@@ -15,6 +15,7 @@
 
 import type { PocketRoomQChatMessage } from '@preload/ipc-contract'
 
+import { toMessageId } from '@common/pocket-ids'
 import { replacePocketEmoji } from '../data/pocket-emojis'
 
 /** 消息类别：决定气泡样式与正文占位文案 */
@@ -51,6 +52,8 @@ export interface PocketRoomMessageView {
   id: string
   /** 客户端消息 ID（UUID 去横杠）；空串 = 接口未回（老消息 / 降级回包） */
   msgIdClient: string
+  /** 服务端消息 ID；空串 = 接口未回。未读分割线按它定位已读水位那条（同一毫秒多条不致错位） */
+  msgIdServer: string
   kind: PocketRoomMessageKind
   text: string
   userId: string
@@ -462,8 +465,9 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
   }
 
   return {
-    id: str(msg.msgIdClient) || str(msg.msgIdServer) || String(num(msg.msgTime)),
-    msgIdClient: str(msg.msgIdClient),
+    id: toMessageId(msg.msgIdClient) || toMessageId(msg.msgIdServer) || String(num(msg.msgTime)),
+    msgIdClient: toMessageId(msg.msgIdClient),
+    msgIdServer: toMessageId(msg.msgIdServer),
     kind,
     text,
     userId,
