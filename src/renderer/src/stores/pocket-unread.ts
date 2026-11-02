@@ -6,7 +6,7 @@
  * markRead 走 invoke 由主进程推进已读水位后广播回来（本地乐观清零只为避免数字闪现，
  * 广播到达后值一致）。页面没开 / 窗口最小化时未读照常积累，与页面自身轮询无关。
  */
-import type { PocketUnreadBatch, PocketUnreadRoomState } from '@preload/ipc-contract'
+import type { PocketRoomReadMark, PocketUnreadBatch, PocketUnreadRoomState } from '@preload/ipc-contract'
 import { computed, ref } from 'vue'
 
 /** 未读快照镜像：userId（字符串键）→ 单房间状态 */
@@ -48,13 +48,21 @@ export function unreadChannelOf(userId: number): { big: number, small: number } 
 }
 
 /**
- * 标记房间已读（点进房间 / 贴底看到新消息时调用）。
- * target 区分大房间 / 小房间（暗号频道）：两个频道各有查看入口，进哪个清哪个，
- * 另一路未读保留（主进程按频道拆分，把该频道的已读水位推到当下）。
- * 只传 userId：主进程清零该频道未读并把水位对齐到「此刻」，下一轮检测数出的就是
- * 读了之后又来的新消息——不传渲染层消息 id，两侧取数不是同一次分页，混写会让已读复活。
+ * 某房间最新一条未读的时刻（无未读返回 0）：左列「谁刚说话」排序用。
+ * 取大 / 小房间两频道的最大值（与主进程 aggregate 同口径）；无未读恒为 0。
  */
-export async function markRoomRead(userId: number, target: 'room' | 'small' = 'room'): Promise<void> {
+export function latestUnreadTimeOf(userId: number): number {
+  return unreadRooms.value[String(userId)]?.latestTime ?? 0
+}
+
+/**
+ * 标记房间已读（点进房间 / 贴底看到新消息时调用）。
+ * target 区分大房间 / 小房间（暗号频道）：各有查看入口，进哪个清哪个，另一路保留。
+ * 返回**清零前**的已读水位（null = 频道未解析 / 从未锚定 / 调用失败）供分割线定位；
+ * 主进程同一次调用里先截水位再推水位，调用方不必自己保证取数顺序。
+ * 只传 userId：不传渲染层消息 id——两侧取数不是同一次分页，混写会让已读复活。
+ */
+export async function markRoomRead(userId: number, target: 'room' | 'small' = 'room'): Promise<PocketRoomReadMark | null> {
   const key = String(userId)
   const entry = unreadRooms.value[key]
   // 乐观清零：只清目标频道，另一路（大房间 / 小房间各算一路）保留——
@@ -76,16 +84,17 @@ export async function markRoomRead(userId: number, target: 'room' | 'small' = 'r
     unreadRooms.value = next
   }
   try {
-    await window.mainAPI.pocketMarkRead(userId, target)
+    return await window.mainAPI.pocketMarkRead(userId, target)
   }
   catch (error) {
     console.error('[pocket-unread] 标记已读失败:', error)
+    return null
   }
 }
 
 /** 未读 store：房间未读的全局镜像与已读标记（模块级单例） */
 export function usePocketUnreadStore() {
-  return { unreadRooms, totalUnread, unreadCountOf, unreadChannelOf, markRoomRead }
+  return { unreadRooms, totalUnread, unreadCountOf, unreadChannelOf, latestUnreadTimeOf, markRoomRead }
 }
 
 export default usePocketUnreadStore

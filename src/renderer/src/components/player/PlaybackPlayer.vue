@@ -142,9 +142,9 @@ function toggleDanmakuMode() {
   if (!hasBarrage.value)
     return
   const next = danmakuMode.value === 'live' ? 'all' : 'live'
-  // Umami 事件：切到「全部」面板才算一次该功能的使用
+  // 只在切到「全部」时计数
   if (next === 'all')
-    trackEvent('danmaku:mode', { mode: 'all' })
+    trackEvent('danmaku:mode')
   danmakuMode.value = next
 }
 
@@ -204,11 +204,12 @@ const {
   onTimeUpdate: onDanmakuTimeUpdate,
   onSeeking: time => seekBarragesTo(time),
   onMetadataLoaded: async () => {
-    // Umami 事件：换清晰度 / 重试重挂也会触发 loadedmetadata，用标记只计首播
+    // Umami 事件：换清晰度 / 重试重挂也会触发 loadedmetadata，用标记只计首播。
+    // 属性也计费，只留标题
     if (!playbackTracked) {
       playbackTracked = true
       playbackStartedAt = Date.now()
-      trackEvent('playback:play', { source: props.source, media: isRadio.value ? 'radio' : 'video', title: realName.value })
+      trackEvent('playback:play', { title: realName.value })
     }
     debugLog('playback', `④元数据就绪: 刷新画面尺寸${isRadio.value ? '（电台无尺寸）' : ''} → 加载弹幕`)
     // 记录源尺寸供旋转缩放计算，并按（可能旋转后的）画面比例上报浮窗
@@ -220,7 +221,7 @@ const {
   onIdle: releaseSleepBlocker,
 })
 
-// Umami 事件：录播播放错误（引擎内 notifyError 已按相同文案去重）
+// 录播播放错误（引擎内 notifyError 已按文案去重）
 watch(lastPlaybackError, (message) => {
   if (message)
     trackEvent('player:error', { type: 'playback' })
@@ -329,7 +330,6 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  // Umami 事件：观看时长分桶
   if (playbackTracked) {
     trackEvent('play:duration', { type: 'playback', bucket: durationBucket((Date.now() - playbackStartedAt) / 1000) })
   }

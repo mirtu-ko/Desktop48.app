@@ -135,6 +135,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   fs.rmSync(tmpUserData, { recursive: true, force: true })
 })
 
@@ -245,7 +246,8 @@ describe('pocket-unread（房间未读检测）', () => {
     expect(mod.getState().total).toBe(3)
 
     // 标记已读：清零 + 广播 + 拉一页把水位推到当下（此页最新是 m4）
-    await mod.markRead(1)
+    // 返回值是**清零前**的水位（渲染层画分割线的锚点）：读前停在 m1
+    await expect(mod.markRead(1)).resolves.toEqual({ msgTime: 1_000_000, msgIdServer: 'm1' })
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
     expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
 
@@ -298,15 +300,15 @@ describe('pocket-unread（房间未读检测）', () => {
     mod.stopPocketUnread()
     expect(mod.getState().rooms['1']).toMatchObject({ count: 2, bigCount: 1, smallCount: 1 })
 
-    // 读大房间：只清大房间，小房间未读保留
+    // 读大房间：只清大房间，小房间未读保留；带回的水位是大房间自己的（m1）
     broadcasts = []
-    await mod.markRead(1, 'room')
+    await expect(mod.markRead(1, 'room')).resolves.toEqual({ msgTime: 1_000_000, msgIdServer: 'm1' })
     expect(mod.getState().rooms['1']).toMatchObject({ count: 1, bigCount: 0, smallCount: 1 })
     // 清零广播当即按频道拆分（不是先整块清零、等对齐后再补回小房间）→ 渲染层角标不闪
     expect(broadcasts[0]).toMatchObject({ rooms: { 1: { count: 1, bigCount: 0, smallCount: 1 } } })
 
-    // 读小房间：清零
-    await mod.markRead(1, 'small')
+    // 读小房间：清零；带回的水位是小房间自己的（同为 m1，两个频道各自锚定）
+    await expect(mod.markRead(1, 'small')).resolves.toEqual({ msgTime: 1_000_000, msgIdServer: 'm1' })
     expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
   })
 
@@ -486,6 +488,103 @@ describe('pocket-unread（房间未读检测）', () => {
     await runTick(auth, mod)
     await settle()
     expect(mod.getState().total).toBe(2)
+  })
+
+  it('频道停更导致触发锚冻结：久未探测的未读补探一次，空页即归零', async () => {
+    let clock = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    await runTick(auth, mod)
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k2'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m3', 'm2', 'm1'))
+    await runTick(auth, mod)
+    expect(mod.getState().total).toBe(2)
+
+    // 预览键不再变化：普通轮次一次列表都不拉，未读冻结在 2
+    const probeCalls = auth.getRoomMessages.mock.calls.length
+    await runTick(auth, mod)
+    await settle()
+    expect(auth.getRoomMessages.mock.calls.length).toBe(probeCalls)
+    expect(mod.getState().total).toBe(2)
+
+    // 超过补探间隔：强拉一次列表；频道已无内容 → 空页让冻结的计数自然归零
+    clock += 31 * 60 * 1000
+    auth.getRoomMessages.mockResolvedValue({ messages: [], nextTime: 0 })
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(auth.getRoomMessages).toHaveBeenCalledTimes(probeCalls + 1))
+    mod.stopPocketUnread()
+    await settle()
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+  })
+
+  it('大房间频道连续探测失败：达上限即作废重解析，未读不再冻结在死频道上', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    await runTick(auth, mod)
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k2'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m3', 'm2', 'm1'))
+    await runTick(auth, mod)
+    expect(mod.getState().total).toBe(2)
+
+    // 频道失效：每轮预览键都变（保证每轮都探测），列表一直失败
+    auth.getRoomMessages.mockRejectedValue(new Error('接口异常（HTTP 500）'))
+    for (let round = 0; round < 3; round += 1) {
+      auth.getRoomLastMessages.mockResolvedValue(lastOf(`k${round + 3}`))
+      await runTick(auth, mod)
+      await settle()
+    }
+    // 第 3 次失败：作废频道归属，旧频道的未读一并清掉
+    expect(mod.getState().total).toBe(0)
+
+    // 空占位 resolvedAt=0：下一轮立即重新解析，不必等占位 TTL
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(auth.getRoomChannel).toHaveBeenCalledTimes(2))
+    mod.stopPocketUnread()
+  })
+
+  it('实时解析出不同频道（成员换房 / 房间重建）：旧频道未读清掉，改挂新频道', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    await runTick(auth, mod)
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k2'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m3', 'm2', 'm1'))
+    await runTick(auth, mod)
+    expect(mod.getState().total).toBe(2)
+
+    // 同一频道：无副作用、不广播
+    const before = broadcasts.length
+    mod.reconcileRoomChannel(1, { serverId: 's1', channelId: 'c1' })
+    expect(broadcasts.length).toBe(before)
+    expect(mod.getState().total).toBe(2)
+
+    // 换房：旧频道还能读历史消息（探测不会失败），未读不能一直算在它头上
+    mod.reconcileRoomChannel(1, { serverId: 's1', channelId: 'c2' })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
+
+    // 未登记的成员（未关注 / 临时房间）：没有可校正的缓存，不写盘也不广播
+    const quiet = broadcasts.length
+    mod.reconcileRoomChannel(999, { serverId: 's9', channelId: 'c9' })
+    expect(broadcasts.length).toBe(quiet)
+  })
+
+  it('房间已关闭（解析回空频道）：频道缓存与未读一并清掉，不留点不掉的红点', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    await runTick(auth, mod)
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k2'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m3', 'm2', 'm1'))
+    await runTick(auth, mod)
+    expect(mod.getState().total).toBe(2)
+
+    mod.reconcileRoomChannel(1, { serverId: '', channelId: '' })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
   })
 
   it('未登录清空未读并广播；重新登录按首见重新锚定', async () => {

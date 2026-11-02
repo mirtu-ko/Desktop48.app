@@ -82,6 +82,26 @@ describe('pocket-room-message / 文本与多媒体', () => {
     expect(view.imageUrl).toBe('https://source.48.cn/emotion/1.png')
   })
 
+  it('expressimage 宽高宽容匹配（expressImgInfo / bodys），缺省 0（相册小图过滤靠实测兜底）', () => {
+    const inInfo = normalizePocketRoomMessage(roomMessage('EXPRESSIMAGE', {
+      bodys: { expressImgInfo: { emotionRemote: '/emotion/1.png', w: 120, h: 120 } },
+    }))!
+    expect(inInfo.imageWidth).toBe(120)
+    expect(inInfo.imageHeight).toBe(120)
+
+    const inBody = normalizePocketRoomMessage(roomMessage('EXPRESSIMAGE', {
+      bodys: { expressImgInfo: { emotionRemote: '/emotion/2.png' }, imgWidth: 200, imgHeight: 160 },
+    }))!
+    expect(inBody.imageWidth).toBe(200)
+    expect(inBody.imageHeight).toBe(160)
+
+    const unsized = normalizePocketRoomMessage(roomMessage('EXPRESSIMAGE', {
+      bodys: { expressImgInfo: { emotionRemote: '/emotion/3.png' } },
+    }))!
+    expect(unsized.imageWidth).toBe(0)
+    expect(unsized.imageHeight).toBe(0)
+  })
+
   it('audio 提取 bodys.url：相对路径补 mp4.48.cn', () => {
     const view = normalizePocketRoomMessage(roomMessage('AUDIO', {
       bodys: { url: '/MediaSource/Voice/2026/1014/xyz.m4a' },
@@ -385,6 +405,13 @@ describe('pocket-room-message / 发送者与兜底', () => {
       msgTime: 5,
       bodys: 'x',
     })!.id).toBe('5')
+  })
+
+  it('占位 id 0 视为「无 id」：不进去重键，也不参与按 id 定位', () => {
+    const view = normalizePocketRoomMessage({ msgIdServer: 0, msgIdClient: '0', msgType: 'TEXT', msgTime: 5, bodys: 'x' })!
+    expect(view.msgIdServer).toBe('')
+    expect(view.msgIdClient).toBe('')
+    expect(view.id).toBe('5')
   })
 
   it('非对象输入不炸', () => {

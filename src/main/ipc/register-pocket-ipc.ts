@@ -72,8 +72,12 @@ export function registerPocketIPC(): void {
   handleTraced('pocketUnfollowMember', (_event: IpcMainInvokeEvent, userId: number) =>
     pocketAuth.unfollowMember(userId))
   // 成员房间（口袋 App「房间」频道留言流，非直播间弹幕）：频道解析 + 历史消息拉取
-  handleTraced('pocketGetRoomChannel', (_event: IpcMainInvokeEvent, userId: number) =>
-    pocketAuth.getRoomChannel(userId))
+  // 渲染层进房必走这里，顺手用实时解析结果校正未读缓存：成员换房后旧频道的未读不会一直挂着
+  handleTraced('pocketGetRoomChannel', async (_event: IpcMainInvokeEvent, userId: number) => {
+    const channel = await pocketAuth.getRoomChannel(userId)
+    pocketUnread.reconcileRoomChannel(userId, channel)
+    return channel
+  })
   // 房间发言权限（room/info 的 userFunction）：房主开房间级禁言时 sendText=false。
   // 渲染层据此在输入框直接显示禁言、并且不再引导 QChat 建连（建连会顶掉手机端）
   handleTraced('pocketGetRoomPermissions', (_event: IpcMainInvokeEvent, channelId: string) =>
@@ -135,9 +139,7 @@ export function registerPocketIPC(): void {
     msgIdClient: string,
     msgTime: number,
   ) => pocketAuth.deleteRoomMessage(channelId, msgIdClient, msgTime))
+  // 标记已读并带回清零前的水位（分割线锚点，见 pocket-unread.markRead）
   handleTraced('pocketMarkRead', (_event: IpcMainInvokeEvent, userId: number, target?: 'room' | 'small') =>
     pocketUnread.markRead(userId, target))
-  // 只读水位：进房画未读分割线（必须在 markRead 之前取，见 pocket-unread.getReadMark）
-  handleTraced('pocketReadMark', (_event: IpcMainInvokeEvent, userId: number, target?: 'room' | 'small') =>
-    pocketUnread.getReadMark(userId, target))
 }

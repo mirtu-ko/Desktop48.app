@@ -65,15 +65,13 @@ export function useStreamRetry(options: {
     if (next === null) {
       options.mediaLoading.value = false
       isRecoveringStream.value = false
-      // Umami 事件：重试预算耗尽 = 这场直播没能救回来
-      trackEvent('live:fail', { retries: maxRetries })
+      // 重试预算耗尽 = 这场没救回来
+      trackEvent('live:fail')
       options.onExhausted()
       return
     }
 
     retryCount.value = next
-    // Umami 事件：断流重连节奏（next = 当前连续失败次数）
-    trackEvent('live:retry', { count: next })
     isRecoveringStream.value = true
     options.mediaLoading.value = true
     clearTimer()

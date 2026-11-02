@@ -43,7 +43,7 @@ import {
   USER_MONEY_URL,
 } from '@common/pocket-api-urls'
 import { resolvePocketClientProfile } from '@common/pocket-client-profile'
-import { toApiId } from '@common/pocket-ids'
+import { toApiId, toMessageId } from '@common/pocket-ids'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
@@ -1026,6 +1026,9 @@ export async function getRoomChannelOwner(channelId: string): Promise<PocketRoom
  *   都不能作为判据）。
  * - `cdTime` 是**房间级**发言冷却（秒）：禁言房间 30、常规房间 10。它与渲染层
  *   `SEND_COOLDOWN_MS`（1.5s 的点击防抖）无关，是服务端真正的限流窗口。
+ * - **房间关闭看 `channelInfo.hasMsgBoard`**（2026-11 实测「刘增艳」）：关闭后 jump 不退空、
+ *   而是退到该 server 的直播频道（`channelName=直播`、`functionType=USER_LIVE`、`hasMsgBoard=0`），
+ *   消息恒空页。`userFunction` 与 `channelStatus` 都判不出来（见上两条），故单取这个字段。
  */
 export interface PocketRoomPermission {
   /** 能否发文字；false = 该房间禁止发言（房间级全员禁言或个人禁言） */
@@ -1036,6 +1039,12 @@ export interface PocketRoomPermission {
   roomRole: string
   /** 是否已关注当前房间所属成员（room/info 顶层字段） */
   followFlag: boolean
+  /**
+   * 该频道是否有房间留言板（`channelInfo.hasMsgBoard`）。
+   * 房间关闭后 jump 会退到该 server 的直播频道，那里为 0、消息恒空；
+   * 字段缺失时给 null，调用方不得据此推断
+   */
+  hasMsgBoard: boolean | null
 }
 
 /**
@@ -1078,16 +1087,23 @@ async function fetchRoomPermissions(channelId: string): Promise<PocketRoomPermis
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
     throwAuthExpired()
-  if (!envelope.success)
+  if (!envelope.success) {
+    log('[pocket-auth] room/info 业务失败', channelId, envelope.status, envelope.message)
     throw new Error(envelope.message || '获取房间发言权限失败')
+  }
   const content = (envelope.content || {}) as Record<string, unknown>
   const userFunction = (content.userFunction || {}) as Record<string, unknown>
+  const channelInfo = (content.channelInfo || {}) as Record<string, unknown>
+  // 房间关闭只能从这条回包读（channelStatus 语义不明，见 docs/room-message-pipeline.md 第 4 节），
+  // 出问题时这行是唯一的现场
+  debug('[pocket-auth] room/info 回包：', JSON.stringify(content))
   return {
     // 字段缺失（协议变动）时按可发言处理：宁可让服务端拒绝，也不要误判成禁言把人锁在外面
     sendText: typeof userFunction.sendText === 'boolean' ? userFunction.sendText : true,
     cdTime: Number(userFunction.cdTime) || 0,
     roomRole: String(content.roomRole ?? '0'),
     followFlag: content.followFlag === true,
+    hasMsgBoard: typeof channelInfo.hasMsgBoard === 'number' ? channelInfo.hasMsgBoard > 0 : null,
   }
 }
 
@@ -1306,8 +1322,8 @@ function toRoomMessages(list: unknown): PocketRoomMessage[] {
     .map((item) => {
       const extInfo = typeof item.extInfo === 'string' ? item.extInfo : JSON.stringify(item.extInfo ?? {})
       return {
-        msgIdServer: String(item.msgIdServer ?? ''),
-        msgIdClient: String(item.msgIdClient ?? ''),
+        msgIdServer: toMessageId(item.msgIdServer),
+        msgIdClient: toMessageId(item.msgIdClient),
         msgType: String(item.msgType ?? ''),
         msgTime: Number(item.msgTime) || 0,
         bodys: typeof item.bodys === 'string' ? item.bodys : JSON.stringify(item.bodys ?? ''),
@@ -1455,9 +1471,12 @@ export async function getRoomLastMessages(serverIds: string[]): Promise<PocketRo
       serverId: String(item.serverId ?? '').trim(),
       starName: String(item.starName ?? '').trim(),
       msgContent,
-      msgKey: String(
-        item.msgidClient || item.msgIdClient || item.msgIdServer || item.msgId || item.messageId || '',
-      ).trim() || `${msgTime}:${msgContent}`,
+      msgKey: toMessageId(item.msgidClient)
+        || toMessageId(item.msgIdClient)
+        || toMessageId(item.msgIdServer)
+        || toMessageId(item.msgId)
+        || toMessageId(item.messageId)
+        || `${msgTime}:${msgContent}`,
       msgTime,
       // 只认字段真实存在的情况：该接口不回该字段，0 与「未读 0 条」必须可区分
       unreadCount: typeof item.unreadCount === 'number' && Number.isFinite(item.unreadCount)

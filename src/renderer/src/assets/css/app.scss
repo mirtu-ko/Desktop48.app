@@ -93,8 +93,12 @@
   --player-glass-bg: rgba(15, 17, 26, 0.68);
   --player-glass-ring: rgba(255, 255, 255, 0.16);
   --player-glass-hover: rgba(255, 255, 255, 0.12);
+}
 
-  /* Element Plus 主题色覆写（浅色） */
+/* ===== Element Plus 变量覆写（浅色） =====
+ * 用 html:root 而非 :root：Element Plus 的 base.css 同样在 :root 定义这些变量，
+ * 同特异性下由加载顺序决定胜负；组件样式改为按需后顺序不再可控，提一级抛开顺序依赖。*/
+html:root {
   --el-color-primary: var(--brand-primary);
   --el-color-primary-light-3: #8f82ee;
   --el-color-primary-light-5: #b6abf6;

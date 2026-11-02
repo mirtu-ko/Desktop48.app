@@ -35,10 +35,11 @@ import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { pocketAuthState, refreshPocketAuthState } from '@renderer/stores/pocket-auth'
-import { unreadCountOf, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
+import { latestUnreadTimeOf, unreadCountOf, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import { debugLog } from '@renderer/utils/debug'
-
 import { isPlaceholderText, liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview, normalizePocketRoomQChatMessage } from '@renderer/utils/pocket-room-message'
+
+import { isRoomClosed } from '@renderer/utils/room-status'
 import { isSmallRoomUnlocked, markSmallRoomUnlocked } from '@renderer/utils/small-room-unlock'
 import Tools from '@renderer/utils/tools'
 import { useIntervalFn } from '@vueuse/core'
@@ -207,6 +208,12 @@ export function usePocketRooms() {
   /** 正在拉权限的频道 id：切房后旧回包不得覆盖新房间 */
   let permissionChannelId = ''
   /**
+   * 房间已关闭：`room/info` 回包无留言板（hasMsgBoard=0）或直接回错时置真。
+   * 关闭的房间 jump 会退到该 server 的直播频道，消息恒为空页——与「没人说话」同形，
+   * 只有这个接口能分辨，消息区据此换掉「暂无消息」的文案。
+   */
+  const roomClosed = ref(false)
+  /**
    * 用户是否已确认「连接云信会挤掉其他登录端」。默认 false：进房只跑 HTTP 轮询，
    * 不建连、不订阅；点聊天框确认后置位，登出即复位。
    */
@@ -373,20 +380,23 @@ export function usePocketRooms() {
   }
 
   /**
-   * 左列排序，四级判据：
+   * 左列排序，五级判据：
    * 1. 临时房间恒置顶（用户刚点进来的那个，要第一眼看到）；
    * 2. 在直播的排在没直播的前面——「谁的房间开着」是第一眼信息；
    * 3. 其次是有未读的——「谁的房间有新消息」是第二眼信息；
-   * 4. 同档按昵称 localeCompare('zh')。
+   * 4. 同为有未读按最新一条未读的时刻降序——「谁刚说话」一眼可见；
+   * 5. 同档按昵称 localeCompare('zh')。
    *
    * 未读判据取大房间 + 小房间合计（与左列角标同源），不是只看大房间：
    * 左列条目上只有一个角标，排序与它不一致会自相矛盾。
+   * latestTime 取两频道最大值（aggregate 口径）；无未读恒为 0，已被第 3 级分走。
    */
   function sortRooms(list: PocketRoom[]) {
     list.sort((a, b) =>
       Number(!!b.temporary) - Number(!!a.temporary)
       || Number(!!b.live) - Number(!!a.live)
       || Number(unreadCountOf(b.userId) > 0) - Number(unreadCountOf(a.userId) > 0)
+      || latestUnreadTimeOf(b.userId) - latestUnreadTimeOf(a.userId)
       || a.nickname.localeCompare(b.nickname, 'zh'),
     )
     sortedUnreadIds = collectUnreadIds(list)
@@ -402,19 +412,24 @@ export function usePocketRooms() {
   }, { immediate: true })
 
   /**
-   * 未读变化 → 重排左列（新消息浮上来），但**只在「新出现未读」时**重排。
+   * 未读变化 → 重排左列（新消息浮上来），只在两种「浮上来」时重排：
+   * 新出现未读、或已有未读的房间又来新消息（latestTime 前移）。
    *
    * 读掉未读（进房即 markRead，本地乐观清零 + 主进程广播）不重排：那条正是用户刚点的，
-   * 当场把它从顶部抽走会让人以为点错了。条目的下沉留给下一次自然排序
-   * （重新进入页面 / 手动刷新 / 直播状态刷新），与「回到列表时名单已归位」的观感一致。
+   * 当场抽走会让人以为点错了。latestTime 回落同属「读掉」，也不重排——条目下沉留给
+   * 下一次自然排序（重进页面 / 手动刷新 / 直播状态刷新）。
    *
    * 临时房间不在主进程未读检测范围内，对它这条 watch 是空转。
    */
-  watch(unreadRooms, () => {
+  watch(unreadRooms, (snapshot, prevSnapshot) => {
     if (!rooms.value.length)
       return
     const next = collectUnreadIds(rooms.value)
-    if ([...next].some(userId => !sortedUnreadIds.has(userId)))
+    const bumped = [...next].some((userId) => {
+      const key = String(userId)
+      return (snapshot[key]?.latestTime ?? 0) > (prevSnapshot?.[key]?.latestTime ?? 0)
+    })
+    if (bumped || [...next].some(userId => !sortedUnreadIds.has(userId)))
       sortRooms(rooms.value)
     else
       sortedUnreadIds = next
@@ -1292,14 +1307,20 @@ export function usePocketRooms() {
   async function loadRoomPermission(channelId: string): Promise<void> {
     permissionChannelId = channelId
     roomPermission.value = null
+    roomClosed.value = false
     try {
       const permission = await window.mainAPI.pocketGetRoomPermissions(channelId)
       // 回包期间已切房：旧频道的权限不得贴到新房间的输入框上
       if (permissionChannelId !== channelId)
         return
       roomPermission.value = permission
+      // 无留言板 = 房间已关闭（jump 退到了该 server 的直播频道，消息永远为空）
+      roomClosed.value = isRoomClosed(permission?.hasMsgBoard ?? null)
     }
     catch (error) {
+      // 也有的关闭形态是直接回错，文案由服务端给
+      if (permissionChannelId === channelId)
+        roomClosed.value = isRoomClosed(null, error instanceof Error ? error.message : String(error))
       debugLog('pocket-rooms', '房间发言权限拉取失败', error)
     }
   }
@@ -1718,6 +1739,7 @@ export function usePocketRooms() {
     smallQuestionLoading,
     chatStatus,
     chatStatusText,
+    roomClosed,
     historyExhausted,
     loadingMore,
     essenceMessages,

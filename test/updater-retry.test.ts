@@ -40,6 +40,7 @@ const autoUpdaterMock = {
   checkForUpdates: vi.fn(),
   downloadUpdate: vi.fn(),
   quitAndInstall: vi.fn(),
+  setFeedURL: vi.fn(),
 }
 vi.mock('electron-updater', () => ({ default: { autoUpdater: autoUpdaterMock } }))
 
@@ -62,6 +63,7 @@ beforeEach(() => {
   existsSyncMock.mockReturnValue(true)
   autoUpdaterMock.checkForUpdates.mockReset()
   autoUpdaterMock.on.mockReset()
+  autoUpdaterMock.setFeedURL.mockClear()
   broadcastMock.mockClear()
 })
 
@@ -92,62 +94,83 @@ describe('checkForUpdates 重试与退避', () => {
     expect(getUpdaterState().phase).not.toBe('error')
   })
 
-  it('指数退避：第 1 次失败等 800ms，第 2 次等 2400ms，不是等间隔', async () => {
+  it('镜像失败后立刻切到 GitHub 重试，退避只发生在 GitHub 阶段', async () => {
     autoUpdaterMock.checkForUpdates.mockRejectedValue(updaterError('ETIMEDOUT', 'Request timed out'))
 
     const promise = checkForUpdates()
     // 让 async 函数体跑过 resolveUpdaterSupport 与首个 await，落到第一次真实请求上
     await vi.advanceTimersByTimeAsync(0)
 
-    // 首次立即发生
-    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1)
+    // 第 1 次是镜像，失败后立即换源，第 2 次紧接着发生——换源不该等退避
+    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(2)
+    expect(autoUpdaterMock.setFeedURL).toHaveBeenLastCalledWith(
+      expect.objectContaining({ provider: 'github' }),
+    )
 
-    // 不足 800ms 不应该有第 2 次
+    // 之后的间隔才是指数退避：要等满 800ms 才有第 3 次（换源那一跳已把定时器排上）
     await vi.advanceTimersByTimeAsync(799)
-    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1)
-
-    await vi.advanceTimersByTimeAsync(1)
-    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(2)
-
-    // 第 2 次的重试窗口是 2400ms：先不足，再补足
-    await vi.advanceTimersByTimeAsync(2399)
     expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(2)
     await vi.advanceTimersByTimeAsync(1)
+    await vi.advanceTimersByTimeAsync(0)
     expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(3)
 
+    // 收尾：第 3 次仍会失败，让最后一次退避跑完，Promise 才不会悬着
+    await vi.advanceTimersByTimeAsync(2400)
     await promise
   })
 
-  it('确定性失败（404 channel 文件缺失）不重试，一次即返回', async () => {
+  it('每次检查都从镜像重新开始（上一轮可能已切到 GitHub）', async () => {
+    autoUpdaterMock.checkForUpdates
+      .mockRejectedValueOnce(updaterError('ETIMEDOUT'))
+      .mockResolvedValueOnce({ updateInfo: {} })
+      .mockResolvedValueOnce({ updateInfo: {} })
+
+    await checkForUpdates()
+    await checkForUpdates()
+
+    expect(autoUpdaterMock.setFeedURL).toHaveBeenLastCalledWith(
+      expect.objectContaining({ provider: 'generic', url: 'https://dl.v2ing.com' }),
+    )
+  })
+
+  it('确定性失败（404 channel 文件缺失）不重试，但仍让 GitHub 顶一次', async () => {
     autoUpdaterMock.checkForUpdates.mockRejectedValue(
       updaterError('ERR_UPDATER_CHANNEL_FILE_NOT_FOUND', 'Cannot find channel file'),
     )
 
     const state = await checkForUpdates()
 
-    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1)
+    // 镜像缺清单恰恰是该换源的情况，所以是 2 次（镜像 + GitHub），而不是 1 次或 3 次
+    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(2)
     expect(state.phase).toBe('error')
   })
 
-  it('确定性失败（latest.yml 版本非法）不重试', async () => {
+  it('确定性失败（latest.yml 版本非法）换源后仍不重试', async () => {
     autoUpdaterMock.checkForUpdates.mockRejectedValue(
       updaterError('ERR_UPDATER_INVALID_VERSION', 'Invalid version'),
     )
 
     await checkForUpdates()
 
-    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1)
+    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(2)
   })
 
-  it('服务端 5xx 可重试，客户端 4xx 不可重试', async () => {
+  it('换源之后：服务端 5xx 可重试，客户端 4xx 不可重试', async () => {
     const serverErr = new Error('Internal server error') as Error & { statusCode: number }
     serverErr.statusCode = 500
-    autoUpdaterMock.checkForUpdates.mockRejectedValueOnce(serverErr).mockResolvedValueOnce({ updateInfo: {} })
+    // 镜像失败 → GitHub 5xx → GitHub 再试成功
+    autoUpdaterMock.checkForUpdates
+      .mockRejectedValueOnce(serverErr)
+      .mockRejectedValueOnce(serverErr)
+      .mockResolvedValueOnce({ updateInfo: {} })
 
     const ok = checkForUpdates()
+    // 先让「镜像失败 → 换源 → GitHub 5xx」这一串微任务落地，800ms 的退避定时器才是真的排上了
+    await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(800)
+    await vi.advanceTimersByTimeAsync(0)
     await ok
-    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(2)
+    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(3)
 
     autoUpdaterMock.checkForUpdates.mockReset()
     const clientErr = new Error('Not found') as Error & { statusCode: number }
@@ -155,7 +178,8 @@ describe('checkForUpdates 重试与退避', () => {
     autoUpdaterMock.checkForUpdates.mockRejectedValue(clientErr)
 
     await checkForUpdates()
-    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1)
+    // 镜像 404 → GitHub 404 就停；4xx 是请求本身的问题，再试无意义
+    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(2)
   })
 
   it('重试耗尽后落到 error，并把失败原因翻成人话', async () => {
@@ -166,7 +190,8 @@ describe('checkForUpdates 重试与退避', () => {
     await vi.advanceTimersByTimeAsync(2400)
     const state = await promise
 
-    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(3)
+    // 镜像 1 次（不计入重试预算）+ GitHub 3 次，共 4 次
+    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(4)
     expect(state).toEqual({ phase: 'error', message: '网络连接超时，请检查网络后重试' })
   })
 })
@@ -192,7 +217,7 @@ describe('checkForUpdates 静默模式（启动后的自动检查）', () => {
     await vi.advanceTimersByTimeAsync(2400)
     await promise
 
-    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(3)
+    expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(4)
     expect(getUpdaterState()).toEqual(before)
   })
 
@@ -222,7 +247,7 @@ describe('resolveUpdaterSupport 的前置拦截', () => {
     expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled()
   })
 
-  it('缺 app-update.yml（免安装版）：不支持，并给出 GitHub 出路', async () => {
+  it('缺 app-update.yml（免安装版）：不支持，并给出官网出路', async () => {
     existsSyncMock.mockReturnValue(false)
 
     const state = await checkForUpdates()
@@ -230,7 +255,8 @@ describe('resolveUpdaterSupport 的前置拦截', () => {
     expect(state.phase).toBe('unsupported')
     if (state.phase === 'unsupported') {
       expect(state.reason).toContain('免安装版')
-      expect(state.url).toContain('github.com')
+      // 大陆用户打不开 GitHub，出路指向官网下载区
+      expect(state.url).toBe('https://48.v2ing.com/')
     }
     expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled()
   })

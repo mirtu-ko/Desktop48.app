@@ -203,7 +203,7 @@ export type UpdaterState
     | { phase: 'checking' }
   /** 检查完成且当前没有可用更新 */
     | { phase: 'up-to-date' }
-  /** 发现新版本；manualUpdate 表示仅可引导到 GitHub 手动下载 */
+  /** 发现新版本；manualUpdate 表示只能引导到下载页手动安装（macOS） */
     | { phase: 'available', version: string, releaseNotes: string, manualUpdate?: boolean, url?: string }
   /** 正在下载 */
     | { phase: 'downloading', version: string, percent: number, bytesPerSecond: number, transferred: number, total: number }
@@ -289,6 +289,11 @@ export interface PocketRoomPermission {
   roomRole: string
   /** 是否已关注该房间所属成员 */
   followFlag: boolean
+  /**
+   * 该频道是否有房间留言板；null = 回包没给这个字段。
+   * 房间关闭后 jump 会退到直播频道（hasMsgBoard=0、消息恒空），据此区分「关闭」与「没人说话」
+   */
+  hasMsgBoard: boolean | null
 }
 
 /** team server 下的频道（seine 频道详情）：channelId + 服务端给的频道名 */
@@ -447,8 +452,7 @@ export interface PocketUnreadRoomState {
 }
 /**
  * 单个频道的已读水位（「读到哪一条」）。
- * 渲染层只用 msgTime 与消息列表比较，定位「以下是新消息」分割线；
- * msgIdServer 是同源取数时的精确定位依据（同一毫秒多条），渲染层不要拿列表里的 id 回写水位。
+ * 渲染层按 msgIdServer 定位分割线，找不到退回 msgTime 比较；不要拿列表里的 id 回写水位。
  */
 export interface PocketRoomReadMark {
   msgTime: number
@@ -594,16 +598,11 @@ interface StaticIpcInvokeMap {
    */
   pocketCheckRoomAnswer: InvokeSpec<[channelId: string, questionId: string, answer: string], PocketRoomAnswerResult>
   /**
-   * 标记房间已读：目标频道未读清零并广播，另一路（大/小房间）未读保留；
-   * 主进程随即把该频道的已读水位推到当下，下一轮检测数出的就是读了之后的新消息
+   * 标记房间已读：返回**清零前**的已读水位（分割线锚点；频道未解析或未锚定时为 null），
+   * 随后清零目标频道并广播，另一路未读保留，水位推到当下。
+   * 不要在调用方拆成「先取水位、再清零」两次调用
    */
-  pocketMarkRead: InvokeSpec<[userId: number, target?: 'room' | 'small'], void>
-  /**
-   * 某频道的已读水位（只读，不推进不广播）：进房画未读分割线用。
-   * 必须在 pocketMarkRead 之前取——markRead 会把水位推到当下，之后取就永远没有分割线。
-   * 频道未解析（小房间还没被归属发现）或从未锚定时返回 null，调用方退回「只显示未读计数」。
-   */
-  pocketReadMark: InvokeSpec<[userId: number, target?: 'room' | 'small'], PocketRoomReadMark | null>
+  pocketMarkRead: InvokeSpec<[userId: number, target?: 'room' | 'small'], PocketRoomReadMark | null>
   /**
    * 进入房间频道的 QChat 连接（订阅实时消息）。渲染层进房时调用，离房走 Leave；
    * 同一账号多频道复用一条连接，最后一个订阅者离开即断开。

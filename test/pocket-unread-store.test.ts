@@ -21,8 +21,10 @@ async function setup(rooms: Record<string, RoomState>) {
     mainAPI: {
       pocketUnreadBatch: vi.fn(),
       pocketUnreadState: vi.fn(async () => ({ rooms, total: 0 })),
+      // markRead 原样带回清零前的水位（分割线锚点），这里给固定值供断言
       pocketMarkRead: vi.fn(async (userId: number, target: string) => {
         calls.push([userId, target])
+        return { msgTime: 1000, msgIdServer: 'm1' }
       }),
     },
   })
@@ -74,5 +76,22 @@ describe('pocket-unread store（未读镜像与已读标记）', () => {
 
     expect(store.unreadCountOf(1)).toBe(5)
     expect(calls).toEqual([[2, 'room']])
+  })
+
+  it('markRoomRead 原样带回主进程返回的清零前水位（分割线锚点）', async () => {
+    const { store } = await setup({
+      1: { count: 5, bigCount: 3, smallCount: 2, latestTime: 100 },
+    })
+
+    await expect(store.markRoomRead(1, 'room')).resolves.toEqual({ msgTime: 1000, msgIdServer: 'm1' })
+  })
+
+  it('latestUnreadTimeOf 透传快照里的最新未读时刻，无未读的房间回 0', async () => {
+    const { store } = await setup({
+      1: { count: 5, bigCount: 3, smallCount: 2, latestTime: 100 },
+    })
+
+    expect(store.latestUnreadTimeOf(1)).toBe(100)
+    expect(store.latestUnreadTimeOf(2)).toBe(0)
   })
 })

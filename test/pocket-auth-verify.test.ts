@@ -470,6 +470,27 @@ describe('pocket-auth 成员房间', () => {
     await expect(getRoomLastMessages(['888'])).rejects.toThrow('服务不存在')
   })
 
+  it('getRoomLastMessages：占位 id 0 不进 msgKey，退回 msgTime:msgContent 兜底', async () => {
+    // 字符串 '0' 是真值，直接拼链会让 msgKey 恒为 '0'——连续两条占位 id 消息
+    // 身份键不变，未读探测漏触发（数字 0 是假值，本来就落进兜底）
+    env.replies['team/classic/last/message/get'] = {
+      status: 200,
+      body: {
+        status: 200,
+        success: true,
+        content: {
+          lastMsgList: [
+            { channelId: '1', msgContent: 'a', msgTime: 1, msgidClient: '0', msgIdClient: 0, msgIdServer: '0' },
+            { channelId: '2', msgContent: 'b', msgTime: 2, msgidClient: 'real-1' },
+            { channelId: '3', msgContent: 'c', msgTime: 3 },
+          ],
+        },
+      },
+    }
+    const list = await getRoomLastMessages(['888'])
+    expect(list.map(item => item.msgKey)).toEqual(['1:a', 'real-1', '3:c'])
+  })
+
   it('频道列表 60s 内复用同一次请求，force 才重拉（渲染层取名字与主进程枚举共用）', async () => {
     const detailRequests = () => env.requests.filter(item => item.url.includes('seine/server/detail')).length
     await getServerChannels('9990001')
