@@ -414,7 +414,14 @@ export function normalizePocketRoomMessage(raw: unknown): PocketRoomMessageView 
     imageHeight = num(body?.height) || num(body?.imgHeight) || num(body?.h)
   }
   else if (msgType === 'EXPRESSIMAGE') {
-    imageUrl = mediaUrl(firstStr(parseJson(body?.expressImgInfo), ['emotionRemote']) || firstStr(body, ['url']), 'source')
+    const expressInfo = parseJson(body?.expressImgInfo)
+    imageUrl = mediaUrl(firstStr(expressInfo, ['emotionRemote']) || firstStr(body, ['url']), 'source')
+    // 尺寸与 IMAGE 同款宽容匹配（expressImgInfo / bodys 两个位置都看）：
+    // 表情是最典型的小图，宽高缺失会让相册「过滤小图」无从判定
+    imageWidth = num(expressInfo?.width) || num(expressInfo?.imgWidth) || num(expressInfo?.w)
+      || num(body?.width) || num(body?.imgWidth) || num(body?.w)
+    imageHeight = num(expressInfo?.height) || num(expressInfo?.imgHeight) || num(expressInfo?.h)
+      || num(body?.height) || num(body?.imgHeight) || num(body?.h)
   }
   else if (msgType === 'AUDIO') {
     audioUrl = mediaUrl(firstStr(body, ['url', 'audioUrl']), 'mp4')
