@@ -112,7 +112,7 @@ vi.mock('../src/main/pocket48/pocket-auth', () => ({
   getRoomSenderProfile: async () => authMock.profile,
   getRoomPermissions: async (channelId: string) => {
     const permission = authMock.permissions[channelId]
-    return permission ? { sendText: true, roomRole: '0', followFlag: true, ...permission } : null
+    return permission ? { sendText: true, roomRole: '0', followFlag: true, hasMsgBoard: true, ...permission } : null
   },
   currentClientProfile: () => 'pocket48',
   expireStoredAuth: expireAuthMock,

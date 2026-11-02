@@ -173,7 +173,13 @@ route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤�
 
 同一判据也是成员详情卡房间入口的显隐条件（见 2.3）：解析不出频道的成员连入口都不给。
 
-⚠️ **不应将 `im/team/room/info` 的 `channelStatus` 作为关闭判据**。该字段语义不明：实测正常房间同样返回非 0（曾据「非 0 = 已关闭」过滤，导致全部房间被误过滤）；真正关闭的房间在 jump 阶段即解析不出频道，已由上述路径覆盖。`room/info` 现用于两处：未读检测的频道归属反查（`getRoomChannelOwner`）与小房间的暗号题面拉取（`getRoomQuestion`，见第 8 节）。
+⚠️ **不应将 `im/team/room/info` 的 `channelStatus` 作为关闭判据**。该字段语义不明：实测正常房间同样返回非 0（曾据「非 0 = 已关闭」过滤，导致全部房间被误过滤）；被回收的房间在 jump 阶段即解析不出频道，已由上述路径覆盖。`room/info` 现用于三处：未读检测的频道归属反查（`getRoomChannelOwner`）、小房间的暗号题面拉取（`getRoomQuestion`，见第 8 节）、房间关闭判定（`hasMsgBoard`，见下）。
+
+**关闭的第二种形态（前端提示用）**：房间关闭后 jump 不报错，而是**退到该 server 的直播频道**。实测「刘增艳」房间关闭后回包：`channelId=1247148`、`channelName=直播`、`functionType=USER_LIVE`、`hasMsgBoard=0`；关闭前是留言频道 `1311973`（「增锅的房间🍳」）。对照正常房间（李婷「听听窝」）`functionType=CHAT_CHANNEL`、`hasMsgBoard=1`、`channelName` 为房主自定义名——两个字段同时区分了「留言频道」与「退到直播频道」。这类房间仍留在左列，但 `team/message/list` 恒回空页——与「房间还在、只是没人说话」在消息层面完全同形。
+
+判据取 `room/info` 的 `channelInfo.hasMsgBoard`：`0` = 该频道没有留言板 = 房间已关闭。`loadRoomPermission` 把它归一成 `PocketRoomPermission.hasMsgBoard`（字段缺失为 `null`），经 `utils/room-status.ts` 的 `isRoomClosed` 收敛后，空态文案换成「该房间已关闭」；接口直接回错且服务端文案含「关闭」同样命中；其余情况（含字段缺失）一律退回「暂无消息」，绝不猜。
+
+两个不能用的字段：`channelStatus`（正常房间同样非 0，见上）、`userFunction`（房间级禁言也是全 `false`，那是「不让说话」不是「房间没了」）。这条判据只影响文案，不影响列表过滤与未读计数；关闭前遗留的旧频道未读由未读检测的 `reconcileRoomChannel` 校正清掉（见第 7 节）。
 
 ## 5. 消息拉取：倒序、游标、轮询
 

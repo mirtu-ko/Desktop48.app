@@ -289,6 +289,11 @@ export interface PocketRoomPermission {
   roomRole: string
   /** 是否已关注该房间所属成员 */
   followFlag: boolean
+  /**
+   * 该频道是否有房间留言板；null = 回包没给这个字段。
+   * 房间关闭后 jump 会退到直播频道（hasMsgBoard=0、消息恒空），据此区分「关闭」与「没人说话」
+   */
+  hasMsgBoard: boolean | null
 }
 
 /** team server 下的频道（seine 频道详情）：channelId + 服务端给的频道名 */

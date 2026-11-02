@@ -65,6 +65,13 @@ const PROBE_CONCURRENCY = 3
 const SMALL_DISCOVER_TTL = 5 * 60 * 1000
 /** 小房间主动发现的并发上限：按成员 server 分组，一次最多查 3 个 server */
 const SMALL_DISCOVER_CONCURRENCY = 3
+/** 频道连续探测失败达这个次数即作废重解析：成员换房 / 关房后旧频道会一直失败 */
+const CHANNEL_FAIL_LIMIT = 3
+/**
+ * 有未读却超过这么久没探测过的频道强制补探一次。
+ * 触发锚只在预览键变化时推进，频道停更后它就冻住了——未读会永久挂在旧计数上。
+ */
+const STALE_UNREAD_PROBE_MS = 30 * 60 * 1000
 
 /** 单个房间的未读快照 */
 interface UnreadRoomState {
@@ -83,6 +90,8 @@ interface StoredChannel {
   serverId: string
   channelId: string
   resolvedAt: number
+  /** 连续探测失败次数（探测成功即清零）；达 CHANNEL_FAIL_LIMIT 作废重解析 */
+  failCount?: number
 }
 
 /** 单个频道的未读（channelId 为键）：由消息列表数出，markRead 时归零 */
@@ -591,6 +600,101 @@ function dropSmallChannelByChannelId(channelId: string): boolean {
   return true
 }
 
+/**
+ * 作废成员的大房间频道归属（连续探测失败：成员换房 / 关房）。
+ * 置空占位且 resolvedAt=0，下一轮 ensureChannels 立即重解析，不必等占位 TTL。
+ */
+function invalidateBigChannel(userId: number): void {
+  const data = store()
+  const key = String(userId)
+  const channel = data.channels[key]
+  if (!channel?.channelId)
+    return
+  data.channels[key] = { serverId: '', channelId: '', resolvedAt: 0 }
+  clearChannelRuntimeState(channel.channelId)
+  data.unread = aggregate()
+  persist()
+  publish()
+  log('[pocket-unread] 大房间频道连续探测失败，作废重解析', key, channel.channelId)
+}
+
+/**
+ * 用实时解析结果校正大房间频道缓存。
+ *
+ * `server/jump` 才是权威，缓存只为省掉每轮重解析。成员换房 / 房间重建后 channelId 会变，
+ * 而缓存对非空频道终身复用——旧频道还能读到历史消息，探测不会失败，未读就一直算在它头上
+ * （角标挂着旧计数，房间里却是新频道的空页）。两个调用方：渲染层进房解析频道（IPC），
+ * 以及检测轮的补探（见 tick）——后者保证用户不点房间也能自愈。
+ * 解析回空 = 房间已关闭，同样按失效处理（未读再也读不到对应内容）。
+ */
+export function reconcileRoomChannel(
+  userId: number,
+  channel: { serverId?: string, channelId?: string },
+): void {
+  const data = store()
+  const key = String(userId)
+  const serverId = String(channel.serverId || '').trim()
+  const channelId = String(channel.channelId || '').trim()
+  const stored = data.channels[key]
+  // 未登记（未关注成员 / 临时房间）：没有缓存与未读可校正。别顺手写一条进去——
+  // 下一轮 ensureChannels 会把它当「已取关」删掉，白写一次盘还广播一轮
+  if (!stored)
+    return
+  // 解析成功但没有频道：房间已关闭 / 已不存在。未读对应的内容再也读不到，
+  // 留着只会变成点不掉的红点；置空占位交给 ensureChannels 按 TTL 重试
+  if (!serverId || !channelId) {
+    if (!stored.channelId)
+      return
+    data.channels[key] = { serverId: '', channelId: '', resolvedAt: Date.now() }
+    clearChannelRuntimeState(stored.channelId)
+    data.unread = aggregate()
+    persist()
+    publish()
+    log('[pocket-unread] 房间已不存在，清掉频道缓存与未读', key, stored.channelId)
+    return
+  }
+  if (stored?.channelId === channelId && stored.serverId === serverId)
+    return
+  if (stored?.channelId)
+    clearChannelRuntimeState(stored.channelId)
+  data.channels[key] = { serverId, channelId, resolvedAt: Date.now() }
+  data.unread = aggregate()
+  persist()
+  publish()
+  log('[pocket-unread] 房间频道已变更，未读改挂新频道', key, stored?.channelId || '-', '->', channelId)
+}
+
+/**
+ * 探测失败累计：大房间连续失败达上限即作废（旧频道不再终身复用）。
+ * 小房间另有「频道不存在」判据与自己的重发现路径，不在此列。
+ */
+function noteChannelFailure(channelId: string): boolean {
+  const data = store()
+  const hit = Object.entries(data.channels).find(([, channel]) => channel.channelId === channelId)
+  if (!hit)
+    return false
+  const [userId, channel] = hit
+  const failCount = (channel.failCount ?? 0) + 1
+  if (failCount < CHANNEL_FAIL_LIMIT) {
+    channel.failCount = failCount
+    return true
+  }
+  invalidateBigChannel(Number(userId))
+  return true
+}
+
+/** 探测成功即清零失败计数；返回是否真的写过（决定落盘） */
+function clearChannelFailure(channelId: string): boolean {
+  const data = store()
+  for (const channel of [...Object.values(data.channels), ...Object.values(data.smallChannels)]) {
+    if (channel.channelId === channelId && channel.failCount) {
+      delete channel.failCount
+      return true
+    }
+  }
+  return false
+}
+
 /** 待探测的房间：channelId + serverId + 本轮预览里的身份键（探测成功后用它推进触发锚） */
 interface ProbeCandidate {
   channelId: string
@@ -613,6 +717,8 @@ async function probeChannels(candidates: ProbeCandidate[]): Promise<boolean> {
       lastProbeAt.set(channelId, Date.now())
       try {
         const { messages } = await getRoomMessages(channelId, serverId, 0, 'member')
+        if (clearChannelFailure(channelId))
+          dirty = true
         const list = countableMessages(messages)
         const newest = list[0]
         const mark = data.readMarks[channelId]
@@ -643,6 +749,9 @@ async function probeChannels(candidates: ProbeCandidate[]): Promise<boolean> {
         // 否则每轮都要对着死频道重打一次请求
         if (isChannelGone(error) && dropSmallChannelByChannelId(channelId))
           continue
+        // 大房间：成员换房 / 关房后旧频道会一直失败，连续失败达上限即作废重解析
+        if (noteChannelFailure(channelId))
+          dirty = true
         log('[pocket-unread] 拉取房间消息失败（下一轮重试）', channelId, error)
       }
     }
@@ -839,6 +948,24 @@ async function tick(): Promise<void> {
         pending.set(channelId, { channelId, serverId, previewKey: '' })
     }
 
+    // 补探：频道停更后预览键不再变化，触发锚与计数一起冻住，未读会永久挂在旧值上。
+    // 有未读又久未探测的一律重探一次——频道已无内容时这一探会把计数自然归零。
+    // 同时记下这些频道：停更的另一种成因是成员换了房，只有 server/jump 看得出来（见下）。
+    const staleBefore = Date.now() - STALE_UNREAD_PROBE_MS
+    const staleChannels: string[] = []
+    for (const [channelId, entry] of Object.entries(data.unreadChannels)) {
+      if (entry.count <= 0 || pending.has(channelId))
+        continue
+      if ((lastProbeAt.get(channelId) ?? 0) > staleBefore)
+        continue
+      const serverId = channelServer.get(channelId)
+      // previewKey 留空：补探不推进触发锚，只重算计数
+      if (serverId) {
+        pending.set(channelId, { channelId, serverId, previewKey: '' })
+        staleChannels.push(channelId)
+      }
+    }
+
     const probes = [...pending.values()]
       .sort((a, b) => (lastProbeAt.get(a.channelId) ?? 0) - (lastProbeAt.get(b.channelId) ?? 0))
       .slice(0, MAX_MESSAGE_PROBES)
@@ -846,6 +973,21 @@ async function tick(): Promise<void> {
       debug('[pocket-unread] 本轮房间超出名额，顺延下一轮：', pending.size, '->', probes.length)
     if (probes.length && await probeChannels(probes))
       dirty = true
+
+    // 校对归属：旧频道只要还能读历史消息，探测就不会失败，失败自愈永远等不到。
+    // 补探本就是低频路径（多数轮次 0~1 个频道），一次 jump 换掉永久错挂的角标很划算。
+    // 必须排在 probe 之后：probe 会把旧频道重新写成「有未读」，校验晚一步才清得干净。
+    await Promise.all(staleChannels.map(async (channelId) => {
+      const ownerId = Number(channelOwner.get(channelId))
+      if (!ownerId)
+        return
+      try {
+        reconcileRoomChannel(ownerId, await getRoomChannel(ownerId))
+      }
+      catch (error) {
+        debug('[pocket-unread] 补探频道归属校对失败（下一轮再试）', channelId, error)
+      }
+    }))
 
     // 归属补全先于聚合：heal 处理 lastMsgList 里出现的未登记频道；discover 枚举频道列表，
     // 补上「还没人说话、所以不在 lastMsgList 里」的新建小房间。两者都可能改变成员→频道归属

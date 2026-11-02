@@ -7,7 +7,7 @@ import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/p
 import type { InputInstance } from 'element-plus'
 import type { Component, ComponentPublicInstance, VNode } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
-import { ArrowRight, ChatDotRound, Close, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import { ArrowRight, ChatDotRound, Check, Close, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
 import RoomEssenceDialog from '@renderer/components/rooms/RoomEssenceDialog.vue'
 import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
@@ -51,6 +51,7 @@ const {
   smallQuestionLoading,
   chatStatus,
   chatStatusText,
+  roomClosed,
   historyExhausted,
   loadingMore,
   essenceMessages,
@@ -492,20 +493,29 @@ function onRoomWrapDblClick(room: PocketRoom, event: MouseEvent) {
 /**
  * 进入大房间视图的收尾（点左列条目、点大房间页签共用）：进房即清该成员**大房间**的
  * 未读（Tab 级计数移交房间页），小房间未读保留、留给它自己的页签入口。
- * 首屏未加载成功（失败 / 空页）不清——用户没看到消息，角标留到重进或重试；
+ * 首屏加载失败不清——用户没看到消息，角标留到重进或重试。
+ * 首屏空页分两种：房间确已关闭（room/info 无留言板）或「全部消息」档也空，才当真没有内容；
+ * 「只看房主」档的空页可能只是房主没发过言，粉丝发言在「全部消息」里，不能凭它清零。
  * 进房前有未读时加载完成强制回底，避免「角标没了但新消息还在上面」；
  * 未读为 0 时交给消息流自身的贴底逻辑（同房重进不重拉，位置保留）。
  *
  * unreadCount 传条数：锚点要用它，而 markRoomRead 会乐观清零，之后只剩 0。
  */
 async function settleBigRoomEnter(userId: number, unreadCount: number) {
-  // 没看到消息：未读保留，留到下次进房成功再清
-  if (chatStatus.value !== 'ready' || messages.value.length === 0) {
+  // 加载失败：未读保留，留到下次进房成功再清
+  if (chatStatus.value !== 'ready') {
     unreadAnchor.value = null
     return
   }
-  await markRoomReadCapturing(userId, 'room', unreadCount)
-  if (unreadCount <= 0)
+  const hasContent = messages.value.length > 0
+  // 空页且确实没有可读内容：不画未读分割线（列表里无处可落），但角标要清
+  const emptyRoom = !hasContent && (roomClosed.value || messageScope.value === 'all')
+  if (!hasContent && !emptyRoom) {
+    unreadAnchor.value = null
+    return
+  }
+  await markRoomReadCapturing(userId, 'room', hasContent ? unreadCount : 0)
+  if (unreadCount <= 0 || !hasContent)
     return
   // 收尾期间已切房：不能把新房间的列表拽到底部
   if (selectedUserId.value !== userId)
@@ -830,12 +840,14 @@ const draftInput = ref<InputInstance | null>(null)
 /** 输入条可见条件：已登录 + 选中房间 + 消息就绪 + 不在小房间暗号锁定态。
  * 连接状态不影响可见性——未连接也要把输入条摆出来，点它才引导连接。
  * 房间禁言也不隐藏：要让用户看到「为什么说不了话」，而不是输入框凭空消失。
+ * 房间已关闭则隐藏：没有留言板，禁言文案（「房主已开启全员禁言」）在这里是错的。
  */
 const composerVisible = computed(() =>
   loggedIn.value
   && !!selectedRoom.value
   && chatStatus.value === 'ready'
-  && !smallLocked.value,
+  && !smallLocked.value
+  && !roomClosed.value,
 )
 
 /** 房主开了房间级禁言（room/info 的 userFunction.sendText === false） */
@@ -1135,6 +1147,51 @@ function onMenuPick(key: string) {
   void runCopy(key as PocketRoomCopyKey, target.message)
 }
 
+// ===== 左列房间条目的未读出口 =====
+// 进房清零要求首屏消息加载成功（见 settleBigRoomEnter）：频道失效 / 空页时那条路走不通，
+// 角标会一直挂着。右键条目直接标已读，是这类房间当前唯一的手动出口。
+
+const roomMenu = ref<{ x: number, y: number, room: PocketRoom } | null>(null)
+
+/** 按未读分部给出口：大 / 小房间是两个独立频道，进哪个清哪个 */
+const roomMenuItems = computed<RoomMenuItem[]>(() => {
+  const target = roomMenu.value
+  if (!target)
+    return []
+  const unread = unreadChannelOf(target.room.userId)
+  const items: RoomMenuItem[] = []
+  if (unread.big > 0)
+    items.push({ key: 'read-room', label: '大房间标为已读', icon: Check })
+  if (unread.small > 0)
+    items.push({ key: 'read-small', label: '小房间标为已读', icon: Check })
+  return items
+})
+
+/** 没有未读就不拦原生菜单：这个菜单只有「标已读」一件事 */
+function onRoomContextMenu(room: PocketRoom, event: MouseEvent) {
+  closeRoomMenu()
+  const unread = unreadChannelOf(room.userId)
+  if (!unread.big && !unread.small)
+    return
+  event.preventDefault()
+  closeMenu()
+  roomMenu.value = { x: event.clientX, y: event.clientY, room }
+}
+
+function closeRoomMenu() {
+  roomMenu.value = null
+}
+
+/** 清不掉时主进程广播会把角标打回来，用户直接看到真实结果，这里不做「成功」推断 */
+async function onRoomMenuPick(key: string) {
+  const target = roomMenu.value
+  roomMenu.value = null
+  if (!target)
+    return
+  const channel = key === 'read-small' ? 'small' : 'room'
+  await markRoomRead(target.room.userId, channel)
+}
+
 // 页面切走（keep-alive 只停用不销毁）：右键菜单挂在 body 上，不关会盖住别的页面
 onDeactivated(resetCardState)
 
@@ -1151,6 +1208,7 @@ function resetCardState() {
     arrivingTimer = undefined
   }
   closeMenu()
+  closeRoomMenu()
 }
 
 // ===== 引用块 =====
@@ -1372,6 +1430,7 @@ onMounted(() => {
             class="room-wrap"
             :class="{ 'is-temp': room.temporary }"
             @dblclick="onRoomWrapDblClick(room, $event)"
+            @contextmenu="onRoomContextMenu(room, $event)"
           >
             <button
               type="button"
@@ -1439,6 +1498,16 @@ onMounted(() => {
               </el-icon>
             </button>
           </div>
+
+          <!-- 未读出口（Teleport 到 body，定位在光标处）：这类房间进房清不掉，只能手动标已读 -->
+          <RoomMessageMenu
+            v-if="roomMenu"
+            :x="roomMenu.x"
+            :y="roomMenu.y"
+            :items="roomMenuItems"
+            @pick="onRoomMenuPick"
+            @close="closeRoomMenu"
+          />
         </div>
 
         <div v-else-if="!loading" class="side-empty">
@@ -1866,6 +1935,12 @@ onMounted(() => {
                 </el-icon>
                 <template v-if="chatStatus === 'loading'">
                   <p>正在加载房间消息…</p>
+                </template>
+                <template v-else-if="roomClosed">
+                  <p>该房间已关闭</p>
+                  <p class="msg-empty-hint">
+                    房间关闭后不再有新消息
+                  </p>
                 </template>
                 <template v-else>
                   <p>暂无消息</p>

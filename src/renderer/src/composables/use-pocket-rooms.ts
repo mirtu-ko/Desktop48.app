@@ -37,8 +37,9 @@ import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/store
 import { pocketAuthState, refreshPocketAuthState } from '@renderer/stores/pocket-auth'
 import { latestUnreadTimeOf, unreadCountOf, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import { debugLog } from '@renderer/utils/debug'
-
 import { isPlaceholderText, liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview, normalizePocketRoomQChatMessage } from '@renderer/utils/pocket-room-message'
+
+import { isRoomClosed } from '@renderer/utils/room-status'
 import { isSmallRoomUnlocked, markSmallRoomUnlocked } from '@renderer/utils/small-room-unlock'
 import Tools from '@renderer/utils/tools'
 import { useIntervalFn } from '@vueuse/core'
@@ -206,6 +207,12 @@ export function usePocketRooms() {
   const canSpeak = computed(() => roomPermission.value?.sendText !== false)
   /** 正在拉权限的频道 id：切房后旧回包不得覆盖新房间 */
   let permissionChannelId = ''
+  /**
+   * 房间已关闭：`room/info` 回包无留言板（hasMsgBoard=0）或直接回错时置真。
+   * 关闭的房间 jump 会退到该 server 的直播频道，消息恒为空页——与「没人说话」同形，
+   * 只有这个接口能分辨，消息区据此换掉「暂无消息」的文案。
+   */
+  const roomClosed = ref(false)
   /**
    * 用户是否已确认「连接云信会挤掉其他登录端」。默认 false：进房只跑 HTTP 轮询，
    * 不建连、不订阅；点聊天框确认后置位，登出即复位。
@@ -1300,14 +1307,20 @@ export function usePocketRooms() {
   async function loadRoomPermission(channelId: string): Promise<void> {
     permissionChannelId = channelId
     roomPermission.value = null
+    roomClosed.value = false
     try {
       const permission = await window.mainAPI.pocketGetRoomPermissions(channelId)
       // 回包期间已切房：旧频道的权限不得贴到新房间的输入框上
       if (permissionChannelId !== channelId)
         return
       roomPermission.value = permission
+      // 无留言板 = 房间已关闭（jump 退到了该 server 的直播频道，消息永远为空）
+      roomClosed.value = isRoomClosed(permission?.hasMsgBoard ?? null)
     }
     catch (error) {
+      // 也有的关闭形态是直接回错，文案由服务端给
+      if (permissionChannelId === channelId)
+        roomClosed.value = isRoomClosed(null, error instanceof Error ? error.message : String(error))
       debugLog('pocket-rooms', '房间发言权限拉取失败', error)
     }
   }
@@ -1726,6 +1739,7 @@ export function usePocketRooms() {
     smallQuestionLoading,
     chatStatus,
     chatStatusText,
+    roomClosed,
     historyExhausted,
     loadingMore,
     essenceMessages,

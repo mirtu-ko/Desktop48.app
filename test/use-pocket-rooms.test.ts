@@ -1969,7 +1969,7 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     const { api } = await setup({
       ...sendFixture(),
       // 实测口径：房主开全员禁言时 sendText=false、cdTime=30
-      roomPermissions: { 'ch-10001': { sendText: false, cdTime: 30, roomRole: '0', followFlag: true } },
+      roomPermissions: { 'ch-10001': { sendText: false, cdTime: 30, roomRole: '0', followFlag: true, hasMsgBoard: true } },
     })
     await api.load()
     await api.selectRoom(10001)
@@ -1980,6 +1980,28 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await api.connectRoomQChat()
     expect(await api.sendMessage('禁言房间')).toEqual({ ok: false, message: '房主已开启全员禁言，暂时不能发言' })
     expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
+  })
+
+  it('房间已关闭（回包无留言板）：roomClosed=true，空态换成关闭文案', async () => {
+    const { api } = await setup({
+      ...sendFixture(),
+      // 实测口径：房间关闭后 jump 退到直播频道，hasMsgBoard=0、消息恒为空页
+      roomPermissions: { 'ch-10001': { sendText: false, cdTime: 30, roomRole: '0', followFlag: true, hasMsgBoard: false } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.roomClosed.value).toBe(true)
+  })
+
+  it('回包缺 hasMsgBoard（协议变动）：不判关闭，退回「暂无消息」', async () => {
+    const { api } = await setup(sendFixture())
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.roomClosed.value).toBe(false)
   })
 
   it('发言权限未知（接口失败 / 未取到）：不禁用输入，交给服务端兜底', async () => {
@@ -2033,7 +2055,7 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
   it('冷却跟服务端 cdTime 走：房间要求 10s 时，本地下限过了仍不可发', async () => {
     const { api } = await setup({
       ...sendFixture(),
-      roomPermissions: { 'ch-10001': { sendText: true, cdTime: 10, roomRole: '0', followFlag: true } },
+      roomPermissions: { 'ch-10001': { sendText: true, cdTime: 10, roomRole: '0', followFlag: true, hasMsgBoard: true } },
     })
     await api.load()
     await api.selectRoom(10001)
