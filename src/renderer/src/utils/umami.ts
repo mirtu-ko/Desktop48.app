@@ -48,17 +48,80 @@ function currentHashPath(): string {
   return sanitizePagePath(window.location.hash.slice(1) || '/')
 }
 
-/** 上报一次页面访问。path / referrer 不含 '#'，无上一页时 referrer 留空 */
-export function trackPage(path: string, referrer?: string): void {
-  // 离线 / CDN 失败时没有 window，静默跳过
-  if (!trackingEnabled || typeof window === 'undefined')
-    return
+/** 播放会话从未出画时的时长分桶：与「出画后不足 1 分钟」区分开 */
+export const DURATION_BUCKET_FAILED = 'failed'
+
+/** 一条待发送的上报 */
+interface PendingPayload {
+  name?: string
+  data?: Record<string, string | number>
+  url: string
+  referrer: string
+}
+
+// CDN 脚本未就绪时的暂存队列：就绪后补发，避免启动期事件被静默丢弃
+const PENDING_LIMIT = 50
+const FLUSH_INTERVAL_MS = 2000
+const FLUSH_BACKOFF_MS = 30000
+const FLUSH_BACKOFF_AFTER = 10
+
+let pending: PendingPayload[] = []
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+let flushAttempts = 0
+
+function send(payload: PendingPayload): void {
   window.umami?.track(props => ({
     ...props,
-    url: `/#${sanitizePagePath(path)}`,
-    referrer: referrer ? `/#${sanitizePagePath(referrer)}` : '',
+    ...payload,
     hostname: REPORT_HOSTNAME,
   }))
+}
+
+function flushPending(): void {
+  flushTimer = null
+  if (typeof window === 'undefined' || !window.umami || pending.length === 0)
+    return
+  const queued = pending
+  pending = []
+  flushAttempts = 0
+  for (const item of queued)
+    send(item)
+}
+
+// 轮询检测 window.umami 是否就绪：CSP 的 script-src 不含 unsafe-inline，
+// 没法用内联 onload 派发事件，只能定时探测
+function scheduleFlush(): void {
+  if (flushTimer !== null)
+    return
+  const delay = flushAttempts >= FLUSH_BACKOFF_AFTER ? FLUSH_BACKOFF_MS : FLUSH_INTERVAL_MS
+  flushTimer = setTimeout(() => {
+    flushAttempts += 1
+    flushPending()
+    if (pending.length > 0)
+      scheduleFlush()
+  }, delay)
+}
+
+function enqueue(payload: PendingPayload): void {
+  if (pending.length >= PENDING_LIMIT)
+    pending.shift()
+  pending.push(payload)
+  scheduleFlush()
+}
+
+/** 上报一次页面访问。path / referrer 不含 '#'，无上一页时 referrer 留空 */
+export function trackPage(path: string, referrer?: string): void {
+  if (!trackingEnabled || typeof window === 'undefined')
+    return
+  const payload: PendingPayload = {
+    url: `/#${sanitizePagePath(path)}`,
+    referrer: referrer ? `/#${sanitizePagePath(referrer)}` : '',
+  }
+  if (!window.umami) {
+    enqueue(payload)
+    return
+  }
+  send(payload)
 }
 
 /** 上报一条自定义事件。空串 / undefined 属性剔除，剔空后不带 data 字段 */
@@ -68,14 +131,17 @@ export function trackEvent(name: string, data?: Record<string, string | number>)
   const payload = Object.fromEntries(
     Object.entries(data ?? {}).filter(([, value]) => value !== '' && value !== undefined),
   )
-  window.umami?.track(props => ({
-    ...props,
+  const item: PendingPayload = {
     name,
     ...(Object.keys(payload).length > 0 ? { data: payload } : {}),
     url: `/#${currentHashPath()}`,
     referrer: '',
-    hostname: REPORT_HOSTNAME,
-  }))
+  }
+  if (!window.umami) {
+    enqueue(item)
+    return
+  }
+  send(item)
 }
 
 /** 观看时长只上报分桶：事件没有时长概念，分桶足够回答「点开就走」的比例 */

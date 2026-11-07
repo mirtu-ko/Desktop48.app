@@ -10,6 +10,7 @@
  * 成员树见 main/domain/member-tree.ts（buildMemberTree）。
  */
 import type { AppConfig, ConfigKey } from '@common/app-config'
+import type { FeedbackInput, FeedbackMetaResponse } from '@common/feedback'
 import type { LiveDanmaku } from '@common/live-danmaku'
 import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
 import type { PocketClientProfileId } from '@common/pocket-client-profile'
@@ -487,6 +488,10 @@ interface StaticIpcInvokeMap {
   netRequest: InvokeSpec<[options: NetRequestOptions], NetResponse>
   /** 网络诊断：对核心服务域名逐一发轻量 GET，返回状态码/耗时/失败原因（对端：main/net-diagnose.ts） */
   netDiagnose: InvokeSpec<[], NetDiagnoseItem[]>
+  /** 反馈用环境摘要与通道可用性：版本/平台/身份档/登录态，不含账号与内容（对端：main/feedback.ts） */
+  feedbackMeta: InvokeSpec<[], FeedbackMetaResponse>
+  /** 提交问题反馈；校验失败或端点未配置时 reject，成功无返回（对端：main/feedback.ts） */
+  submitFeedback: InvokeSpec<[input: FeedbackInput], void>
   saveMemberData: InvokeSpec<[content: Partial<MemberDataContent>], { ok: true }>
   getAllMembers: InvokeSpec<[], AllMembersPayload>
   hasMembers: InvokeSpec<[], boolean>

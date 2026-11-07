@@ -18,9 +18,10 @@ import { danmakuPlacement, ensureDanmakuPlacement, setDanmakuPlacement } from '@
 import { pocketAuthState } from '@renderer/stores/pocket-auth'
 import { debugLog } from '@renderer/utils/debug'
 import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
+import { flushPlayDuration, markPlayDurationStarted } from '@renderer/utils/play-duration'
 import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
-import { durationBucket, trackEvent } from '@renderer/utils/umami'
+import { trackEvent } from '@renderer/utils/umami'
 import { formatViewNum } from '@renderer/utils/view-num'
 
 import { useDocumentVisibility, useEventListener, useIntervalFn } from '@vueuse/core'
@@ -69,10 +70,7 @@ const hovered = ref(false)
 // 卸载标记：置位后所有在途异步回包直接丢弃
 const isManuallyUnmounted = ref(false)
 
-// Umami：一场直播只计一次成功播放（首次 canplay）；观看时长以首次出画为起点，
-// 卸载时按分桶上报（durationBucket），不打精确秒数
 let livePlayTracked = false
-let livePlayStartedAt = 0
 
 const isRadio = computed(() => props.liveType !== 1)
 
@@ -198,7 +196,7 @@ const showDanmaku = computed(() => hasDanmakuRoom.value && danmakuEnabled.value)
 /** 弹幕开关：翻转并上报使用率（只记用户主动切换，不记初始状态） */
 function toggleDanmaku() {
   danmakuEnabled.value = !danmakuEnabled.value
-  trackEvent('danmaku:toggle', { enabled: danmakuEnabled.value ? 1 : 0 })
+  trackEvent('danmaku:toggle', { enabled: danmakuEnabled.value ? 'on' : 'off' })
 }
 
 // ── 互动榜单（口袋 LIVEUPDATE 消息）─────────────────────────────
@@ -361,7 +359,7 @@ function onPlayerCanPlay() {
   // 属性也计费，只留标题
   if (!livePlayTracked) {
     livePlayTracked = true
-    livePlayStartedAt = Date.now()
+    markPlayDurationStarted()
     trackEvent('live:play', { title: realName.value })
   }
   if (!isRadio.value)
@@ -382,7 +380,7 @@ function handleStreamError(reason: string, isNetwork: boolean) {
   if (liveEnded.value)
     return
   // 网络类错误随后会自动重试，这里只记发生频率
-  trackEvent('player:error', { type: 'live', network: isNetwork ? 1 : 0 })
+  trackEvent('player:error', { type: 'live', network: isNetwork ? 'net' : 'other' })
   if (isNetwork) {
     debugLog('live', `①直播:网络错误（${reason}），保持 loading 并重试`)
     mediaLoading.value = true
@@ -567,10 +565,8 @@ onUnmounted(() => {
   }
   player.destroyPlayer()
   player.resetMediaElement()
-  // 关窗即卸载，靠 sendBeacon 送达
-  if (livePlayTracked) {
-    trackEvent('play:duration', { type: 'live', bucket: durationBucket((Date.now() - livePlayStartedAt) / 1000) })
-  }
+  // 组件真被卸载时兜底上报；窗口销毁走 FloatWindowApp 的 flushPlayDuration
+  flushPlayDuration()
   releaseSleepBlocker()
 })
 </script>

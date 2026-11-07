@@ -1,3 +1,4 @@
+import type { FeedbackInput } from '@common/feedback'
 import type { NetRequestOptions, NetResponse } from '@preload/ipc-contract'
 /**
  * 系统服务类 IPC 通道注册：路径/对话框/网络请求/ffmpeg 二进制检查。
@@ -14,6 +15,7 @@ import { app, dialog, net, shell } from 'electron'
 import { isAllowedUrl } from '../allowed-hosts'
 import { isPathInAllowedRoots } from '../allowed-path'
 import { Database } from '../database'
+import { collectFeedbackMeta, isFeedbackEndpointReady, submitFeedback } from '../feedback'
 import { inspectFfmpegDir } from '../ffmpeg/ffmpeg-process'
 import { log } from '../logger'
 import { diagnoseTargets } from '../net-diagnose'
@@ -197,4 +199,11 @@ export function registerSystemIPC(): void {
 
   // 网络诊断：对核心服务域名逐一轻量探测（设置页「网络诊断」），目标清单在 net-diagnose.ts
   handleTraced('netDiagnose', async () => diagnoseTargets())
+
+  // 问题反馈：环境摘要由主进程采集，上报地址不经过渲染层（见 feedback.ts 的边界说明）
+  handleTraced('feedbackMeta', () => ({
+    meta: collectFeedbackMeta(),
+    endpointReady: isFeedbackEndpointReady(),
+  }))
+  handleTraced('submitFeedback', (_event: IpcMainInvokeEvent, input: FeedbackInput) => submitFeedback(input))
 }

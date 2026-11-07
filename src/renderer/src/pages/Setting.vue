@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import type { FeedbackMetaResponse } from '@common/feedback'
 import type { NetDiagnoseItem, PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
 import type { InputInstance } from 'element-plus'
+import { FEEDBACK_CONTACT_MAX, FEEDBACK_CONTENT_MAX, formatFeedbackMeta } from '@common/feedback'
 import { DEFAULT_POCKET_CLIENT_PROFILE, POCKET_CLIENT_PROFILE_OPTIONS, pocketClientProfileOption } from '@common/pocket-client-profile'
-import { Connection, Cpu, Document, Download, Folder, Hide, Lock, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
+import { ChatDotRound, Connection, Cpu, Document, Download, Folder, Hide, Lock, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
@@ -115,6 +117,7 @@ onMounted(async () => {
   await refreshPocketAuthState()
   // 已登录则静默拉取一次口袋关注（friends/id 一次性返回，无分页成本）
   syncPocketFollowIfStale(5 * 60 * 1000)
+  await loadFeedbackMeta()
 })
 
 /** FFmpeg 行状态徽章：可用 / 未配置 / 目录不存在 / 缺少 ffmpeg */
@@ -219,6 +222,65 @@ async function handleCopyDiagnose() {
   ElMessage({ message: '诊断结果已复制，可粘贴发给开发者', type: 'success' })
 }
 
+// ===== 问题反馈 =====
+// 报文的采集与发送都在主进程（main/feedback.ts）：渲染层只提交用户输入，
+// 环境摘要由主进程补齐，上报地址也不经过这里。
+
+/** 环境摘要与上报通道可用性；端点未配置时 endpointReady=false，提交按钮禁用 */
+const feedbackState = ref<FeedbackMetaResponse | null>(null)
+/** 反馈弹窗：卡片只放入口，输入区在弹窗内，避免设置页被一块长表单撑开 */
+const feedbackDialogVisible = ref(false)
+const feedbackContent = ref('')
+const feedbackContact = ref('')
+const feedbackSubmitting = ref(false)
+
+const feedbackReady = computed(() => feedbackState.value?.endpointReady ?? false)
+/** 剩余可写字数：负数不展示（超长由主进程校验兜底并回报具体原因） */
+const feedbackRemaining = computed(() => FEEDBACK_CONTENT_MAX - feedbackContent.value.length)
+
+async function loadFeedbackMeta() {
+  try {
+    feedbackState.value = await window.mainAPI.feedbackMeta()
+  }
+  catch (error) {
+    console.error('[feedback] 环境摘要读取失败:', error)
+  }
+}
+
+/** 复制环境摘要：不依赖上报通道，端点未配置时仍可用于其它反馈渠道 */
+async function handleCopyFeedbackMeta() {
+  const state = feedbackState.value
+  if (!state)
+    return
+  await navigator.clipboard.writeText(formatFeedbackMeta(state.meta))
+  ElMessage({ message: '环境信息已复制', type: 'success' })
+}
+
+async function handleSubmitFeedback() {
+  if (!feedbackContent.value.trim()) {
+    ElMessage.warning('请先填写问题描述')
+    return
+  }
+  feedbackSubmitting.value = true
+  try {
+    await window.mainAPI.submitFeedback({
+      content: feedbackContent.value,
+      contact: feedbackContact.value,
+    })
+    ElMessage({ message: '反馈已提交，感谢你的反馈', type: 'success' })
+    feedbackContent.value = ''
+    feedbackContact.value = ''
+    feedbackDialogVisible.value = false
+  }
+  catch (error) {
+    // 主进程的报错已按用户可读口径组织（校验失败 / 超时 / HTTP 状态码）
+    ElMessage.error(error instanceof Error ? error.message : '提交失败，请稍后重试')
+  }
+  finally {
+    feedbackSubmitting.value = false
+  }
+}
+
 /** 更新行的描述文案：一行说清当前处于什么状态、下一步该做什么 */
 const updaterDesc = computed(() => {
   const s = updaterState.value
@@ -304,7 +366,10 @@ const downloadSizeText = computed(() => {
     : `${formatBytes(d.transferred)} · ${speed}`
 })
 
-/** 手动下载兜底地址；正常情况下主进程会在 available 态带上镜像安装包直链。 */
+/**
+ * 手动下载兜底地址：官方下载页。
+ * 正常情况下主进程会在 available 态带上镜像安装包直链，这里只兜住缺 url 的情形。
+ */
 const MANUAL_RELEASE_PAGE_URL = 'https://48.v2ing.com/'
 
 /** available 态是否只能跳转手动下载（macOS 当前走该链路） */
@@ -1186,6 +1251,95 @@ function hideLogo(event: Event) {
         </div>
       </section>
 
+      <!-- 问题反馈：入口卡；输入区在弹窗内，避免设置页被一块长表单撑开 -->
+      <section class="setting-card glass-card">
+        <div class="setting-row">
+          <span
+            class="row-icon icon-tile"
+            :style="{ '--tile-color': 'var(--color-setting)' }"
+          >
+            <el-icon><ChatDotRound /></el-icon>
+          </span>
+          <div class="row-text row-text--fluid">
+            <div class="row-title">
+              问题反馈
+            </div>
+            <div class="row-desc">
+              描述使用中遇到的问题，提交时会附带版本与运行环境；不收集账号凭据、手机号与聊天内容
+            </div>
+          </div>
+          <div class="row-actions">
+            <el-button
+              type="primary"
+              @click="feedbackDialogVisible = true"
+            >
+              写反馈
+            </el-button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 反馈弹窗：点遮罩不关闭（正文可能较长，误触会丢掉已写内容） -->
+      <el-dialog
+        v-model="feedbackDialogVisible"
+        title="问题反馈"
+        width="520px"
+        append-to-body
+        :close-on-click-modal="false"
+        :close-on-press-escape="!feedbackSubmitting"
+      >
+        <div class="feedback-form">
+          <p class="feedback-intro">
+            提交时会附带应用版本、运行平台与客户端身份档，便于定位问题。请勿填写账号密码或他人隐私信息。
+          </p>
+          <el-input
+            v-model="feedbackContent"
+            type="textarea"
+            :rows="6"
+            :maxlength="FEEDBACK_CONTENT_MAX"
+            resize="none"
+            placeholder="发生了什么？例如：进入某成员房间后消息不再刷新，重启应用可恢复"
+          />
+          <div class="feedback-hint">
+            还可输入 {{ feedbackRemaining }} 字
+          </div>
+          <el-input
+            v-model="feedbackContact"
+            :maxlength="FEEDBACK_CONTACT_MAX"
+            placeholder="联系方式（可选，便于回复你）"
+          />
+          <p v-if="!feedbackReady" class="feedback-warn">
+            上报服务尚未配置，暂无法提交；可先复制环境信息通过其它渠道反馈。
+          </p>
+        </div>
+        <template #footer>
+          <div class="feedback-dialog-footer">
+            <el-button
+              :disabled="!feedbackState"
+              @click="handleCopyFeedbackMeta"
+            >
+              复制环境信息
+            </el-button>
+            <div class="feedback-dialog-actions">
+              <el-button
+                :disabled="feedbackSubmitting"
+                @click="feedbackDialogVisible = false"
+              >
+                取消
+              </el-button>
+              <el-button
+                type="primary"
+                :disabled="!feedbackReady"
+                :loading="feedbackSubmitting"
+                @click="handleSubmitFeedback"
+              >
+                提交
+              </el-button>
+            </div>
+          </div>
+        </template>
+      </el-dialog>
+
       <!-- 权利声明 -->
       <section class="setting-card glass-card">
         <div class="setting-row">
@@ -1805,6 +1959,50 @@ function hideLogo(event: Event) {
   margin-top: 2px;
   color: var(--el-text-color-placeholder);
   word-break: break-all;
+}
+
+/* 问题反馈弹窗：说明、输入区、字数提示与页脚 */
+.feedback-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.feedback-intro {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
+}
+
+.feedback-hint {
+  /* 紧贴文本框底部：负外边距抵消 flex gap，避免字数提示看起来另起一块 */
+  margin-top: -4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+  text-align: right;
+}
+
+.feedback-warn {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-color-warning);
+}
+
+/* 页脚：复制环境信息靠左，取消与提交靠右 */
+.feedback-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.feedback-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 /* 新版本提示块：available 态展开版本对比与更新说明，downloading 态接棒显示进度 */

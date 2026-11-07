@@ -1,4 +1,5 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
+import type { FeedbackInput } from '@common/feedback'
 import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketClientProfileId, PocketDanmakuBatch, PocketRoomBatch, PocketRoomReplyTarget, PocketUnreadBatch, RoomAlbumDownloadProgress, RoomAlbumDownloadSource, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
@@ -37,6 +38,8 @@ const api = {
   // 对端：main/ipc/register-system-ipc.ts，走 Electron net 模块 + 域名白名单
   netRequest: (options: NetRequestOptions) => invokeIpc('netRequest', options),
   netDiagnose: () => invokeIpc('netDiagnose'),
+  feedbackMeta: () => invokeIpc('feedbackMeta'),
+  submitFeedback: (input: FeedbackInput) => invokeIpc('submitFeedback', input),
 
   // ===== 成员与屏蔽名单 =====
   // 对端：main/ipc/register-database-ipc.ts
