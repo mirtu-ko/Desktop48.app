@@ -38,10 +38,16 @@ const MIRROR_BASE = 'https://dl.v2ing.com'
 /** 发布脚本写的版本清单（含版本号、更新说明、各平台文件名），主页也在读它。 */
 const MIRROR_MANIFEST_URL = `${MIRROR_BASE}/latest.json`
 
-/** 镜像不可用时的手动下载出路：官网下载区，比 GitHub Release 页面更适合大陆用户。 */
+/**
+ * 官网下载页：镜像清单里没有当前架构安装包时的兜底，也是 GitHub 来源的唯一落地页。
+ * 大陆网络下 GitHub Release 页可达性不稳定，因此即使版本是从 GitHub 判出来的，也只把用户送去官网。
+ */
 const DOWNLOAD_PAGE_URL = 'https://48.v2ing.com/'
 
-/** GitHub 兜底用的仓库地址；仓库变更时需同步 electron-builder 的 publish 配置。 */
+/**
+ * GitHub 仓库地址；只用于版本号探测（API 限流时读 Release 页面解析 tag），不产出下载地址。
+ * 仓库变更时需同步 electron-builder 的 publish 配置。
+ */
 const GITHUB_OWNER = 'mirtu-ko'
 const GITHUB_REPO = 'Desktop48.app'
 const GITHUB_RELEASE_PAGE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`
@@ -153,7 +159,10 @@ function isNewerVersion(next: string, current: string): boolean {
   return false
 }
 
-/** 手动检查的归一结果：版本、说明、下载入口。镜像与 GitHub 两条来源都要交出这三件事。 */
+/**
+ * 手动检查的归一结果：版本、说明与下载入口。
+ * 镜像来源给安装包直链；GitHub 来源只给官网下载页（GitHub 页面不作为跳转目标）。
+ */
 interface ReleaseInfo {
   version: string
   releaseNotes: string
@@ -247,7 +256,8 @@ async function fetchReleaseFromGithub(): Promise<ReleaseInfo> {
   return {
     version: readVersion(release.tag_name, 'GitHub Release'),
     releaseNotes: release.body ?? '',
-    url: GITHUB_RELEASE_PAGE_URL,
+    // 版本虽由 GitHub 判出，下载仍回官网：GitHub 页面在大陆网络下不稳定，且不便引导安装
+    url: DOWNLOAD_PAGE_URL,
   }
 }
 

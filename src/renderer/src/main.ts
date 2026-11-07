@@ -29,8 +29,7 @@ if (window.location.hash.slice(1).startsWith(FLOAT_WINDOW_HASH_PATH)) {
   const floatApp = createApp(FloatWindowApp)
   installElement(floatApp)
   floatApp.mount('#app')
-  // 播放窗没有 router，打开即视作一次页面访问（记到 /#/float 下，便于看播放窗打开量）
-  trackPage(window.location.hash.slice(1) || FLOAT_WINDOW_HASH_PATH)
+  trackPage(FLOAT_WINDOW_HASH_PATH)
 }
 else {
   const app = createApp(App)

@@ -11,9 +11,10 @@ import { loadLiveDetail } from '@renderer/services/live-detail'
 import { danmakuPlacement, ensureDanmakuPlacement, setDanmakuPlacement } from '@renderer/stores/danmaku-placement'
 import { debugLog } from '@renderer/utils/debug'
 import { resolveCarouselImages } from '@renderer/utils/live-stream'
+import { flushPlayDuration, markPlayDurationStarted } from '@renderer/utils/play-duration'
 import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
-import { durationBucket, trackEvent } from '@renderer/utils/umami'
+import { trackEvent } from '@renderer/utils/umami'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -48,10 +49,7 @@ const userAvatar = ref('')
 // 观看人数：取自回放详情 onlineNum，供「全部弹幕」面板头部展示（公演回放无此数据）
 const onlineNumber = ref(0)
 
-// Umami：一次会话只计一次成功起播（首次元数据就绪）；时长以首次起播为起点，
-// 卸载时按分桶上报（durationBucket），不打精确秒数
 let playbackTracked = false
-let playbackStartedAt = 0
 
 // 弹幕展示模式：实时堆叠 | 全部面板
 type DanmakuMode = 'live' | 'all'
@@ -208,7 +206,7 @@ const {
     // 属性也计费，只留标题
     if (!playbackTracked) {
       playbackTracked = true
-      playbackStartedAt = Date.now()
+      markPlayDurationStarted()
       trackEvent('playback:play', { title: realName.value })
     }
     debugLog('playback', `④元数据就绪: 刷新画面尺寸${isRadio.value ? '（电台无尺寸）' : ''} → 加载弹幕`)
@@ -330,9 +328,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (playbackTracked) {
-    trackEvent('play:duration', { type: 'playback', bucket: durationBucket((Date.now() - playbackStartedAt) / 1000) })
-  }
+  flushPlayDuration()
   debugLog('playback', `⑤录播会话结束（liveId=${props.liveId}）: 销毁播放引擎 → 释放防休眠`)
   destroyPlayer()
   releaseSleepBlocker()

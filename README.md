@@ -39,20 +39,13 @@ $ npm run build:linux
 
 ![Desktop48 截图](docs/screenshot.png)
 
-## 🍎 macOS 常见问题
-
-### 打开提示"已损坏，无法打开"
-
-**临时解决**：
-
-```bash
-# 移除 quarantine 属性
-sudo xattr -rd com.apple.quarantine /Applications/Desktop48.app
-```
-
 ## 📊 Telemetry
 
 This app includes anonymous usage stats via [Umami](https://umami.is) (open source, cookie-free). Collected: in-app page routes (e.g. `/#/setting`) and generic device fields (OS, screen, language). Never collected: account credentials, chat or room messages, or anything that can identify you. No cookies, no cross-app tracking.
+
+## 💬 Feedback
+
+The feedback form in Settings sends what you write, an optional contact, and a few environment fields (app version, OS and architecture, Electron version, locale, client profile, whether you are signed in) to our own endpoint — only when you press submit. Never collected: account credentials, phone number, chat or room messages. IP addresses are stored only as a salted hash, used for rate limiting.
 
 ## 📄 License
 

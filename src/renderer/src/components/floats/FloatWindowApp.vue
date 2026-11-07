@@ -5,6 +5,7 @@ import LivePlayer from '@renderer/components/player/LivePlayer.vue'
 import PlaybackPlayer from '@renderer/components/player/PlaybackPlayer.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import EventBus from '@renderer/services/event-bus'
+import { flushPlayDuration, openPlayDuration } from '@renderer/utils/play-duration'
 import { useEventListener } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue'
 
@@ -24,6 +25,7 @@ function parseHash(): { kind: FloatPlayerKind, liveId: string } {
 }
 
 const { kind, liveId } = parseHash()
+openPlayDuration(kind)
 
 // undefined=载荷加载中；null=主进程已查不到，窗口信息失效
 const payload = ref<FloatPlayerPayload | null | undefined>(undefined)
@@ -69,6 +71,8 @@ const compact = computed(() => viewportWidth.value < 420)
 
 /** 窗口控制通道按 event.sender 定位，作用于本窗而非主窗口 */
 function onClose() {
+  // 先上报观看时长再关窗：窗口销毁后渲染端不再有机会发事件
+  flushPlayDuration()
   void window.mainAPI.windowClose()
 }
 
@@ -103,6 +107,10 @@ function onLiveUnavailable(id: string) {
 
 useEventListener(window, 'resize', () => {
   viewportWidth.value = window.innerWidth
+})
+
+useEventListener(window, 'pagehide', () => {
+  flushPlayDuration()
 })
 
 onUnmounted(() => {

@@ -3,6 +3,7 @@
  *
  * macOS 不走 electron-updater，只读镜像上的 latest.json 判断版本；
  * 镜像不可用时回落 GitHub（API → Release 页面）。这里覆盖这三级来源与重试语义。
+ * 下载入口：镜像命中给当前架构的安装包直链，GitHub 来源一律回官网下载页。
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -28,6 +29,9 @@ const originalFetch = globalThis.fetch
 /** 当前架构对应的镜像安装包直链；清单里两种架构都给，避免断言随机器变化 */
 const ARCH_SUFFIX = process.arch === 'arm64' ? 'arm64' : 'x64'
 const MIRROR_URL = `https://dl.v2ing.com/Desktop48-0.3.0-${ARCH_SUFFIX}.dmg`
+
+/** GitHub 兜底时的落地页：官网下载区 */
+const DOWNLOAD_PAGE_URL = 'https://48.v2ing.com/'
 
 beforeEach(() => {
   appMock.isPackaged = true
@@ -67,7 +71,7 @@ function manifest(version: string, notes = '') {
 }
 
 describe('macOS 手动更新检查', () => {
-  it('镜像清单有新版本时返回 available，下载地址直接指向安装包', async () => {
+  it('镜像清单有新版本时返回 available，下载地址直接指向当前架构的安装包', async () => {
     fetchMock.mockResolvedValueOnce(manifest('0.3.0', '### 修复\n- 更新检查'))
 
     const state = await checkForUpdates()
@@ -84,6 +88,17 @@ describe('macOS 手动更新检查', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('镜像清单缺少当前架构的包时退回官网下载页', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      version: '0.3.0',
+      files: [{ name: 'Desktop48-0.3.0-installer.zip', size: 1 }],
+    }))
+
+    const state = await checkForUpdates()
+
+    expect(state).toMatchObject({ phase: 'available', url: DOWNLOAD_PAGE_URL })
+  })
+
   it('版本不高于当前版本时返回 up-to-date', async () => {
     fetchMock.mockResolvedValueOnce(manifest('0.2.5'))
 
@@ -92,7 +107,7 @@ describe('macOS 手动更新检查', () => {
     expect(state).toEqual({ phase: 'up-to-date' })
   })
 
-  it('镜像不可用时回落 GitHub API，下载地址退回 Release 页面', async () => {
+  it('镜像不可用时回落 GitHub API 取版本，下载回落到官网而非 GitHub', async () => {
     fetchMock
       .mockRejectedValueOnce(Object.assign(new Error('mirror down'), { statusCode: 503 }))
       .mockResolvedValueOnce(jsonResponse({ tag_name: 'v0.3.0', body: '修复更新检查' }))
@@ -103,7 +118,7 @@ describe('macOS 手动更新检查', () => {
       phase: 'available',
       version: '0.3.0',
       releaseNotes: '修复更新检查',
-      url: 'https://github.com/mirtu-ko/Desktop48.app/releases/latest',
+      url: DOWNLOAD_PAGE_URL,
     })
   })
 
@@ -149,7 +164,7 @@ describe('macOS 手动更新检查', () => {
     const state = await checkForUpdates()
 
     expect(fetchMock).toHaveBeenCalledTimes(3)
-    expect(state).toMatchObject({ phase: 'available', manualUpdate: true, version: '0.3.1' })
+    expect(state).toMatchObject({ phase: 'available', manualUpdate: true, version: '0.3.1', url: DOWNLOAD_PAGE_URL })
   })
 
   it('静默检查失败时还原检查前状态，不停留在 checking', async () => {
