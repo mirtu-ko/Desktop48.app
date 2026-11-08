@@ -17,7 +17,7 @@
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self';
-        script-src 'self' https://cloud.umami.is;
+        script-src 'self' https://cloud.umami.is https://log.v2ing.com;
         style-src 'self' 'unsafe-inline';
         img-src 'self' data: blob: https: http:;
         media-src 'self' blob: https: http:;
@@ -32,8 +32,8 @@
     <!-- 关闭自动采集（data-auto-track），改由 utils/umami.ts 的 trackPage 上报清洗后的 hash 路由 -->
     <script
       defer
-      src="https://cloud.umami.is/script.js"
-      data-website-id="6a5198f5-45be-4ce8-a2f9-6503322ed838"
+      src="https://log.v2ing.com/script.js"
+      data-website-id="fb9582f4-983a-46ef-87a8-8e7393766bb5"
       data-auto-track="false"
     ></script>
   </head>
