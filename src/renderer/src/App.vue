@@ -13,6 +13,7 @@ import EventBus from '@renderer/services/event-bus'
 import { installPocketUnread, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import Constants from '@renderer/utils/constants'
 import { scrollPageToTop } from '@renderer/utils/page-scroll'
+import { trackEvent } from '@renderer/utils/umami'
 import { computed, KeepAlive, onErrorCaptured, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -63,6 +64,12 @@ const dockItems = computed(() => [
 
 /** 任务中心卡片显隐：入口是右下角常驻的 DownloadsEntry */
 const downloadsOpen = ref(false)
+
+/** 右下角任务中心入口：每次打开上报一次，用于统计入口点击量 */
+function openTaskCenter() {
+  downloadsOpen.value = true
+  trackEvent('task:page_open')
+}
 
 /** 导航 path 必须带前导斜杠，确保 vue-router 按绝对路径解析 */
 function changeMenu(path: string) {
@@ -181,7 +188,7 @@ onErrorCaptured((error, instance, info) => {
         <BackTopButton />
 
         <!-- 右下角常驻下载入口：打开任务中心卡片 -->
-        <DownloadsEntry @open="downloadsOpen = true" />
+        <DownloadsEntry @open="openTaskCenter" />
 
         <!-- 任务中心卡片（录制 / 下载）：全屏蒙版 + 左类型切换 / 右任务列表 -->
         <DownloadsCard :open="downloadsOpen" @close="downloadsOpen = false" />
