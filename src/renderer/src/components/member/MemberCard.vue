@@ -59,8 +59,11 @@ const followOn = computed(() => !!props.followed && !props.blocked)
 const followTitle = computed(() => {
   if (props.blocked)
     return '已屏蔽，点击解除屏蔽并关注'
-  return props.followed ? '取消关注' : '关注 TA，直播列表优先展示'
+  return props.followed ? '取消关注' : '关注她'
 })
+
+/** 屏蔽钮提示：已屏蔽时切换为解除语义 */
+const blockTitle = computed(() => (props.blocked ? '解除屏蔽' : '屏蔽她的直播、回放'))
 
 /** 皇冠边长：紧凑档同步收小（MediaIcon 的 size 走内联 style，CSS 覆盖不了） */
 const crownSize = computed(() => (props.compact ? 22 : 30))
@@ -105,30 +108,32 @@ const subSegments = computed(() => segments(sub.value, props.keyword || ''))
 
         <!-- 关注 / 屏蔽：头像右上角竖排。图标尺寸由 .quick-btn 的 font-size 控制，不写 :size -->
         <div v-if="actionable" class="quick-actions">
-          <button
-            class="quick-btn quick-btn--follow"
-            :class="{ 'is-on': followOn }"
-            :title="followTitle"
-            type="button"
-            @click.stop="emit('toggleFollow', member)"
-          >
-            <el-icon>
-              <StarFilled v-if="followOn" />
-              <Star v-else />
-            </el-icon>
-          </button>
-          <button
-            class="quick-btn quick-btn--block"
-            :class="{ 'is-on': blocked }"
-            :title="blocked ? '解除屏蔽' : '屏蔽 TA 的直播、回放与房间消息'"
-            type="button"
-            @click.stop="emit('toggleBlock', member)"
-          >
-            <el-icon>
-              <Hide v-if="blocked" />
-              <View v-else />
-            </el-icon>
-          </button>
+          <el-tooltip :content="followTitle" placement="top" :show-after="300">
+            <button
+              class="quick-btn quick-btn--follow"
+              :class="{ 'is-on': followOn }"
+              type="button"
+              @click.stop="emit('toggleFollow', member)"
+            >
+              <el-icon>
+                <StarFilled v-if="followOn" />
+                <Star v-else />
+              </el-icon>
+            </button>
+          </el-tooltip>
+          <el-tooltip :content="blockTitle" placement="top" :show-after="300">
+            <button
+              class="quick-btn quick-btn--block"
+              :class="{ 'is-on': blocked }"
+              type="button"
+              @click.stop="emit('toggleBlock', member)"
+            >
+              <el-icon>
+                <Hide v-if="blocked" />
+                <View v-else />
+              </el-icon>
+            </button>
+          </el-tooltip>
         </div>
       </div>
     </div>

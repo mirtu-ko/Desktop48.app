@@ -523,6 +523,16 @@ function scrollToBottom() {
   lastSeenScrollTop = el.scrollTop
 }
 
+/** 左列条目：进房、双击回底、右键标已读都没有文字入口，靠 hover 说明 */
+function roomItemHint(room: PocketRoom): string {
+  const hints = [`进入「${room.nickname}」的房间`]
+  if (room.userId === selectedUserId.value)
+    hints.push('双击回到最新消息')
+  if (unreadCountOf(room.userId))
+    hints.push('右键标为已读')
+  return hints.join(' · ')
+}
+
 /**
  * 双击左列房间条目：若正是当前房间，消息流立即钉回底部
  * （其他房间双击时单击已先选中、进房流程本身会回底，无需额外处理）。
@@ -947,6 +957,21 @@ const sendButtonLabel = computed(() => {
   return '发送'
 })
 
+/** 发送钮 hover：说明倒数与禁用原因，这些状态不写在按钮文字里 */
+const sendButtonHint = computed(() => {
+  if (composerMuted.value)
+    return '全员禁言，暂不能发言'
+  if (sendBusy.value)
+    return '正在发送消息'
+  if (sendCooldownLeft.value > 0)
+    return `发言冷却中，${Math.ceil(sendCooldownLeft.value / 1000)}s 后可继续发送`
+  if (!qchatOptIn.value)
+    return '先点击输入框连接房间，连接后即可发言'
+  if (qchatStatus.value !== 'connected')
+    return '房间连接未就绪，暂不能发送'
+  return '发送消息（也可按 Enter）'
+})
+
 /**
  * 连接确认正文：一句前提 + 两条影响，拆成要点比整段说明更好扫读。
  * 弹窗挂在 body 下，正文样式复用 app.scss 的 .app-confirm-body / .app-confirm-list。
@@ -1368,6 +1393,14 @@ function liveCardBadge(message: PocketRoomMessageView) {
   return { text: '直播', type: 'live' }
 }
 
+/** 分享卡 hover：点击打开的是独立播放窗，直播与回放走不同窗口 */
+function liveCardHint(message: PocketRoomMessageView): string {
+  if (!message.liveId)
+    return '这条分享没有可播放的直播或回放'
+  const playback = message.liveIsPlayback || isSharedLiveOnAir(message.liveId) !== true
+  return playback ? '在独立播放窗观看回放' : '在独立播放窗进入直播'
+}
+
 /** 右栏消息区状态文案 */
 const statusText = ref('')
 watch([chatStatus, chatStatusText], () => {
@@ -1481,6 +1514,7 @@ onMounted(() => {
               type="button"
               class="room-item"
               :class="{ 'is-active': selectedRoom?.userId === room.userId, 'is-live': !!room.live }"
+              :title="roomItemHint(room)"
               @click="enterRoom(room.userId)"
             >
               <span class="room-avatar">
@@ -1622,7 +1656,7 @@ onMounted(() => {
                 class="room-tab"
                 :class="{ 'is-active': viewMode === tab.mode }"
                 :aria-selected="viewMode === tab.mode"
-                :title="tab.locked ? `${tab.name} · 需要暗号` : tab.name"
+                :title="tab.locked ? `「${tab.name}」需要暗号，点击后输入` : `切换到「${tab.name}」`"
                 @click="onViewModeChange(tab.mode)"
               >
                 <el-icon v-if="tab.locked" :size="12" class="room-tab-lock">
@@ -1675,6 +1709,7 @@ onMounted(() => {
                     class="scope-tab"
                     :class="{ 'is-active': messageScope === 'member' }"
                     :aria-selected="messageScope === 'member'"
+                    title="只看房主：仅显示房主 / 成员发言，不含粉丝留言；切换后重新拉取"
                     @click="messageScope = 'member'"
                   >
                     只看房主
@@ -1685,6 +1720,7 @@ onMounted(() => {
                     class="scope-tab"
                     :class="{ 'is-active': messageScope === 'all' }"
                     :aria-selected="messageScope === 'all'"
+                    title="全部消息：包含粉丝发言、回复与其他成员串门；切换后重新拉取"
                     @click="messageScope = 'all'"
                   >
                     全部消息
@@ -1854,6 +1890,7 @@ onMounted(() => {
                             class="msg-live"
                             :class="{ 'is-clickable': !!message.liveId }"
                             :disabled="!message.liveId"
+                            :title="liveCardHint(message)"
                             :aria-label="`${liveCardBadge(message).text}：${liveShareTitle(message.text) || '快来看看吧'}`"
                             @click="openSharedLive(message)"
                           >
@@ -2065,6 +2102,7 @@ onMounted(() => {
                     round
                     :loading="sendBusy"
                     :disabled="!composerUsable"
+                    :title="sendButtonHint"
                     @click="onSendClick"
                   >
                     {{ sendButtonLabel }}
@@ -2083,6 +2121,7 @@ onMounted(() => {
                 type="button"
                 class="new-msg-float new-msg-float--up"
                 :style="newMsgFloatStyle"
+                title="跳到未读消息的起点"
                 @click="jumpToUnread"
               >
                 <el-icon :size="12">
@@ -2097,6 +2136,7 @@ onMounted(() => {
                 type="button"
                 class="new-msg-float"
                 :style="newMsgFloatStyle"
+                title="回到最新消息"
                 @click="scrollToBottom"
               >
                 <el-icon :size="12">

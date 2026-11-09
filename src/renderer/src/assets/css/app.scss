@@ -1572,3 +1572,29 @@ body,
     transform: rotate(360deg);
   }
 }
+
+/* 原生 title 替身：浏览器 tooltip 在 Electron 窗口里不弹，改用纯文本小浮层。
+ * 不带箭头与入场动画，颜色走 Element Plus 变量，亮暗主题一并跟随 */
+.native-title-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 99999;
+  max-width: 320px;
+  padding: 4px 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+  background: var(--el-bg-color);
+  box-shadow: var(--shadow-sm);
+  color: var(--el-text-color-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  visibility: hidden;
+
+  &.is-visible {
+    visibility: visible;
+  }
+}

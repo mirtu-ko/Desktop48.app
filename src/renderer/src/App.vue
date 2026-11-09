@@ -9,6 +9,7 @@ import Initialize from '@renderer/components/app/Initialize.vue'
 import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
 import DownloadsCard from '@renderer/components/ui/DownloadsCard.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
+import { useNativeTitle } from '@renderer/composables/use-native-title'
 import EventBus from '@renderer/services/event-bus'
 import { installPocketUnread, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import Constants from '@renderer/utils/constants'
@@ -23,6 +24,9 @@ import { useRoute, useRouter } from 'vue-router'
 
 const router = useRouter()
 const route = useRoute()
+
+// 浏览器原生 title 在 Electron 里常不弹，全局改用静止 1 秒后的轻量浮层
+useNativeTitle()
 
 // 初始化门：Initialize 完成 ffmpeg 环境自检后 emit，之后才渲染主界面
 const isInitialized = ref(false)

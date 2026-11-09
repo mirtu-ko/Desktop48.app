@@ -153,7 +153,7 @@ function enterLive() {
   </section>
 
   <!-- 直播状态：独立模块，与资料卡平级（间距由右栏 gap 提供） -->
-  <button v-if="live" type="button" class="profile-live" @click="enterLive">
+  <button v-if="live" type="button" class="profile-live" :title="`打开直播播放窗：${live.title || '直播中'}`" @click="enterLive">
     <span class="profile-live-cover">
       <img v-if="liveCover" :src="liveCover" alt="" referrerpolicy="no-referrer">
       <span v-else class="profile-live-ph">LIVE</span>
