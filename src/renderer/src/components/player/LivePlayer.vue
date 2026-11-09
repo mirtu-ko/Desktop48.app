@@ -7,7 +7,7 @@ import { useLiveDanmaku } from '@renderer/composables/use-live-danmaku'
 import { useLivePlayer } from '@renderer/composables/use-live-player'
 import { useLiveSession } from '@renderer/composables/use-live-session'
 import useMediaDownload from '@renderer/composables/use-media-download'
-import { dispatchMediaShortcut } from '@renderer/composables/use-media-shortcuts'
+import { useMediaShortcuts } from '@renderer/composables/use-media-shortcuts'
 import { useOnlinePoll } from '@renderer/composables/use-online-poll'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useStreamRetry } from '@renderer/composables/use-stream-retry'
@@ -24,7 +24,7 @@ import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
 import { formatViewNum } from '@renderer/utils/view-num'
 
-import { useDocumentVisibility, useEventListener, useIntervalFn } from '@vueuse/core'
+import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
@@ -64,9 +64,6 @@ const liveEnded = ref(false)
 const liveResult = ref<LiveResultView | null>(null)
 /** 结束卡头像加载失败记账（按 userId）：回退用户名首字母 */
 const failedEndAvatars = reactive(new Set<string>())
-// 鼠标悬浮才响应快捷键：同屏可能有多个浮窗播放器，否则一次按键会把它们全部转一遍。
-// 触发策略与 PlaybackPlayer 不同（它走根节点焦点制），但按键分派共用 use-media-shortcuts。
-const hovered = ref(false)
 // 卸载标记：置位后所有在途异步回包直接丢弃
 const isManuallyUnmounted = ref(false)
 
@@ -493,22 +490,14 @@ const { running: recording, onActionClick: onRecordClick } = useMediaDownload({
   },
 })
 
-// ── 键盘快捷键（悬浮制：仅视频模式、鼠标悬浮时响应） ─────────────────────────
-// 按键分派与 PlaybackPlayer 共用 dispatchMediaShortcut（键位单源）；
+// ── 键盘快捷键（窗口级监听：按键只到 OS 激活的播放窗） ──────────────────────
+// 按键分派与 PlaybackPlayer 共用 useMediaShortcuts（键位单源）；
 // 直播场景只接旋转族快捷键（seek/音量对直播流无意义，不传对应 action 即不响应）
-function onKeyDown(event: KeyboardEvent) {
-  if (isRadio.value || !hovered.value || event.ctrlKey || event.metaKey || event.altKey)
-    return
-  const consumed = dispatchMediaShortcut(event, {
-    rotateLeft,
-    rotateRight,
-    resetRotation,
-  }, null)
-  if (consumed)
-    event.preventDefault()
-}
-
-useEventListener(window, 'keydown', onKeyDown)
+useMediaShortcuts({
+  getMedia: () => null,
+  actions: { rotateLeft, rotateRight, resetRotation },
+  isEnabled: () => !isRadio.value,
+})
 
 /** 挂载播放器；环境不支持 HTTP-FLV 时统一在此提示 */
 function mountPlayer(path: string) {
@@ -578,8 +567,6 @@ onUnmounted(() => {
       class="video-box"
       :class="{ 'video-box-background': !isRadio }"
       @dblclick="onBoxDblClick"
-      @mouseenter="hovered = true"
-      @mouseleave="hovered = false"
     >
       <RadioStage
         v-if="isRadio"
