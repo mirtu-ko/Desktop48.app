@@ -333,6 +333,12 @@ function saveStoredAuth(auth: StoredAuth): void {
   authStore().write(auth)
 }
 
+/**
+ * 上次已打印过的 token：每个请求都会重新解密一次，同一 token 只打一条日志。
+ * 只做日志去重，不缓存解密结果——token 仍每次现算（见 currentClientProfile 的口径说明）。
+ */
+let loggedToken: string | null = null
+
 /** 解出可用 token；加密解密失败（如更换系统用户）视为未保存，返回空串 */
 function extractToken(stored: StoredAuth | null): string {
   if (!stored)
@@ -350,8 +356,12 @@ function extractToken(stored: StoredAuth | null): string {
   else {
     token = stored.tokenPlain || ''
   }
-  // 仅开发环境打印 token，生产环境不落日志（token 本身是机密）
-  debug('[pocket-auth] 解密后的 token：', token)
+  // 仅开发环境打印 token，生产环境不落日志（token 本身是机密）；
+  // 同一 token 只打一次——消息轮询 5s 一次，每次都打会把终端刷满
+  if (token !== loggedToken) {
+    loggedToken = token
+    debug('[pocket-auth] 解密后的 token：', token)
+  }
   return token
 }
 
@@ -590,6 +600,8 @@ function saveAuth(
 
 /** 删除本地凭证文件；存在才删，失败不抛（删除只影响展示，调用方各有兵底） */
 function deleteStoredCredentials(): void {
+  // 凭证没了，日志去重状态归零：下次登录（哪怕拿到同一个 token）应重新打印一次
+  loggedToken = null
   const file = authFilePath()
   try {
     if (fs.existsSync(file))

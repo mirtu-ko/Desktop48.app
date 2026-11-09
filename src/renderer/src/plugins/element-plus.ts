@@ -7,12 +7,13 @@
  */
 import type { App } from 'vue'
 
-import { ElButton, ElCarousel, ElCarouselItem, ElCascader, ElDialog, ElEmpty, ElIcon, ElImage, ElInput, ElOption, ElProgress, ElRadio, ElRadioButton, ElRadioGroup, ElScrollbar, ElSelect, ElTabPane, ElTabs, ElTag, ElText, ElTooltip } from 'element-plus'
+import { ElButton, ElCarousel, ElCarouselItem, ElCascader, ElDatePicker, ElDialog, ElEmpty, ElIcon, ElImage, ElInput, ElOption, ElProgress, ElRadio, ElRadioButton, ElRadioGroup, ElScrollbar, ElSelect, ElTabPane, ElTabs, ElTag, ElText, ElTooltip } from 'element-plus'
 
 import 'element-plus/es/components/button/style/css'
 import 'element-plus/es/components/carousel/style/css'
 import 'element-plus/es/components/carousel-item/style/css'
 import 'element-plus/es/components/cascader/style/css'
+import 'element-plus/es/components/date-picker/style/css'
 import 'element-plus/es/components/dialog/style/css'
 import 'element-plus/es/components/empty/style/css'
 import 'element-plus/es/components/icon/style/css'
@@ -46,6 +47,7 @@ export const ELEMENT_COMPONENTS = {
   ElCarousel,
   ElCarouselItem,
   ElCascader,
+  ElDatePicker,
   ElDialog,
   ElEmpty,
   ElIcon,

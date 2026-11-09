@@ -13,6 +13,7 @@ import {
   getServerChannels,
   loginByCode,
   loginByToken,
+  logout,
   MASTER_PASSCODE,
   resetRoomSenderProfile,
   sendSms,
@@ -109,6 +110,10 @@ vi.mock('../src/main/safe-json-file-sync', () => ({
   },
 }))
 
+// 被测模块的 '../logger' 被 vitest 别名指向 test/stubs/logger，日志断言必须 mock 这份替身
+const loggerMock = vi.hoisted(() => ({ debug: vi.fn(), log: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('./stubs/logger', () => ({ ...loggerMock, isVerboseEnabled: () => true }))
+
 const STORED = {
   mobile: '13800138000',
   tokenEnc: '',
@@ -161,6 +166,9 @@ beforeEach(() => {
   env.replies = defaultReplies()
   // 发言资料是模块级缓存：别让上一例的结果漏到下一例
   resetRoomSenderProfile()
+  // token 日志去重也是模块级状态：先退一次，避免上一例的 token 抑制本例的首条日志
+  logout()
+  loggerMock.debug.mockClear()
 })
 
 describe('pocket-auth verifyLogin', () => {
@@ -787,5 +795,35 @@ describe('pocket-auth 客户端档位', () => {
   it('未知档位值回退口袋48（旧凭证 / 手改值容错）', () => {
     env.stored = { ...STORED, clientProfile: 'unknown-apk' }
     expect(getAuthState().clientProfile).toBe('pocket48')
+  })
+})
+
+/**
+ * token 每条请求都会重新解密一次；日志按 token 值去重，
+ * 否则轮询接口（5s / 60s）会把终端刷满同一条 token。
+ */
+describe('pocket-auth token 日志去重', () => {
+  const tokenLogs = () => loggerMock.debug.mock.calls.filter(([message]) => String(message).includes('解密后的 token'))
+
+  it('同一 token 连续取用只打一条', () => {
+    getAuthState()
+    getAuthState()
+    getAuthState()
+    expect(tokenLogs()).toHaveLength(1)
+    expect(tokenLogs()[0][1]).toBe('test-token')
+  })
+
+  it('token 变化时重新打一条', () => {
+    getAuthState()
+    env.stored = { ...STORED, tokenPlain: 'another-token' }
+    getAuthState()
+    expect(tokenLogs().map(call => call[1])).toEqual(['test-token', 'another-token'])
+  })
+
+  it('退出登录后再取同一个 token 会重新打（去重状态随凭证清除）', () => {
+    getAuthState()
+    logout()
+    getAuthState()
+    expect(tokenLogs()).toHaveLength(2)
   })
 })

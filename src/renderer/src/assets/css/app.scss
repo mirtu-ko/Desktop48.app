@@ -834,6 +834,11 @@ body,
   width: min(92vw, 660px);
 }
 
+/* 按日期查看弹层：与精华弹层同宽，日期条占用后列表自己滚 */
+.detail-card-dialog.room-date-dialog.el-dialog {
+  width: min(92vw, 660px);
+}
+
 /* 卡面：左右怎么分栏由调用方定（成员卡是上立绘下操作条，专辑卡是左专辑栏右曲目） */
 .detail-card {
   --accent: var(--brand-primary);

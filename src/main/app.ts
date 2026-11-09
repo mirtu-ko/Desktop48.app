@@ -45,6 +45,34 @@ log('[app.ts] Electron 版本:', process.versions.electron)
 log('[app.ts] Node.js 版本:', process.versions.node)
 log('[app.ts] Chromium 版本:', process.versions.chrome)
 
+/**
+ * 开发环境渲染页自身的 origin（ELECTRON_RENDERER_URL）；生产环境为空串。
+ * 进程内不变，模块加载时算一次。
+ */
+const devRendererOrigin = (() => {
+  const url = process.env.ELECTRON_RENDERER_URL
+  if (!is.dev || !url)
+    return ''
+  try {
+    return new URL(url).origin
+  }
+  catch {
+    return ''
+  }
+})()
+
+/** 是否为开发环境渲染页自身的导航（含整页刷新）；生产环境恒为 false */
+function isRendererOrigin(url: string): boolean {
+  if (!devRendererOrigin)
+    return false
+  try {
+    return new URL(url).origin === devRendererOrigin
+  }
+  catch {
+    return false
+  }
+}
+
 // 保持对主窗口的引用，供自定义标题栏窗口控制使用
 let mainWindow: BrowserWindow | null = null
 /** 是否正处于退出流程：置位后主窗口 close 放行，不再隐藏到托盘 */
@@ -122,8 +150,13 @@ function createWindow(): void {
   })
 
   // setWindowOpenHandler 只管 window.open / target=_blank；同一窗口内的导航走 will-navigate。
-  // 应用内没有需要跟随的页面，任何导航都视为「离开应用」，拦下并转系统浏览器。
+  // 应用内没有需要跟随的页面，任何外部导航都视为「离开应用」，拦下并转系统浏览器。
   win.webContents.on('will-navigate', (event, url) => {
+    // 开发环境页面自身就是 http://localhost:5173：整页刷新（HMR full-reload、⌘R）
+    // 同样触发本事件，拦下来会把应用自己的路由丢给系统浏览器——那里没有 preload，
+    // 只会得到一个空白页。同源导航必须放行，它不是「离开应用」。
+    if (isRendererOrigin(url))
+      return
     event.preventDefault()
     if (/^https?:/.test(url))
       void shell.openExternal(url)

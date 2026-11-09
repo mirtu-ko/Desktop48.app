@@ -119,6 +119,10 @@ function enterLive() {
         <dt>团体</dt>
         <dd>{{ member.groupName }}</dd>
       </div>
+      <div v-if="member.joinTime" class="profile-info-row">
+        <dt>入团</dt>
+        <dd>{{ member.joinTime }}</dd>
+      </div>
     </dl>
 
     <!-- 口袋关注状态：品牌小徽标注状态，右侧胶囊按钮切换（状态编排留在房间页） -->
