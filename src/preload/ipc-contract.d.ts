@@ -685,6 +685,8 @@ export type IpcEventMap = {
    * 未读状态由主进程统一持有、每个窗口各存镜像，因此广播给全部窗口（见 main/ipc/send.ts）。
    */
   pocketUnreadBatch: [state: PocketUnreadBatch]
+  /** 菜单栏 / 托盘点击未读房间：主窗口切到房间页并定位该成员（对端：main/app.ts） */
+  openRoomFromTray: [userId: number]
   /** 登录凭证已因 token 失效被清除（对端：pocket-auth.ts），各窗镜像据此复位 */
   pocketAuthExpired: []
   /**

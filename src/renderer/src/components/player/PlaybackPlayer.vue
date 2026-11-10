@@ -60,7 +60,6 @@ const keyword = ref('')
 const trimmedKeyword = computed(() => keyword.value.trim().toLowerCase())
 
 const videoBoxRef = ref<HTMLElement | null>(null)
-const rootRef = ref<HTMLElement | null>(null)
 
 // 录播页只做两类事情：
 // 1. 按播放地址选择 HLS 或原生 MP4 播放（use-playback-engine）
@@ -225,9 +224,8 @@ watch(lastPlaybackError, (message) => {
     trackEvent('player:error', { type: 'playback' })
 })
 
-// =========== 键盘策略（根节点焦点制，见 use-media-shortcuts） ===========
-const { onKeydown, onPointerDown } = useMediaShortcuts({
-  getRoot: () => rootRef.value,
+// =========== 键盘快捷键（窗口级监听，见 use-media-shortcuts） ===========
+useMediaShortcuts({
   getMedia: getActiveMediaElement,
   actions: {
     togglePlay,
@@ -322,8 +320,6 @@ const { running: downloading, onActionClick: onDownloadClick } = useMediaDownloa
 
 onMounted(async () => {
   debugLog('playback', `①录播会话开始（liveId=${props.liveId}, source=${props.source}）: 拉详情`)
-  rootRef.value?.focus()
-
   await getLiveOne()
 })
 
@@ -336,13 +332,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div
-    ref="rootRef"
-    class="playback-player"
-    tabindex="-1"
-    @keydown="onKeydown"
-    @pointerdown="onPointerDown"
-  >
+  <div class="playback-player">
     <div class="playback-content">
       <div class="video-box">
         <div
@@ -531,7 +521,6 @@ onUnmounted(() => {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  outline: none;
 }
 
 /* 悬浮按钮（下载）与右上角容器样式为全局 .player-actions / .action-btn，见 app.scss */

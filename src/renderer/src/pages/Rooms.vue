@@ -7,8 +7,9 @@ import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/p
 import type { InputInstance } from 'element-plus'
 import type { Component, ComponentPublicInstance, VNode } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
-import { ArrowRight, ChatDotRound, Check, Close, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import { ArrowRight, Calendar, ChatDotRound, Check, Close, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
+import RoomDateDialog from '@renderer/components/rooms/RoomDateDialog.vue'
 import RoomEssenceDialog from '@renderer/components/rooms/RoomEssenceDialog.vue'
 import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
@@ -16,10 +17,12 @@ import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
 import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
+import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { copyText } from '@renderer/utils/clipboard'
 import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
+import { resolveRoomArchiveStart } from '@renderer/utils/room-date-jump'
 import { shouldTrackRoomEnter } from '@renderer/utils/room-enter-tracker'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
@@ -94,6 +97,48 @@ const docVisibility = useDocumentVisibility()
 
 /** 精华消息弹层是否打开 */
 const essenceOpen = ref(false)
+/** 按日期查看弹层是否打开 */
+const dateOpen = ref(false)
+
+const { findMemberByUserId } = useMemberDirectoryStore()
+
+/** 当前房间成员的入团时间；名录未同步或查不到时为空，起点回落到归档日 */
+const roomJoinTime = ref('')
+let joinLookupSeq = 0
+watch(selectedUserId, async (userId) => {
+  const seq = ++joinLookupSeq
+  roomJoinTime.value = ''
+  if (userId === null)
+    return
+  try {
+    const member = await findMemberByUserId(userId)
+    if (seq === joinLookupSeq)
+      roomJoinTime.value = member?.joinTime || ''
+  }
+  catch {
+    // 名录未同步：保留空值，由起点计算回落
+  }
+}, { immediate: true })
+
+/** 按日期查看的可查起点：入团日与归档日取较晚者 */
+const roomArchiveStart = computed(() => resolveRoomArchiveStart(roomJoinTime.value))
+
+/** 按日期查看读取的频道：与当前消息流一致（大房间 / 小房间） */
+const activeDateChannel = computed(() => {
+  if (viewMode.value === 'small') {
+    const small = smallChannel.value
+    return small?.channelId && small.serverId ? { serverId: small.serverId, channelId: small.channelId } : null
+  }
+  const room = selectedRoom.value
+  return room?.channelId && room.serverId ? { serverId: room.serverId, channelId: room.channelId } : null
+})
+
+/** 小房间上锁时收起弹层：门禁未通过不该留着房间历史 */
+watch(smallLocked, (locked) => {
+  if (locked)
+    dateOpen.value = false
+})
+
 /** 顶部精华条展示的那条：最新一条精华（列表已按 msgTime 倒序） */
 const newestEssence = computed(() => essenceMessages.value[0] ?? null)
 
@@ -476,6 +521,16 @@ function scrollToBottom() {
     return
   el.scrollTop = el.scrollHeight
   lastSeenScrollTop = el.scrollTop
+}
+
+/** 左列条目：进房、双击回底、右键标已读都没有文字入口，靠 hover 说明 */
+function roomItemHint(room: PocketRoom): string {
+  const hints = [`进入「${room.nickname}」的房间`]
+  if (room.userId === selectedUserId.value)
+    hints.push('双击回到最新消息')
+  if (unreadCountOf(room.userId))
+    hints.push('右键标为已读')
+  return hints.join(' · ')
 }
 
 /**
@@ -902,6 +957,21 @@ const sendButtonLabel = computed(() => {
   return '发送'
 })
 
+/** 发送钮 hover：说明倒数与禁用原因，这些状态不写在按钮文字里 */
+const sendButtonHint = computed(() => {
+  if (composerMuted.value)
+    return '全员禁言，暂不能发言'
+  if (sendBusy.value)
+    return '正在发送消息'
+  if (sendCooldownLeft.value > 0)
+    return `发言冷却中，${Math.ceil(sendCooldownLeft.value / 1000)}s 后可继续发送`
+  if (!qchatOptIn.value)
+    return '先点击输入框连接房间，连接后即可发言'
+  if (qchatStatus.value !== 'connected')
+    return '房间连接未就绪，暂不能发送'
+  return '发送消息（也可按 Enter）'
+})
+
 /**
  * 连接确认正文：一句前提 + 两条影响，拆成要点比整段说明更好扫读。
  * 弹窗挂在 body 下，正文样式复用 app.scss 的 .app-confirm-body / .app-confirm-list。
@@ -1323,6 +1393,14 @@ function liveCardBadge(message: PocketRoomMessageView) {
   return { text: '直播', type: 'live' }
 }
 
+/** 分享卡 hover：点击打开的是独立播放窗，直播与回放走不同窗口 */
+function liveCardHint(message: PocketRoomMessageView): string {
+  if (!message.liveId)
+    return '这条分享没有可播放的直播或回放'
+  const playback = message.liveIsPlayback || isSharedLiveOnAir(message.liveId) !== true
+  return playback ? '在独立播放窗观看回放' : '在独立播放窗进入直播'
+}
+
 /** 右栏消息区状态文案 */
 const statusText = ref('')
 watch([chatStatus, chatStatusText], () => {
@@ -1436,6 +1514,7 @@ onMounted(() => {
               type="button"
               class="room-item"
               :class="{ 'is-active': selectedRoom?.userId === room.userId, 'is-live': !!room.live }"
+              :title="roomItemHint(room)"
               @click="enterRoom(room.userId)"
             >
               <span class="room-avatar">
@@ -1577,7 +1656,7 @@ onMounted(() => {
                 class="room-tab"
                 :class="{ 'is-active': viewMode === tab.mode }"
                 :aria-selected="viewMode === tab.mode"
-                :title="tab.locked ? `${tab.name} · 需要暗号` : tab.name"
+                :title="tab.locked ? `「${tab.name}」需要暗号，点击后输入` : `切换到「${tab.name}」`"
                 @click="onViewModeChange(tab.mode)"
               >
                 <el-icon v-if="tab.locked" :size="12" class="room-tab-lock">
@@ -1612,6 +1691,17 @@ onMounted(() => {
                   <span class="essence-bar-text">{{ essenceSummary }}</span>
                   <span v-if="essenceMessages.length > 1" class="essence-bar-count">{{ essenceMessages.length }}</span>
                 </button>
+                <button
+                  type="button"
+                  class="date-jump-btn"
+                  title="按日期查看历史消息"
+                  @click="dateOpen = true"
+                >
+                  <el-icon :size="12">
+                    <Calendar />
+                  </el-icon>
+                  按日期
+                </button>
                 <div class="scope-tabs" role="tablist" aria-label="消息范围">
                   <button
                     type="button"
@@ -1619,6 +1709,7 @@ onMounted(() => {
                     class="scope-tab"
                     :class="{ 'is-active': messageScope === 'member' }"
                     :aria-selected="messageScope === 'member'"
+                    title="只看房主：仅显示房主 / 成员发言，不含粉丝留言；切换后重新拉取"
                     @click="messageScope = 'member'"
                   >
                     只看房主
@@ -1629,6 +1720,7 @@ onMounted(() => {
                     class="scope-tab"
                     :class="{ 'is-active': messageScope === 'all' }"
                     :aria-selected="messageScope === 'all'"
+                    title="全部消息：包含粉丝发言、回复与其他成员串门；切换后重新拉取"
                     @click="messageScope = 'all'"
                   >
                     全部消息
@@ -1798,6 +1890,7 @@ onMounted(() => {
                             class="msg-live"
                             :class="{ 'is-clickable': !!message.liveId }"
                             :disabled="!message.liveId"
+                            :title="liveCardHint(message)"
                             :aria-label="`${liveCardBadge(message).text}：${liveShareTitle(message.text) || '快来看看吧'}`"
                             @click="openSharedLive(message)"
                           >
@@ -2009,6 +2102,7 @@ onMounted(() => {
                     round
                     :loading="sendBusy"
                     :disabled="!composerUsable"
+                    :title="sendButtonHint"
                     @click="onSendClick"
                   >
                     {{ sendButtonLabel }}
@@ -2027,6 +2121,7 @@ onMounted(() => {
                 type="button"
                 class="new-msg-float new-msg-float--up"
                 :style="newMsgFloatStyle"
+                title="跳到未读消息的起点"
                 @click="jumpToUnread"
               >
                 <el-icon :size="12">
@@ -2041,6 +2136,7 @@ onMounted(() => {
                 type="button"
                 class="new-msg-float"
                 :style="newMsgFloatStyle"
+                title="回到最新消息"
                 @click="scrollToBottom"
               >
                 <el-icon :size="12">
@@ -2083,6 +2179,15 @@ onMounted(() => {
             :loading="essenceLoading"
             :exhausted="essenceExhausted"
             @load-more="loadMoreEssence"
+          />
+
+          <!-- 按日期查看弹层：独立只读轨道，不进主消息流、不碰已读与轮询 -->
+          <RoomDateDialog
+            v-model="dateOpen"
+            :channel="activeDateChannel"
+            :scope="messageScope"
+            :room-name="selectedRoom?.nickname ?? ''"
+            :archive-start="roomArchiveStart"
           />
         </template>
 
@@ -2828,6 +2933,21 @@ onMounted(() => {
     color: var(--el-text-color-primary);
     background: var(--el-bg-color);
     box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+  }
+}
+
+/* 按日期查看入口：与消息范围同一行的次级控件，用浅底与范围页签区分 */
+.date-jump-btn {
+  @extend %pill-tab;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--el-fill-color-light);
+
+  &:hover {
+    color: var(--el-text-color-primary);
+    background: color-mix(in srgb, var(--color-rooms) 12%, transparent);
   }
 }
 

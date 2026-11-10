@@ -94,6 +94,7 @@ async function handleCheckIn() {
   checkingIn.value = true
   try {
     const result = await checkInPocket()
+    trackEvent('pocket:checkin', { result: 'ok' })
     const rewards = [`成长值 +${result.addExp}`, `鸡翅 +${result.addSupport}`]
     if (result.addMoney > 0)
       rewards.push(`鸡腿 +${result.addMoney}`)
@@ -101,6 +102,7 @@ async function handleCheckIn() {
     ElMessage.success(`签到成功：${rewards.join('，')}${days}`)
   }
   catch (error) {
+    trackEvent('pocket:checkin', { result: 'fail' })
     debugLog('pocket-auth', '签到失败：', error)
     ElMessage.warning(pocketAuthErrorMessage(error))
   }

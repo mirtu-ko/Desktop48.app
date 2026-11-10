@@ -9,10 +9,12 @@ import Initialize from '@renderer/components/app/Initialize.vue'
 import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
 import DownloadsCard from '@renderer/components/ui/DownloadsCard.vue'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
+import { useNativeTitle } from '@renderer/composables/use-native-title'
 import EventBus from '@renderer/services/event-bus'
 import { installPocketUnread, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import Constants from '@renderer/utils/constants'
 import { scrollPageToTop } from '@renderer/utils/page-scroll'
+import { trackEvent } from '@renderer/utils/umami'
 import { computed, KeepAlive, onErrorCaptured, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -22,6 +24,9 @@ import { useRoute, useRouter } from 'vue-router'
 
 const router = useRouter()
 const route = useRoute()
+
+// 浏览器原生 title 在 Electron 里常不弹，全局改用静止 1 秒后的轻量浮层
+useNativeTitle()
 
 // 初始化门：Initialize 完成 ffmpeg 环境自检后 emit，之后才渲染主界面
 const isInitialized = ref(false)
@@ -51,6 +56,17 @@ let lastLivePath = '/lives'
 const { totalUnread } = usePocketUnreadStore()
 installPocketUnread()
 
+// 菜单栏 / 托盘点未读房间：切到房间页并带上成员 query（Rooms.vue 的 watch 负责选中房间）
+window.mainAPI.openRoomFromTray((userId) => {
+  const member = String(userId)
+  const target = { path: Constants.Menu.ROOMS, query: { member } }
+  // 已在同一个 ?member= 时 push 不触发 watch，先清空再带上，重复点击也能重新定位
+  if (route.path === Constants.Menu.ROOMS && route.query.member === member)
+    void router.replace({ path: Constants.Menu.ROOMS }).then(() => router.push(target))
+  else
+    void router.push(target)
+})
+
 const dockItems = computed(() => [
   { index: Constants.Menu.LIVES, label: '直播', icon: VideoCamera, color: 'var(--color-lives)' },
   { index: Constants.Menu.ROOMS, label: '房间', icon: ChatDotRound, color: 'var(--color-rooms)', badge: totalUnread.value || undefined },
@@ -63,6 +79,12 @@ const dockItems = computed(() => [
 
 /** 任务中心卡片显隐：入口是右下角常驻的 DownloadsEntry */
 const downloadsOpen = ref(false)
+
+/** 右下角任务中心入口：每次打开上报一次，用于统计入口点击量 */
+function openTaskCenter() {
+  downloadsOpen.value = true
+  trackEvent('task:page_open')
+}
 
 /** 导航 path 必须带前导斜杠，确保 vue-router 按绝对路径解析 */
 function changeMenu(path: string) {
@@ -181,7 +203,7 @@ onErrorCaptured((error, instance, info) => {
         <BackTopButton />
 
         <!-- 右下角常驻下载入口：打开任务中心卡片 -->
-        <DownloadsEntry @open="downloadsOpen = true" />
+        <DownloadsEntry @open="openTaskCenter" />
 
         <!-- 任务中心卡片（录制 / 下载）：全屏蒙版 + 左类型切换 / 右任务列表 -->
         <DownloadsCard :open="downloadsOpen" @close="downloadsOpen = false" />

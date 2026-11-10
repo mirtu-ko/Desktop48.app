@@ -50,6 +50,8 @@ vi.mock('../src/main/database', () => ({
   Database: {
     instance: () => ({
       getMemberFlagIds: (kind: string) => (kind === 'followed' ? localFollowedIds : blockedIds),
+      getMemberInfo: () => undefined,
+      getAllMembers: () => ({ officials: [] }),
     }),
   },
 }))

@@ -4,11 +4,14 @@ import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, powerSaveBlocker, shell } from 'electron'
 import icon from '../../resources/icon.png?asset'
 import trayIco from '../../resources/tray.ico?asset'
+import trayTemplate from '../../resources/trayTemplate.png?asset'
+import trayUnread from '../../resources/trayUnread.png?asset'
 import { cleanupDanmakuSessions } from './bilibili/danmaku-session'
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
 import { closeAllFloatWindows } from './float-window'
 import { registerAllIPC } from './ipc'
+import { sendIpc } from './ipc/send'
 import { log } from './logger'
 import { cleanupPocketDanmakuSessions } from './pocket48/pocket-danmaku'
 import { cleanupRoomQChatSessions } from './pocket48/pocket-room-qchat'
@@ -45,29 +48,80 @@ log('[app.ts] Electron 版本:', process.versions.electron)
 log('[app.ts] Node.js 版本:', process.versions.node)
 log('[app.ts] Chromium 版本:', process.versions.chrome)
 
+/**
+ * 开发环境渲染页自身的 origin（ELECTRON_RENDERER_URL）；生产环境为空串。
+ * 进程内不变，模块加载时算一次。
+ */
+const devRendererOrigin = (() => {
+  const url = process.env.ELECTRON_RENDERER_URL
+  if (!is.dev || !url)
+    return ''
+  try {
+    return new URL(url).origin
+  }
+  catch {
+    return ''
+  }
+})()
+
+/** 是否为开发环境渲染页自身的导航（含整页刷新）；生产环境恒为 false */
+function isRendererOrigin(url: string): boolean {
+  if (!devRendererOrigin)
+    return false
+  try {
+    return new URL(url).origin === devRendererOrigin
+  }
+  catch {
+    return false
+  }
+}
+
 // 保持对主窗口的引用，供自定义标题栏窗口控制使用
 let mainWindow: BrowserWindow | null = null
 /** 是否正处于退出流程：置位后主窗口 close 放行，不再隐藏到托盘 */
 let isQuitting = false
 
-/** 是否把主窗口「关闭」转为隐藏到托盘（Windows、开关开启、未在退出） */
+/**
+ * 是否把主窗口「关闭」转为隐藏到托盘：Windows 由 trayOnClose 开关决定；
+ * macOS 菜单栏常驻，关窗即隐藏（与系统里点关闭不退出应用的习惯一致）；其余平台不拦截。
+ */
 function shouldHideToTray(): boolean {
+  if (isQuitting)
+    return false
+  if (process.platform === 'darwin')
+    return true
   return process.platform === 'win32'
-    && !isQuitting
     && Database.instance().getConfig('trayOnClose') === 'on'
 }
 
 /** 显示 / 聚焦主窗口；主窗口不存在（已销毁）时重建。托盘点击、菜单与 activate/second-instance 共用 */
-function showMainWindow(): void {
+function showMainWindow(): BrowserWindow | null {
   const win = activeWindow() ?? BrowserWindow.getAllWindows().find(w => !w.isDestroyed())
   if (!win) {
     createWindow()
-    return
+    return activeWindow()
   }
   if (win.isMinimized())
     win.restore()
   win.show()
   win.focus()
+  // macOS 从菜单栏 / Dock 唤回时进程可能仍未激活，show 不会把应用拉到前台，需显式激活
+  if (process.platform === 'darwin')
+    app.focus({ steal: true })
+  return win
+}
+
+/** 托盘点未读房间：先唤回主窗口，再让渲染层切到房间页定位该成员 */
+function openRoomFromTray(userId: number): void {
+  const win = showMainWindow()
+  if (!win)
+    return
+  const deliver = () => sendIpc(win.webContents, 'openRoomFromTray', userId)
+  // 窗口刚重建时渲染层还没加载完，直接 send 会丢，等它就绪再发一次
+  if (win.webContents.isLoading())
+    win.webContents.once('did-finish-load', deliver)
+  else
+    deliver()
 }
 
 function createWindow(): void {
@@ -89,7 +143,8 @@ function createWindow(): void {
   })
   mainWindow = win
 
-  // Windows 托盘：关闭主窗口时隐藏到托盘（不销毁），退出流程中照常关闭
+  // 托盘 / 菜单栏常驻：关闭主窗口时隐藏（不销毁），退出流程中照常关闭。
+  // 只隐藏窗口，不切换程序坞显隐（TransformProcessType 会强制重排菜单栏）
   win.on('close', (event) => {
     if (shouldHideToTray()) {
       event.preventDefault()
@@ -122,8 +177,13 @@ function createWindow(): void {
   })
 
   // setWindowOpenHandler 只管 window.open / target=_blank；同一窗口内的导航走 will-navigate。
-  // 应用内没有需要跟随的页面，任何导航都视为「离开应用」，拦下并转系统浏览器。
+  // 应用内没有需要跟随的页面，任何外部导航都视为「离开应用」，拦下并转系统浏览器。
   win.webContents.on('will-navigate', (event, url) => {
+    // 开发环境页面自身就是 http://localhost:5173：整页刷新（HMR full-reload、⌘R）
+    // 同样触发本事件，拦下来会把应用自己的路由丢给系统浏览器——那里没有 preload，
+    // 只会得到一个空白页。同源导航必须放行，它不是「离开应用」。
+    if (isRendererOrigin(url))
+      return
     event.preventDefault()
     if (/^https?:/.test(url))
       void shell.openExternal(url)
@@ -156,11 +216,6 @@ app.whenReady().then(() => {
   // 为 Windows 设置应用用户模型 ID。
   electronApp.setAppUserModelId('com.electron.desktop48')
 
-  // macOS 下 BrowserWindow 的 icon 选项无效，dev 模式运行的是原生 Electron.app，
-  // 需要手动设置 Dock 图标；打包版由 build/icon.icns 提供，不受影响
-  if (process.platform === 'darwin' && app.dock)
-    app.dock.setIcon(icon)
-
   // dev 按 F12 开 DevTools、prod 屏蔽 Ctrl+R（electron-toolkit optimizer）
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -168,9 +223,20 @@ app.whenReady().then(() => {
 
   createWindow()
 
-  // Windows 系统托盘：常驻托盘 + 右键菜单；仅 Windows 创建
-  if (process.platform === 'win32')
-    installTray(trayIco, { showWindow: showMainWindow })
+  // macOS dev 模式运行的是原生 Electron.app，需手动设置 Dock 图标；打包版由 build/icon.icns 提供
+  if (process.platform === 'darwin' && app.dock && icon && is.dev)
+    app.dock.setIcon(icon)
+
+  // 系统托盘 / 菜单栏常驻：Windows 用 ico；macOS 两张纯黑模板图，颜色由系统按菜单栏明暗反色
+  if (process.platform === 'win32') {
+    installTray({ icon: trayIco }, { showWindow: showMainWindow, openRoom: openRoomFromTray })
+  }
+  else if (process.platform === 'darwin') {
+    installTray(
+      { icon: trayTemplate, unread: trayUnread },
+      { showWindow: showMainWindow, openRoom: openRoomFromTray },
+    )
+  }
 
   // 房间未读检测：主进程 60s 低频轮询（页面没开 / 窗口最小化时未读照样积累）
   startPocketUnread()
@@ -184,7 +250,7 @@ app.whenReady().then(() => {
   })
 })
 
-// 所有窗口关闭时退出（macOS 除外）；Windows 托盘在驻且开启时保持常驻
+// 所有窗口关闭但应用常驻：macOS 菜单栏常驻一律不退出；Windows 仅在托盘在驻且开关开启时保持
 app.on('window-all-closed', () => {
   if (process.platform === 'darwin')
     return
