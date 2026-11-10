@@ -56,6 +56,17 @@ let lastLivePath = '/lives'
 const { totalUnread } = usePocketUnreadStore()
 installPocketUnread()
 
+// 菜单栏 / 托盘点未读房间：切到房间页并带上成员 query（Rooms.vue 的 watch 负责选中房间）
+window.mainAPI.openRoomFromTray((userId) => {
+  const member = String(userId)
+  const target = { path: Constants.Menu.ROOMS, query: { member } }
+  // 已在同一个 ?member= 时 push 不触发 watch，先清空再带上，重复点击也能重新定位
+  if (route.path === Constants.Menu.ROOMS && route.query.member === member)
+    void router.replace({ path: Constants.Menu.ROOMS }).then(() => router.push(target))
+  else
+    void router.push(target)
+})
+
 const dockItems = computed(() => [
   { index: Constants.Menu.LIVES, label: '直播', icon: VideoCamera, color: 'var(--color-lives)' },
   { index: Constants.Menu.ROOMS, label: '房间', icon: ChatDotRound, color: 'var(--color-rooms)', badge: totalUnread.value || undefined },
