@@ -1,4 +1,6 @@
 import type { PocketRoomReadMark, PocketUnreadBatch } from '@preload/ipc-contract'
+import type { OfficialInfoItem } from '../data'
+import type { TrayUnreadRoom } from '../tray'
 import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
 /**
  * 房间未读检测服务（主进程唯一真相）。
@@ -204,6 +206,31 @@ function snapshot(): PocketUnreadBatch {
   return { rooms, total }
 }
 
+/** 未读房间在菜单栏的显示名：成员档案优先，官方账号回落，最后兜底 userId */
+function trayRoomLabel(userId: number, officials: OfficialInfoItem[]): string {
+  const member = Database.instance().getMemberInfo(userId)
+  const official = officials.find(item => Number(item.userId) === userId)
+  return member?.realName || member?.nickname
+    || official?.realName || official?.nickname
+    || `口袋用户 ${userId}`
+}
+
+/** 未读快照 → 托盘房间列表；按最新消息倒序，名称在此一次解析完 */
+function trayRooms(state: PocketUnreadBatch): TrayUnreadRoom[] {
+  const officials = Database.instance().getAllMembers().officials
+  return Object.entries(state.rooms)
+    .map(([userId, entry]) => {
+      const id = Number(userId)
+      return {
+        userId: id,
+        name: trayRoomLabel(id, officials),
+        count: entry.count,
+        latestTime: entry.latestTime,
+      }
+    })
+    .sort((a, b) => b.latestTime - a.latestTime || a.userId - b.userId)
+}
+
 /** 未读变化统一出口：全量广播（多窗镜像）+ 任务栏/Dock 角标（Windows overlay 图标留给 M2） */
 function publish(): void {
   const state = snapshot()
@@ -216,8 +243,8 @@ function publish(): void {
     log('[pocket-unread] 应用角标设置失败', error)
   }
 
-  // Windows 托盘未读提示（随未读快照实时更新 tooltip；非托盘场景为 no-op）
-  setTrayUnread(state.total)
+  // 托盘 / 菜单栏未读提示：角标、tooltip 与房间菜单共用同一份明细（非托盘场景为 no-op）
+  setTrayUnread(trayRooms(state))
 }
 
 /**

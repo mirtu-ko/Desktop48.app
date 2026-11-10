@@ -1,13 +1,12 @@
 /**
- * 媒体播放器键盘快捷键：
- * 按键→动作的映射与防误触规则（输入框过滤 / 原生控件交还 / 长按去抖）在此单源维护。
+ * 媒体播放器键盘快捷键：按键→动作的映射与防误触规则（输入框过滤 / 原生控件交还 / 长按去抖）单源维护。
  *
- * 两种触发策略，由宿主按场景选择：
- * - 焦点制（PlaybackPlayer）：绑定在根节点，持有焦点才响应——回放页多实例并存时互不干扰
- * - 悬浮制（LivePlayer）：hover 检测 + window 监听——直播浮窗无焦点概念，
- *   同屏多个浮窗只有鼠标所在那个响应
- * 两边共用同一份按键分派（dispatchMediaShortcut），改键位只需改这里。
+ * 播放窗是独立 BrowserWindow，按键只到 OS 激活的那个窗口，故宿主一律挂 window 监听：
+ * 不依赖焦点或 hover，全屏时浏览器把焦点限制在全屏元素内也不会失效。
  */
+
+import { useEventListener } from '@vueuse/core'
+
 export interface MediaShortcutActions {
   togglePlay: () => void
   toggleFullscreen: () => void
@@ -30,12 +29,12 @@ export function dispatchMediaShortcut(
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable))
     return false
 
-  // 空格与方向键原生 controls 自身就会响应，焦点落在媒体元素或按钮上时必须交还给原生：
-  // 否则会出现 keydown 由本组件暂停、keyup 又被按钮的默认激活行为恢复播放的重复触发。
+  // 只有带原生 controls 的媒体元素会自己处理空格 / 方向键；本项目播控全自绘，
+  // 把按键交还给 BUTTON 或裸露 video/audio 等于直接丢弃。
   const nativeOwnsKey = event.key === ' ' || event.key.startsWith('Arrow')
-  const focusInNativeControl = target
-    && (target.tagName === 'VIDEO' || target.tagName === 'AUDIO' || target.tagName === 'BUTTON')
-  if (nativeOwnsKey && focusInNativeControl)
+  const nativeMediaOwnsKey = nativeOwnsKey && !!mediaElement?.controls && target === mediaElement
+  // 按钮上的空格会触发原生激活，仍需让行，否则 togglePlay 与 click 双触发
+  if (nativeMediaOwnsKey || (event.key === ' ' && target?.tagName === 'BUTTON'))
     return false
 
   switch (event.key) {
@@ -98,26 +97,22 @@ export function dispatchMediaShortcut(
   return true
 }
 
+/** 窗口级快捷键：OS 激活哪个播放窗，keydown 就只到哪个 window */
 export function useMediaShortcuts(options: {
-  /** 焦点容器：快捷键只在它持有焦点时生效 */
-  getRoot: () => HTMLElement | null
   /** 当前媒体元素：方向键 seek / 调音量直接操作它 */
   getMedia: () => HTMLMediaElement | null
-  actions: MediaShortcutActions
+  actions: Partial<MediaShortcutActions>
+  /** 额外的启用条件（如电台直播不接旋转键） */
+  isEnabled?: () => boolean
 }) {
-  /** 点击播放器即把焦点收回根节点，让快捷键随即生效（点在按钮/输入上时保留其原生焦点） */
-  function onPointerDown(event: PointerEvent) {
-    const target = event.target as HTMLElement | null
-    if (target?.closest('input, textarea, button, [contenteditable="true"]'))
-      return
-    options.getRoot()?.focus({ preventScroll: true })
-  }
-
   function onKeydown(event: KeyboardEvent) {
+    // 组合键交给系统 / 浏览器（Cmd+R 刷新等），别和播放器快捷键打架
+    if (event.ctrlKey || event.metaKey || event.altKey || (options.isEnabled && !options.isEnabled()))
+      return
     const consumed = dispatchMediaShortcut(event, options.actions, options.getMedia())
     if (consumed)
       event.preventDefault()
   }
 
-  return { onKeydown, onPointerDown }
+  useEventListener(window, 'keydown', onKeydown)
 }

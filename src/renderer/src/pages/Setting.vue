@@ -5,6 +5,7 @@ import type { InputInstance } from 'element-plus'
 import { FEEDBACK_CONTACT_MAX, FEEDBACK_CONTENT_MAX, formatFeedbackMeta } from '@common/feedback'
 import { DEFAULT_POCKET_CLIENT_PROFILE, POCKET_CLIENT_PROFILE_OPTIONS, pocketClientProfileOption } from '@common/pocket-client-profile'
 import { ChatDotRound, Connection, Cpu, Document, Download, Folder, Hide, Lock, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
+import appIcon from '@renderer/assets/icon.png'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
@@ -27,10 +28,11 @@ import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
 import { previewReleaseNotes } from '@renderer/utils/update-notes'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 const router = useRouter()
+const route = useRoute()
 
 // 下载目录的状态与读写集中在 use-app-config.ts
 const {
@@ -94,6 +96,7 @@ async function handleCheckIn() {
   checkingIn.value = true
   try {
     const result = await checkInPocket()
+    trackEvent('pocket:checkin', { result: 'ok' })
     const rewards = [`成长值 +${result.addExp}`, `鸡翅 +${result.addSupport}`]
     if (result.addMoney > 0)
       rewards.push(`鸡腿 +${result.addMoney}`)
@@ -101,6 +104,7 @@ async function handleCheckIn() {
     ElMessage.success(`签到成功：${rewards.join('，')}${days}`)
   }
   catch (error) {
+    trackEvent('pocket:checkin', { result: 'fail' })
     debugLog('pocket-auth', '签到失败：', error)
     ElMessage.warning(pocketAuthErrorMessage(error))
   }
@@ -118,6 +122,7 @@ onMounted(async () => {
   // 已登录则静默拉取一次口袋关注（friends/id 一次性返回，无分页成本）
   syncPocketFollowIfStale(5 * 60 * 1000)
   await loadFeedbackMeta()
+  consumeUpdateFocus()
 })
 
 /** FFmpeg 行状态徽章：可用 / 未配置 / 目录不存在 / 缺少 ffmpeg */
@@ -161,11 +166,14 @@ async function handleChooseFfmpegDir() {
 // 用于接口报错（如 HTTP 403）时让用户自助定位：不可达 / 被拒 / 服务端异常一目了然。
 const diagnosing = ref(false)
 const diagnoseResults = ref<NetDiagnoseItem[]>([])
+/** 诊断结果弹窗：点击即打开，先给等待态，出结果后原地替换 */
+const diagnoseDialogVisible = ref(false)
 
 /** 发起诊断：结果整体替换而非追加，重复点击看到的是最新一轮 */
 async function handleDiagnose() {
   if (diagnosing.value)
     return
+  diagnoseDialogVisible.value = true
   diagnosing.value = true
   try {
     diagnoseResults.value = await window.mainAPI.netDiagnose()
@@ -810,6 +818,14 @@ const friendLinks: FriendLink[] = [
     color: '#ff0000',
     glyph: 'M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z',
   },
+  { name: 'Desktop48', url: 'https://48.v2ing.com/', abbr: 'D48', color: 'var(--brand-primary)', logo: appIcon },
+  {
+    name: 'GitHub 仓库',
+    url: 'https://github.com/mirtu-ko/Desktop48.app',
+    abbr: 'GH',
+    color: '#24292f',
+    glyph: 'M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12',
+  },
 ]
 
 /** 参考项目致谢 */
@@ -838,619 +854,776 @@ function linkHost(url: string) {
 function hideLogo(event: Event) {
   (event.target as HTMLImageElement).style.display = 'none'
 }
+
+/** 左侧分组导航：id 对应内容区的 [data-setting-group]，label 需与组标题文案保持一致 */
+const settingGroups = [
+  { id: 'account', label: '账号' },
+  { id: 'media', label: '播放与文件' },
+  { id: 'content', label: '内容与可见性' },
+  { id: 'app', label: '应用' },
+  { id: 'about', label: '关于' },
+]
+
+const settingRootRef = ref<HTMLElement | null>(null)
+/** el-scrollbar 实例，只读取 wrapRef；容器口径见 utils/page-scroll.ts */
+const settingScrollRef = ref<any>(null)
+const activeGroup = ref(settingGroups[0].id)
+
+/** 平滑滚动期间锁住高亮，避免途经分组被依次点亮；用户中途打断由超时兜底解锁 */
+let navTargetId: string | null = null
+let navTargetTop = 0
+let navLockUntil = 0
+
+function groupElements(): HTMLElement[] {
+  return Array.from(settingRootRef.value?.querySelectorAll<HTMLElement>('[data-setting-group]') ?? [])
+}
+
+/** 组标题相对滚动视口顶部的位置；不用 offsetTop，避免 offsetParent 差异 */
+function groupTop(el: HTMLElement, wrap: HTMLElement): number {
+  return el.getBoundingClientRect().top - wrap.getBoundingClientRect().top
+}
+
+function syncActiveGroup(wrap: HTMLElement) {
+  if (navTargetId) {
+    const arrived = Math.abs(wrap.scrollTop - navTargetTop) < 4
+    if (arrived || Date.now() > navLockUntil)
+      navTargetId = null
+    else
+      return
+  }
+
+  const items = groupElements()
+  if (!items.length)
+    return
+
+  let current = items[0].dataset.settingGroup ?? settingGroups[0].id
+  for (const el of items) {
+    if (groupTop(el, wrap) > 40)
+      break
+    current = el.dataset.settingGroup ?? current
+  }
+
+  // 末尾分组内容较矮时永远到不了判定线，滚到底即视为最后一组；
+  // 内容不足一屏时不做此判定，否则首屏就会被误标成「关于」
+  const scrollable = wrap.scrollHeight - wrap.clientHeight > 40
+  if (scrollable && wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 4)
+    current = items[items.length - 1].dataset.settingGroup ?? current
+
+  activeGroup.value = current
+}
+
+function onSettingScroll() {
+  const wrap = settingScrollRef.value?.wrapRef as HTMLElement | undefined
+  if (wrap)
+    syncActiveGroup(wrap)
+}
+
+/** 滚到指定元素并同步左侧导航高亮；平滑滚动期间用 navTargetId 锁住途经分组 */
+function scrollToElement(target: HTMLElement, group: string) {
+  const wrap = settingScrollRef.value?.wrapRef as HTMLElement | undefined
+  if (!wrap)
+    return
+
+  navTargetTop = Math.max(0, wrap.scrollTop + groupTop(target, wrap) - 12)
+  navTargetId = group
+  navLockUntil = Date.now() + 1200
+  activeGroup.value = group
+  wrap.scrollTo({ top: navTargetTop, behavior: 'smooth' })
+}
+
+function scrollToGroup(id: string) {
+  const target = settingRootRef.value?.querySelector<HTMLElement>(`[data-setting-group="${id}"]`)
+  if (target)
+    scrollToElement(target, id)
+}
+
+/**
+ * 首页新版本 toast 的「去更新」会带 ?focus=update 进来：定位到「应用 → 版本」行，
+ * 并立刻把参数从地址栏清掉，避免之后每次切回设置页都被重新滚到版本行。
+ * 设置页首次挂载走 onMounted，已被 KeepAlive 缓存时走 onActivated。
+ */
+function consumeUpdateFocus() {
+  if (route.query.focus !== 'update')
+    return
+  void router.replace({ path: Constants.Menu.SETTING })
+  void nextTick(() => {
+    const target = settingRootRef.value?.querySelector<HTMLElement>('#setting-update')
+    if (target)
+      scrollToElement(target, 'app')
+  })
+}
+
+onActivated(consumeUpdateFocus)
 </script>
 
 <template>
   <el-scrollbar
+    ref="settingScrollRef"
     class="scrollbar-wrapper"
     wrap-class="scrollbar-wrapper"
+    @scroll="onSettingScroll"
   >
-    <div class="setting-root">
-      <!-- 口袋48账号 -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile auth-avatar"
-            :class="{ 'is-clickable': pocketAuthState.loggedIn, 'is-verifying': verifying, 'has-avatar': !!authAvatarUrl }"
-            :style="{ '--tile-color': 'var(--brand-primary)' }"
-            :title="pocketAuthState.loggedIn ? (verifying ? '正在验证登录…' : '点击查看登录状态与账号资料') : ''"
-            @click="pocketAuthState.loggedIn ? verifyLogin() : undefined"
-          >
-            <img
-              v-if="pocketAuthState.loggedIn && authAvatarUrl"
-              :src="authAvatarUrl"
-              alt="账号头像"
-            >
-            <el-icon v-else>
-              <User />
-            </el-icon>
-          </span>
-          <div class="row-text row-text--fluid">
-            <div class="row-title">
-              {{ authRowTitle }}<span
-                v-if="currentProfileLabel"
-                class="row-profile-badge"
-                :title="pocketClientProfileOption(pocketAuthState.clientProfile).hint"
-              >{{ currentProfileLabel }}</span>
-            </div>
-            <div class="row-desc">
-              <template v-if="pocketAuthState.loggedIn">
-                账号<template v-if="pocketAuthState.mobileMasked">
-                  （{{ pocketAuthState.mobileMasked }}）
-                </template>
-              </template>
-              <template v-else>
-                登录后可在直播页实时查看口袋互动消息
-              </template>
-            </div>
-          </div>
-          <div class="row-actions">
-            <template v-if="pocketAuthState.loggedIn">
-              <el-tag
-                v-if="pocketAuthState.plainFallback"
-                type="warning"
-                size="small"
-                class="auth-fallback-tag"
-              >
-                明文存储
-              </el-tag>
-              <el-button
-                :loading="checkingIn"
-                @click="handleCheckIn"
-              >
-                签到
-              </el-button>
-              <el-button
-                type="danger"
-                plain
-                @click="confirmLogout"
-              >
-                退出登录
-              </el-button>
-            </template>
-            <el-button
-              v-else
-              type="primary"
-              @click="openLoginDialog"
-            >
-              登录
-            </el-button>
-          </div>
-        </div>
-      </section>
-
-      <!-- 默认下载目录 -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-downloads)' }"
-          >
-            <el-icon><Folder /></el-icon>
-          </span>
-          <div class="row-text">
-            <div class="row-title">
-              默认下载目录
-            </div>
-            <div class="row-desc">
-              回放与录制文件的保存位置
-            </div>
-          </div>
-          <el-input
-            v-model="downloadDirectory"
-            class="row-control"
-            readonly
-            placeholder="点击输入框选择目录"
-            @click="setDownloadDirectory"
-          />
-          <div class="row-actions">
-            <el-button
-              :disabled="!downloadDirectory"
-              @click="openDownloadDirectory"
-            >
-              打开目录
-            </el-button>
-            <el-button
-              type="primary"
-              @click="setDownloadDirectory"
-            >
-              选择
-            </el-button>
-          </div>
-        </div>
-      </section>
-
-      <!-- ffmpeg 目录 -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-lives)' }"
-          >
-            <el-icon><Cpu /></el-icon>
-          </span>
-          <div class="row-text">
-            <div class="row-title">
-              FFmpeg 目录
-            </div>
-            <div class="row-desc">
-              播放直播与录制下载依赖的程序
-            </div>
-          </div>
-          <el-input
-            :model-value="ffmpegDirectory"
-            class="row-control"
-            readonly
-            placeholder="未配置，可一键下载或手动选择"
-            @click="handleChooseFfmpegDir"
-          />
-          <div class="row-actions">
-            <el-button
-              :disabled="!ffmpegDirectory"
-              @click="openFfmpegDirectory"
-            >
-              打开目录
-            </el-button>
-            <el-button
-              :disabled="ffmpegBusy"
-              @click="handleChooseFfmpegDir"
-            >
-              选择
-            </el-button>
-            <el-button
-              type="primary"
-              :disabled="ffmpegBusy"
-              :loading="ffmpegDownloading"
-              @click="handleDownloadFfmpeg"
-            >
-              {{ ffmpegDownloading ? '下载中' : '下载' }}
-            </el-button>
-          </div>
-        </div>
-
-        <!-- 就绪状态：目录可能在应用之外被删除或移动，这里给出可直接照做的修复说明 -->
-        <div class="row-body">
-          <div
-            class="ffmpeg-state"
-            :class="ffmpegStateClass"
-          >
-            <span class="state-dot" />
-            <span class="state-label">{{ ffmpegStateLabel }}</span>
-            <span
-              v-if="ffmpegStatus && !ffmpegStatus.ok"
-              class="state-hint"
-            >{{ ffmpegCopy.hint }}</span>
-          </div>
-          <el-progress
-            v-if="ffmpegDownloading && ffmpegDownloadPercent !== null"
-            class="ffmpeg-progress"
-            :percentage="ffmpegDownloadPercent"
-            :stroke-width="8"
-            :show-text="false"
-          />
-          <p
-            v-if="ffmpegDownloading"
-            class="ffmpeg-progress-label"
-          >
-            {{ ffmpegDownloadLabel }}
-          </p>
-          <p
-            v-else-if="ffmpegStatus && !ffmpegStatus.ok"
-            class="ffmpeg-fix-hint"
-          >
-            下一步：点击「下载」自动获取，或点击「选择」指定本机已有的 FFmpeg 目录。
-          </p>
-        </div>
-      </section>
-
-      <!-- 屏蔽成员 -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-members)' }"
-          >
-            <el-icon><Hide /></el-icon>
-          </span>
-          <div class="row-text row-text--fluid">
-            <div class="row-title">
-              屏蔽成员
-            </div>
-            <div class="row-desc">
-              已屏蔽 {{ blockedMembers.length }} 名成员，其直播、回放与房间消息将不再展示
-            </div>
-          </div>
-          <div class="row-actions">
-            <el-button
-              type="danger"
-              plain
-              :disabled="!blockedMembers.length"
-              @click="confirmClearBlockedMembers"
-            >
-              清空
-            </el-button>
-            <el-button
-              type="primary"
-              @click="goMembers"
-            >
-              屏蔽成员
-            </el-button>
-          </div>
-        </div>
-        <div class="row-body">
-          <div v-if="blockedMembers.length" class="tag-list">
-            <el-tag
-              v-for="member in blockedMembers"
-              :key="member.userId"
-              closable
-              :color="Tools.toHex(member.teamColor)"
-              effect="dark"
-              @close="unblockMember(member.userId)"
-            >
-              {{ member.realName }}
-            </el-tag>
-          </div>
-          <div v-else class="empty-hint">
-            尚未屏蔽任何成员，点击「屏蔽成员」前往成员页操作
-          </div>
-        </div>
-      </section>
-
-      <!-- 版本与更新：轻量单行，作为设置项收尾，与下方声明区的「关于」语义衔接 -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-albums)' }"
-          >
-            <el-icon><Refresh /></el-icon>
-          </span>
-          <div class="row-text row-text--fluid">
-            <div class="row-title">
-              版本
-              <span v-if="appVersion" class="row-version">v{{ appVersion }}</span>
-              <span v-if="availableUpdate" class="row-update-badge">有新版本</span>
-            </div>
-            <div class="row-desc" :class="updaterDescClass">
-              {{ updaterDesc }}
-            </div>
-          </div>
-          <div class="row-actions">
-            <el-button
-              v-if="updaterState.phase === 'available' || updaterState.phase === 'ready'"
-              :disabled="updaterChecking"
-              @click="checkUpdate"
-            >
-              重新检查
-            </el-button>
-            <el-button
-              type="primary"
-              :disabled="updaterAction.disabled"
-              :loading="updaterAction.loading"
-              @click="updaterAction.handler"
-            >
-              {{ updaterAction.label }}
-            </el-button>
-          </div>
-        </div>
-
-        <!-- 新版本提示：available 态展开版本对比与更新说明；downloading 态接棒显示下载进度 -->
-        <div v-if="availableUpdate || downloadingUpdate" class="row-body update-notice">
-          <template v-if="availableUpdate">
-            <div class="update-notice-head">
-              <el-icon class="update-notice-icon">
-                <Top />
-              </el-icon>
-              <span class="update-notice-title">{{ availableTitle }}</span>
-              <span class="update-notice-versions">{{ updateVersionLine }}</span>
-            </div>
-            <ul v-if="releaseNotesPreview.lines.length" class="update-notes">
-              <li
-                v-for="(line, index) in releaseNotesPreview.lines"
-                :key="index"
-              >
-                {{ line }}
-              </li>
-            </ul>
-            <p v-if="releaseNotesPreview.truncated" class="update-notes-more">
-              更多更新内容详见官网
-            </p>
-            <p class="update-notice-hint">
-              {{ manualUpdateNotice
-                ? 'macOS 暂不支持应用内更新，请点击「去下载」打开下载页，下载后手动安装。'
-                : '点击「更新版本」开始下载，下载完成后重启应用即可完成升级。' }}
-            </p>
-          </template>
-          <template v-else-if="downloadingUpdate">
-            <div class="update-notice-head">
-              <el-icon class="update-notice-icon">
-                <Download />
-              </el-icon>
-              <span class="update-notice-title">{{ downloadingTitle }}</span>
-              <span class="update-notice-versions">{{ updaterPercent.toFixed(0) }}%</span>
-            </div>
-            <el-progress
-              class="update-progress"
-              :percentage="updaterPercent"
-              :stroke-width="8"
-              :show-text="false"
-            />
-            <p class="update-notice-hint">
-              {{ downloadSizeText }}，下载完成后需重启应用以完成更新。
-            </p>
-          </template>
-        </div>
-      </section>
-
-      <!-- 网络诊断 -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-shows)' }"
-          >
-            <el-icon><Connection /></el-icon>
-          </span>
-          <div class="row-text row-text--fluid">
-            <div class="row-title">
-              网络诊断（仅供参考）
-            </div>
-            <div class="row-desc">
-              检测核心服务域名与口袋客户端身份的连通情况；接口报错（如 HTTP 403）时可能影响使用
-            </div>
-          </div>
-          <div class="row-actions">
-            <el-button
-              v-if="diagnoseResults.length"
-              :disabled="diagnosing"
-              @click="handleCopyDiagnose"
-            >
-              复制结果
-            </el-button>
-            <el-button
-              type="primary"
-              :loading="diagnosing"
-              @click="handleDiagnose"
-            >
-              开始诊断
-            </el-button>
-          </div>
-        </div>
-        <div
-          v-if="diagnoseResults.length"
-          class="row-body"
+    <div
+      ref="settingRootRef"
+      class="setting-root"
+    >
+      <nav class="setting-nav" aria-label="设置分组导航">
+        <span class="setting-nav-title">设置</span>
+        <button
+          v-for="group in settingGroups"
+          :key="group.id"
+          type="button"
+          class="setting-nav-item"
+          :class="{ 'is-active': activeGroup === group.id }"
+          :aria-current="activeGroup === group.id ? 'location' : undefined"
+          @click="scrollToGroup(group.id)"
         >
-          <div class="diagnose-grid">
-            <div
-              v-for="item in diagnoseResults"
-              :key="`${item.label}|${item.url}`"
-              class="diagnose-item"
+          {{ group.label }}
+        </button>
+      </nav>
+      <div class="setting-content">
+        <!-- 账号 -->
+        <h2 class="setting-group-label" data-setting-group="account">
+          账号
+        </h2>
+        <section class="setting-card glass-card">
+          <div class="setting-row">
+            <span
+              class="row-icon icon-tile auth-avatar"
+              :class="{ 'is-clickable': pocketAuthState.loggedIn, 'is-verifying': verifying, 'has-avatar': !!authAvatarUrl }"
+              :style="{ '--tile-color': 'var(--brand-primary)' }"
+              :title="pocketAuthState.loggedIn ? (verifying ? '正在验证登录…' : '点击查看登录状态与账号资料') : ''"
+              @click="pocketAuthState.loggedIn ? verifyLogin() : undefined"
             >
-              <div class="diagnose-head">
-                <span class="diagnose-label">{{ item.label }}</span>
-                <el-tag
-                  size="small"
-                  :type="diagnoseVerdict(item).type"
-                >
-                  {{ diagnoseVerdict(item).label }}
-                </el-tag>
-              </div>
-              <div class="diagnose-detail">
-                {{ item.status === null ? '无响应' : `HTTP ${item.status}` }} · {{ item.ms }}ms
-                <span
-                  v-if="diagnoseNote(item)"
-                  class="diagnose-note"
-                >{{ diagnoseNote(item) }}</span>
-                <span
-                  v-if="item.detail"
-                  class="diagnose-note diagnose-note--body"
-                >{{ item.detail }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 问题反馈：入口卡；输入区在弹窗内，避免设置页被一块长表单撑开 -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile"
-            :style="{ '--tile-color': 'var(--color-setting)' }"
-          >
-            <el-icon><ChatDotRound /></el-icon>
-          </span>
-          <div class="row-text row-text--fluid">
-            <div class="row-title">
-              问题反馈
-            </div>
-            <div class="row-desc">
-              描述使用中遇到的问题，提交时会附带版本与运行环境；不收集账号凭据、手机号与聊天内容
-            </div>
-          </div>
-          <div class="row-actions">
-            <el-button
-              type="primary"
-              @click="feedbackDialogVisible = true"
-            >
-              写反馈
-            </el-button>
-          </div>
-        </div>
-      </section>
-
-      <!-- 反馈弹窗：点遮罩不关闭（正文可能较长，误触会丢掉已写内容） -->
-      <el-dialog
-        v-model="feedbackDialogVisible"
-        title="问题反馈"
-        width="520px"
-        append-to-body
-        :close-on-click-modal="false"
-        :close-on-press-escape="!feedbackSubmitting"
-      >
-        <div class="feedback-form">
-          <p class="feedback-intro">
-            提交时会附带应用版本、运行平台与客户端身份档，便于定位问题。请勿填写账号密码或他人隐私信息。
-          </p>
-          <el-input
-            v-model="feedbackContent"
-            type="textarea"
-            :rows="6"
-            :maxlength="FEEDBACK_CONTENT_MAX"
-            resize="none"
-            placeholder="发生了什么？例如：进入某成员房间后消息不再刷新，重启应用可恢复"
-          />
-          <div class="feedback-hint">
-            还可输入 {{ feedbackRemaining }} 字
-          </div>
-          <el-input
-            v-model="feedbackContact"
-            :maxlength="FEEDBACK_CONTACT_MAX"
-            placeholder="联系方式（可选，便于回复你）"
-          />
-          <p v-if="!feedbackReady" class="feedback-warn">
-            上报服务尚未配置，暂无法提交；可先复制环境信息通过其它渠道反馈。
-          </p>
-        </div>
-        <template #footer>
-          <div class="feedback-dialog-footer">
-            <el-button
-              :disabled="!feedbackState"
-              @click="handleCopyFeedbackMeta"
-            >
-              复制环境信息
-            </el-button>
-            <div class="feedback-dialog-actions">
-              <el-button
-                :disabled="feedbackSubmitting"
-                @click="feedbackDialogVisible = false"
+              <img
+                v-if="pocketAuthState.loggedIn && authAvatarUrl"
+                :src="authAvatarUrl"
+                alt="账号头像"
               >
-                取消
+              <el-icon v-else>
+                <User />
+              </el-icon>
+            </span>
+            <div class="row-text row-text--fluid">
+              <div class="row-title">
+                {{ authRowTitle }}<span
+                  v-if="currentProfileLabel"
+                  class="row-profile-badge"
+                  :title="pocketClientProfileOption(pocketAuthState.clientProfile).hint"
+                >{{ currentProfileLabel }}</span>
+              </div>
+              <div class="row-desc">
+                <template v-if="pocketAuthState.loggedIn">
+                  账号<template v-if="pocketAuthState.mobileMasked">
+                    （{{ pocketAuthState.mobileMasked }}）
+                  </template>
+                </template>
+                <template v-else>
+                  登录后可在直播页实时查看口袋互动消息
+                </template>
+              </div>
+            </div>
+            <div class="row-actions">
+              <template v-if="pocketAuthState.loggedIn">
+                <el-tag
+                  v-if="pocketAuthState.plainFallback"
+                  type="warning"
+                  size="small"
+                  class="auth-fallback-tag"
+                >
+                  明文存储
+                </el-tag>
+                <el-button
+                  :loading="checkingIn"
+                  @click="handleCheckIn"
+                >
+                  签到
+                </el-button>
+                <el-button
+                  type="danger"
+                  plain
+                  @click="confirmLogout"
+                >
+                  退出登录
+                </el-button>
+              </template>
+              <el-button
+                v-else
+                type="primary"
+                @click="openLoginDialog"
+              >
+                登录
+              </el-button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 播放与文件 -->
+        <h2 class="setting-group-label" data-setting-group="media">
+          播放与文件
+        </h2>
+        <section class="setting-card glass-card">
+          <div class="setting-row">
+            <span
+              class="row-icon icon-tile"
+              :style="{ '--tile-color': 'var(--color-downloads)' }"
+            >
+              <el-icon><Folder /></el-icon>
+            </span>
+            <div class="row-text">
+              <div class="row-title">
+                默认下载目录
+              </div>
+              <div class="row-desc">
+                回放与录制文件的保存位置
+              </div>
+            </div>
+            <el-input
+              v-model="downloadDirectory"
+              class="row-control"
+              readonly
+              placeholder="点击输入框选择目录"
+              @click="setDownloadDirectory"
+            />
+            <div class="row-actions">
+              <el-button
+                :disabled="!downloadDirectory"
+                @click="openDownloadDirectory"
+              >
+                打开目录
               </el-button>
               <el-button
                 type="primary"
-                :disabled="!feedbackReady"
-                :loading="feedbackSubmitting"
-                @click="handleSubmitFeedback"
+                @click="setDownloadDirectory"
               >
-                提交
+                选择
               </el-button>
             </div>
           </div>
-        </template>
-      </el-dialog>
+        </section>
 
-      <!-- 权利声明 -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile"
-            style="--tile-color: #909399"
-          >
-            <el-icon><Document /></el-icon>
-          </span>
-          <div class="row-text">
-            <div class="row-title">
-              权利声明
-            </div>
-            <div class="row-desc">
-              免责声明与版权归属说明
-            </div>
-          </div>
-        </div>
-        <div class="row-body">
-          <div class="friend-links">
-            <span class="links-label">推荐链接</span>
-            <div class="links-grid">
-              <a
-                v-for="link in friendLinks"
-                :key="link.name"
-                class="friend-link"
-                :href="link.url"
-                target="_blank"
-                rel="noopener"
-              >
-                <span class="link-logo icon-tile" :style="{ '--tile-color': link.color }">
-                  <svg
-                    v-if="link.glyph"
-                    class="link-glyph"
-                    :viewBox="link.glyphBox || '0 0 24 24'"
-                    aria-hidden="true"
-                  >
-                    <path :d="link.glyph" />
-                  </svg>
-                  <span v-else class="link-abbr">{{ link.abbr }}</span>
-                  <img v-if="link.logo" :src="link.logo" alt="" @error="hideLogo">
-                </span>
-                <span class="link-meta">
-                  <span class="link-name">{{ link.name }}</span>
-                  <span class="link-host ellipsis">{{ linkHost(link.url) }}</span>
-                </span>
-              </a>
-            </div>
-          </div>
-        </div>
-        <div class="legal-grid">
-          <div class="legal-block">
-            <p class="legal-title">
-              版权声明
-            </p>
-            <p class="legal-text">
-              所有数据来源于SNH48 官方网站、口袋48 APP 等互联网公开数据，本应用不拥有任何资源的版权。
-            </p>
-            <p class="legal-text">
-              包括且不限于商标、肖像权、音视频版权，均归 SNH48 Group 及其运营方（上海丝芭文化传媒集团有限公司）和其他相关权利人所有。
-            </p>
-          </div>
-          <div class="legal-block">
-            <p class="legal-title">
-              免责声明
-            </p>
-            <p class="legal-text">
-              本应用不对任何音视频资源的版权合法性承担责任。用户在使用本应用时，应当遵守相关法律法规，不得用于商业用途。
-            </p>
-            <p class="legal-text">
-              任何因使用本应用而产生的版权纠纷或法律责任，均由用户自行承担。本应用不承担任何责任。
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <!-- 参考项目致谢 -->
-      <section class="setting-card glass-card">
-        <div class="setting-row">
-          <span
-            class="row-icon icon-tile"
-            style="--tile-color: #909399"
-          >
-            <el-icon><Document /></el-icon>
-          </span>
-          <div class="row-text row-text--fluid">
-            <div class="row-title">
-              参考项目致谢
-            </div>
-            <div class="row-desc">
-              感谢以下项目提供的实现参考
-            </div>
-          </div>
-        </div>
-        <div class="row-body">
-          <div class="credits-grid">
-            <a
-              v-for="project in referenceProjects"
-              :key="project.name"
-              class="credit-link"
-              :href="project.url"
-              target="_blank"
-              rel="noopener"
+        <!-- ffmpeg 目录 -->
+        <section class="setting-card glass-card">
+          <div class="setting-row">
+            <span
+              class="row-icon icon-tile"
+              :style="{ '--tile-color': 'var(--color-lives)' }"
             >
-              <span class="credit-name">{{ project.name }}</span>
-              <span class="credit-role ellipsis">{{ project.role }}</span>
-            </a>
+              <el-icon><Cpu /></el-icon>
+            </span>
+            <div class="row-text">
+              <div class="row-title">
+                FFmpeg 目录
+              </div>
+              <div class="row-desc">
+                播放直播与录制下载依赖的程序
+              </div>
+            </div>
+            <el-input
+              :model-value="ffmpegDirectory"
+              class="row-control"
+              readonly
+              placeholder="未配置，可一键下载或手动选择"
+              @click="handleChooseFfmpegDir"
+            />
+            <div class="row-actions">
+              <el-button
+                :disabled="!ffmpegDirectory"
+                @click="openFfmpegDirectory"
+              >
+                打开目录
+              </el-button>
+              <el-button
+                :disabled="ffmpegBusy"
+                @click="handleChooseFfmpegDir"
+              >
+                选择
+              </el-button>
+              <el-button
+                type="primary"
+                :disabled="ffmpegBusy"
+                :loading="ffmpegDownloading"
+                @click="handleDownloadFfmpeg"
+              >
+                {{ ffmpegDownloading ? '下载中' : '下载' }}
+              </el-button>
+            </div>
+          </div>
+
+          <!-- 就绪状态：目录可能在应用之外被删除或移动，这里给出可直接照做的修复说明 -->
+          <div class="row-body">
+            <div
+              class="ffmpeg-state"
+              :class="ffmpegStateClass"
+            >
+              <span class="state-dot" />
+              <span class="state-label">{{ ffmpegStateLabel }}</span>
+              <span
+                v-if="ffmpegStatus && !ffmpegStatus.ok"
+                class="state-hint"
+              >{{ ffmpegCopy.hint }}</span>
+            </div>
+            <el-progress
+              v-if="ffmpegDownloading && ffmpegDownloadPercent !== null"
+              class="ffmpeg-progress"
+              :percentage="ffmpegDownloadPercent"
+              :stroke-width="8"
+              :show-text="false"
+            />
+            <p
+              v-if="ffmpegDownloading"
+              class="ffmpeg-progress-label"
+            >
+              {{ ffmpegDownloadLabel }}
+            </p>
+            <p
+              v-else-if="ffmpegStatus && !ffmpegStatus.ok"
+              class="ffmpeg-fix-hint"
+            >
+              下一步：点击「下载」自动获取，或点击「选择」指定本机已有的 FFmpeg 目录。
+            </p>
+          </div>
+        </section>
+
+        <!-- 内容与可见性 -->
+        <h2 class="setting-group-label" data-setting-group="content">
+          内容与可见性
+        </h2>
+        <section class="setting-card glass-card">
+          <div class="setting-row">
+            <span
+              class="row-icon icon-tile"
+              :style="{ '--tile-color': 'var(--color-members)' }"
+            >
+              <el-icon><Hide /></el-icon>
+            </span>
+            <div class="row-text row-text--fluid">
+              <div class="row-title">
+                屏蔽成员
+              </div>
+              <div class="row-desc">
+                已屏蔽 {{ blockedMembers.length }} 名成员，其直播、回放与房间消息将不再展示
+              </div>
+            </div>
+            <div class="row-actions">
+              <el-button
+                type="danger"
+                plain
+                :disabled="!blockedMembers.length"
+                @click="confirmClearBlockedMembers"
+              >
+                清空
+              </el-button>
+              <el-button
+                type="primary"
+                @click="goMembers"
+              >
+                屏蔽成员
+              </el-button>
+            </div>
+          </div>
+          <div class="row-body">
+            <div v-if="blockedMembers.length" class="tag-list">
+              <el-tag
+                v-for="member in blockedMembers"
+                :key="member.userId"
+                closable
+                :color="Tools.toHex(member.teamColor)"
+                effect="dark"
+                @close="unblockMember(member.userId)"
+              >
+                {{ member.realName }}
+              </el-tag>
+            </div>
+            <div v-else class="empty-hint">
+              尚未屏蔽任何成员，点击「屏蔽成员」前往成员页操作
+            </div>
+          </div>
+        </section>
+
+        <!-- 应用 -->
+        <h2 class="setting-group-label" data-setting-group="app">
+          应用
+        </h2>
+        <section id="setting-update" class="setting-card glass-card">
+          <div class="setting-row">
+            <span
+              class="row-icon icon-tile"
+              :style="{ '--tile-color': 'var(--color-albums)' }"
+            >
+              <el-icon><Refresh /></el-icon>
+            </span>
+            <div class="row-text row-text--fluid">
+              <div class="row-title">
+                版本
+                <span v-if="appVersion" class="row-version">v{{ appVersion }}</span>
+                <span v-if="availableUpdate" class="row-update-badge">有新版本</span>
+              </div>
+              <div class="row-desc" :class="updaterDescClass">
+                {{ updaterDesc }}
+              </div>
+            </div>
+            <div class="row-actions">
+              <el-button
+                v-if="updaterState.phase === 'available' || updaterState.phase === 'ready'"
+                :disabled="updaterChecking"
+                @click="checkUpdate"
+              >
+                重新检查
+              </el-button>
+              <el-button
+                type="primary"
+                :disabled="updaterAction.disabled"
+                :loading="updaterAction.loading"
+                @click="updaterAction.handler"
+              >
+                {{ updaterAction.label }}
+              </el-button>
+            </div>
+          </div>
+
+          <!-- 新版本提示：available 态展开版本对比与更新说明；downloading 态接棒显示下载进度 -->
+          <div v-if="availableUpdate || downloadingUpdate" class="row-body update-notice">
+            <template v-if="availableUpdate">
+              <div class="update-notice-head">
+                <el-icon class="update-notice-icon">
+                  <Top />
+                </el-icon>
+                <span class="update-notice-title">{{ availableTitle }}</span>
+                <span class="update-notice-versions">{{ updateVersionLine }}</span>
+              </div>
+              <ul v-if="releaseNotesPreview.lines.length" class="update-notes">
+                <li
+                  v-for="(line, index) in releaseNotesPreview.lines"
+                  :key="index"
+                >
+                  {{ line }}
+                </li>
+              </ul>
+              <p v-if="releaseNotesPreview.truncated" class="update-notes-more">
+                更多更新内容详见官网
+              </p>
+              <p class="update-notice-hint">
+                {{ manualUpdateNotice
+                  ? 'macOS 暂不支持应用内更新，请点击「去下载」打开下载页，下载后手动安装。'
+                  : '点击「更新版本」开始下载，下载完成后重启应用即可完成升级。' }}
+              </p>
+            </template>
+            <template v-else-if="downloadingUpdate">
+              <div class="update-notice-head">
+                <el-icon class="update-notice-icon">
+                  <Download />
+                </el-icon>
+                <span class="update-notice-title">{{ downloadingTitle }}</span>
+                <span class="update-notice-versions">{{ updaterPercent.toFixed(0) }}%</span>
+              </div>
+              <el-progress
+                class="update-progress"
+                :percentage="updaterPercent"
+                :stroke-width="8"
+                :show-text="false"
+              />
+              <p class="update-notice-hint">
+                {{ downloadSizeText }}，下载完成后需重启应用以完成更新。
+              </p>
+            </template>
+          </div>
+        </section>
+
+        <!-- 网络诊断 -->
+        <section class="setting-card glass-card">
+          <div class="setting-row">
+            <span
+              class="row-icon icon-tile"
+              :style="{ '--tile-color': 'var(--color-shows)' }"
+            >
+              <el-icon><Connection /></el-icon>
+            </span>
+            <div class="row-text row-text--fluid">
+              <div class="row-title">
+                网络诊断
+              </div>
+              <div class="row-desc">
+                检测核心服务域名与口袋客户端身份的连通情况；接口报错（如 HTTP 403）时可能影响使用
+              </div>
+            </div>
+            <div class="row-actions">
+              <el-button
+                v-if="diagnoseResults.length"
+                :disabled="diagnosing"
+                @click="diagnoseDialogVisible = true"
+              >
+                查看结果
+              </el-button>
+              <el-button
+                type="primary"
+                :loading="diagnosing"
+                @click="handleDiagnose"
+              >
+                开始诊断
+              </el-button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 问题反馈：入口卡；输入区在弹窗内，避免设置页被一块长表单撑开 -->
+        <section class="setting-card glass-card">
+          <div class="setting-row">
+            <span
+              class="row-icon icon-tile"
+              :style="{ '--tile-color': 'var(--color-setting)' }"
+            >
+              <el-icon><ChatDotRound /></el-icon>
+            </span>
+            <div class="row-text row-text--fluid">
+              <div class="row-title">
+                问题反馈
+              </div>
+              <div class="row-desc">
+                描述使用中遇到的问题，提交时会附带版本与运行环境；不收集账号凭据、手机号与聊天内容
+              </div>
+            </div>
+            <div class="row-actions">
+              <el-button
+                type="primary"
+                @click="feedbackDialogVisible = true"
+              >
+                反馈一下
+              </el-button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 反馈弹窗：点遮罩不关闭（正文可能较长，误触会丢掉已写内容） -->
+        <el-dialog
+          v-model="feedbackDialogVisible"
+          title="问题反馈"
+          width="520px"
+          append-to-body
+          :close-on-click-modal="false"
+          :close-on-press-escape="!feedbackSubmitting"
+        >
+          <div class="feedback-form">
+            <p class="feedback-intro">
+              提交时会附带应用版本、运行平台与客户端身份档，便于定位问题。请勿填写账号密码或他人隐私信息。
+            </p>
+            <el-input
+              v-model="feedbackContent"
+              type="textarea"
+              :rows="6"
+              :maxlength="FEEDBACK_CONTENT_MAX"
+              resize="none"
+              placeholder="发生了什么？例如：进入某成员房间后消息不再刷新，重启应用可恢复"
+            />
+            <div class="feedback-hint">
+              还可输入 {{ feedbackRemaining }} 字
+            </div>
+            <el-input
+              v-model="feedbackContact"
+              :maxlength="FEEDBACK_CONTACT_MAX"
+              placeholder="联系方式（可选，便于回复你）"
+            />
+            <p v-if="!feedbackReady" class="feedback-warn">
+              上报服务尚未配置，暂无法提交；可先复制环境信息通过其它渠道反馈。
+            </p>
+          </div>
+          <template #footer>
+            <div class="feedback-dialog-footer">
+              <el-button
+                :disabled="!feedbackState"
+                @click="handleCopyFeedbackMeta"
+              >
+                复制环境信息
+              </el-button>
+              <div class="feedback-dialog-actions">
+                <el-button
+                  :disabled="feedbackSubmitting"
+                  @click="feedbackDialogVisible = false"
+                >
+                  取消
+                </el-button>
+                <el-button
+                  type="primary"
+                  :disabled="!feedbackReady"
+                  :loading="feedbackSubmitting"
+                  @click="handleSubmitFeedback"
+                >
+                  提交
+                </el-button>
+              </div>
+            </div>
+          </template>
+        </el-dialog>
+
+        <!-- 关于：低频静态内容默认折叠，展开后按「相关链接 / 权利声明 / 致谢」三段呈现 -->
+        <h2 class="setting-group-label" data-setting-group="about">
+          关于
+        </h2>
+        <section class="setting-card glass-card">
+          <details class="setting-about">
+            <summary class="setting-about-summary">
+              <span
+                class="row-icon icon-tile"
+                style="--tile-color: #909399"
+              >
+                <el-icon><Document /></el-icon>
+              </span>
+              <span class="setting-about-text">
+                <span class="setting-about-title">关于本应用</span>
+                <span class="setting-about-desc">主站与源码、相关链接、版权声明与致谢</span>
+              </span>
+              <span class="setting-about-arrow" aria-hidden="true" />
+            </summary>
+            <div class="row-body">
+              <div class="friend-links setting-about-section">
+                <span class="links-label">相关链接</span>
+                <div class="links-grid">
+                  <a
+                    v-for="link in friendLinks"
+                    :key="link.name"
+                    class="friend-link"
+                    :href="link.url"
+                    target="_blank"
+                    rel="noopener"
+                  >
+                    <span class="link-logo icon-tile" :style="{ '--tile-color': link.color }">
+                      <svg
+                        v-if="link.glyph"
+                        class="link-glyph"
+                        :viewBox="link.glyphBox || '0 0 24 24'"
+                        aria-hidden="true"
+                      >
+                        <path :d="link.glyph" />
+                      </svg>
+                      <span v-else class="link-abbr">{{ link.abbr }}</span>
+                      <img v-if="link.logo" :src="link.logo" alt="" @error="hideLogo">
+                    </span>
+                    <span class="link-meta">
+                      <span class="link-name">{{ link.name }}</span>
+                      <span class="link-host ellipsis">{{ linkHost(link.url) }}</span>
+                    </span>
+                  </a>
+                </div>
+              </div>
+              <div class="legal-grid setting-about-section">
+                <div class="legal-block">
+                  <p class="legal-title">
+                    版权声明
+                  </p>
+                  <p class="legal-text">
+                    所有数据来源于SNH48 官方网站、口袋48 APP 等互联网公开数据，本应用不拥有任何资源的版权。
+                  </p>
+                  <p class="legal-text">
+                    包括且不限于商标、肖像权、音视频版权，均归 SNH48 Group 及其运营方（上海丝芭文化传媒集团有限公司）和其他相关权利人所有。
+                  </p>
+                </div>
+                <div class="legal-block">
+                  <p class="legal-title">
+                    免责声明
+                  </p>
+                  <p class="legal-text">
+                    本应用不对任何音视频资源的版权合法性承担责任。用户在使用本应用时，应当遵守相关法律法规，不得用于商业用途。
+                  </p>
+                  <p class="legal-text">
+                    任何因使用本应用而产生的版权纠纷或法律责任，均由用户自行承担。本应用不承担任何责任。
+                  </p>
+                </div>
+              </div>
+              <div class="friend-links setting-about-section">
+                <span class="links-label">参考项目致谢</span>
+                <div class="credits-grid">
+                  <a
+                    v-for="project in referenceProjects"
+                    :key="project.name"
+                    class="credit-link"
+                    :href="project.url"
+                    target="_blank"
+                    rel="noopener"
+                  >
+                    <span class="credit-name">{{ project.name }}</span>
+                    <span class="credit-role ellipsis">{{ project.role }}</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+          </details>
+        </section>
+      </div>
+    </div>
+
+    <!-- 网络诊断结果：点击「开始诊断」即弹出，等待态与结果态原地切换 -->
+    <el-dialog
+      v-model="diagnoseDialogVisible"
+      title="网络诊断结果"
+      width="640px"
+      append-to-body
+    >
+      <!-- 等待态复用登录验证弹窗的轻量 spinner -->
+      <div v-if="diagnosing" class="verify-loading">
+        <span class="verify-spinner" />
+        <span>正在检测核心服务域名与口袋客户端身份…</span>
+      </div>
+      <template v-else-if="diagnoseResults.length">
+        <p class="diagnose-summary">
+          共检测 {{ diagnoseResults.length }} 个目标。结果仅供参考：HTTP 403 表示服务端可达但拒绝访问，需结合各身份行区分地区策略与客户端限制。
+        </p>
+        <div class="diagnose-grid">
+          <div
+            v-for="item in diagnoseResults"
+            :key="`${item.label}|${item.url}`"
+            class="diagnose-item"
+          >
+            <div class="diagnose-head">
+              <span class="diagnose-label">{{ item.label }}</span>
+              <el-tag
+                size="small"
+                :type="diagnoseVerdict(item).type"
+              >
+                {{ diagnoseVerdict(item).label }}
+              </el-tag>
+            </div>
+            <div class="diagnose-detail">
+              {{ item.status === null ? '无响应' : `HTTP ${item.status}` }} · {{ item.ms }}ms
+              <span
+                v-if="diagnoseNote(item)"
+                class="diagnose-note"
+              >{{ diagnoseNote(item) }}</span>
+              <span
+                v-if="item.detail"
+                class="diagnose-note diagnose-note--body"
+              >{{ item.detail }}</span>
+            </div>
           </div>
         </div>
-      </section>
-    </div>
+      </template>
+      <div v-else class="empty-hint">
+        诊断未返回结果，请点击「重新诊断」重试
+      </div>
+      <template #footer>
+        <div class="diagnose-dialog-footer">
+          <el-button
+            :disabled="!diagnoseResults.length || diagnosing"
+            @click="handleCopyDiagnose"
+          >
+            复制结果
+          </el-button>
+          <div class="diagnose-dialog-actions">
+            <el-button
+              :disabled="diagnosing"
+              @click="handleDiagnose"
+            >
+              重新诊断
+            </el-button>
+            <el-button
+              type="primary"
+              @click="diagnoseDialogVisible = false"
+            >
+              关闭
+            </el-button>
+          </div>
+        </div>
+      </template>
+    </el-dialog>
 
     <!-- 口袋48登录弹窗：短信验证码 / Token 粘贴 两种方式 -->
     <el-dialog
@@ -1750,19 +1923,187 @@ function hideLogo(event: Event) {
 
 <style scoped lang="scss">
 .setting-root {
-  max-width: 880px;
+  /* 左 152px 导航 + 24px 间距 + 右侧内容，内容区仍以约 880px 为上限 */
+  max-width: 1120px;
   margin: 0 auto;
   /* 底部留出悬浮 Dock 的高度（--dock-reserve），避免最后一张卡片被遮挡 */
   padding: 20px 24px var(--dock-reserve);
   display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.setting-content {
+  display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
+}
+
+/* 左侧分组导航：粘性停靠在滚动容器顶部；激活态竖条与内容区组标签同语言 */
+.setting-nav {
+  position: sticky;
+  top: 20px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 152px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--el-border-color) 55%, #ffffff);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--el-bg-color) 78%, transparent);
+  backdrop-filter: blur(16px) saturate(180%);
+  box-shadow: var(--shadow-sm);
+}
+
+.setting-nav-title {
+  padding: 2px 10px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--el-text-color-secondary);
+}
+
+.setting-nav-item {
+  position: relative;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--el-text-color-regular);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color 0.18s ease,
+    background 0.18s ease;
+
+  &:hover {
+    color: var(--brand-primary);
+    background: color-mix(in srgb, var(--brand-primary) 8%, transparent);
+  }
+
+  &.is-active {
+    color: var(--brand-primary);
+    font-weight: 600;
+    background: color-mix(in srgb, var(--brand-primary) 12%, transparent);
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 9px;
+      bottom: 9px;
+      left: 2px;
+      width: 3px;
+      border-radius: 2px;
+      background: linear-gradient(180deg, var(--brand-primary-light), var(--brand-primary));
+    }
+  }
+}
+
+/* 窄窗收回单列，避免导航把卡片挤得过窄 */
+@media (max-width: 1000px) {
+  .setting-root {
+    max-width: 880px;
+  }
+
+  .setting-nav {
+    display: none;
+  }
 }
 
 /* 设置卡片：磨砂玻璃基底见全局 .glass-card */
 .setting-card {
   padding: 18px 20px;
   border-radius: var(--radius-lg);
+}
+
+/* 分组标签置于卡片之外，不切开玻璃卡面；左侧色条复用声明区的视觉语言。
+   负下边距抵消 flex gap，让标签贴近所属卡片、组间留白更大 */
+.setting-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 -6px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--el-text-color-secondary);
+
+  &::before {
+    content: '';
+    flex: none;
+    width: 3px;
+    height: 12px;
+    border-radius: 2px;
+    background: linear-gradient(180deg, var(--brand-primary-light), var(--brand-primary));
+  }
+}
+
+.setting-content > .setting-group-label:first-child {
+  margin-top: 0;
+}
+
+/* 关于组：低频静态内容默认折叠；原生 details 免维护一份展开状态 */
+.setting-about-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+  list-style: none;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+}
+
+.setting-about-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.setting-about-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  transition: color 0.18s ease;
+}
+
+.setting-about-summary:hover .setting-about-title {
+  color: var(--brand-primary);
+}
+
+.setting-about-desc {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--el-text-color-secondary);
+}
+
+.setting-about-arrow {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-right: 1.5px solid var(--el-text-color-placeholder);
+  border-bottom: 1.5px solid var(--el-text-color-placeholder);
+  transform: rotate(45deg);
+  transition: transform 0.18s ease;
+}
+
+.setting-about[open] .setting-about-arrow {
+  transform: rotate(-135deg);
+}
+
+/* 展开正文沿用 .row-body 的虚线分隔，这里只补小节间距 */
+.setting-about-section + .setting-about-section {
+  margin-top: 14px;
 }
 
 .setting-row {
@@ -1916,7 +2257,28 @@ function hideLogo(event: Event) {
   color: var(--el-text-color-secondary);
 }
 
-/* 网络诊断结果：两列网格，单格 = 名称 + 徽标 / 状态摘要 + 说明；窄窗自动降为单列 */
+/* 诊断结果弹窗：结果口径提示 + 页脚（复制靠左，重新诊断 / 关闭靠右） */
+.diagnose-summary {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
+}
+
+.diagnose-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.diagnose-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 诊断结果网格：两列，单格 = 名称 + 徽标 / 状态摘要 + 说明；窄窗自动降为单列 */
 .diagnose-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

@@ -7,8 +7,9 @@ import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/p
 import type { InputInstance } from 'element-plus'
 import type { Component, ComponentPublicInstance, VNode } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
-import { ArrowRight, ChatDotRound, Check, Close, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import { ArrowRight, Calendar, ChatDotRound, Check, Close, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
+import RoomDateDialog from '@renderer/components/rooms/RoomDateDialog.vue'
 import RoomEssenceDialog from '@renderer/components/rooms/RoomEssenceDialog.vue'
 import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
@@ -16,10 +17,12 @@ import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
 import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
+import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { copyText } from '@renderer/utils/clipboard'
 import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
+import { resolveRoomArchiveStart } from '@renderer/utils/room-date-jump'
 import { shouldTrackRoomEnter } from '@renderer/utils/room-enter-tracker'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
@@ -94,6 +97,48 @@ const docVisibility = useDocumentVisibility()
 
 /** 精华消息弹层是否打开 */
 const essenceOpen = ref(false)
+/** 按日期查看弹层是否打开 */
+const dateOpen = ref(false)
+
+const { findMemberByUserId } = useMemberDirectoryStore()
+
+/** 当前房间成员的入团时间；名录未同步或查不到时为空，起点回落到归档日 */
+const roomJoinTime = ref('')
+let joinLookupSeq = 0
+watch(selectedUserId, async (userId) => {
+  const seq = ++joinLookupSeq
+  roomJoinTime.value = ''
+  if (userId === null)
+    return
+  try {
+    const member = await findMemberByUserId(userId)
+    if (seq === joinLookupSeq)
+      roomJoinTime.value = member?.joinTime || ''
+  }
+  catch {
+    // 名录未同步：保留空值，由起点计算回落
+  }
+}, { immediate: true })
+
+/** 按日期查看的可查起点：入团日与归档日取较晚者 */
+const roomArchiveStart = computed(() => resolveRoomArchiveStart(roomJoinTime.value))
+
+/** 按日期查看读取的频道：与当前消息流一致（大房间 / 小房间） */
+const activeDateChannel = computed(() => {
+  if (viewMode.value === 'small') {
+    const small = smallChannel.value
+    return small?.channelId && small.serverId ? { serverId: small.serverId, channelId: small.channelId } : null
+  }
+  const room = selectedRoom.value
+  return room?.channelId && room.serverId ? { serverId: room.serverId, channelId: room.channelId } : null
+})
+
+/** 小房间上锁时收起弹层：门禁未通过不该留着房间历史 */
+watch(smallLocked, (locked) => {
+  if (locked)
+    dateOpen.value = false
+})
+
 /** 顶部精华条展示的那条：最新一条精华（列表已按 msgTime 倒序） */
 const newestEssence = computed(() => essenceMessages.value[0] ?? null)
 
@@ -476,6 +521,16 @@ function scrollToBottom() {
     return
   el.scrollTop = el.scrollHeight
   lastSeenScrollTop = el.scrollTop
+}
+
+/** 左列条目：进房、双击回底、右键标已读都没有文字入口，靠 hover 说明 */
+function roomItemHint(room: PocketRoom): string {
+  const hints = [`进入「${room.nickname}」的房间`]
+  if (room.userId === selectedUserId.value)
+    hints.push('双击回到最新消息')
+  if (unreadCountOf(room.userId))
+    hints.push('右键标为已读')
+  return hints.join(' · ')
 }
 
 /**
@@ -902,6 +957,21 @@ const sendButtonLabel = computed(() => {
   return '发送'
 })
 
+/** 发送钮 hover：说明倒数与禁用原因，这些状态不写在按钮文字里 */
+const sendButtonHint = computed(() => {
+  if (composerMuted.value)
+    return '全员禁言，暂不能发言'
+  if (sendBusy.value)
+    return '正在发送消息'
+  if (sendCooldownLeft.value > 0)
+    return `发言冷却中，${Math.ceil(sendCooldownLeft.value / 1000)}s 后可继续发送`
+  if (!qchatOptIn.value)
+    return '先点击输入框连接房间，连接后即可发言'
+  if (qchatStatus.value !== 'connected')
+    return '房间连接未就绪，暂不能发送'
+  return '发送消息（也可按 Enter）'
+})
+
 /**
  * 连接确认正文：一句前提 + 两条影响，拆成要点比整段说明更好扫读。
  * 弹窗挂在 body 下，正文样式复用 app.scss 的 .app-confirm-body / .app-confirm-list。
@@ -1323,6 +1393,14 @@ function liveCardBadge(message: PocketRoomMessageView) {
   return { text: '直播', type: 'live' }
 }
 
+/** 分享卡 hover：点击打开的是独立播放窗，直播与回放走不同窗口 */
+function liveCardHint(message: PocketRoomMessageView): string {
+  if (!message.liveId)
+    return '这条分享没有可播放的直播或回放'
+  const playback = message.liveIsPlayback || isSharedLiveOnAir(message.liveId) !== true
+  return playback ? '在独立播放窗观看回放' : '在独立播放窗进入直播'
+}
+
 /** 右栏消息区状态文案 */
 const statusText = ref('')
 watch([chatStatus, chatStatusText], () => {
@@ -1436,14 +1514,15 @@ onMounted(() => {
               type="button"
               class="room-item"
               :class="{ 'is-active': selectedRoom?.userId === room.userId, 'is-live': !!room.live }"
+              :title="roomItemHint(room)"
               @click="enterRoom(room.userId)"
             >
               <span class="room-avatar">
                 <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
                 <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
-                <!-- 开播状态：头像边缘呼吸光环（见 .room-live-badge），不再占头像右下角 -->
+                <!-- 开播状态：头像外沿呼吸光环（见 .room-live-badge），不占头像角落 -->
                 <span v-if="room.live" class="room-live-badge" aria-label="直播中" />
-                <!-- 开播伴生：头像内底部均衡器跳动（同 .room-live-badge 一起表达「正在直播」） -->
+                <!-- 开播状态：头像下沿白色跃动光柱（见 .room-eq），压在玫红晕染上 -->
                 <span v-if="room.live" class="room-eq" aria-hidden="true">
                   <i />
                   <i />
@@ -1577,7 +1656,7 @@ onMounted(() => {
                 class="room-tab"
                 :class="{ 'is-active': viewMode === tab.mode }"
                 :aria-selected="viewMode === tab.mode"
-                :title="tab.locked ? `${tab.name} · 需要暗号` : tab.name"
+                :title="tab.locked ? `「${tab.name}」需要暗号，点击后输入` : `切换到「${tab.name}」`"
                 @click="onViewModeChange(tab.mode)"
               >
                 <el-icon v-if="tab.locked" :size="12" class="room-tab-lock">
@@ -1612,6 +1691,17 @@ onMounted(() => {
                   <span class="essence-bar-text">{{ essenceSummary }}</span>
                   <span v-if="essenceMessages.length > 1" class="essence-bar-count">{{ essenceMessages.length }}</span>
                 </button>
+                <button
+                  type="button"
+                  class="date-jump-btn"
+                  title="按日期查看历史消息"
+                  @click="dateOpen = true"
+                >
+                  <el-icon :size="12">
+                    <Calendar />
+                  </el-icon>
+                  按日期
+                </button>
                 <div class="scope-tabs" role="tablist" aria-label="消息范围">
                   <button
                     type="button"
@@ -1619,6 +1709,7 @@ onMounted(() => {
                     class="scope-tab"
                     :class="{ 'is-active': messageScope === 'member' }"
                     :aria-selected="messageScope === 'member'"
+                    title="只看房主：仅显示房主 / 成员发言，不含粉丝留言；切换后重新拉取"
                     @click="messageScope = 'member'"
                   >
                     只看房主
@@ -1629,6 +1720,7 @@ onMounted(() => {
                     class="scope-tab"
                     :class="{ 'is-active': messageScope === 'all' }"
                     :aria-selected="messageScope === 'all'"
+                    title="全部消息：包含粉丝发言、回复与其他成员串门；切换后重新拉取"
                     @click="messageScope = 'all'"
                   >
                     全部消息
@@ -1798,6 +1890,7 @@ onMounted(() => {
                             class="msg-live"
                             :class="{ 'is-clickable': !!message.liveId }"
                             :disabled="!message.liveId"
+                            :title="liveCardHint(message)"
                             :aria-label="`${liveCardBadge(message).text}：${liveShareTitle(message.text) || '快来看看吧'}`"
                             @click="openSharedLive(message)"
                           >
@@ -2009,6 +2102,7 @@ onMounted(() => {
                     round
                     :loading="sendBusy"
                     :disabled="!composerUsable"
+                    :title="sendButtonHint"
                     @click="onSendClick"
                   >
                     {{ sendButtonLabel }}
@@ -2027,6 +2121,7 @@ onMounted(() => {
                 type="button"
                 class="new-msg-float new-msg-float--up"
                 :style="newMsgFloatStyle"
+                title="跳到未读消息的起点"
                 @click="jumpToUnread"
               >
                 <el-icon :size="12">
@@ -2041,6 +2136,7 @@ onMounted(() => {
                 type="button"
                 class="new-msg-float"
                 :style="newMsgFloatStyle"
+                title="回到最新消息"
                 @click="scrollToBottom"
               >
                 <el-icon :size="12">
@@ -2083,6 +2179,15 @@ onMounted(() => {
             :loading="essenceLoading"
             :exhausted="essenceExhausted"
             @load-more="loadMoreEssence"
+          />
+
+          <!-- 按日期查看弹层：独立只读轨道，不进主消息流、不碰已读与轮询 -->
+          <RoomDateDialog
+            v-model="dateOpen"
+            :channel="activeDateChannel"
+            :scope="messageScope"
+            :room-name="selectedRoom?.nickname ?? ''"
+            :archive-start="roomArchiveStart"
           />
         </template>
 
@@ -2463,17 +2568,16 @@ onMounted(() => {
   font-size: 16px;
 }
 
-/* 开播状态：头像边缘一圈呼吸光环，替代原本右下角的 LIVE 小点。
- * 光环不占头像角落，未读角标照旧贴头像右上角，两者不再互相挤压。
- * 动画只动 opacity / transform（合成器线程）：环本体呼吸，::after 外扩柔光脉冲；
- * 柔光的静态 box-shadow 随提层烘焙，缩放不触发重绘 */
+/* 开播状态：头像外沿一圈呼吸光环，不占头像角落，未读角标照旧贴右上角。
+ * 只动 opacity / transform（合成器线程）：环本体呼吸，::after 外扩柔光脉冲。
+ * transform / opacity 动画自身即提层，不再常驻 will-change —— 多成员同时开播时
+ * 每条都预留合成层没有收益，窗口隐藏时也无法回收 */
 .room-live-badge {
   position: absolute;
   inset: -4px;
   border-radius: 50%;
   border: 2px solid var(--color-lives);
   pointer-events: none;
-  will-change: opacity;
   animation: room-live-breathe 2.4s ease-in-out infinite;
 
   &::after {
@@ -2482,7 +2586,6 @@ onMounted(() => {
     inset: -2px;
     border-radius: 50%;
     box-shadow: 0 0 6px 2px color-mix(in srgb, var(--color-lives) 45%, transparent);
-    will-change: transform, opacity;
     animation: room-live-pulse 2.4s ease-in-out infinite;
   }
 }
@@ -2521,76 +2624,113 @@ onMounted(() => {
   }
 }
 
-/* 开播伴生：头像底部一汪同色氛围光，衬托均衡器条。
- * 静态径向渐变（不提层、不参与动画），随圆裁切；底部浓芯、向上快速衰减 */
+/* 开播状态：头像下半部分的玫红晕染，上浅下深。
+ * 只覆盖约下 50%，人像上半部保持原样；底部浓度足以托住白色光柱。
+ * 静态渐变（不提层、不参与动画），随头像圆形裁切，边缘不会越界 */
 .room-item.is-live .room-avatar::after {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: radial-gradient(
-    95% 75% at 50% 118%,
-    color-mix(in srgb, var(--color-lives) 85%, transparent) 0%,
-    color-mix(in srgb, var(--color-lives) 45%, transparent) 38%,
-    transparent 74%
-  );
+  background:
+    radial-gradient(85% 55% at 50% 96%, color-mix(in srgb, var(--color-lives) 30%, transparent) 0%, transparent 78%),
+    linear-gradient(
+      to bottom,
+      transparent 48%,
+      color-mix(in srgb, var(--color-lives) 12%, transparent) 62%,
+      color-mix(in srgb, var(--color-lives) 38%, transparent) 82%,
+      color-mix(in srgb, var(--color-lives) 66%, transparent) 100%
+    );
   pointer-events: none;
 }
 
-/* 开播伴生：头像内底部均衡器——几根小竖条此起彼伏跳动，一眼传达「正在直播」 */
+/* 开播状态：压在晕染上的三根白色跃动光柱。
+ * 柱身顶端渐隐、外圈一点柔光，读作「光」而不是硬白实体块；
+ * 起伏全靠 scaleY（transform 合成，不触发重排），三条各自不同周期，
+ * 不与外圈光环的 2.4s 同步，避免整体机械齐动 */
 .room-eq {
   position: absolute;
   bottom: 3px;
   left: 50%;
   display: flex;
   align-items: flex-end;
-  gap: 2px;
-  height: 10px;
+  gap: 3px;
+  height: 14px;
   transform: translateX(-50%);
   pointer-events: none;
-  /* 氛围光是头像 ::after（树序更靠后），条形需显式提层压在其上 */
+  /* 晕染是头像 ::after（树序更靠后），光柱需显式提层压在其上 */
   z-index: 1;
 
   i {
     display: block;
-    width: 2px;
-    /* 固定满高度，跳动全靠 scaleY（transform 合成，不触发重排）；
-     * scaleY(0.4) ≈ 原 height 4px / 10px，逐帧观感一致 */
-    height: 10px;
-    border-radius: 1px;
-    /* 均衡器与外围呼吸光环同色（--color-lives），开播状态整体同一种语义色 */
-    background: var(--color-lives);
-    box-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+    width: 3px;
+    /* 固定满高度，起伏全靠 scaleY */
+    height: 14px;
+    border-radius: 2px;
+    background: linear-gradient(
+      to top,
+      rgba(255, 255, 255, 0.98) 0%,
+      rgba(255, 255, 255, 0.82) 60%,
+      rgba(255, 255, 255, 0) 100%
+    );
+    box-shadow: 0 0 3px 0 rgba(255, 255, 255, 0.38);
     transform-origin: bottom;
-    will-change: transform;
-    animation: room-eq-bounce 0.8s ease-in-out infinite;
+    animation: room-eq-bounce 1.1s ease-in-out infinite;
+
+    &:nth-child(1) {
+      animation-duration: 1.02s;
+      animation-delay: -0.14s;
+    }
 
     &:nth-child(2) {
-      animation-delay: -0.25s;
+      animation-duration: 1.34s;
+      animation-delay: -0.67s;
     }
 
     &:nth-child(3) {
-      animation-delay: -0.5s;
+      animation-duration: 1.16s;
+      animation-delay: -0.39s;
     }
   }
 }
 
+/* 非对称起伏 + 三根条各自不同周期 */
 @keyframes room-eq-bounce {
   0%,
   100% {
-    transform: scaleY(0.4);
+    transform: scaleY(0.3);
   }
 
-  50% {
+  18% {
+    transform: scaleY(0.9);
+  }
+
+  38% {
+    transform: scaleY(0.48);
+  }
+
+  62% {
     transform: scaleY(1);
+  }
+
+  82% {
+    transform: scaleY(0.55);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .room-eq i {
     animation: none;
-    /* 静态中等高度（≈ 原 6px），不跳动 */
-    transform: scaleY(0.6);
+    /* 静态不等高，不动也仍是电平指示的样子 */
+    transform: scaleY(0.5);
+
+    &:nth-child(2) {
+      transform: scaleY(0.8);
+    }
+
+    &:nth-child(3) {
+      transform: scaleY(0.62);
+    }
   }
 }
 
@@ -2828,6 +2968,21 @@ onMounted(() => {
     color: var(--el-text-color-primary);
     background: var(--el-bg-color);
     box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+  }
+}
+
+/* 按日期查看入口：与消息范围同一行的次级控件，用浅底与范围页签区分 */
+.date-jump-btn {
+  @extend %pill-tab;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--el-fill-color-light);
+
+  &:hover {
+    color: var(--el-text-color-primary);
+    background: color-mix(in srgb, var(--color-rooms) 12%, transparent);
   }
 }
 

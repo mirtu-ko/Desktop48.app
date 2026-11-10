@@ -834,6 +834,11 @@ body,
   width: min(92vw, 660px);
 }
 
+/* 按日期查看弹层：与精华弹层同宽，日期条占用后列表自己滚 */
+.detail-card-dialog.room-date-dialog.el-dialog {
+  width: min(92vw, 660px);
+}
+
 /* 卡面：左右怎么分栏由调用方定（成员卡是上立绘下操作条，专辑卡是左专辑栏右曲目） */
 .detail-card {
   --accent: var(--brand-primary);
@@ -1565,5 +1570,85 @@ body,
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* 原生 title 替身：浏览器 tooltip 在 Electron 窗口里不弹，改用纯文本小浮层。
+ * 不带箭头与入场动画，颜色走 Element Plus 变量，亮暗主题一并跟随 */
+.native-title-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 99999;
+  max-width: 320px;
+  padding: 4px 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+  background: var(--el-bg-color);
+  box-shadow: var(--shadow-sm);
+  color: var(--el-text-color-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  visibility: hidden;
+
+  &.is-visible {
+    visibility: visible;
+  }
+}
+
+/* ===== 首页新版本 toast =====
+ * ElMessage 由 JS 挂到 body，样式必须放全局层；customClass 只命中这一条消息，
+ * 不影响项目里其他 ElMessage 提示。颜色走主题变量，亮暗主题一并跟随。 */
+.el-message.update-toast-message {
+  --el-message-bg-color: var(--el-bg-color);
+  --el-message-text-color: var(--el-text-color-primary);
+
+  min-width: 360px;
+  max-width: min(440px, calc(100vw - 40px));
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--brand-primary) 28%, var(--el-border-color-lighter));
+  border-left: 3px solid var(--brand-primary);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg), 0 10px 26px -14px rgba(var(--brand-rgb), 0.5);
+  align-items: flex-start;
+
+  .el-message__icon.el-message-icon--info {
+    margin-top: 2px;
+    color: var(--brand-primary);
+    font-size: 18px;
+  }
+
+  .el-message__content {
+    flex: 1;
+    min-width: 0;
+    line-height: 1.5;
+  }
+
+  .el-message__closeBtn {
+    margin-top: 2px;
+  }
+}
+
+.update-toast {
+  &__title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+
+  &__desc {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
   }
 }

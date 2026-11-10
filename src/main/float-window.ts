@@ -10,9 +10,13 @@ import { fileURLToPath } from 'node:url'
 import { computeInitialWindowSize, decideAutoFit, FLOAT_DEFAULT_ASPECT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, FLOAT_WINDOW_HASH_PATH, resolveFloatWindowPosition } from '@common/float-window'
 import { is } from '@electron-toolkit/utils'
 import { BrowserWindow, screen, shell } from 'electron'
+import iconWin from '../../resources/icon-win.ico?asset'
 import icon from '../../resources/icon.png?asset'
 import { log } from './logger'
 import { wireWindowMaximizeEvents } from './window-events'
+
+/** 窗口图标：与主窗口同口径，Windows 取多尺寸 ico，macOS / Linux 取带留白的方形图稿（见 app.ts） */
+const appIcon = process.platform === 'win32' ? iconWin : icon
 
 /** 判定「用户手动缩放过」的尺寸容差（DIP），避免 Linux 窗口管理器取整被误判 */
 const RESIZE_DETECT_EPSILON = 2
@@ -114,7 +118,7 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#000000',
-    icon,
+    icon: appIcon,
     webPreferences: {
       preload: fileURLToPath(new URL('../preload/index.mjs', import.meta.url)),
       sandbox: false,
