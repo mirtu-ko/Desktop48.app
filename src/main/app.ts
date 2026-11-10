@@ -2,6 +2,7 @@ import type { WebContents } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import { app, BrowserWindow, powerSaveBlocker, shell } from 'electron'
+import iconWin from '../../resources/icon-win.ico?asset'
 import icon from '../../resources/icon.png?asset'
 import trayIco from '../../resources/tray.ico?asset'
 import trayTemplate from '../../resources/trayTemplate.png?asset'
@@ -124,6 +125,13 @@ function openRoomFromTray(userId: number): void {
     deliver()
 }
 
+/**
+ * 窗口图标按平台取不同图稿：Windows 用与安装包 exe 同一份多尺寸 ico（满幅、16~256 各档齐全），
+ * macOS / Linux 用带留白的方形图稿（Dock 侧自带留白，满幅图稿会顶格）。
+ * resources/icon.png 是 macOS 图稿，直接给 Windows 用会让任务栏图标整体缩小约 19%。
+ */
+const appIcon = process.platform === 'win32' ? iconWin : icon
+
 function createWindow(): void {
   // 创建浏览器窗口。
   const win = new BrowserWindow({
@@ -135,7 +143,7 @@ function createWindow(): void {
     show: false,
     frame: false, // 纯自定义标题栏：去掉系统边框与默认按钮
     autoHideMenuBar: true,
-    icon,
+    icon: appIcon,
     webPreferences: {
       preload: fileURLToPath(new URL('../preload/index.mjs', import.meta.url)),
       sandbox: false,
