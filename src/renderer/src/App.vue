@@ -8,6 +8,7 @@ import DownloadsEntry from '@renderer/components/app/DownloadsEntry.vue'
 import Initialize from '@renderer/components/app/Initialize.vue'
 import FloatAudioBar from '@renderer/components/floats/FloatAudioBar.vue'
 import DownloadsCard from '@renderer/components/ui/DownloadsCard.vue'
+import { useHomeUpdateToast } from '@renderer/composables/use-home-update-toast'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import { useNativeTitle } from '@renderer/composables/use-native-title'
 import EventBus from '@renderer/services/event-bus'
@@ -124,6 +125,11 @@ watch(
 
 // 启动兜底：数据库没有成员信息时自动同步一次（逻辑见 use-member-sync.ts）
 const { ensureMembers } = useMemberSync()
+
+// 首页新版本提示：根组件订阅一次更新状态，只在直播（含回放子页）可见时弹 toast。
+// 判定复用 Dock 的 resolveActiveMenu，避免两处各写一份「什么算首页」。
+const isHome = computed(() => resolveActiveMenu(route.path) === Constants.Menu.LIVES)
+useHomeUpdateToast(isHome)
 
 // ffmpeg 环境自检完成后再访问数据库，避免初始化阶段触发数据依赖
 watch(isInitialized, async (ready) => {

@@ -28,10 +28,11 @@ import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
 import { previewReleaseNotes } from '@renderer/utils/update-notes'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 const router = useRouter()
+const route = useRoute()
 
 // 下载目录的状态与读写集中在 use-app-config.ts
 const {
@@ -121,6 +122,7 @@ onMounted(async () => {
   // 已登录则静默拉取一次口袋关注（friends/id 一次性返回，无分页成本）
   syncPocketFollowIfStale(5 * 60 * 1000)
   await loadFeedbackMeta()
+  consumeUpdateFocus()
 })
 
 /** FFmpeg 行状态徽章：可用 / 未配置 / 目录不存在 / 缺少 ffmpeg */
@@ -916,18 +918,42 @@ function onSettingScroll() {
     syncActiveGroup(wrap)
 }
 
-function scrollToGroup(id: string) {
+/** 滚到指定元素并同步左侧导航高亮；平滑滚动期间用 navTargetId 锁住途经分组 */
+function scrollToElement(target: HTMLElement, group: string) {
   const wrap = settingScrollRef.value?.wrapRef as HTMLElement | undefined
-  const target = settingRootRef.value?.querySelector<HTMLElement>(`[data-setting-group="${id}"]`)
-  if (!wrap || !target)
+  if (!wrap)
     return
 
   navTargetTop = Math.max(0, wrap.scrollTop + groupTop(target, wrap) - 12)
-  navTargetId = id
+  navTargetId = group
   navLockUntil = Date.now() + 1200
-  activeGroup.value = id
+  activeGroup.value = group
   wrap.scrollTo({ top: navTargetTop, behavior: 'smooth' })
 }
+
+function scrollToGroup(id: string) {
+  const target = settingRootRef.value?.querySelector<HTMLElement>(`[data-setting-group="${id}"]`)
+  if (target)
+    scrollToElement(target, id)
+}
+
+/**
+ * 首页新版本 toast 的「去更新」会带 ?focus=update 进来：定位到「应用 → 版本」行，
+ * 并立刻把参数从地址栏清掉，避免之后每次切回设置页都被重新滚到版本行。
+ * 设置页首次挂载走 onMounted，已被 KeepAlive 缓存时走 onActivated。
+ */
+function consumeUpdateFocus() {
+  if (route.query.focus !== 'update')
+    return
+  void router.replace({ path: Constants.Menu.SETTING })
+  void nextTick(() => {
+    const target = settingRootRef.value?.querySelector<HTMLElement>('#setting-update')
+    if (target)
+      scrollToElement(target, 'app')
+  })
+}
+
+onActivated(consumeUpdateFocus)
 </script>
 
 <template>
@@ -1219,7 +1245,7 @@ function scrollToGroup(id: string) {
         <h2 class="setting-group-label" data-setting-group="app">
           应用
         </h2>
-        <section class="setting-card glass-card">
+        <section id="setting-update" class="setting-card glass-card">
           <div class="setting-row">
             <span
               class="row-icon icon-tile"

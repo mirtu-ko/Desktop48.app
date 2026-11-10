@@ -1598,3 +1598,57 @@ body,
     visibility: visible;
   }
 }
+
+/* ===== 首页新版本 toast =====
+ * ElMessage 由 JS 挂到 body，样式必须放全局层；customClass 只命中这一条消息，
+ * 不影响项目里其他 ElMessage 提示。颜色走主题变量，亮暗主题一并跟随。 */
+.el-message.update-toast-message {
+  --el-message-bg-color: var(--el-bg-color);
+  --el-message-text-color: var(--el-text-color-primary);
+
+  min-width: 360px;
+  max-width: min(440px, calc(100vw - 40px));
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--brand-primary) 28%, var(--el-border-color-lighter));
+  border-left: 3px solid var(--brand-primary);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg), 0 10px 26px -14px rgba(var(--brand-rgb), 0.5);
+  align-items: flex-start;
+
+  .el-message__icon.el-message-icon--info {
+    margin-top: 2px;
+    color: var(--brand-primary);
+    font-size: 18px;
+  }
+
+  .el-message__content {
+    flex: 1;
+    min-width: 0;
+    line-height: 1.5;
+  }
+
+  .el-message__closeBtn {
+    margin-top: 2px;
+  }
+}
+
+.update-toast {
+  &__title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+
+  &__desc {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+  }
+}
