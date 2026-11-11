@@ -4,6 +4,11 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import FloatingTabBar from './FloatingTabBar.vue'
 
+/** 透传给 FloatingTabBar：false 时作为普通流内胶囊，参与页首工具行的排布 */
+withDefaults(defineProps<{ floating?: boolean }>(), {
+  floating: true,
+})
+
 const emit = defineEmits<{ refresh: [] }>()
 
 const route = useRoute()
@@ -31,6 +36,7 @@ function switchTab(tab: string) {
   <FloatingTabBar
     :tabs="viewTabs"
     :active="activeTab"
+    :floating="floating"
     @change="switchTab"
     @refresh="emit('refresh')"
   />

@@ -9,10 +9,17 @@ export interface FloatingTabItem {
   icon?: any
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   tabs: FloatingTabItem[]
   active: string
-}>()
+  /**
+   * 是否脱离文档流自行定位（默认 true = 左上角浮层）。
+   * 置 false 时改为「普通流内的胶囊」，用于与其它浮层并排组成一整条页首工具行。
+   */
+  floating?: boolean
+}>(), {
+  floating: true,
+})
 
 const emit = defineEmits<{ change: [key: string], refresh: [] }>()
 
@@ -117,7 +124,7 @@ function dblClick(tab: FloatingTabItem) {
   <div
     ref="barRef"
     class="float-tab-bar frosted-surface no-scrollbar"
-    :class="{ 'is-dragging': dragging }"
+    :class="{ 'is-dragging': dragging, 'is-flow': !floating }"
     @wheel="onWheel"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
@@ -157,6 +164,13 @@ function dblClick(tab: FloatingTabItem) {
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   touch-action: pan-x;
+
+  /* 并排组成页首工具行时不再自行定位：宽度交给外层 flex 分配，标签多了自己横向滚动 */
+  &.is-flow {
+    position: static;
+    flex: none;
+    max-width: 45%;
+  }
 }
 
 /* 拖拽中：整条变抓手光标，并屏蔽 hover 高亮，避免划过时一路闪烁 */

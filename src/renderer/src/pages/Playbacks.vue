@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { MemberTreeGroupPayload } from '@preload/ipc-contract'
 import type { LiveListItemView } from '@renderer/services/api-types'
+import FollowedMemberRail from '@renderer/components/playback/FollowedMemberRail.vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import LiveItem from '@renderer/components/ui/LiveItem.vue'
 import LiveTabBar from '@renderer/components/ui/LiveTabBar.vue'
 import MemberDetailCard from '@renderer/components/ui/MemberDetailCard.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
+import { useFollowedMemberEntries } from '@renderer/composables/use-followed-member-entries'
 import { useMemberDetail } from '@renderer/composables/use-member-detail'
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
 import Apis from '@renderer/services/apis'
@@ -36,6 +38,9 @@ const { memberTree, loadTree } = useMemberTreeStore()
 // 回放是历史归档、且列表常带成员筛选，故只做标识不重排（重排会打乱时间倒序与筛选语义）
 const { refreshFollowedMembers, isFollowed } = useFollowedMembersStore()
 
+// 快速筛选条的头像条目：昵称 / 头像 / 队色由关注名单经成员名录反查得到
+const { entries: followedEntries } = useFollowedMemberEntries()
+
 // 成员详情卡片：点卡片上的成员名打开，详情按 userId 反查（数据源见 stores/member-directory）
 const {
   selectedMember,
@@ -52,6 +57,21 @@ const memberOption = computed(() => sortMembersByStatus(memberTree.value))
 
 // 级联筛选选中的路径：[groupId] / [groupId, teamId] / [groupId, teamId, userId]
 const selectedFilter = ref<any[]>([])
+
+/**
+ * 快速筛选的旁路：只在成员树里查不到该账号（官方号 / 成员资料未同步）时使用。
+ * 这种情况级联里没有对应层级，只能直接按 userId 请求；能与级联对上的一律走 selectedFilter，
+ * 保证头像条与右上角筛选器始终是同一个状态。
+ */
+const quickMemberId = ref<string | null>(null)
+
+/** 当前生效的快速筛选成员：级联选到成员层同样算（两处共用一个筛选轴） */
+const activeQuickUserId = computed(() => {
+  if (quickMemberId.value)
+    return quickMemberId.value
+  const path = selectedFilter.value || []
+  return path.length === 3 ? String(path[2]) : null
+})
 
 // 列表滚动容器：绑给模板，并交给 usePagedLiveList 做回顶与触底判定
 const playbackScrollRef = ref<any>(null)
@@ -79,6 +99,11 @@ const {
       groupId: '0',
       next,
     }
+    // 快速筛选的旁路优先：它生效时级联一定已被清空（见 selectQuickMember）
+    if (quickMemberId.value) {
+      params.userId = quickMemberId.value
+      return Apis.playbackList(params)
+    }
     const [groupId, teamId, userId] = selectedFilter.value || []
     if (userId != null)
       params.userId = String(userId)
@@ -96,6 +121,9 @@ const {
 
 // 首屏/筛选刷新后列表为空时显示骨架屏；已有列表时刷新只反馈到右上角 dock
 const showSkeleton = computed(() => loading.value && playbackList.value.length === 0)
+
+// 空态文案区分「真的没有回放」与「筛的这个人没有回放」
+const emptyText = computed(() => (activeQuickUserId.value ? '该成员暂无回放' : '暂无回放'))
 
 const whitespaceRegex = /\s+/g
 
@@ -206,6 +234,45 @@ watch(memberOption, () => {
     applyPreset()
 })
 
+/**
+ * 点关注头像：同一成员再次点击取消筛选，换人则直接切到新成员。
+ *
+ * 成员树里查得到的人落到级联筛选（头像条与右上角筛选器始终一致，刷新交给 watch）；
+ * 查不到的（官方号 / 资料未同步）走 quickMemberId 旁路，同时把级联清空 ——
+ * 两路同时生效会让人分不清列表到底按谁筛的。
+ */
+function selectQuickMember(userId: string) {
+  if (activeQuickUserId.value === userId) {
+    clearQuickFilter()
+    return
+  }
+  const path = findFilterPath(userId)
+  if (path) {
+    quickMemberId.value = null
+    selectedFilter.value = path
+    return
+  }
+  quickMemberId.value = userId
+  if ((selectedFilter.value?.length ?? 0) > 0)
+    selectedFilter.value = []
+  else
+    refreshFromTop()
+}
+
+/** 取消快速筛选：两路筛选一起清空，回到全部回放 */
+function clearQuickFilter() {
+  quickMemberId.value = null
+  if ((selectedFilter.value?.length ?? 0) > 0)
+    selectedFilter.value = []
+  else
+    refreshFromTop()
+}
+
+/** 用户改级联筛选 = 改用了筛选器：旁路让位，否则它会盖过新选择（见 loadPage 的优先级） */
+function onFilterPickerChange() {
+  quickMemberId.value = null
+}
+
 // 点击回放：以独立播放窗打开，可边看边继续浏览列表
 function onPlaybackClick(item: LiveListItemView) {
   openPlayback({
@@ -232,7 +299,45 @@ watch(selectedFilter, () => {
 
 <template>
   <div class="page-root">
-    <LiveTabBar @refresh="refreshFromTop" />
+    <!-- 页首工具行：左 tab 栏独占一侧；关注条与筛选/刷新成组贴右，二者是同一件事的两个入口
+         （挑人 → 看她的录播），所以挨在一起。关注条窄时先压缩自己，不挤右侧控件 -->
+    <div class="page-toolbar">
+      <LiveTabBar :floating="false" @refresh="refreshFromTop" />
+
+      <div class="page-toolbar__trail">
+        <!-- 关注成员快速筛选条：只在有关注成员时出现，点头像只看她，再点一次取消；
+             条目默认只列在役成员，暂休 / 退团 / 荣誉毕业生收在「+N」里 -->
+        <FollowedMemberRail
+          v-if="followedEntries.length"
+          :members="followedEntries"
+          :active-user-id="activeQuickUserId"
+          @select="selectQuickMember"
+        />
+
+        <FloatingRefreshDock
+          :floating="false"
+          :loading="loading" title="刷新" @refresh="refreshFromTop"
+        >
+          <el-cascader
+            v-model="selectedFilter"
+            style="width: 240px" transfer
+            clearable placeholder="请选择团体/队伍/成员"
+            filterable :filter-method="filterMethod" :options="memberOption" :props="{
+              label: 'label',
+              value: 'value',
+              children: 'children',
+              checkStrictly: true,
+              checkOnClickNode: true,
+              emitPath: true,
+              multiple: false,
+              expandTrigger: 'hover',
+              lazy: false,
+            }"
+            @change="onFilterPickerChange"
+          />
+        </FloatingRefreshDock>
+      </div>
+    </div>
 
     <el-scrollbar
       ref="playbackScrollRef"
@@ -245,7 +350,7 @@ watch(selectedFilter, () => {
         class="playback-skeleton"
       />
       <div v-else-if="playbackList.length === 0 && !loading" class="empty-block">
-        暂无回放
+        {{ emptyText }}
       </div>
       <div v-else class="card-grid">
         <div
@@ -265,26 +370,6 @@ watch(selectedFilter, () => {
       </div>
     </el-scrollbar>
 
-    <!-- 右上角浮动筛选/刷新工具条：不占行，内容滚过时呈现磨砂玻璃 -->
-    <FloatingRefreshDock :loading="loading" title="刷新" @refresh="refreshFromTop">
-      <el-cascader
-        v-model="selectedFilter"
-        style="width: 240px" transfer
-        clearable placeholder="请选择团体/队伍/成员"
-        filterable :filter-method="filterMethod" :options="memberOption" :props="{
-          label: 'label',
-          value: 'value',
-          children: 'children',
-          checkStrictly: true,
-          checkOnClickNode: true,
-          emitPath: true,
-          multiple: false,
-          expandTrigger: 'hover',
-          lazy: false,
-        }"
-      />
-    </FloatingRefreshDock>
-
     <!-- 成员详情卡片：与成员页共用同一份合并详情（点成员名打开） -->
     <MemberDetailCard
       :member="selectedMember"
@@ -298,7 +383,39 @@ watch(selectedFilter, () => {
 </template>
 
 <style scoped lang="scss">
-/* 页面骨架（相对定位 + 裁剪）见模板上的全局 .page-root */
+/* 页首工具行：三条浮层并排一行，高度与原先各自浮动时一致。
+ * 容器本身不接收点击（中间空白处留给内容），只有胶囊可点 */
+.page-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 6px;
+  right: 8px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+
+  > * {
+    pointer-events: auto;
+  }
+}
+
+/* 关注条 + 筛选/刷新：成组贴右。间距比工具行主间距略小，
+ * 读起来是「同组」，而 tab 栏与它们之间仍留出分组的距离 */
+.page-toolbar__trail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  pointer-events: none;
+
+  > * {
+    pointer-events: auto;
+  }
+}
 
 /* 筛选控件不压缩，避免窄窗口下按钮被挤掉文案 */
 :deep(.el-button) {

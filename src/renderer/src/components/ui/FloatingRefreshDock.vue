@@ -12,9 +12,15 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   /** 按钮 title */
   title?: string
+  /**
+   * 是否脱离文档流自行定位（默认 true = 右上角浮层）。
+   * 置 false 时改为普通流内的胶囊，由外层工具行负责定位与两端对齐。
+   */
+  floating?: boolean
 }>(), {
   loading: false,
   title: '刷新',
+  floating: true,
 })
 
 const emit = defineEmits<{ refresh: [] }>()
@@ -24,7 +30,7 @@ const displayLoading = useMinVisibleLoading(() => props.loading)
 </script>
 
 <template>
-  <div class="floating-dock frosted-surface no-scrollbar">
+  <div class="floating-dock frosted-surface no-scrollbar" :class="{ 'is-flow': !floating }">
     <slot />
     <el-button
       circle
@@ -50,5 +56,13 @@ const displayLoading = useMinVisibleLoading(() => props.loading)
   padding: 4px;
   border-radius: var(--radius-pill);
   overflow-x: auto;
+
+  /* 并排组成页首工具行时不再自行定位；宽度随内容，贴哪一侧交给外层工具行决定
+   * （回放页把它与关注条一起推向右端，两者是同一件事的两个入口） */
+  &.is-flow {
+    position: static;
+    flex: none;
+    max-width: none;
+  }
 }
 </style>
