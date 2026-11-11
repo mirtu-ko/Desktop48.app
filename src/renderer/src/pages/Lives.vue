@@ -17,9 +17,10 @@ import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { resolveBilibiliRoomIdAsync } from '@renderer/utils/bilibili-room'
 import { debugLog } from '@renderer/utils/debug'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
+const router = useRouter()
 
 // 独立播放窗：直播/回放/公演共用全局播放挂载点
 const { openLive, openPlayback } = useFloatPlayersStore()
@@ -157,6 +158,11 @@ function openPlaybackItem(item: LiveListItemView) {
   })
 }
 
+/** 空态分区的「查看全部」：跳到对应列表页；本页被 keep-alive 缓存，返回时等待状态仍在 */
+function goToAll(path: string) {
+  router.push(path)
+}
+
 // 只刷新当前可见列表
 function onLivesRefresh() {
   if (route.path === '/lives')
@@ -239,6 +245,14 @@ onUnmounted(() => {
           <template v-if="hasPreviewShows">
             <h2 class="section-title section-title--live">
               {{ previewShowsTitle }}
+              <button
+                type="button"
+                class="section-more"
+                aria-label="查看全部公演"
+                @click="goToAll('/shows')"
+              >
+                查看全部
+              </button>
             </h2>
             <div class="idle-shows">
               <div
@@ -259,6 +273,14 @@ onUnmounted(() => {
           <template v-if="hasPreviewPlaybacks">
             <h2 class="section-title">
               {{ previewPlaybacksTitle }}
+              <button
+                type="button"
+                class="section-more"
+                aria-label="查看全部回放"
+                @click="goToAll('/lives/playbacks')"
+              >
+                查看全部
+              </button>
             </h2>
             <div class="idle-playbacks">
               <div
@@ -270,6 +292,7 @@ onUnmounted(() => {
                 <!-- enrichLiveItem 已在取数阶段补全 cover/date/member，渲染时必然就绪 -->
                 <LiveItem
                   :item="item"
+                  date-mode="relative"
                   :followed="isFollowed(item.userInfo.userId)"
                   @select-member="openMemberDetail"
                 />
@@ -353,12 +376,22 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   padding: var(--page-pad);
+
+  /* 全局 .section-title--live 是硬编码暖粉；空态统一到直播语义色。
+   * 只在本页覆写，不影响公演页等其它使用方 */
+  .section-title--live {
+    --st-accent: var(--color-lives);
+  }
 }
 
 /* 空态灵动岛：与左上 FloatingTabBar / 右上 FloatingRefreshDock 同用 .frosted-surface
- * 浅色玻璃，三件套同在顶部才是一套观感；这里只负责布局、文字层级与直播语义色点缀。
- * 定位脱离滚动流：列表为空时居中悬浮，不占文档流 */
+ * 浅色玻璃，三个浮层同在顶部才是一套观感；这里只负责布局、文字层级与直播语义色点缀。
+ * 严格按页面水平居中（left:50% + translateX(-50%)）；左上 tab 栏右边界约 216px，
+ * 故两侧各预留 224px 作为宽度上限，居中时也不会压住任一浮层。
+ * 主窗口 minWidth 为 900px，正常宽度下内容不会收缩；max() 兜住缩放后的极窄视口 */
 .idle-head {
+  --idle-side-reserve: 224px;
+
   position: absolute;
   top: 12px;
   left: 50%;
@@ -367,8 +400,9 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 14px;
-  max-width: calc(100% - 32px);
-  padding: 10px 18px;
+  width: fit-content;
+  max-width: max(160px, calc(100% - var(--idle-side-reserve) - var(--idle-side-reserve)));
+  padding: 8px 20px;
   border-radius: var(--radius-pill);
   animation: idle-head-in 0.32s ease-out;
 
@@ -401,14 +435,18 @@ onUnmounted(() => {
     font-size: 13px;
     font-weight: 600;
     line-height: 1.4;
+    white-space: nowrap;
     color: var(--el-text-color-primary);
   }
 
   .idle-sub {
     margin: 2px 0 0;
+    overflow: hidden;
     font-size: 11px;
     line-height: 1.5;
+    white-space: nowrap;
     color: var(--el-text-color-secondary);
+    text-overflow: ellipsis;
   }
 
   /* 右侧动态信息区：两行右对齐，与左侧标题/副题的高度节奏对齐，发丝线分隔 */
@@ -439,6 +477,7 @@ onUnmounted(() => {
   }
 }
 
+/* 居中依赖 transform，入场动画必须连同横向 -50% 一起写，否则入场瞬间会横向跳动 */
 @keyframes idle-head-in {
   from {
     opacity: 0;
@@ -500,6 +539,51 @@ onUnmounted(() => {
   margin: 20px 0 0;
   font-size: 13px;
   color: var(--el-text-color-placeholder);
+}
+
+/* 分区标题右侧的「查看全部」：.section-title 的 ::after 尾线 flex:1 且 order 为 0，
+ * 按钮设 order:1 排到尾线右侧，颜色继承所在分区的 --st-accent */
+.section-more {
+  order: 1;
+  flex: none;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--st-accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
+
+  &::after {
+    content: '→';
+    margin-left: 4px;
+  }
+
+  &:hover {
+    background: color-mix(in srgb, var(--st-accent) 14%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--st-accent) 30%, transparent);
+  }
+}
+
+/* 正常窗口不会触发（minWidth 900px）；仅在页面缩放或日后调小窗口下限时逐级精简：
+ * 先收起右侧动态信息，再收起副题，始终不让胶囊压住左 tab 栏 */
+@media (max-width: 760px) {
+  .idle-head .idle-meta {
+    display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .idle-head .idle-sub {
+    display: none;
+  }
 }
 
 .live-item {

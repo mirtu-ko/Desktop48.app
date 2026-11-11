@@ -182,6 +182,7 @@ body,
   width: 8px;
   height: 8px;
 }
+
 ::-webkit-scrollbar-thumb {
   background: rgba(var(--shadow-rgb), 0.16);
   border-radius: var(--radius-sm);
@@ -193,6 +194,7 @@ body,
     background-clip: content-box;
   }
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
@@ -430,6 +432,7 @@ body,
 .page-root .el-scrollbar__view {
   padding-bottom: var(--dock-reserve);
 }
+
 /* ===== 跨页共用的版式片段 =====
  * 出现在 ≥2 处、且值完全一致的片段收敛到这里，页面与组件里只挂类名 */
 
@@ -1316,6 +1319,7 @@ body,
   100% {
     height: 4px;
   }
+
   50% {
     height: 12px;
   }
@@ -1505,6 +1509,7 @@ body,
       inset 0 0 0 1px rgba(255, 255, 255, 0.16),
       0 0 0 0 var(--ab-pulse);
   }
+
   50% {
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.16),
@@ -1518,6 +1523,7 @@ body,
   100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.4;
   }
@@ -1568,6 +1574,7 @@ body,
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
@@ -1612,7 +1619,9 @@ body,
   border: 1px solid color-mix(in srgb, var(--brand-primary) 28%, var(--el-border-color-lighter));
   border-left: 3px solid var(--brand-primary);
   border-radius: 12px;
-  box-shadow: var(--shadow-lg), 0 10px 26px -14px rgba(var(--brand-rgb), 0.5);
+  box-shadow:
+    var(--shadow-lg),
+    0 10px 26px -14px rgba(var(--brand-rgb), 0.5);
   align-items: flex-start;
 
   .el-message__icon.el-message-icon--info {

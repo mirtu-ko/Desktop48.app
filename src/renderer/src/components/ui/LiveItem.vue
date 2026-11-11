@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { LiveListItemView } from '@renderer/services/api-types'
 import { StarFilled, UserFilled, VideoCameraFilled } from '@element-plus/icons-vue'
+import { formatRelativeDate } from '@renderer/utils/relative-date'
 import Tools from '@renderer/utils/tools'
 import { formatViewNum } from '@renderer/utils/view-num'
 import { computed } from 'vue'
@@ -11,10 +12,19 @@ const props = defineProps<{
   imageVersion?: number | string
   /** 是否被关注成员的直播：为 true 时整卡金色描边高亮，右上角标「已关注」胶囊 */
   followed?: boolean
+  /** 日期写法：relative 用于直播页空态「打发时间」区，默认保留完整时间戳 */
+  dateMode?: 'absolute' | 'relative'
 }>()
 
 /** 点击成员名：交给列表页打开成员详情抽屉（卡片点击是播放，故模板上 .stop） */
 const emit = defineEmits<{ selectMember: [userId: string] }>()
+
+/** 相对写法解析失败时回退完整时间戳；悬停仍可看到精确时间（见模板 title） */
+const dateText = computed(() =>
+  props.dateMode === 'relative'
+    ? (formatRelativeDate(props.item.ctime) ?? props.item.date)
+    : props.item.date,
+)
 
 const coverSrc = computed(() => {
   const source = props.item.cover?.[0]
@@ -100,8 +110,8 @@ const liveBadge = computed(() => {
           {{ Tools.shortTeamName(item.member.teamName) }}
         </span>
       </div>
-      <p class="live-date">
-        {{ item.date }}
+      <p class="live-date" :title="item.date">
+        {{ dateText }}
       </p>
     </div>
   </div>
