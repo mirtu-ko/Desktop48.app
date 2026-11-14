@@ -6,7 +6,7 @@ import { ref } from 'vue'
 /**
  * 直播断流重试状态机：
  * 统一重试节奏（定时器串行，避免并发重连），计满 maxRetries 次后
- * 走 onExhausted（组件在此切下播结束态：停流 → 复盘卡片，不再直接关窗）。
+ * 走 onExhausted（组件在此核对是否下播：确认则切结束卡，否则切加载失败卡）。
  * 重试决策用纯函数 nextRetryAttempt，见 utils/live-stream.ts。
  */
 export function useStreamRetry(options: {
@@ -16,7 +16,7 @@ export function useStreamRetry(options: {
   mediaLoading: Ref<boolean>
   /** 单次恢复尝试：拉详情 → 重建流。抛错视为本次失败，进入下一次重试 */
   attempt: () => Promise<void>
-  /** 重试耗尽：组件在此停流并切下播结束态（复盘卡片自带「直播已结束」，不再另弹提示） */
+  /** 重试耗尽：组件在此查状态判下播，未确认则切加载失败卡（不直接判「直播已结束」） */
   onExhausted: () => void
 }) {
   const maxRetries = options.maxRetries ?? 3
@@ -44,7 +44,7 @@ export function useStreamRetry(options: {
   /**
    * 播放成功（canplay）后调用：只清计数与恢复态，不动计时器。
    * 计数语义是「连续失败次数」，播放成功即中断连续性；不复位的话，一场直播里累计断流
-   * 3 次（如反复连麦）就会被误判为直播结束并关窗。计时器不能在这里清：错误后等待重试的
+   * 3 次（如反复连麦）就会被误判为加载失败。计时器不能在这里清：错误后等待重试的
    * 2 秒内仍可能有旧媒体元素的 canplay 迟到，清掉会把已安排的重试一并撤销。
    */
   function markRecovered() {
@@ -65,7 +65,7 @@ export function useStreamRetry(options: {
     if (next === null) {
       options.mediaLoading.value = false
       isRecoveringStream.value = false
-      // 重试预算耗尽 = 这场没救回来
+      // 重试预算耗尽：是否下播由调用方查状态判定，这里只记恢复失败
       trackEvent('live:fail')
       options.onExhausted()
       return

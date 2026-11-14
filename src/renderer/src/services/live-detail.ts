@@ -7,8 +7,8 @@
  *
  * ⚠️ 硬性约束：内层零 try/catch，异常必须原样穿透。
  * 上游的「直播已终结」是业务错误（Apis 抛 Error 带固定文案），
- * 调用方靠 isUnavailableLiveMessage 判别后关窗；在这里吞掉或改写，
- * 可恢复的临时故障会被当成永久下架，直播被反复重试。
+ * 调用方据此进下播结束卡或关窗；在这里吞掉或改写，
+ * 可恢复的临时故障会被当成永久终结，直播被反复重试。
  */
 import type { OpenLiveDetail } from '@renderer/services/api-types'
 import Apis from '@renderer/services/apis'

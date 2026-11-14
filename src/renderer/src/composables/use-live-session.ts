@@ -5,7 +5,9 @@ import { ensurePocketAuthState, pocketAuthState } from '@renderer/stores/pocket-
 import { debugLog } from '@renderer/utils/debug'
 import {
   buildPlaybackUrl,
-  isUnavailableLiveMessage,
+  isEndedLiveDetail,
+  isLiveEndedMessage,
+  isLiveRemovedMessage,
   resolveCarouselImages,
 } from '@renderer/utils/live-stream'
 import Tools from '@renderer/utils/tools'
@@ -37,8 +39,12 @@ export function useLiveSession(options: {
   onAvatar: (avatarUrl: string) => void
   /** 详情携带的在线人数上抛（首帧；实时值走 IM LIVEUPDATE 推送） */
   onOnlineNum: (num: number) => void
-  /** 详情获取失败（通常直播已下架）：列表刷新 + 关闭浮窗 */
+  /** 详情确认本场已下播：by=详情转回放 / 业务文案「回放生成中」，宿主进下播结束卡 */
+  onEnded: (by: 'detail' | 'error') => void
+  /** 直播已被删除/下架：列表刷新 + 关闭浮窗 */
   onUnavailable: () => void
+  /** 详情临时失败（网络异常等）：宿主进加载失败卡，不再静默转圈 */
+  onSessionError: (error: unknown) => void
   /** 每次重建流之前调用：组件在此销毁播放器/复位媒体元素/清重试计时器 */
   onBeforeRebuild: () => void
   /** 会话启动（getLiveOne 开始）时调用：组件在此复位重试计数与 loading 态 */
@@ -90,7 +96,7 @@ export function useLiveSession(options: {
   /**
    * 取直播详情并归一成 LiveDetailView（open 走公演接口，user 走个人直播接口）。
    * 返回值里的 playStreamPath 是**远程 rtmp 地址**（不是本地播放地址）。
-   * 异常原样上抛：业务错误（直播已下架）由调用方判别后关窗。
+   * 异常原样上抛：业务错误由调用方判别后关窗或进下播结束态。
    * fetchOptions.silent = 后台轮询（游客刷在线人数）用，失败不弹统一提示。
    */
   async function fetchLiveDetail(fetchOptions?: { silent?: boolean }): Promise<LiveDetailView> {
@@ -204,7 +210,7 @@ export function useLiveSession(options: {
 
   /**
    * 会话入口：拉详情 → 同步界面 → 开本地转流会话。
-   * 详情都取不到通常意味着直播已下架，走 onUnavailable 关窗。
+   * 失败按业务文案分流（下播 / 下架），其余临时故障交给宿主显示加载失败卡。
    */
   async function getLiveOne() {
     options.onSessionStart()
@@ -213,16 +219,25 @@ export function useLiveSession(options: {
       debugLog('live', `②拉详情: 直播详情 -> data`, data)
       if (options.isDisposed.value)
         return
+      // 详情已转回放态说明本场下播：不能把 VOD 地址喂给直播转流会话
+      if (isEndedLiveDetail(data, options.source())) {
+        options.onEnded('detail')
+        return
+      }
       applyLiveDetail(data)
       void refreshChatroomId()
       await restartLiveStream(data.playStreamPath)
     }
     catch (error: any) {
       console.error('getLiveOne()', error)
-      // 详情失败的原因已由 apis.ts 的 request() 统一弹窗提示（不在这里重复弹）。
-      // 只有「直播已下架」才关窗：网络中断 / 重试耗尽等临时故障关窗等于把可恢复的抖动当成永久下架。
-      if (error instanceof Error && isUnavailableLiveMessage(error.message))
+      // 临时故障不关窗；「回放生成中」是本场刚下播（request() 也不为它弹提示），走结束卡。
+      // 其余业务错误由 apis.ts 的 request() 统一弹窗，这里不重复弹。
+      if (error instanceof Error && isLiveEndedMessage(error.message))
+        options.onEnded('error')
+      else if (error instanceof Error && isLiveRemovedMessage(error.message))
         options.onUnavailable()
+      else
+        options.onSessionError(error)
     }
   }
 

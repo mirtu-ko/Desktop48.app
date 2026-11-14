@@ -10,6 +10,7 @@ import type {
   SyncInfoContent,
 } from './api-types'
 import { debugLog } from '@renderer/utils/debug'
+import { isLiveEndedMessage } from '@renderer/utils/live-stream'
 import { ElMessage } from 'element-plus'
 import ApiUrls from './api-urls'
 import EventBus from './event-bus'
@@ -321,9 +322,10 @@ async function request<T>(url: string, data: object, headers: Record<string, str
     const result = await requestOnce<T>(url, data, headers)
     if (result.ok)
       return result.content
-    // 确定性失败（业务结论）或重试预算用尽：提示一次并上抛，调用方按错误文案决定后续
+    // 确定性失败（业务结论）或重试预算用尽：提示一次并上抛，调用方按错误文案决定后续。
+    // 「回放生成中」是本场下播的正常状态，由播放层切结束卡，不报红
     if (!result.retryable || attempt >= attempts) {
-      if (!options.silent)
+      if (!options.silent && !isLiveEndedMessage(result.message))
         toastApiError(result.message)
       throw result.cause ?? new Error(result.message)
     }
