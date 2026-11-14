@@ -14,6 +14,7 @@ import { closeAllFloatWindows } from './float-window'
 import { registerAllIPC } from './ipc'
 import { sendIpc } from './ipc/send'
 import { log } from './logger'
+import { ensureAuthLoaded } from './pocket48/pocket-auth'
 import { cleanupPocketDanmakuSessions } from './pocket48/pocket-danmaku'
 import { cleanupRoomQChatSessions } from './pocket48/pocket-room-qchat'
 import { startPocketUnread, stopPocketUnread } from './pocket48/pocket-unread'
@@ -220,7 +221,10 @@ app.on('second-instance', () => {
   showMainWindow()
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // 异步加密器在 ready 之后才初始化：先载入凭证，再开窗口与轮询，避免首个请求被判未登录
+  await ensureAuthLoaded()
+
   // 为 Windows 设置应用用户模型 ID。
   electronApp.setAppUserModelId('com.electron.desktop48')
 
