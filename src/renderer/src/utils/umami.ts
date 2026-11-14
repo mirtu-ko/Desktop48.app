@@ -1,7 +1,8 @@
 // Umami 手动上报。
 //
 // 页面以 file:// 加载，自动采集会把本机安装路径当作 URL 上报，故统一由这里清洗后发送。
-// 计费口径：pageview、自定义事件、每条事件属性各算 1 条配额，故不带数字 ID 与恒定属性。
+// 计费口径：pageview、自定义事件、每条事件属性各算 1 条配额，故常规事件不带数字 ID 与恒定属性。
+// player:error 例外：带 title / liveId 才能定位出错的场次。
 interface UmamiTrackProps {
   url?: string
   referrer?: string

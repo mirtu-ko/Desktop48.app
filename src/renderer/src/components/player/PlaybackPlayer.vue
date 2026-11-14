@@ -221,7 +221,7 @@ const {
 // 录播播放错误（引擎内 notifyError 已按文案去重）
 watch(lastPlaybackError, (message) => {
   if (message)
-    trackEvent('player:error', { type: 'playback' })
+    trackEvent('player:error', { type: 'playback', title: realName.value, liveId: props.liveId })
 })
 
 // =========== 键盘快捷键（窗口级监听，见 use-media-shortcuts） ===========
