@@ -9,6 +9,7 @@ import { app } from 'electron'
 import electronUpdater from 'electron-updater'
 import { broadcastIpc } from './ipc/send'
 import { log } from './logger'
+import { isNewerVersion } from './updater-version'
 
 /** electron-updater 为 CJS 包，autoUpdater 需延迟到运行时取用。 */
 function getAutoUpdater() {
@@ -138,25 +139,6 @@ function humanizeError(err: any): string {
 /** 等待指定毫秒（重试退避用） */
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-/** 把 v1.2.3 / 1.2.3 归一成可比数字；非法段视为 0，避免比较时抛错。 */
-function parseVersion(version: string): number[] {
-  return version.trim().replace(/^v/i, '').split('.').map(part => Number.parseInt(part, 10))
-}
-
-/** 语义化版本比较（项目当前只用 x.y.z）：next 大于 current 时返回 true。 */
-function isNewerVersion(next: string, current: string): boolean {
-  const a = parseVersion(next)
-  const b = parseVersion(current)
-  const width = Math.max(a.length, b.length)
-  for (let i = 0; i < width; i++) {
-    const av = a[i] ?? 0
-    const bv = b[i] ?? 0
-    if (av !== bv)
-      return av > bv
-  }
-  return false
 }
 
 /**
