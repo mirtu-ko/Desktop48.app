@@ -26,7 +26,7 @@ import { resolveRoomArchiveStart } from '@renderer/utils/room-date-jump'
 import { shouldTrackRoomEnter } from '@renderer/utils/room-enter-tracker'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
-import { useDebounceFn, useDocumentVisibility, useEventListener, useResizeObserver } from '@vueuse/core'
+import { useDebounceFn, useDocumentVisibility, useEventListener, useIntersectionObserver, useResizeObserver } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, h, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
@@ -297,12 +297,6 @@ async function markRoomReadCapturing(userId: number, target: 'room' | 'small', c
   return true
 }
 
-/** 跳到未读分割线：居中显示，胶囊随即让位（分割线留着做视觉标记） */
-function jumpToUnread() {
-  unreadJumped.value = true
-  unreadAnchorEl.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-}
-
 /** 分割线钉在窗口顶且补页触顶：水位仍在更早的未加载区域（上翻补进后恢复精确定位） */
 const unreadAnchorBeyond = computed(() =>
   unreadAnchor.value?.beyond === true && unreadIndex.value === 0,
@@ -529,6 +523,33 @@ function scrollToBottom() {
     return
   el.scrollTop = el.scrollHeight
   lastSeenScrollTop = el.scrollTop
+}
+
+/** 分割线在视口内时浮标让位；交点状态只由 observer 写，元素卸载用 DOM ref 兜底，避免残留 true 压住新锚点 */
+const unreadAnchorIntersecting = ref(false)
+useIntersectionObserver(
+  unreadAnchorEl,
+  ([entry]) => { unreadAnchorIntersecting.value = entry?.isIntersecting === true },
+  // 上下各留 24px：线只贴边露出一点时仍保留跳转入口
+  { root: listRef, rootMargin: '-24px 0px' },
+)
+const unreadAnchorVisible = computed(() => unreadAnchorEl.value !== null && unreadAnchorIntersecting.value)
+
+/** 跳转后分割线距视口顶的比例：上方留一点旧消息作上下文，其余空间都给新消息 */
+const UNREAD_ANCHOR_TOP_RATIO = 0.25
+
+/** 跳到未读分割线：只滚消息容器，把线落在视口上部，胶囊随即让位（分割线留着做视觉标记） */
+function jumpToUnread() {
+  unreadJumped.value = true
+  const el = listRef.value
+  const anchor = unreadAnchorEl.value
+  if (!el || !anchor)
+    return
+  const anchorTop = el.scrollTop + anchor.getBoundingClientRect().top - el.getBoundingClientRect().top
+  el.scrollTo({
+    top: Math.max(0, anchorTop - el.clientHeight * UNREAD_ANCHOR_TOP_RATIO),
+    behavior: 'smooth',
+  })
 }
 
 /** 左列条目：进房、双击回底、右键标已读都没有文字入口，靠 hover 说明 */
@@ -2127,10 +2148,10 @@ onMounted(() => {
                 {{ statusText }}
               </footer>
 
-              <!-- 进房遗留未读的跳转浮标：贴底时分割线在视口上方，点它滚到那里。
+              <!-- 进房遗留未读的跳转浮标：贴底且分割线不在视口内才出现，点它滚到那里。
                    与下面的「新消息」浮标互斥（一个只在贴底、一个只在离开底部时出现） -->
               <button
-                v-if="atBottom && unreadAnchor && unreadIndex >= 0 && !unreadJumped"
+                v-if="atBottom && unreadAnchor && unreadIndex >= 0 && !unreadJumped && !unreadAnchorVisible"
                 type="button"
                 class="new-msg-float new-msg-float--up"
                 :style="newMsgFloatStyle"
