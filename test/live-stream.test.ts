@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPlaybackUrl,
-  isUnavailableLiveMessage,
+  describeLoadFailure,
+  isEndedLiveDetail,
+  isLiveEndedMessage,
+  isLiveRemovedMessage,
   nextRetryAttempt,
   normalizeCarouselTime,
   pickPreferredStream,
@@ -109,20 +112,67 @@ describe('nextRetryAttempt（重试决策）', () => {
     expect(nextRetryAttempt(2, 3)).toBe(3)
   })
 
-  it('已达上限返回 null（走直播结束分支）', () => {
+  it('已达上限返回 null（交给耗尽处理）', () => {
     expect(nextRetryAttempt(3, 3)).toBeNull()
     expect(nextRetryAttempt(4, 3)).toBeNull()
   })
 })
-describe('isUnavailableLiveMessage（直播终结业务文案判定）', () => {
-  it('命中已列出的直播终结文案', () => {
-    expect(isUnavailableLiveMessage('回放生成中')).toBe(true)
-    expect(isUnavailableLiveMessage('该成员直播已被删除')).toBe(true)
+describe('直播终结业务文案分流', () => {
+  it('两类文案分流：下播进结束卡，删除才关窗', () => {
+    expect(isLiveEndedMessage('回放生成中')).toBe(true)
+    expect(isLiveEndedMessage('该成员直播已被删除')).toBe(false)
+    expect(isLiveRemovedMessage('该成员直播已被删除')).toBe(true)
+    expect(isLiveRemovedMessage('回放生成中')).toBe(false)
   })
 
-  it('网络/参数/普通业务错误不视为终结', () => {
-    expect(isUnavailableLiveMessage('参数错误')).toBe(false)
-    expect(isUnavailableLiveMessage('网络请求失败')).toBe(false)
-    expect(isUnavailableLiveMessage('')).toBe(false)
+  it('网络/参数/普通业务错误两类都不命中', () => {
+    expect(isLiveEndedMessage('参数错误')).toBe(false)
+    expect(isLiveRemovedMessage('参数错误')).toBe(false)
+    expect(isLiveEndedMessage('网络请求失败')).toBe(false)
+    expect(isLiveRemovedMessage('网络请求失败')).toBe(false)
+    expect(isLiveEndedMessage('')).toBe(false)
+    expect(isLiveRemovedMessage('')).toBe(false)
+  })
+})
+
+describe('isEndedLiveDetail（详情状态判决）', () => {
+  const streaming = { review: false, playStreamPath: 'rtmp://idol.tv.48.cn/live/abc' }
+
+  it('user 源下播后 review=true 或 VOD 地址判为结束', () => {
+    expect(isEndedLiveDetail({ review: true, playStreamPath: 'https://idol-vod.48.cn/a.m3u8' }, 'user')).toBe(true)
+    expect(isEndedLiveDetail({ review: true, playStreamPath: 'rtmp://idol.tv.48.cn/live/abc' }, 'user')).toBe(true)
+    expect(isEndedLiveDetail({ review: false, playStreamPath: 'https://idol-vod.48.cn/a.m3u8' }, 'user')).toBe(true)
+  })
+
+  it('进行中 rtmp + review=false 不判结束', () => {
+    expect(isEndedLiveDetail(streaming, 'user')).toBe(false)
+  })
+
+  it('地址缺失或异常协议不判结束（留给重试链）', () => {
+    expect(isEndedLiveDetail({ review: false, playStreamPath: '' }, 'user')).toBe(false)
+    expect(isEndedLiveDetail({ review: false, playStreamPath: 'ftp://x/a.flv' }, 'user')).toBe(false)
+  })
+
+  it('open 源恒不判结束（详情归一后 review 恒 true）', () => {
+    expect(isEndedLiveDetail({ review: true, playStreamPath: 'https://vod/abc.m3u8' }, 'open')).toBe(false)
+    expect(isEndedLiveDetail({ review: true, playStreamPath: 'rtmp://live/abc' }, 'open')).toBe(false)
+  })
+})
+
+describe('describeLoadFailure（失败卡文案）', () => {
+  it('三种来源都有完整文案与操作入口', () => {
+    for (const kind of ['stream', 'detail', 'offline'] as const) {
+      const view = describeLoadFailure(kind)
+      expect(view.title).not.toBe('')
+      expect(view.hint).not.toBe('')
+      expect(view.action).not.toBe('')
+    }
+  })
+
+  it('离线单独说明会自动重连，其余两种只给重试入口', () => {
+    expect(describeLoadFailure('offline').title).toBe('网络连接已断开')
+    expect(describeLoadFailure('offline').hint).toContain('自动')
+    expect(describeLoadFailure('stream').title).toBe('直播暂时无法加载')
+    expect(describeLoadFailure('detail').hint).toContain('直播信息')
   })
 })

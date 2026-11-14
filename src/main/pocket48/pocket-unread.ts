@@ -164,6 +164,11 @@ const alignPending = new Set<string>()
  * 渲染层选中成员与检测轮共用同一份，避免两边各打一次频道列表。
  */
 const smallDiscoverAt = new Map<string, number>()
+/**
+ * 已判定「房间关闭中」的旧留言频道（channelId → serverId + 复核时刻）。
+ * room/info 反查的错误分类之一，随未读快照广播给渲染层；只存内存，重启由启动那轮检测重建。
+ */
+const closedChannels = new Map<string, { serverId: string, rank: number, resolvedAt: number }>()
 
 /** 惰性加载持久化状态（app.getPath 在应用 ready 前不可用，与 pocket-auth 同款时机） */
 function store(): StoredUnread {
@@ -203,7 +208,15 @@ function snapshot(): PocketUnreadBatch {
       total += entry.count
     }
   }
-  return { rooms, total }
+  return {
+    rooms,
+    total,
+    // 同一 server 可能有多个已关闭频道（成员换过大房间）。lastMsgList 按最后消息时间倒序，
+    // 这里按它在回包里的序号排，渲染层取首个即最新的那个；不能依赖探测完成顺序。
+    closedChannels: [...closedChannels.entries()]
+      .sort((a, b) => a[1].rank - b[1].rank)
+      .map(([channelId, info]) => ({ channelId, serverId: info.serverId })),
+  }
 }
 
 /** 未读房间在菜单栏的显示名：成员档案优先，官方账号回落，最后兜底 userId */
@@ -340,33 +353,47 @@ async function ensureChannels(followedIds: number[]): Promise<{ dirty: boolean, 
  * 未归属频道自愈：lastMsgList 回包里会出现同 server 下未登记的频道
  * （可能是「频道解析失败的关注成员」的房间，也可能是互动频道/未关注成员房间）。
  * 用 room/info 反查房主：ownerId 命中关注名单就把频道补进归属表（下一轮生效）；
- * 未命中/无房主记负缓存按 TTL 重试。返回是否有结构变化。
+ * 未命中/无房主记负缓存按 TTL 重试。返回结构变化，以及关闭频道集合是否变化
+ * （后者与未读计数无关，需单独触发快照广播）。
  */
 async function healChannelOwners(
   lastMessages: PocketRoomLastMessage[],
   attributedChannelIds: Set<string>,
   followedIds: number[],
-): Promise<boolean> {
+): Promise<{ changed: boolean, closedChanged: boolean }> {
   const data = store()
   const now = Date.now()
   const unknown = [...new Set(lastMessages.map(item => item.channelId).filter(cid => cid && !attributedChannelIds.has(cid)))]
   const toResolve = unknown.filter((channelId) => {
+    const closed = closedChannels.get(channelId)
+    if (closed)
+      return now - closed.resolvedAt > EMPTY_CHANNEL_TTL
     const cached = data.roomOwners[channelId]
     if (!cached)
       return true
     // 正向归属终身复用；负缓存（非房间频道）按 TTL 重试
     return cached.ownerId === 0 && now - cached.resolvedAt > EMPTY_CHANNEL_TTL
   })
+  // 已关闭频道到期也要复核：房间重开后旧频道会从 lastMsgList 消失，不再进 unknown，
+  // 只等「出现在未知列表里」就永远轮不到它，渲染层的「已关闭」标记会永久残留。
+  for (const [channelId, info] of closedChannels) {
+    if (now - info.resolvedAt > EMPTY_CHANNEL_TTL && !toResolve.includes(channelId))
+      toResolve.push(channelId)
+  }
   if (!toResolve.length)
-    return false
+    return { changed: false, closedChanged: false }
   debug('[pocket-unread] 未归属频道自愈：', toResolve.join(','))
   let dirty = false
+  let closedChanged = false
   let cursor = 0
   const workers = Array.from({ length: Math.min(RESOLVE_CONCURRENCY, toResolve.length) }, async () => {
     while (cursor < toResolve.length) {
       const channelId = toResolve[cursor++]
       try {
         const info = await getRoomChannelOwner(channelId)
+        // 复核时房间已重开：关闭集合里的旧记录作废，渲染层标记随快照消失
+        if (closedChannels.delete(channelId))
+          closedChanged = true
         data.roomOwners[channelId] = { ownerId: info.ownerId, resolvedAt: Date.now() }
         dirty = true
         const ownerKey = String(info.ownerId)
@@ -412,8 +439,25 @@ async function healChannelOwners(
           }
           dirty = true
         }
+        else if (message.includes('关闭')) {
+          // 房间关闭中：旧留言频道仍可读历史，登记后供渲染层恢复按日期查看。复核时频道
+          // 可能已不在回包里，沿用上次的 serverId / rank；rank 决定同 server 多候选的优先级。
+          const index = lastMessages.findIndex(item => item.channelId === channelId)
+          const previous = closedChannels.get(channelId)
+          const serverId = (index >= 0 ? lastMessages[index].serverId : '') || previous?.serverId || ''
+          const rank = index >= 0 ? index : previous?.rank ?? 0
+          if (serverId) {
+            if (!previous || previous.serverId !== serverId || previous.rank !== rank)
+              closedChanged = true
+            closedChannels.set(channelId, { serverId, rank, resolvedAt: Date.now() })
+          }
+          debug('[pocket-unread] 房间已关闭，登记历史频道', channelId, serverId, `rank=${rank}`)
+        }
         else if (message.includes('频道不存在')) {
-          // 翻牌/礼物回复等非成员房间：记负缓存按 TTL 重试，避免每轮重打必失败请求
+          // 翻牌/礼物回复等非成员房间：记负缓存按 TTL 重试，避免每轮重打必失败请求。
+          // 已关闭的旧频道被删掉（房间重开换新频道）也走这里，标记一并作废。
+          if (closedChannels.delete(channelId))
+            closedChanged = true
           data.roomOwners[channelId] = { ownerId: 0, resolvedAt: Date.now() }
           dirty = true
           debug('[pocket-unread] 非成员房间，记负缓存', channelId, message.slice(0, 60))
@@ -426,7 +470,7 @@ async function healChannelOwners(
     }
   })
   await Promise.all(workers)
-  return dirty
+  return { changed: dirty, closedChanged }
 }
 
 /**
@@ -1018,8 +1062,11 @@ async function tick(): Promise<void> {
 
     // 归属补全先于聚合：heal 处理 lastMsgList 里出现的未登记频道；discover 枚举频道列表，
     // 补上「还没人说话、所以不在 lastMsgList 里」的新建小房间。两者都可能改变成员→频道归属
-    if (await healChannelOwners(lastMessages, new Set(channelOwner.keys()), followedIds))
+    const healed = await healChannelOwners(lastMessages, new Set(channelOwner.keys()), followedIds)
+    if (healed.changed)
       dirty = true
+    // 关闭频道集合与未读计数无关，需单独触发快照广播
+    const closedChanged = healed.closedChanged
     if (await discoverSmallChannels())
       dirty = true
 
@@ -1035,7 +1082,7 @@ async function tick(): Promise<void> {
     // 取关清理（unfollowChanged）同属「registry 结构变化」，一并落盘并广播
     if (dirty || unreadChanged || unfollowChanged)
       persist()
-    if (unreadChanged || unfollowChanged)
+    if (unreadChanged || unfollowChanged || closedChanged)
       publish()
     debug(
       '[pocket-unread] 本轮结束 dirty:',

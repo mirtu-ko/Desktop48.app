@@ -38,6 +38,7 @@ function stubNet(results: NetResult[]) {
 const okBody = JSON.stringify({ status: 200, success: true, message: 'OK', content: { onlineNum: 1067 } })
 const paramErrorBody = JSON.stringify({ status: 1017, success: false, message: '参数错误' })
 const deletedBody = JSON.stringify({ status: 10049, success: false, message: '该成员直播已被删除' })
+const endedBody = JSON.stringify({ status: 10050, success: false, message: '回放生成中' })
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
@@ -92,6 +93,15 @@ describe('apis.live 的瞬时失败重试', () => {
 
     expect(netRequest).toHaveBeenCalledTimes(1)
     expect(messageMock).toHaveBeenCalledWith('该成员直播已被删除')
+  })
+
+  it('下播状态（回放生成中）照常上抛，但不弹错误提示', async () => {
+    const netRequest = stubNet([{ body: endedBody }])
+
+    await expect(Apis.live('123')).rejects.toThrow('回放生成中')
+
+    expect(netRequest).toHaveBeenCalledTimes(1)
+    expect(messageMock).not.toHaveBeenCalled()
   })
 
   it('429 限流不重试：直接提示「请求过于频繁」', async () => {

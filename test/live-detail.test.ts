@@ -180,8 +180,8 @@ describe('loadLiveDetail（详情加载与归一）', () => {
 
   describe('异常穿透（loader 不得吞异常）', () => {
     it('「直播已终结」业务错误原样上抛，message 不被改写', async () => {
-      // 调用方（LivePlayer.recoverStream）靠 isUnavailableLiveMessage 判别后关窗；
-      // 在这里吞掉或改写会把可恢复的临时故障当成永久下架
+      // 调用方（LivePlayer.recoverStream）按终结文案决定进结束卡还是关窗；
+      // 在这里吞掉或改写会把可恢复的临时故障当成永久终结
       liveMock.mockRejectedValue(new Error('该成员直播已被删除'))
 
       await expect(loadLiveDetail({ liveId: 'a', source: 'user', stream: 'live' }))

@@ -1,8 +1,8 @@
-import { ANDROID_DEVICE } from '@common/android-device'
+import { SITE_USER_AGENT } from '@common/android-device'
 import { debugLog } from '@renderer/utils/debug'
 
 /**
- * 站点请求的 UA（本模块发出的请求都带它）。
+ * 站点请求的 UA 统一取自 `common/android-device.ts`，本模块发出的请求都带它。
  *
  * 与口袋客户端的伪装身份是两回事，不要合并：`main/pocket48/client-profile.ts` 那套
  * 用于模拟 App 客户端；这里打的是静态资源 / 媒体 CDN / cgt48 曲库等网页域。
@@ -11,11 +11,8 @@ import { debugLog } from '@renderer/utils/debug'
  * 主进程 netRequest 转发前会把 UA / appInfo / pa 整组换成 App 身份（清单见
  * `main/net-request-headers.ts`）——站点身份在业务接口上直接 403。
  *
- * 但**设备必须是同一台**：机型事实取自 `common/android-device.ts`（App 档同源）。
- *
- * 固定为常量、不再可配置。
+ * 固定为常量、不再可配置；主进程为贺卡取头像二进制时复用同一份。
  */
-const SITE_USER_AGENT = `Mozilla/5.0 (Linux; Android ${ANDROID_DEVICE.osVersion}; ${ANDROID_DEVICE.model}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36`
 
 /** 网络请求参数：直接从 preload 契约签名反推，避免渲染层反向依赖 preload 目录 */
 type NetRequestPayload = Parameters<typeof window.mainAPI.netRequest>[0]

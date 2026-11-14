@@ -12,12 +12,14 @@
  * 特征不同，服务端因此把同一账号的多个客户端会话分开——手机端在用口袋48 时，桌面选
  * 塞纳河48 即可两端并存。档位即「当前登录身份」，切换档位需重新登录。
  *
- * 凭证保存：token 经 safeStorage 加密后落盘 userData/pocket48-auth.json；
+ * 凭证保存：token 经 safeStorage 异步加密后落盘 userData/pocket48-auth.json；
  * 平台无加密能力（部分 Linux 无钥匙环）时降级明文并打 plainFallback 标记。
+ * 凭证由 auth-credentials.ts 收敛为单一内存状态源：启动解密一次，之后业务侧同步读取。
  * token 有效期由服务端掌控（被踢/长期未用会失效），使用时才暴露给调用方，
  * 调用方收到 401005 等失效状态码时引导用户重新登录，本模块不自动重登。
  */
 import type { PocketClientProfileId } from '@common/pocket-client-profile'
+import type { StoredAuth } from './auth-credentials'
 import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -48,8 +50,74 @@ import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
+import { AuthCredentialStore, TokenTemporarilyUnavailableError } from './auth-credentials'
 import { clientHeaders, profileFor } from './client-profile'
 import { currentPa, ensurePaWasm } from './pa-sign'
+
+// ===== 凭证状态：唯一状态源，业务侧只读内存快照 =====
+
+function authFilePath(): string {
+  return path.join(app.getPath('userData'), 'pocket48-auth.json')
+}
+
+let authFile: SafeJSONFileSync<StoredAuth> | null = null
+
+function authStore(): SafeJSONFileSync<StoredAuth> {
+  authFile ??= new SafeJSONFileSync<StoredAuth>(authFilePath())
+  return authFile
+}
+
+/**
+ * safeStorage 只走异步 API（同步版在 Electron 46 已移除）。旧版同步 API 加密的
+ * tokenEnc 可由 decryptStringAsync 解开，升级后无需重新登录；反向不保证兼容。
+ */
+const credentials = new AuthCredentialStore(
+  {
+    async isEncryptionAvailable() {
+      return safeStorage.isAsyncEncryptionAvailable()
+    },
+    async encrypt(token) {
+      return (await safeStorage.encryptStringAsync(token)).toString('base64')
+    },
+    async decrypt(encoded) {
+      try {
+        const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(Buffer.from(encoded, 'base64'))
+        return { token: result, shouldReEncrypt }
+      }
+      catch (error) {
+        if (error instanceof Error && /temporarily unavailable/i.test(error.message))
+          throw new TokenTemporarilyUnavailableError(error.message)
+        throw error
+      }
+    },
+  },
+  {
+    read: () => authStore().read(),
+    write: auth => authStore().write(auth),
+    remove: () => {
+      const file = authFilePath()
+      try {
+        if (fs.existsSync(file))
+          fs.unlinkSync(file)
+      }
+      catch (error) {
+        log('[pocket-auth] 删除凭证失败', error)
+      }
+    },
+  },
+  (message, error) => {
+    if (error === undefined)
+      log(message)
+    else
+      log(message, error)
+  },
+  token => debug('[pocket-auth] 解密后的 token：', token),
+)
+
+/** app.whenReady 之后预热：异步加密器就绪后才能解密，业务侧在此之前的读取一律视为未登录 */
+export function ensureAuthLoaded(): Promise<void> {
+  return credentials.load()
+}
 
 // ===== 接口常量：统一在 common/pocket-api-urls.ts（与渲染层同源），见文件头 import =====
 
@@ -101,24 +169,7 @@ function isEnvelopeOk(envelope: PocketEnvelope<unknown>): boolean {
   return envelope.status === 200 && envelope.success !== false
 }
 
-// ===== 持久化结构 =====
-
-interface StoredAuth {
-  /** 记住手机号（下次打开弹窗预填；明文，手机号本身不算机密） */
-  mobile: string
-  /** 登录时使用的区号（如 '852'）；旧版本无此字段，读取时按 86 处理 */
-  area?: string
-  /** 登录时选定的客户端档位；旧版本无此字段，读取时按口袋48 处理 */
-  clientProfile?: PocketClientProfileId
-  /** safeStorage 加密后的 token（base64）；plainFallback 时为空 */
-  tokenEnc: string
-  /** safeStorage 不可用时的降级明文 token；有 tokenEnc 时恒为空 */
-  tokenPlain: string
-  nickname: string
-  avatar: string
-  userId: string
-  savedAt: number
-}
+// ===== 对外结构 =====
 
 /** 对渲染层暴露的登录态（不含 token 本体） */
 export interface PocketAuthState {
@@ -190,14 +241,13 @@ function summarizeEnvelope(envelope: PocketEnvelope<unknown> | null | undefined)
 }
 
 /**
- * 当前请求所用的客户端档位：读凭证（未登录 / 旧凭证回退默认档）。
- * 与 getToken 同口径——每次请求读一次凭证（读盘代价可忽略），故登录与退出都不需要
- * 额外的缓存失效逻辑。同一请求内多次取值也不会读到不一致的状态。
+ * 当前请求所用的客户端档位：读凭证内存快照（未登录 / 旧凭证回退默认档）。
+ * 与 getToken 同用一个状态源，登录与退出都不需要额外的缓存失效逻辑。
  *
  * 导出供聊天室取同档云信身份（`pocket-danmaku.ts`），保证 HTTP 与 TCP 报同一家客户端。
  */
 export function currentClientProfile(): PocketClientProfileId {
-  return resolvePocketClientProfile(readStoredAuth()?.clientProfile)
+  return resolvePocketClientProfile(credentials.getStored()?.clientProfile)
 }
 
 /**
@@ -302,69 +352,6 @@ async function postPocket<T>(
   })
 }
 
-// ===== 凭证文件 =====
-
-function authFilePath(): string {
-  return path.join(app.getPath('userData'), 'pocket48-auth.json')
-}
-
-let store: SafeJSONFileSync<StoredAuth> | null = null
-
-function authStore(): SafeJSONFileSync<StoredAuth> {
-  if (!store)
-    store = new SafeJSONFileSync<StoredAuth>(authFilePath())
-  return store
-}
-
-function safeStorageAvailable(): boolean {
-  try {
-    return safeStorage.isEncryptionAvailable()
-  }
-  catch {
-    return false
-  }
-}
-
-function readStoredAuth(): StoredAuth | null {
-  return authStore().read()
-}
-
-function saveStoredAuth(auth: StoredAuth): void {
-  authStore().write(auth)
-}
-
-/**
- * 上次已打印过的 token：每个请求都会重新解密一次，同一 token 只打一条日志。
- * 只做日志去重，不缓存解密结果——token 仍每次现算（见 currentClientProfile 的口径说明）。
- */
-let loggedToken: string | null = null
-
-/** 解出可用 token；加密解密失败（如更换系统用户）视为未保存，返回空串 */
-function extractToken(stored: StoredAuth | null): string {
-  if (!stored)
-    return ''
-  let token: string
-  if (stored.tokenEnc) {
-    try {
-      token = safeStorage.decryptString(Buffer.from(stored.tokenEnc, 'base64'))
-    }
-    catch (error) {
-      log('[pocket-auth] token 解密失败，按未登录处理', error)
-      return ''
-    }
-  }
-  else {
-    token = stored.tokenPlain || ''
-  }
-  // 仅开发环境打印 token，生产环境不落日志（token 本身是机密）；
-  // 同一 token 只打一次——消息轮询 5s 一次，每次都打会把终端刷满
-  if (token !== loggedToken) {
-    loggedToken = token
-    debug('[pocket-auth] 解密后的 token：', token)
-  }
-  return token
-}
-
 /**
  * 脱敏手机号（139****1234）。非 86 区号加 `+区号 ` 前缀——区号是归属地信息，
  * 无脱敏必要；海外号码 4-15 位不定长，头尾各留 2 位（短于 5 位时头尾重叠，脱敏无意义）。
@@ -382,9 +369,8 @@ function maskMobile(mobile: string, area?: string): string {
 }
 
 function toAuthState(stored: StoredAuth | null): PocketAuthState {
-  const token = extractToken(stored)
   return {
-    loggedIn: !!token,
+    loggedIn: !!credentials.getToken(),
     nickname: stored?.nickname || '',
     avatar: stored?.avatar || '',
     userId: stored?.userId || '',
@@ -398,14 +384,14 @@ function toAuthState(stored: StoredAuth | null): PocketAuthState {
 
 // ===== 对外能力 =====
 
-/** 当前登录态（读本地凭证，不发起网络校验；token 是否真有效由调用方用时才知道） */
+/** 当前登录态（读内存凭证，不发起网络校验；token 是否真有效由调用方用时才知道） */
 export function getAuthState(): PocketAuthState {
-  return toAuthState(readStoredAuth())
+  return toAuthState(credentials.getStored())
 }
 
 /** 取 token 供 IM 凭据等已登录链路使用；未登录返回空串 */
 export function getToken(): string {
-  return extractToken(readStoredAuth())
+  return credentials.getToken()
 }
 
 /** 区号统一去掉可能的 + 前缀；缺省或空串（如误传单个 '+'）仍按中国大陆处理 */
@@ -539,7 +525,7 @@ export async function loginByCode(
   catch (error) {
     log('[pocket-auth] 登录后拉取资料失败（不阻断登录）', error)
   }
-  saveAuth(trimmedMobile, token, info, normalizedArea, profile)
+  await saveAuth(trimmedMobile, token, info, normalizedArea, profile)
   return getAuthState()
 }
 
@@ -571,50 +557,33 @@ export async function loginByToken(
   }
   const info = pickUserInfo(envelope.content)
   // token 登录的手机号由用户手填、无区号语义（该链路不校验手机号），按 86 存档只为展示不带前缀
-  saveAuth(mobile.trim(), trimmed, info, '86', profile)
+  await saveAuth(mobile.trim(), trimmed, info, '86', profile)
   return getAuthState()
 }
 
 /** 落盘凭证：档位一并写入，此后所有请求按该档发头（档位随凭证读） */
-function saveAuth(
+async function saveAuth(
   mobile: string,
   token: string,
   info: PocketUserInfo,
   area: string,
   clientProfile: PocketClientProfileId,
-): void {
-  const encrypted = safeStorageAvailable()
-  saveStoredAuth({
+): Promise<void> {
+  const encrypted = await credentials.save({
     mobile,
     area,
     clientProfile,
-    tokenEnc: encrypted ? safeStorage.encryptString(token).toString('base64') : '',
-    tokenPlain: encrypted ? '' : token,
     nickname: info.nickname,
     avatar: info.avatar,
     userId: info.userId,
     savedAt: Date.now(),
-  })
+  }, token)
   log(`[pocket-auth] 凭证已保存（${encrypted ? '加密' : '明文降级'}，档位 ${clientProfile}），用户: ${info.nickname || '未知'}`)
-}
-
-/** 删除本地凭证文件；存在才删，失败不抛（删除只影响展示，调用方各有兵底） */
-function deleteStoredCredentials(): void {
-  // 凭证没了，日志去重状态归零：下次登录（哪怕拿到同一个 token）应重新打印一次
-  loggedToken = null
-  const file = authFilePath()
-  try {
-    if (fs.existsSync(file))
-      fs.unlinkSync(file)
-  }
-  catch (error) {
-    log('[pocket-auth] 删除凭证失败', error)
-  }
 }
 
 /** 退出登录：删除本地凭证文件（档位随凭证消失，请求头回到默认档；下次登录重新选） */
 export function logout(): void {
-  deleteStoredCredentials()
+  credentials.clear()
   serverChannelCache.clear()
   roomPermissionCache.clear()
   roomPermissionInflight.clear()
@@ -624,7 +593,7 @@ export function logout(): void {
 
 /** token 判失效：删凭证文件（过期无恢复手段，重登必然覆盖）+ 广播各窗复位镜像 */
 export function expireStoredAuth(): void {
-  deleteStoredCredentials()
+  credentials.clear()
   serverChannelCache.clear()
   roomPermissionCache.clear()
   roomPermissionInflight.clear()
@@ -818,12 +787,7 @@ export async function checkIn(): Promise<PocketCheckInResult> {
 
 /** 验证通过后把服务端最新资料回写本地凭证（头像/昵称变更后设置页即时刷新；无变化不写盘） */
 function refreshStoredProfile(info: PocketUserInfo): void {
-  const stored = readStoredAuth()
-  if (!stored)
-    return
-  if (stored.nickname === info.nickname && stored.avatar === info.avatar && stored.userId === info.userId)
-    return
-  saveStoredAuth({ ...stored, nickname: info.nickname, avatar: info.avatar, userId: info.userId })
+  credentials.update({ nickname: info.nickname, avatar: info.avatar, userId: info.userId })
 }
 
 // ===== 关注列表（账号维度） =====
@@ -1613,7 +1577,7 @@ function num(value: unknown): number {
 export async function getRoomSenderProfile(): Promise<PocketRoomSenderProfile> {
   if (roomSenderProfile)
     return roomSenderProfile
-  const stored = readStoredAuth()
+  const stored = credentials.getStored()
   const base: PocketRoomSenderProfile = {
     userId: stored?.userId ?? '',
     nickname: stored?.nickname ?? '',

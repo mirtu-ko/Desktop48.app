@@ -7,7 +7,7 @@
  */
 import type { ClientRequest } from 'electron'
 import { Buffer } from 'node:buffer'
-import { ANDROID_DEVICE } from '@common/android-device'
+import { SITE_USER_AGENT } from '@common/android-device'
 import { ALL_MEMBER_SNAPSHOT_URL, ALL_MEMBER_URL, LIVE_LIST_URL } from '@common/pocket-api-urls'
 import { net } from 'electron'
 import { log } from './logger'
@@ -71,9 +71,6 @@ function memberListTarget(headers?: Record<string, string>): DiagnoseTarget {
 const DIAGNOSE_TIMEOUT = 8 * 1000
 const DETAIL_BYTES = 512
 const DETAIL_CHARS = 160
-
-/** 站点身份 UA，机型与 App 身份共用 common/android-device.ts。 */
-const DIAGNOSE_UA = `Mozilla/5.0 (Linux; Android ${ANDROID_DEVICE.osVersion}; ${ANDROID_DEVICE.model}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36`
 
 /**
  * 组装站点对照、App 身份、成员名单与静态资源探测目标。
@@ -144,7 +141,7 @@ function probe(target: DiagnoseTarget): Promise<NetDiagnoseItem> {
 
     try {
       request = net.request({ url: target.url, method: target.method })
-      request.setHeader('User-Agent', DIAGNOSE_UA)
+      request.setHeader('User-Agent', SITE_USER_AGENT)
       if (target.method === 'POST')
         request.setHeader('Content-Type', 'application/json')
       for (const [key, value] of Object.entries(target.headers ?? {}))

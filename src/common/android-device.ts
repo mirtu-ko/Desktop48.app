@@ -29,3 +29,9 @@ export const ANDROID_DEVICE = {
   /** `Build.TAGS` */
   buildTags: 'release-keys',
 } as const
+
+/**
+ * 站点档 UA：静态资源 / 媒体 CDN 使用，与 App 档是两回事（业务接口会被主进程换成 App 身份），
+ * 但设备必须同源 —— 主进程为贺卡取头像二进制时也复用这一份，别在各自模块里重写机型。
+ */
+export const SITE_USER_AGENT = `Mozilla/5.0 (Linux; Android ${ANDROID_DEVICE.osVersion}; ${ANDROID_DEVICE.model}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36`

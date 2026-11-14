@@ -1,4 +1,6 @@
 import type { NetRequestOptions } from '@preload/ipc-contract'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import Apis from '@renderer/services/apis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ANDROID_DEVICE } from '../src/common/android-device'
@@ -47,5 +49,18 @@ describe('站点请求 UA', () => {
     await Apis.barrage('https://cdn.48.cn/barrage.lrc')
 
     expect(headersAt()['User-Agent']).toContain(ANDROID_DEVICE.model)
+  })
+
+  it('主进程与各渲染层出口都复用共享常量，不再内联 UA 字面量', () => {
+    const consumers = [
+      'src/main/net-diagnose.ts',
+      'src/main/ipc/register-system-ipc.ts',
+      'src/renderer/src/services/request.ts',
+    ]
+    for (const file of consumers) {
+      const source = readFileSync(fileURLToPath(new URL(`../${file}`, import.meta.url)), 'utf8')
+      expect(source, file).toContain('SITE_USER_AGENT')
+      expect(source, file).not.toContain('Chrome/152.0.0.0 Mobile Safari')
+    }
   })
 })

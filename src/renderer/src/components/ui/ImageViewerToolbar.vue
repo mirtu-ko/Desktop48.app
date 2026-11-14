@@ -5,6 +5,7 @@
 import { Download, RefreshLeft, RefreshRight, ScaleToOriginal, ZoomIn, ZoomOut } from '@element-plus/icons-vue'
 import { debugLog } from '@renderer/utils/debug'
 import { downloadImage } from '@renderer/utils/image-download'
+import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
@@ -16,6 +17,8 @@ const props = defineProps<{
   /** 与 viewer 的 urlList 同序，下载时按 activeIndex 取当前这张 */
   urls: string[]
   activeIndex: number
+  /** 来源，仅用于埋点区分入口 */
+  from: 'room' | 'essence' | 'date' | 'album'
 }>()
 
 const downloading = ref(false)
@@ -27,9 +30,11 @@ async function onDownload() {
   downloading.value = true
   try {
     const name = await downloadImage(url)
+    trackEvent('image:save', { from: props.from, result: 'ok' })
     ElMessage.success(`已下载到下载目录：${name}`)
   }
   catch (error: unknown) {
+    trackEvent('image:save', { from: props.from, result: 'fail' })
     debugLog('rooms-page', '图片下载失败', url, error)
     ElMessage.error('图片下载失败，可能该图片所在域名未开放跨域读取')
   }

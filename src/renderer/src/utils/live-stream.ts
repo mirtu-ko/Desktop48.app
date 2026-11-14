@@ -38,17 +38,35 @@ export function buildPlaybackUrl(url: string, restartToken: number, now = Date.n
 }
 
 /**
- * 直播详情接口明确返回的「直播已终结」业务文案：
- * 命中即说明不该再走断流重试，应直接关闭直播窗口。
+ * 直播详情接口的两类终结业务文案，处置不同：
+ * 「回放生成中」= 本场刚下播（进结束卡）；「已被删除」= 内容下架（关窗）。
  */
-const UNAVAILABLE_LIVE_MESSAGES = new Set([
-  '回放生成中',
-  '该成员直播已被删除',
-])
+const LIVE_ENDED_MESSAGE = '回放生成中'
+const LIVE_REMOVED_MESSAGE = '该成员直播已被删除'
 
-/** 判断 apis.ts 抛出的业务错误是否属于「直播已终结/不可用」 */
-export function isUnavailableLiveMessage(message: string): boolean {
-  return UNAVAILABLE_LIVE_MESSAGES.has(message)
+/** 本场已下播、回放尚未生成：不该再重试，应进下播结束态 */
+export function isLiveEndedMessage(message: string): boolean {
+  return message === LIVE_ENDED_MESSAGE
+}
+
+/** 直播已被删除/下架：错误态，关闭浮窗 */
+export function isLiveRemovedMessage(message: string): boolean {
+  return message === LIVE_REMOVED_MESSAGE
+}
+
+/**
+ * 详情是否已从直播态转为回放态：进行中是 review=false + rtmp 地址，
+ * 下播后是 review=true + https VOD 地址（无 token 也能查，见 getLiveOne）。
+ * 仅 user 源可判：open 详情没有 review 概念，归一后恒 true。
+ * 地址缺失或异常协议不算结束，留给重试链处理。
+ */
+export function isEndedLiveDetail(
+  view: { review: boolean, playStreamPath: string },
+  source: string,
+): boolean {
+  if (source !== 'user')
+    return false
+  return view.review === true || /^https?:\/\//i.test(view.playStreamPath)
 }
 
 /** 电台轮播切换间隔（毫秒）：接口缺省或非法时回退 5 秒 */
@@ -79,8 +97,41 @@ export function resolveCarouselImages(
 
 /**
  * 重试决策：未达上限返回下一次尝试序号；已达上限返回 null，
- * 由调用方走"直播结束"分支。
+ * 由调用方查状态判是否下播，未确认则切加载失败卡。
  */
 export function nextRetryAttempt(current: number, maxRetries: number): number | null {
   return current < maxRetries ? current + 1 : null
+}
+
+/** 加载失败的来源：流本身 / 首次详情 / 本地网络断开 */
+export type LoadFailureKind = 'stream' | 'detail' | 'offline'
+
+/** 失败卡文案；三种来源共用一张卡，模板不再按分支拼字串 */
+export interface LoadFailureView {
+  title: string
+  hint: string
+  action: string
+}
+
+const LOAD_FAILURE_VIEWS: Record<LoadFailureKind, LoadFailureView> = {
+  stream: {
+    title: '直播暂时无法加载',
+    hint: '主播推流或网络可能暂时异常，稍后可以重试',
+    action: '重试',
+  },
+  detail: {
+    title: '直播暂时无法加载',
+    hint: '无法获取直播信息，请检查网络后重试',
+    action: '重试',
+  },
+  offline: {
+    title: '网络连接已断开',
+    hint: '网络恢复后将自动重新连接',
+    action: '立即重试',
+  },
+}
+
+/** 失败态 → 卡片文案；新增来源只需在此登记取值 */
+export function describeLoadFailure(kind: LoadFailureKind): LoadFailureView {
+  return LOAD_FAILURE_VIEWS[kind]
 }

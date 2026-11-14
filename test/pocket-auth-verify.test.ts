@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   checkIn,
   checkRoomAnswer,
+  ensureAuthLoaded,
   followMember,
   getAuthState,
   getFollowedIds,
@@ -95,9 +96,9 @@ vi.mock('electron', () => {
   return {
     app: { getPath: () => '/tmp/pocket-auth-verify-test' },
     safeStorage: {
-      isEncryptionAvailable: () => false,
-      encryptString: (value: string) => Buffer.from(value, 'utf8'),
-      decryptString: (value: Buffer) => value.toString('utf8'),
+      isAsyncEncryptionAvailable: async () => false,
+      encryptStringAsync: async (value: string) => Buffer.from(value, 'utf8'),
+      decryptStringAsync: async (value: Buffer) => ({ result: value.toString('utf8'), shouldReEncrypt: false }),
     },
     net: { request },
   }
@@ -159,15 +160,16 @@ function defaultReplies() {
   }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   env.requests.length = 0
   env.written = null
   env.stored = { ...STORED }
   env.replies = defaultReplies()
   // 发言资料是模块级缓存：别让上一例的结果漏到下一例
   resetRoomSenderProfile()
-  // token 日志去重也是模块级状态：先退一次，避免上一例的 token 抑制本例的首条日志
+  // 明文 token 是模块级缓存：先清再按本例的 env.stored 重新载入
   logout()
+  await ensureAuthLoaded()
   loggerMock.debug.mockClear()
 })
 
@@ -799,31 +801,30 @@ describe('pocket-auth 客户端档位', () => {
 })
 
 /**
- * token 每条请求都会重新解密一次；日志按 token 值去重，
- * 否则轮询接口（5s / 60s）会把终端刷满同一条 token。
+ * 明文 token 只在载入 / 保存时产生，读取不再解密（也不再刷 token 日志）；
+ * 磁盘快照仍按原口径每次读盘。
  */
-describe('pocket-auth token 日志去重', () => {
+describe('pocket-auth 凭证载入', () => {
   const tokenLogs = () => loggerMock.debug.mock.calls.filter(([message]) => String(message).includes('解密后的 token'))
 
-  it('同一 token 连续取用只打一条', () => {
+  it('载入后频繁读取不再解密也不再打 token 日志', () => {
+    expect(getAuthState().loggedIn).toBe(true)
     getAuthState()
     getAuthState()
-    getAuthState()
-    expect(tokenLogs()).toHaveLength(1)
-    expect(tokenLogs()[0][1]).toBe('test-token')
+    expect(tokenLogs()).toHaveLength(0)
   })
 
-  it('token 变化时重新打一条', () => {
-    getAuthState()
+  it('重新载入会同步磁盘上的新凭证', async () => {
     env.stored = { ...STORED, tokenPlain: 'another-token' }
-    getAuthState()
-    expect(tokenLogs().map(call => call[1])).toEqual(['test-token', 'another-token'])
+    await ensureAuthLoaded()
+    expect(getAuthState().loggedIn).toBe(true)
+    expect(tokenLogs().map(call => call[1])).toEqual(['another-token'])
   })
 
-  it('退出登录后再取同一个 token 会重新打（去重状态随凭证清除）', () => {
-    getAuthState()
+  it('退出登录立即清空明文，登录态同步复位', () => {
+    expect(getAuthState().loggedIn).toBe(true)
     logout()
-    getAuthState()
-    expect(tokenLogs()).toHaveLength(2)
+    expect(getAuthState().loggedIn).toBe(false)
+    expect(tokenLogs()).toHaveLength(0)
   })
 })

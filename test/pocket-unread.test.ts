@@ -148,7 +148,7 @@ describe('pocket-unread（房间未读检测）', () => {
     auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
     await runTick(auth, mod)
     expect(auth.getRoomMessages).toHaveBeenCalledTimes(1)
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
   })
 
   it('有新消息：按列表数出「比水位新」的条数（不是每轮 +1）', async () => {
@@ -250,13 +250,13 @@ describe('pocket-unread（房间未读检测）', () => {
     // 标记已读：清零 + 广播 + 拉一页把水位推到当下（此页最新是 m4）
     // 返回值是**清零前**的水位（渲染层画分割线的锚点）：读前停在 m1
     await expect(mod.markRead(1)).resolves.toEqual({ msgTime: 1_000_000, msgIdServer: 'm1' })
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
-    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
+    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 同一页消息不复活（水位已到 m4，即使键变化触发探测，数出来也是 0）
     auth.getRoomLastMessages.mockResolvedValue(lastOf('k3'))
     await runTick(auth, mod)
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 比水位新的消息照常计
     auth.getRoomLastMessages.mockResolvedValue(lastOf('k4'))
@@ -311,7 +311,7 @@ describe('pocket-unread（房间未读检测）', () => {
 
     // 读小房间：清零；带回的水位是小房间自己的（同为 m1，两个频道各自锚定）
     await expect(mod.markRead(1, 'small')).resolves.toEqual({ msgTime: 1_000_000, msgIdServer: 'm1' })
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
   })
 
   it('小房间被房主更新（旧频道回「频道不存在」）：作废归属、清未读，下一轮重新发现新频道', async () => {
@@ -348,7 +348,7 @@ describe('pocket-unread（房间未读检测）', () => {
     auth.getRoomLastMessages.mockResolvedValue([lastOf('k2a', 'c1')[0], lastOf('k2b', 'cX')[0]])
     await runTick(auth, mod)
     await settle()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 第 3 轮：小房间来新消息 → 计未读（后面才能验证是「真被清掉」）
     smallPage = pageOf('m2', 'm1')
@@ -365,7 +365,7 @@ describe('pocket-unread（房间未读检测）', () => {
     await runTick(auth, mod)
     await settle()
     expect(mod.getSmallChannel(1)).toBeNull()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 第 5 轮：房主新建的小房间出现在列表与 lastMsgList → 归属自愈重新挂到同一成员名下
     auth.getServerChannels.mockResolvedValue([
@@ -411,7 +411,7 @@ describe('pocket-unread（房间未读检测）', () => {
     await vi.waitFor(() => expect(mod.getSmallChannel(1)).toMatchObject({ serverId: 's1', channelId: 'cNew' }))
     mod.stopPocketUnread()
     // 还没人说话 → 不产生未读
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
   })
 
   it('同 server 的普通频道（room/info 正常回包）不会被当成小房间', async () => {
@@ -518,7 +518,7 @@ describe('pocket-unread（房间未读检测）', () => {
     await vi.waitFor(() => expect(auth.getRoomMessages).toHaveBeenCalledTimes(probeCalls + 1))
     mod.stopPocketUnread()
     await settle()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
   })
 
   it('大房间频道连续探测失败：达上限即作废重解析，未读不再冻结在死频道上', async () => {
@@ -565,8 +565,8 @@ describe('pocket-unread（房间未读检测）', () => {
 
     // 换房：旧频道还能读历史消息（探测不会失败），未读不能一直算在它头上
     mod.reconcileRoomChannel(1, { serverId: 's1', channelId: 'c2' })
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
-    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
+    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 未登记的成员（未关注 / 临时房间）：没有可校正的缓存，不写盘也不广播
     const quiet = broadcasts.length
@@ -585,8 +585,8 @@ describe('pocket-unread（房间未读检测）', () => {
     expect(mod.getState().total).toBe(2)
 
     mod.reconcileRoomChannel(1, { serverId: '', channelId: '' })
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
-    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
+    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0, closedChannels: [] })
   })
 
   it('未登录清空未读并广播；重新登录按首见重新锚定', async () => {
@@ -602,17 +602,17 @@ describe('pocket-unread（房间未读检测）', () => {
     // 彻底未登录（凭证不存在）：清空并广播
     auth.getToken.mockReturnValue('')
     mod.startPocketUnread()
-    await vi.waitFor(() => expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 }))
+    await vi.waitFor(() => expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0, closedChannels: [] }))
     await settle()
     mod.stopPocketUnread()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 重新登录：账号相关状态已随登出清空，重新走首见锚定，不补回登出前未读
     auth.getToken.mockReturnValue('tok')
     auth.getRoomMessages.mockResolvedValue(pageOf('m3', 'm2', 'm1'))
     await runTick(auth, mod)
     await settle()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
   })
 
   it('clearAccountUnread 即刻清空并广播归零，不等下一轮检测；无变化时静默', async () => {
@@ -629,8 +629,8 @@ describe('pocket-unread（房间未读检测）', () => {
     // （凭证失效后 tick 会因 token 无效整轮冻结，永远走不到未登录分支）
     broadcasts = []
     mod.clearAccountUnread()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
-    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
+    expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 已空再调不广播（并发失效报错时幂等）
     broadcasts = []
@@ -651,10 +651,10 @@ describe('pocket-unread（房间未读检测）', () => {
     // 取关：房间已不在列表，markRead 无从触发——未读必须随频道缓存一并清理并广播
     auth.getFollowedIds.mockResolvedValue([])
     mod.startPocketUnread()
-    await vi.waitFor(() => expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 }))
+    await vi.waitFor(() => expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0, closedChannels: [] }))
     await settle()
     mod.stopPocketUnread()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 重新关注：频道缓存与水位已清，首轮重新解析 + 重新锚定，历史不算未读
     auth.getFollowedIds.mockResolvedValue([1])
@@ -662,7 +662,7 @@ describe('pocket-unread（房间未读检测）', () => {
     await runTick(auth, mod)
     await vi.waitFor(() => expect(auth.getRoomChannel).toHaveBeenCalledTimes(2))
     await settle()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
   })
 
   it('屏蔽成员：剔除出检测范围，未读与频道缓存按取关同一条路径清理', async () => {
@@ -678,10 +678,10 @@ describe('pocket-unread（房间未读检测）', () => {
     // 屏蔽：账号关注照旧存在（关注与屏蔽正交），检测范围里剔除该成员，未读随之清零并广播
     blockedIds = [1]
     mod.startPocketUnread()
-    await vi.waitFor(() => expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0 }))
+    await vi.waitFor(() => expect(broadcasts.at(-1)).toEqual({ rooms: {}, total: 0, closedChannels: [] }))
     await settle()
     mod.stopPocketUnread()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 解除屏蔽：频道缓存已清，重新解析 + 重新锚定，历史不算未读
     blockedIds = []
@@ -689,7 +689,7 @@ describe('pocket-unread（房间未读检测）', () => {
     await runTick(auth, mod)
     await vi.waitFor(() => expect(auth.getRoomChannel).toHaveBeenCalledTimes(2))
     await settle()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
   })
 
   it('仅本地关注的成员同样参与轮询：解析大房间、发现小房间、消息计入未读', async () => {
@@ -769,12 +769,12 @@ describe('pocket-unread（房间未读检测）', () => {
     await runTick(auth, mod)
     await vi.waitFor(() => expect(auth.getRoomChannelOwner).toHaveBeenCalledTimes(1))
     mod.stopPocketUnread()
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 第 2 轮：c2 已归属 → 首见锚定；正向缓存不再反查
     await runTick(auth, mod)
     expect(auth.getRoomChannelOwner).toHaveBeenCalledTimes(1)
-    expect(mod.getState()).toEqual({ rooms: {}, total: 0 })
+    expect(mod.getState()).toEqual({ rooms: {}, total: 0, closedChannels: [] })
 
     // 第 3 轮：新消息 → 按列表数出 2 条
     auth.getRoomLastMessages.mockResolvedValue(lastOf('k2', 'c2'))
@@ -783,5 +783,145 @@ describe('pocket-unread（房间未读检测）', () => {
     await vi.waitFor(() => expect(mod.getState().total).toBe(2))
     mod.stopPocketUnread()
     expect(mod.getState().rooms['2']).toMatchObject({ count: 2 })
+  })
+})
+
+/** 预览回包：当前频道 + 一个未归属的旧频道（关闭房间关闭前的留言频道） */
+function lastWithArchive(serverId = 's1') {
+  return [
+    ...lastOf('k1', 'c1', serverId),
+    { channelId: 'c-old', serverId, starName: '成员', msgContent: '告别', msgKey: 'k2', msgTime: 0, unreadCount: null },
+  ]
+}
+
+describe('pocket-unread（关闭频道分类）', () => {
+  /** 未归属频道的反查：默认正常回包，指定频道抛错 */
+  function stubOwner(auth: AuthMock, failures: Record<string, string>) {
+    auth.getRoomChannelOwner.mockImplementation(async (channelId: string) => {
+      if (failures[channelId])
+        throw new Error(failures[channelId])
+      return { channelId, serverId: 's1', ownerId: 0 }
+    })
+  }
+
+  it('room/info 报「房间关闭中」：登记历史频道并随快照广播', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastWithArchive())
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    stubOwner(auth, { 'c-old': '房间关闭中' })
+
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(mod.getState().closedChannels).toHaveLength(1))
+
+    expect(mod.getState().closedChannels).toEqual([{ channelId: 'c-old', serverId: 's1' }])
+    expect(broadcasts.at(-1)).toMatchObject({ closedChannels: [{ channelId: 'c-old', serverId: 's1' }] })
+  })
+
+  it('「频道不存在」与回包没给 serverId 的关闭频道都不登记', async () => {
+    const { mod, auth } = await freshModule()
+    const last = [
+      ...lastWithArchive(),
+      { channelId: 'c-no-server', serverId: '', starName: '成员', msgContent: '告别', msgKey: 'k3', msgTime: 0, unreadCount: null },
+    ]
+    stubOnline(auth, last)
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    stubOwner(auth, { 'c-old': '频道不存在', 'c-no-server': '房间关闭中' })
+
+    await runTick(auth, mod)
+    await settle()
+
+    expect(mod.getState().closedChannels).toEqual([])
+  })
+
+  it('关闭频道在 TTL 内不重复反查', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastWithArchive())
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    stubOwner(auth, { 'c-old': '房间关闭中' })
+
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(mod.getState().closedChannels).toHaveLength(1))
+    const ownerCalls = () => auth.getRoomChannelOwner.mock.calls.filter(([cid]) => cid === 'c-old').length
+    expect(ownerCalls()).toBe(1)
+
+    await runTick(auth, mod)
+    await settle()
+    expect(ownerCalls()).toBe(1)
+  })
+
+  it('房间重开：TTL 后复核反查成功，关闭记录从快照消失', async () => {
+    const realNow = Date.now
+    let offset = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset)
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastWithArchive())
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    auth.getRoomChannelOwner.mockImplementation(async (channelId: string) => {
+      if (channelId === 'c-old' && offset === 0)
+        throw new Error('房间关闭中')
+      return { channelId, serverId: 's1', ownerId: 1 }
+    })
+
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(mod.getState().closedChannels).toHaveLength(1))
+
+    offset = 31 * 60 * 1000
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(mod.getState().closedChannels).toHaveLength(0))
+  })
+
+  it('旧频道已不在 lastMsgList：到期仍复核，仍在关闭则保留、已被删除则清掉', async () => {
+    const realNow = Date.now
+    let offset = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + offset)
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastWithArchive())
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    stubOwner(auth, { 'c-old': '房间关闭中' })
+
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(mod.getState().closedChannels).toHaveLength(1))
+    const ownerCalls = () => auth.getRoomChannelOwner.mock.calls.filter(([cid]) => cid === 'c-old').length
+    expect(ownerCalls()).toBe(1)
+
+    // 房间重开换了新频道：c-old 不再出现在回包里，只能靠到期复核发现，否则标记永久残留
+    stubOnline(auth, lastOf('k1', 'c1', 's1'))
+    offset = 31 * 60 * 1000
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(ownerCalls()).toBe(2))
+    expect(mod.getState().closedChannels).toHaveLength(1)
+
+    // 复核报「频道不存在」= 旧频道已随重开删除，记录作废
+    offset = 62 * 60 * 1000
+    stubOwner(auth, { 'c-old': '频道不存在' })
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(mod.getState().closedChannels).toHaveLength(0))
+  })
+
+  it('同一 server 多个已关闭频道：快照按回包顺序排，不随探测完成顺序变', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, [
+      ...lastOf('k1', 'c1', 's1'),
+      { channelId: 'c-new', serverId: 's1', starName: '成员', msgContent: '我好啦！', msgKey: 'k2', msgTime: 0, unreadCount: null },
+      { channelId: 'c-old', serverId: 's1', starName: '成员', msgContent: '[图片消息]', msgKey: 'k3', msgTime: 0, unreadCount: null },
+    ])
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    // 回包里靠前的频道故意慢返回：完成顺序与回包顺序相反，排序必须仍按回包顺序
+    auth.getRoomChannelOwner.mockImplementation(async (channelId: string) => {
+      if (channelId === 'c-new' || channelId === 'c-old') {
+        if (channelId === 'c-new')
+          await new Promise(resolve => setTimeout(resolve, 20))
+        throw new Error('房间关闭中')
+      }
+      return { channelId, serverId: 's1', ownerId: 0 }
+    })
+
+    await runTick(auth, mod)
+    await vi.waitFor(() => expect(mod.getState().closedChannels).toHaveLength(2))
+
+    expect(mod.getState().closedChannels).toEqual([
+      { channelId: 'c-new', serverId: 's1' },
+      { channelId: 'c-old', serverId: 's1' },
+    ])
   })
 })

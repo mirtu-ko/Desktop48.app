@@ -5,6 +5,7 @@ import type { SortKey } from '@renderer/utils/member-sort'
 import type { StatsScope } from '@renderer/utils/member-stats'
 import { Close, Grid, Menu } from '@element-plus/icons-vue'
 import MemberBirthdayBanner from '@renderer/components/member/MemberBirthdayBanner.vue'
+import MemberBirthdayCard from '@renderer/components/member/MemberBirthdayCard.vue'
 import MemberCard from '@renderer/components/member/MemberCard.vue'
 import MemberStatsBoard from '@renderer/components/member/MemberStatsBoard.vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
@@ -18,16 +19,17 @@ import { useMemberSync } from '@renderer/composables/use-member-sync'
 import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { useMemberTreeStore } from '@renderer/stores/member-tree'
 import Constants from '@renderer/utils/constants'
-import { monthBirthdays } from '@renderer/utils/member-birthday'
+import { monthBirthdays, todayBirthdays } from '@renderer/utils/member-birthday'
 import { excludeMembers } from '@renderer/utils/member-exclude'
 import { memberCardKey } from '@renderer/utils/member-list'
 import { buildAdjuncts, mergeMembers } from '@renderer/utils/member-merge'
 import { applyElectionRanks } from '@renderer/utils/member-ranking'
 import { SORT_OPTIONS } from '@renderer/utils/member-sort'
 import { STATS_ALL_SCOPE } from '@renderer/utils/member-stats'
+import { trackEvent } from '@renderer/utils/umami'
 import { useEventListener } from '@vueuse/core'
 import { ElMessage } from 'element-plus'
-import { computed, onActivated, onDeactivated, onMounted, ref } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, ref, watch } from 'vue'
 
 /** 成员库页面：分团 tab + 工具条 + 分区卡片网格 + 详情抽屉。本文件只留布局与交互 */
 
@@ -67,6 +69,14 @@ const loading = ref(true)
 
 /** 当前查看详情的成员（null = 抽屉关闭） */
 const selectedMember = ref<MemberDetail | null>(null)
+
+/** 打开详情抽屉：列表卡片 / 生日墙 / 生日贺卡 / 数据看板四个入口共用 */
+function openMemberDetail(member: MemberDetail | null) {
+  if (!member)
+    return
+  selectedMember.value = member
+  trackEvent('member:detail_open', { from: 'members' })
+}
 
 /** 屏蔽名单：模块级共享状态，机制见 stores/member-flags.ts */
 const { refreshBlockedMembers } = useBlockedMembersStore()
@@ -158,6 +168,18 @@ const tabMembers = computed(() =>
 
 /** 本月寿星（含本月已过完的），按日期升序；为空时整块生日墙不渲染 */
 const monthEntries = computed(() => monthBirthdays(tabMembers.value, today.value))
+
+/** 今日寿星：生日贺卡只承载这批人，非今日寿星不进贺卡 */
+const todayEntries = computed(() => todayBirthdays(monthEntries.value))
+
+/** 生日贺卡是否打开：打开期间本页的 / 与 Esc 快捷键让给贺卡（← → 切寿星、Esc 关闭） */
+const cardOpen = ref(false)
+
+/** 跨零点后今日寿星可能清空：浮层随之卸载，标记也要收起，否则页面快捷键会一直被挡住 */
+watch(todayEntries, (entries) => {
+  if (!entries.length)
+    cardOpen.value = false
+})
 
 // ===== 详情卡片的 ↑ / ↓ 切换 =====
 
@@ -254,10 +276,12 @@ onActivated(() => {
 })
 onDeactivated(() => {
   keyboardEnabled.value = false
+  // 贺卡遮罩 Teleport 到 body，页面失活时不会自己消失，切页顺手收起
+  cardOpen.value = false
 })
 
 function onKeydown(event: KeyboardEvent) {
-  if (!keyboardEnabled.value || isStats.value)
+  if (!keyboardEnabled.value || isStats.value || cardOpen.value)
     return
   // 抽屉 / 对话框打开时不抢按键（Esc 归弹层）
   if (document.querySelector('.el-overlay:not([style*="display: none"])'))
@@ -361,7 +385,7 @@ useEventListener(window, 'keydown', onKeydown)
         class="members-stats"
         :members="members"
         :scopes="STATS_SCOPES"
-        @select="selectedMember = $event"
+        @select="openMemberDetail"
       />
 
       <template v-else>
@@ -376,11 +400,21 @@ useEventListener(window, 'keydown', onKeydown)
           :line-widths="[68, 44]"
         />
         <div v-else class="members-container">
-          <!-- 生日墙：本月寿星横幅，跟着当前分团 tab 走；本月无人过生日时整块不渲染 -->
+          <!-- 生日墙：本月寿星横幅，跟着当前分团 tab 走；贺卡入口就在这条横幅里 -->
           <MemberBirthdayBanner
             v-if="monthEntries.length"
             :entries="monthEntries"
-            @select="selectedMember = $event"
+            @select="openMemberDetail"
+            @card="cardOpen = true"
+          />
+
+          <!-- 生日贺卡：半透明蒙层 + 弹卡，Teleport 到 body；只承载今日寿星，卡面与分享图同源 -->
+          <MemberBirthdayCard
+            v-if="todayEntries.length"
+            v-model:open="cardOpen"
+            :entries="todayEntries"
+            :today="today"
+            @select="openMemberDetail"
           />
 
           <!-- 分区：一层极淡的队色底 + 同色描边，让每支队伍自成一块，整页不再是一片白 -->
@@ -422,7 +456,7 @@ useEventListener(window, 'keydown', onKeydown)
                 :keyword="keyword"
                 :blocked="!!member.userId && isBlocked(member.userId)"
                 :followed="!!member.userId && isFollowed(member.userId)"
-                @select="selectedMember = member"
+                @select="openMemberDetail(member)"
                 @toggle-follow="toggleFollowMember"
                 @toggle-block="toggleBlockMember"
               />
@@ -466,8 +500,8 @@ useEventListener(window, 'keydown', onKeydown)
       @close="selectedMember = null"
       @prev="stepMember(-1)"
       @next="stepMember(1)"
-      @toggle-block="toggleBlockMember"
-      @toggle-follow="toggleFollowMember"
+      @toggle-block="m => toggleBlockMember(m, 'detail')"
+      @toggle-follow="m => toggleFollowMember(m, 'detail')"
     />
   </div>
 </template>

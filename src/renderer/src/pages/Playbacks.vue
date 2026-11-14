@@ -361,7 +361,7 @@ watch(selectedFilter, () => {
             :item="item"
             class="live-card"
             :followed="isFollowed(item.userInfo.userId)"
-            @select-member="openMemberDetail"
+            @select-member="id => openMemberDetail(id, 'playback')"
           />
         </div>
       </div>

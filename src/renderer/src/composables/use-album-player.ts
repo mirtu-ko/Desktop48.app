@@ -2,7 +2,11 @@
 import type { AlbumSong, MusicAlbum } from '@renderer/services/api-types'
 import useAudioPlayerStore from '@renderer/stores/audio-player'
 import { toTrack, toTracks, trackKey } from '@renderer/utils/album'
+import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
+
+/** 专辑入口来源：网格快捷按钮与详情卡片 */
+type AlbumSource = 'grid' | 'detail'
 
 export function useAlbumPlayer() {
   const { playlist, currentIndex, playing, playAt, playAlbum, addAlbum, addTrack, isCurrent, isBroken } = useAudioPlayerStore()
@@ -18,12 +22,13 @@ export function useAlbumPlayer() {
   }
 
   /** 播放整张专辑：替换当前队列，从第一首开始 */
-  function playWholeAlbum(album: MusicAlbum) {
+  function playWholeAlbum(album: MusicAlbum, from: AlbumSource = 'grid') {
     const tracks = toTracks(album)
     if (!tracks.length) {
       ElMessage.info('这张专辑暂无可播放的音源')
       return
     }
+    trackEvent('album:play', { from })
     playAlbum(tracks)
   }
 
@@ -45,6 +50,7 @@ export function useAlbumPlayer() {
     if (!song.url) {
       return
     }
+    trackEvent('album:track_play')
     const existing = playlist.value.findIndex(track => track.key === trackKey(album, song))
     if (existing >= 0) {
       playAt(existing)
@@ -73,8 +79,9 @@ export function useAlbumPlayer() {
   }
 
   /** 购买页（shop 商品页）外链 */
-  function openAlbumShop(album: MusicAlbum) {
+  function openAlbumShop(album: MusicAlbum, from: AlbumSource = 'grid') {
     if (album.href) {
+      trackEvent('album:shop_open', { from })
       openExternal(album.href)
     }
   }

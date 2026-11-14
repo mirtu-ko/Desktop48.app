@@ -134,3 +134,53 @@ describe('net-rate-limit / 429 惩罚', () => {
     expect(parseRetryAfterMs(new Date('2026-10-24T00:00:05Z').toUTCString())).toBe(5_000)
   })
 })
+
+describe('net-rate-limit / withNetSlot 统一出口', () => {
+  it('按 URL 取域名、透传结果，run 抛错也归还名额', async () => {
+    const { withNetSlot, acquireNetSlot } = await loadModule()
+
+    await expect(withNetSlot('https://A.test/path', async (host) => {
+      expect(host).toBe('a.test')
+      return 'ok'
+    })).resolves.toBe('ok')
+
+    await expect(withNetSlot('https://a.test/path', async () => {
+      throw new Error('boom')
+    })).rejects.toThrow('boom')
+
+    // 让令牌回满，只看在途名额：两次占用都已归还才能连续拿到 4 个
+    await vi.advanceTimersByTimeAsync(1_000)
+    const held: Array<() => void> = []
+    for (let i = 0; i < 4; i++)
+      held.push(await acquireNetSlot('a.test'))
+    held.forEach(release => release())
+  })
+
+  it('与底层配额共享同一域状态：在途占满时排队', async () => {
+    const { withNetSlot, acquireNetSlot } = await loadModule()
+    const held: Array<() => void> = []
+    for (let i = 0; i < 4; i++)
+      held.push(await acquireNetSlot('a.test'))
+
+    let entered = false
+    const pending = withNetSlot('https://a.test/path', async () => {
+      entered = true
+      return 1
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(entered).toBe(false)
+
+    held[0]()
+    await vi.advanceTimersByTimeAsync(0)
+    await expect(pending).resolves.toBe(1)
+    expect(entered).toBe(true)
+    held.slice(1).forEach(release => release())
+  })
+
+  it('不可解析的 url 直接拒绝，不占配额', async () => {
+    const { withNetSlot } = await loadModule()
+    const run = vi.fn(async () => 'ok')
+    await expect(withNetSlot('not a url', run)).rejects.toThrow()
+    expect(run).not.toHaveBeenCalled()
+  })
+})

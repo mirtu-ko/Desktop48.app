@@ -294,7 +294,7 @@ onUnmounted(() => {
                   :item="item"
                   date-mode="relative"
                   :followed="isFollowed(item.userInfo.userId)"
-                  @select-member="openMemberDetail"
+                  @select-member="id => openMemberDetail(id, 'live')"
                 />
               </div>
             </div>
@@ -321,7 +321,7 @@ onUnmounted(() => {
               :item="item"
               :image-version="imageVersion"
               :followed="isFollowed(item.userInfo.userId)"
-              @select-member="openMemberDetail"
+              @select-member="id => openMemberDetail(id, 'live')"
             />
           </div>
         </div>

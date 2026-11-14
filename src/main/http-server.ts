@@ -1,6 +1,7 @@
 import http from 'node:http'
 import { debug, error, log } from './logger'
 import { createFlvStreamProcess } from './stream'
+import { createStreamIdleGuard, STREAM_IDLE_TIMEOUT_MS } from './stream-idle-guard'
 
 let _serverPort = 8080
 export const serverPort = () => _serverPort
@@ -90,6 +91,8 @@ const server = http.createServer((req, res) => {
     debug(`[http-server.ts] 已为 ${liveId} spawn FFmpeg 转流进程, pid=${ffmpeg.pid}`)
     let responseClosed = false
     let hasReceivedData = false
+    // 上游连接还活着但不再吐数据时，FFmpeg 不会退出；由守卫结束响应以触发播放器重连
+    let idleGuard: ReturnType<typeof createStreamIdleGuard> | null = null
 
     res.writeHead(200, {
       'Content-Type': 'video/x-flv',
@@ -102,6 +105,7 @@ const server = http.createServer((req, res) => {
         return
 
       responseClosed = true
+      idleGuard?.dispose()
       debug(`[http-server.ts] 关闭 ${liveId} 的响应与转流管道（收到过数据: ${hasReceivedData}）`)
       try {
         ffmpeg.stdout.unpipe(res)
@@ -128,6 +132,16 @@ const server = http.createServer((req, res) => {
       if (!hasReceivedData)
         debug(`[http-server.ts] ${liveId} 收到首帧流数据，开始向播放器输出`)
       hasReceivedData = true
+      idleGuard?.touch()
+    })
+
+    idleGuard = createStreamIdleGuard(() => {
+      if (responseClosed)
+        return
+      debug(`[http-server.ts] ${liveId} 超过 ${STREAM_IDLE_TIMEOUT_MS}ms 无流数据，结束响应以触发重连`)
+      // 与 FFmpeg 正常退出同形：不留错误体，mpegts 判为下载完成 → ended → 既有断流重试链
+      res.end('')
+      closeResponse()
     })
 
     ffmpeg.stdout.on('error', (err) => {

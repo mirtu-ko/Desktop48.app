@@ -15,6 +15,8 @@ describe('room-status（房间关闭判据）', () => {
     expect(isRoomClosed(null, '房间已关闭')).toBe(true)
     // 跨 IPC 的错误会带上前缀，仍然要认
     expect(isRoomClosed(null, 'Error invoking remote method: 房间已关闭')).toBe(true)
+    // 关闭前的旧留言频道报的是「房间关闭中」，同样用来认历史频道
+    expect(isRoomClosed(null, 'Error invoking remote method: Error: 房间关闭中')).toBe(true)
   })
 
   it('其它失败不当作关闭（宁可显示暂无消息，也不误报）', () => {

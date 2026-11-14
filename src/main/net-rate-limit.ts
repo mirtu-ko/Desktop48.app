@@ -1,9 +1,10 @@
 /**
- * 渲染层 `netRequest` 的出口闸门：按目标域名做令牌桶 + 在途上限。
+ * 所有对外请求的出口闸门：按目标域名做令牌桶 + 在途上限。
  *
  * 白名单（allowed-hosts.ts）解决「能打谁」，这里解决「打多快」。没有这一层时，
  * 渲染层任一处写错（循环、watch 抖动、重复挂载）都能瞬间把请求打满，主进程会全盘接受，
- * 最终由对方服务端的风控替我们兜底。
+ * 最终由对方服务端的风控替我们兜底。业务 handler 一律走 withNetSlot，
+ * 新增请求通道时不会漏掉闸门。
  *
  * 超限不丢弃：进 FIFO 队列等令牌（调用方本来就在 await），队列满或等太久才拒绝。
  * 收到 429 且带 Retry-After 时整域进入冷却——服务端已明说等多久，继续撞只会更糟。
@@ -115,7 +116,22 @@ function pump(host: string): void {
 }
 
 /**
- * 申请一次对外请求的许可。返回的释放函数必须恰好调一次（主进程 handler 里用 finally）。
+ * 对外请求的唯一出口：按 url 取域名、占配额、finally 归还。
+ * 业务通道（netRequest / imageDataUrl）都走这里，run 收到的 host 供 429 冷却复用。
+ */
+export async function withNetSlot<T>(url: string, run: (host: string) => Promise<T>): Promise<T> {
+  const host = new URL(url).hostname.toLowerCase()
+  const release = await acquireNetSlot(host)
+  try {
+    return await run(host)
+  }
+  finally {
+    release()
+  }
+}
+
+/**
+ * 配额原语，供闸门内部与单测使用。返回的释放函数必须恰好调一次。
  * 队列满 / 排队超时都会被拒绝——让调用方尽早失败，而不是把过期请求继续排在后面。
  */
 export function acquireNetSlot(host: string): Promise<() => void> {

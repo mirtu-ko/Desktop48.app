@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { BirthdayEntry } from '@renderer/utils/member-birthday'
 import type { MemberDetail } from '@renderer/utils/member-merge'
-import { ArrowDown, User } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowRight, User } from '@element-plus/icons-vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { formatBirthdayCountdown, nextUpcomingBirthday, todayBirthdays } from '@renderer/utils/member-birthday'
 import { memberCardKey } from '@renderer/utils/member-list'
@@ -11,13 +11,20 @@ import { computed, ref } from 'vue'
  * 生日墙：成员页顶部的生日提醒横幅。
  * 折叠态一句话说清「今天谁生日 / 本月还有谁」，展开是本月的寿星日历（按日期升序）。
  * 入参是当前 tab 范围内的本月寿星（含已过完的），口径见 utils/member-birthday.ts。
+ *
+ * 条幅右侧的「生日贺卡」按钮是本功能的唯一入口（emit('card')），仅在今天有寿星时出现：
+ * 贺卡只承载今日寿星，无人过生日时不提供空壳入口。
+ * 两个按钮并列而非嵌套 —— button 内嵌 button 是非法 HTML，点击行为会被浏览器改写。
  */
 const props = defineProps<{
   /** 本月寿星，已按日期升序（monthBirthdays 的输出） */
   entries: BirthdayEntry[]
 }>()
 
-const emit = defineEmits<{ select: [member: MemberDetail] }>()
+const emit = defineEmits<{
+  select: [member: MemberDetail]
+  card: []
+}>()
 
 const expanded = ref(false)
 
@@ -50,23 +57,46 @@ const summary = computed(() => {
     class="bday"
     :class="{ 'is-today': todayList.length > 0, 'is-open': expanded }"
   >
-    <button class="bday__head" type="button" @click="expanded = !expanded">
-      <span class="bday__cake">
-        <MediaIcon name="cake" :size="19" />
-      </span>
+    <div class="bday__head">
+      <button
+        class="bday__main"
+        type="button"
+        :aria-expanded="expanded"
+        @click="expanded = !expanded"
+      >
+        <span class="bday__cake">
+          <MediaIcon name="cake" :size="19" />
+        </span>
 
-      <span class="bday__text">
-        <span class="bday__title">{{ summary }}</span>
-        <span class="bday__meta">{{ month }} 月生日墙 · 共 {{ entries.length }} 位寿星</span>
-      </span>
+        <span class="bday__text">
+          <span class="bday__title">{{ summary }}</span>
+          <span class="bday__meta">{{ month }} 月生日墙 · 共 {{ entries.length }} 位寿星</span>
+        </span>
 
-      <span class="bday__toggle">
-        {{ expanded ? '收起' : '展开' }}
-        <el-icon class="bday__arrow" :class="{ 'is-open': expanded }">
-          <ArrowDown />
+        <span class="bday__toggle">
+          {{ expanded ? '收起' : '展开' }}
+          <el-icon class="bday__arrow" :class="{ 'is-open': expanded }">
+            <ArrowDown />
+          </el-icon>
+        </span>
+      </button>
+
+      <!-- 贺卡入口就在条幅里：仅今天有寿星时出现，固定为鎏金流光态 -->
+      <button
+        v-if="todayList.length"
+        class="bday__card"
+        type="button"
+        title="打开今日寿星的生日贺卡"
+        @click="emit('card')"
+      >
+        <span class="bday__card-sweep" />
+        <MediaIcon name="cake" :size="15" />
+        <span>生日贺卡</span>
+        <el-icon :size="12">
+          <ArrowRight />
         </el-icon>
-      </span>
-    </button>
+      </button>
+    </div>
 
     <!-- 折叠用 grid-template-rows 0fr→1fr 过渡（高度自适应且可动画），
          收起时一并切 visibility，免得被裁掉的内容还能被 Tab 聚焦 -->
@@ -132,13 +162,21 @@ const summary = computed(() => {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-follow) 42%, transparent);
 }
 
-/* ===== 折叠态的一行 ===== */
+/* ===== 折叠态的一行：左边展开、右边开贺卡，两个按钮并列 ===== */
 .bday__head {
   display: flex;
   align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px 14px;
+}
+
+.bday__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
   gap: 12px;
-  width: 100%;
-  padding: 10px 14px;
+  padding: 0;
   border: none;
   font-family: inherit;
   text-align: left;
@@ -213,6 +251,59 @@ const summary = computed(() => {
 
   &.is-open {
     transform: rotate(180deg);
+  }
+}
+
+/* 贺卡入口：只在今天有寿星时出现，固定为鎏金流光态 */
+.bday__card {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #3d2450;
+  background: linear-gradient(120deg, #fff1c9, #ffc53d 62%, #ff9ec4);
+  box-shadow: 0 6px 18px -8px rgba(255, 180, 60, 0.9);
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+
+  &:hover {
+    transform: translateY(-1px);
+    background: linear-gradient(120deg, #fff8e4, #ffd166 62%, #ffb1cd);
+    box-shadow: 0 6px 20px -8px rgba(255, 180, 60, 0.95);
+  }
+}
+
+.bday__card-sweep {
+  position: absolute;
+  top: -60%;
+  left: -45%;
+  width: 34%;
+  height: 220%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  transform: rotate(18deg);
+  animation: bday-card-sweep 3.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes bday-card-sweep {
+  0%,
+  55% {
+    left: -45%;
+  }
+
+  100% {
+    left: 135%;
   }
 }
 
@@ -349,16 +440,19 @@ const summary = computed(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bday.is-today .bday__cake {
+  .bday.is-today .bday__cake,
+  .bday__card-sweep {
     animation: none;
   }
 
   .bday__wall-wrap,
   .bday__arrow,
+  .bday__card,
   .bday-item {
     transition: none;
   }
 
+  .bday__card:hover,
   .bday-item:hover {
     transform: none;
   }

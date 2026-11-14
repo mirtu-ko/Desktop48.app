@@ -1,7 +1,7 @@
 {
   "name": "Desktop48",
   "type": "module",
-  "version": "0.2.10",
+  "version": "0.2.11-beta.0",
   "description": "Desktop48",
   "author": "Zack",
   "license": "MIT",
@@ -35,7 +35,7 @@
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
     "electron-updater": "^6.8.11",
-    "ws": "^8.22.0"
+    "ws": "^8.23.0"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^10.0.0",
@@ -43,25 +43,25 @@
     "@element-plus/icons-vue": "^2.3.2",
     "@types/node": "^26.6.6",
     "@types/ws": "^8.18.2",
-    "@vitejs/plugin-vue": "^6.0.10",
+    "@vitejs/plugin-vue": "^6.0.11",
     "@vueuse/core": "^15.0.0",
     "dayjs": "^1.11.23",
-    "electron": "^44.5.1",
+    "electron": "^45.3.1",
     "electron-builder": "^26.18.1",
     "electron-vite": "^6.0.0",
-    "element-plus": "^2.14.7",
+    "element-plus": "^2.14.8",
     "eslint": "^10.14.0",
     "eslint-plugin-format": "^2.0.1",
-    "hls.js": "^1.7.3",
+    "hls.js": "^1.7.4",
     "mitt": "^3.0.1",
     "mpegts.js": "^1.8.2",
-    "sass-embedded": "^1.105.1",
+    "sass-embedded": "^1.108.2",
     "typescript": "~6.0.3",
-    "vite": "^8.3.4",
-    "vitest": "^5.0.4",
-    "vue": "^3.5.44",
-    "vue-router": "^5.4.0",
-    "vue-tsc": "^3.3.13"
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0",
+    "vue": "^3.5.45",
+    "vue-router": "^5.5.0",
+    "vue-tsc": "^3.3.14"
   },
   "allowScripts": {
     "esbuild@0.25.12": true,

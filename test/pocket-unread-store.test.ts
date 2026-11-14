@@ -14,13 +14,17 @@ interface RoomState {
 }
 
 /** 假主进程：未读快照回取一次 + 记录 markRead 调用（本用例不推广播，只看乐观值） */
-async function setup(rooms: Record<string, RoomState>) {
+async function setup(rooms: Record<string, RoomState>, closedChannels?: Array<{ serverId: string, channelId: string }>) {
   vi.resetModules()
   const calls: Array<[number, string]> = []
   vi.stubGlobal('window', {
     mainAPI: {
       pocketUnreadBatch: vi.fn(),
-      pocketUnreadState: vi.fn(async () => ({ rooms, total: 0 })),
+      pocketUnreadState: vi.fn(async () => ({
+        rooms,
+        total: 0,
+        ...(closedChannels ? { closedChannels } : {}),
+      })),
       // markRead 原样带回清零前的水位（分割线锚点），这里给固定值供断言
       pocketMarkRead: vi.fn(async (userId: number, target: string) => {
         calls.push([userId, target])
@@ -93,5 +97,18 @@ describe('pocket-unread store（未读镜像与已读标记）', () => {
 
     expect(store.latestUnreadTimeOf(1)).toBe(100)
     expect(store.latestUnreadTimeOf(2)).toBe(0)
+  })
+
+  it('快照里的关闭频道进入镜像；旧快照缺该字段时回落为空', async () => {
+    const withClosed = await setup(
+      { 1: { count: 5, bigCount: 5, smallCount: 0, latestTime: 100 } },
+      [{ serverId: 's1', channelId: 'c-old' }],
+    )
+    expect(withClosed.store.usePocketUnreadStore().closedChannels.value).toEqual([
+      { serverId: 's1', channelId: 'c-old' },
+    ])
+
+    const legacy = await setup({ 1: { count: 5, bigCount: 5, smallCount: 0, latestTime: 100 } })
+    expect(legacy.store.usePocketUnreadStore().closedChannels.value).toEqual([])
   })
 })

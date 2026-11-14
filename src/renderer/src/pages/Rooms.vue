@@ -22,11 +22,11 @@ import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/p
 import { copyText } from '@renderer/utils/clipboard'
 import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
-import { resolveRoomArchiveStart } from '@renderer/utils/room-date-jump'
+import { resolveDateChannel, resolveRoomArchiveStart } from '@renderer/utils/room-date-jump'
 import { shouldTrackRoomEnter } from '@renderer/utils/room-enter-tracker'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
-import { useDebounceFn, useDocumentVisibility, useEventListener, useResizeObserver } from '@vueuse/core'
+import { useDebounceFn, useDocumentVisibility, useEventListener, useIntersectionObserver, useResizeObserver } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, h, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
@@ -55,6 +55,8 @@ const {
   chatStatus,
   chatStatusText,
   roomClosed,
+  isRoomClosedOf,
+  archiveChannelOf,
   historyExhausted,
   loadingMore,
   essenceMessages,
@@ -100,6 +102,12 @@ const essenceOpen = ref(false)
 /** 按日期查看弹层是否打开 */
 const dateOpen = ref(false)
 
+/** 打开按日期查看：入口只有头部一处，埋点放在这里 */
+function openDateDialog() {
+  dateOpen.value = true
+  trackEvent('room:date_open')
+}
+
 const { findMemberByUserId } = useMemberDirectoryStore()
 
 /** 当前房间成员的入团时间；名录未同步或查不到时为空，起点回落到归档日 */
@@ -123,14 +131,23 @@ watch(selectedUserId, async (userId) => {
 /** 按日期查看的可查起点：入团日与归档日取较晚者 */
 const roomArchiveStart = computed(() => resolveRoomArchiveStart(roomJoinTime.value))
 
-/** 按日期查看读取的频道：与当前消息流一致（大房间 / 小房间） */
-const activeDateChannel = computed(() => {
-  if (viewMode.value === 'small') {
-    const small = smallChannel.value
-    return small?.channelId && small.serverId ? { serverId: small.serverId, channelId: small.channelId } : null
+/**
+ * 按日期查看的读取频道与不可用原因：关闭态只认历史存档频道，其余按视图取小房间 / 大房间
+ * （见 resolveDateChannel）。关闭却没解析到存档频道时按日期无可读内容，弹层据此说明原因。
+ */
+const dateTarget = computed(() => {
+  const closed = roomClosed.value
+  const archive = archiveChannelOf(selectedUserId.value)
+  return {
+    channel: resolveDateChannel({
+      closed,
+      archive,
+      viewMode: viewMode.value,
+      small: smallChannel.value,
+      room: selectedRoom.value,
+    }),
+    missing: closed && !archive,
   }
-  const room = selectedRoom.value
-  return room?.channelId && room.serverId ? { serverId: room.serverId, channelId: room.channelId } : null
 })
 
 /** 小房间上锁时收起弹层：门禁未通过不该留着房间历史 */
@@ -291,12 +308,6 @@ async function markRoomReadCapturing(userId: number, target: 'room' | 'small', c
   return true
 }
 
-/** 跳到未读分割线：居中显示，胶囊随即让位（分割线留着做视觉标记） */
-function jumpToUnread() {
-  unreadJumped.value = true
-  unreadAnchorEl.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-}
-
 /** 分割线钉在窗口顶且补页触顶：水位仍在更早的未加载区域（上翻补进后恢复精确定位） */
 const unreadAnchorBeyond = computed(() =>
   unreadAnchor.value?.beyond === true && unreadIndex.value === 0,
@@ -398,6 +409,8 @@ async function submitSmallAnswer() {
   smallAnswerError.value = ''
   const result = await unlockSmall(answer)
   smallSubmitting.value = false
+  // 门禁通过率是这块功能唯一有效的指标，不记录暗号本身
+  trackEvent('room:unlock_small', { result: result.ok ? 'ok' : 'fail' })
   if (!result.ok) {
     smallAnswerError.value = result.message || '暗号不正确'
     return
@@ -521,6 +534,33 @@ function scrollToBottom() {
     return
   el.scrollTop = el.scrollHeight
   lastSeenScrollTop = el.scrollTop
+}
+
+/** 分割线在视口内时浮标让位；交点状态只由 observer 写，元素卸载用 DOM ref 兜底，避免残留 true 压住新锚点 */
+const unreadAnchorIntersecting = ref(false)
+useIntersectionObserver(
+  unreadAnchorEl,
+  ([entry]) => { unreadAnchorIntersecting.value = entry?.isIntersecting === true },
+  // 上下各留 24px：线只贴边露出一点时仍保留跳转入口
+  { root: listRef, rootMargin: '-24px 0px' },
+)
+const unreadAnchorVisible = computed(() => unreadAnchorEl.value !== null && unreadAnchorIntersecting.value)
+
+/** 跳转后分割线距视口顶的比例：上方留一点旧消息作上下文，其余空间都给新消息 */
+const UNREAD_ANCHOR_TOP_RATIO = 0.25
+
+/** 跳到未读分割线：只滚消息容器，把线落在视口上部，胶囊随即让位（分割线留着做视觉标记） */
+function jumpToUnread() {
+  unreadJumped.value = true
+  const el = listRef.value
+  const anchor = unreadAnchorEl.value
+  if (!el || !anchor)
+    return
+  const anchorTop = el.scrollTop + anchor.getBoundingClientRect().top - el.getBoundingClientRect().top
+  el.scrollTo({
+    top: Math.max(0, anchorTop - el.clientHeight * UNREAD_ANCHOR_TOP_RATIO),
+    behavior: 'smooth',
+  })
 }
 
 /** 左列条目：进房、双击回底、右键标已读都没有文字入口，靠 hover 说明 */
@@ -1042,7 +1082,7 @@ function onComposerClick(): void {
 function onDraftEnter(event: KeyboardEvent) {
   if (event.isComposing)
     return
-  void onSendClick()
+  void onSendClick('enter')
 }
 
 /** 输入条上的「断开连接」：回到只看模式（不再顶手机），断开前二次确认 */
@@ -1067,7 +1107,7 @@ async function onDisconnectClick(): Promise<void> {
   ElMessage.success('已断开房间连接')
 }
 
-async function onSendClick() {
+async function onSendClick(via: 'enter' | 'button') {
   if (!composerUsable.value)
     return
   if (!canSend.value) {
@@ -1082,6 +1122,11 @@ async function onSendClick() {
   if (!text)
     return
   const result = await sendMessage(text)
+  trackEvent('room:send', {
+    result: result.ok ? 'ok' : 'fail',
+    via,
+    hasReply: replyTarget.value ? 'yes' : 'no',
+  })
   if (result.ok) {
     draft.value = ''
     return
@@ -1539,6 +1584,7 @@ onMounted(() => {
                   <span class="room-name ellipsis">{{ room.nickname }}</span>
                   <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
                   <span v-if="room.temporary" class="room-temp-tag">临时</span>
+                  <span v-if="isRoomClosedOf(room.userId)" class="room-closed-tag">已关闭</span>
                 </span>
 
                 <span v-if="room.preview" class="room-preview ellipsis">{{ room.preview }}</span>
@@ -1695,7 +1741,7 @@ onMounted(() => {
                   type="button"
                   class="date-jump-btn"
                   title="按日期查看历史消息"
-                  @click="dateOpen = true"
+                  @click="openDateDialog"
                 >
                   <el-icon :size="12">
                     <Calendar />
@@ -2103,7 +2149,7 @@ onMounted(() => {
                     :loading="sendBusy"
                     :disabled="!composerUsable"
                     :title="sendButtonHint"
-                    @click="onSendClick"
+                    @click="onSendClick('button')"
                   >
                     {{ sendButtonLabel }}
                   </el-button>
@@ -2114,36 +2160,40 @@ onMounted(() => {
                 {{ statusText }}
               </footer>
 
-              <!-- 进房遗留未读的跳转浮标：贴底时分割线在视口上方，点它滚到那里。
+              <!-- 进房遗留未读的跳转浮标：贴底且分割线不在视口内才出现，点它滚到那里。
                    与下面的「新消息」浮标互斥（一个只在贴底、一个只在离开底部时出现） -->
-              <button
-                v-if="atBottom && unreadAnchor && unreadIndex >= 0 && !unreadJumped"
-                type="button"
-                class="new-msg-float new-msg-float--up"
-                :style="newMsgFloatStyle"
-                title="跳到未读消息的起点"
-                @click="jumpToUnread"
-              >
-                <el-icon :size="12">
-                  <ArrowRight />
-                </el-icon>
-                {{ unreadText(unreadAnchor.count) }} 条未读
-              </button>
+              <Transition name="msg-float">
+                <button
+                  v-if="atBottom && unreadAnchor && unreadIndex >= 0 && !unreadJumped && !unreadAnchorVisible"
+                  type="button"
+                  class="new-msg-float new-msg-float--up"
+                  :style="newMsgFloatStyle"
+                  title="跳到未读消息的起点"
+                  @click="jumpToUnread"
+                >
+                  <el-icon :size="12">
+                    <ArrowRight />
+                  </el-icon>
+                  {{ unreadText(unreadAnchor.count) }} 条未读
+                </button>
+              </Transition>
 
               <!-- 上翻历史时收到新消息的浮标：点击回底（贴在输入条上方，见 newMsgFloatStyle） -->
-              <button
-                v-if="newCount > 0 && !atBottom"
-                type="button"
-                class="new-msg-float"
-                :style="newMsgFloatStyle"
-                title="回到最新消息"
-                @click="scrollToBottom"
-              >
-                <el-icon :size="12">
-                  <ArrowRight />
-                </el-icon>
-                {{ newCount }} 条新消息
-              </button>
+              <Transition name="msg-float">
+                <button
+                  v-if="newCount > 0 && !atBottom"
+                  type="button"
+                  class="new-msg-float"
+                  :style="newMsgFloatStyle"
+                  title="回到最新消息"
+                  @click="scrollToBottom"
+                >
+                  <el-icon :size="12">
+                    <ArrowRight />
+                  </el-icon>
+                  {{ newCount }} 条新消息
+                </button>
+              </Transition>
 
               <!-- 消息右键菜单（Teleport 到 body 定位在光标处）：复制正文 / 媒体直链 -->
               <RoomMessageMenu
@@ -2184,10 +2234,11 @@ onMounted(() => {
           <!-- 按日期查看弹层：独立只读轨道，不进主消息流、不碰已读与轮询 -->
           <RoomDateDialog
             v-model="dateOpen"
-            :channel="activeDateChannel"
+            :channel="dateTarget.channel"
             :scope="messageScope"
             :room-name="selectedRoom?.nickname ?? ''"
             :archive-start="roomArchiveStart"
+            :empty-reason="dateTarget.missing ? '该房间已关闭，暂未取到关闭前的留言频道' : ''"
           />
         </template>
 
@@ -2795,6 +2846,19 @@ onMounted(() => {
   color: var(--color-rooms);
   background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 34%, transparent);
+}
+
+/* 「已关闭」标记：与临时标签同规格，用中性色表达不可用，不抢直播 / 未读的强调 */
+.room-closed-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--el-text-color-secondary);
+  background: color-mix(in srgb, var(--el-text-color-secondary) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--el-text-color-secondary) 28%, transparent);
 }
 
 /* 条目右缘竖排小标签列：口袋关注星标在上、队伍徽标在下。
@@ -3925,6 +3989,27 @@ onMounted(() => {
  * 同特异度，必须定义在 .new-msg-float 之后才生效 */
 .new-msg-float--up .el-icon {
   transform: rotate(-90deg);
+}
+
+/* 浮标出入场：与 BackTopButton 同款的下沉淡入淡出；reduced-motion 下瞬切 */
+.msg-float-enter-active,
+.msg-float-leave-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+
+.msg-float-enter-from,
+.msg-float-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-float-enter-active,
+  .msg-float-leave-active {
+    transition: none;
+  }
 }
 
 .msg-empty,

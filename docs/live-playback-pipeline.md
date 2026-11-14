@@ -138,11 +138,14 @@ handleStopLiveStream → stopProcess(优雅写 'q') → 2s 未退 SIGTERM → �
 ```
 session ──onSessionStart──▶ beginSession ──▶ retry.reset() + mediaLoading=true
 session ──onBeforeRebuild─▶ rebuildMedia ──▶ retry.reset() + player.destroyPlayer()
-session ──onAvatar/onOnlineNum/onUnavailable─▶ 标题栏 / 在线人数首帧 / 下架+关窗
-player  ──onCanPlay───────▶ onPlayerCanPlay ──▶ retry.isRecoveringStream=false
+session ──onAvatar/onOnlineNum/onEnded/onUnavailable/onSessionError─▶ 标题栏 / 在线人数 / 结束卡 / 关窗 / 失败卡
+player  ──onCanPlay───────▶ onPlayerCanPlay ──▶ retry 复位 + clearLoadFailure()
 player  ──onError─────────▶ handleStreamError ──▶ 网络错保持 loading / 致命错销毁播放器 → retry.schedule()
-retry   ──attempt─────────▶ recoverStream ──▶ fetchLiveDetail + applyLiveDetail + restartLiveStream
-retry   ──onExhausted─────▶ handleRetryExhausted ──▶ enterLiveEnded
+main    ──stdout 空闲 10s─▶ http-server 结束响应 ──▶ 媒体元素 ended ──▶ 同上的 onError 入口
+network ──offline/online─▶ watch(isOnline) ──▶ markLoadFailed('offline') / retryAfterStall()
+watchdog──起播 15s 未出画▶ recoverStream 或 markLoadFailed('stream')
+retry   ──attempt─────────▶ recoverStream ──▶ 离线短路 / fetchLiveDetail → 判回放态 → 重建流
+retry   ──onExhausted─────▶ handleRetryExhausted ──▶ refreshLiveStatus(true) → enterLiveEnded / loadFailed
 danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveEnded
 ```
 
@@ -167,7 +170,7 @@ danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveE
 
 ### 6.1 下播结束态与复盘数据
 
-主播下播有两条判决路径：`CLOSELIVE` 消息（服务端推送即达，仅 user 源有口袋 IM 会话）与断流重试耗尽（兜底：未登录 / 公演 / 消息丢失）。二者都进 `enterLiveEnded`：
+主播下播有三条判决路径，都进 `enterLiveEnded`：`CLOSELIVE` 消息（服务端推送即达，仅登录用户有口袋 IM 会话）、详情状态确认（`getLiveOne` / `recoverStream` 判 `review=true` / VOD 地址，或「回放生成中」文案；无需登录）、重试耗尽后的列表确认（`refreshLiveStatus(true)` 里已无本场 liveId，仅 user 源）。耗尽时列表仍有本场、查询失败或 open 源，一律切加载失败卡（`loadFailed`），不再把网络故障误报成「直播已结束」。加载失败与下播结束是两条互斥出口，共用 `.live-end` 卡片外壳但状态源不同，见 §7.7。
 
 1. **收摊**：停已播计时、复位重试状态机、停弹幕会话（`useLiveDanmaku` 额外暴露的 `stop`）、停流并销毁播放器。此后 `handleStreamError` 与所有在途 `fetchLiveDetail` 回包都被 `liveEnded` 拦下——停流必然触发错误事件，不拦就会把已结束的直播反复重拉。
 2. **广播 `live-unavailable`**：列表页据此把该直播移出进行中（与下架同一通道，Lives 页只关心刷新）。
@@ -190,9 +193,9 @@ danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveE
 
 连续两次点击同一场直播时，第一次请求持有的 `requestId` 会被第二次推进计数，迟到响应检测到自己已过期，主动 `stopLiveStream` 撤销刚登记的会话并放弃写入，不覆盖第二次的结果（分页列表的 `listRequestId` 同模式）。`streamRestartToken` 是另一维度序号，拼进地址的 `?r=` 参数，让同 URL 的两次重启在浏览器/mpegts 眼里是两个不同资源。
 
-### 7.4 详情失败统一走 `onUnavailable`
+### 7.4 详情失败按业务结论分流
 
-`getLiveOne` 的 `try/catch` 里，详情接口失败通常意味着直播已下架。错误提示由 `services/apis.ts` 的 `request()` 统一弹窗（3 秒同文案去重），此处不重复弹，只广播 `live-unavailable` 让列表页刷新并 `emit('close')` 关窗。
+`getLiveOne` 的 `try/catch` 里，详情接口失败不一定意味着下架：`10049 已被删除` 才广播 `live-unavailable` 并 `emit('close')` 关窗；「回放生成中」是本场下播，走 `onEnded` 进结束卡（`request()` 也不为它弹错误提示）；成功路径若详情已转回放态（`review=true` / VOD 地址）同样走 `onEnded`，不把回放地址喂给直播转流链；其余临时故障走 `onSessionError` 切加载失败卡（既不关窗，也不再静默转圈）。错误提示由 `services/apis.ts` 的 `request()` 统一弹窗（3 秒同文案去重），此处不重复弹。
 
 ⚠️ 只有确定性失败才该走这条路：pocketapi 的 `getLiveOne` 会随机返回 `{status:1017}`（同一份 body 约 1/3 命中，与参数、频率、并发无关，2026-09-13 实测），若原样当成下架会无故关播，故 `request()` 对 1017 与网络层异常默认重试 3 次（退避 400/800/1200ms）；`10049 该成员直播已被删除` 等业务结论不重试，立即上抛。**下架（错误态）与下播（结束态）是两条路**：前者立即关窗，后者进结束卡停流展示复盘，见 §6.1。
 
@@ -203,11 +206,20 @@ danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveE
 - 本地响应没有 `Content-Length`，mpegts 判定为 LOADING_COMPLETE 而非 Early-EOF，不抛 ERROR；随后 `endOfStream()` 把时长校正到最后一段，播完缓冲即触发 `ended`（伴随 `pause`，观感是「停住 + 暂停」）。
 - 触发点取媒体元素的 `onended`（直播正常播放时永远不会 ended），一律按网络错误上抛 → `retry.schedule()` → `recoverStream` 重新拉详情拿到**新签名地址**重建。
 - ⚠️ 不要改用 mpegts 的 `LOADING_COMPLETE` 兜底：`enableWorker: true` 时 worker 回传的包只有 `{ msg, event }`、不带 `extraData`，主线程按 `'extraData' in packet` 判断后直接丢弃该事件。
-- 重试计数语义是「连续失败次数」，必须在 canplay 时清零，否则一场直播里累计断流 3 次（连麦很容易做到）会被误判为「已结束」并切入结束态。
+- 重试计数语义是「连续失败次数」，必须在 canplay 时清零，否则一场直播里累计断流 3 次（连麦很容易做到）会被误判为加载失败。
 
 ### 7.6 开播前的 FFmpeg 校验只做一次
 
 `stores/float-players.ts` 的 `openLive` 是四个开播入口（直播列表 / 公演页 / 房间资料卡 / 房间分享卡）的唯一汇聚点，`use-live-guard` 的 `checkLiveReady()` 接在这里，新增入口无需接线；`openPlayback` 不做该校验——回放走 mpegts 直连，不经过 FFmpeg 转封装。判定口径与启动门禁、下载守卫共用 `window.mainAPI.getFfmpegStatus`（`inspectFfmpegDir`），不要另起一套。
+
+### 7.7 静默故障与加载失败态
+
+本机断网与主播停推不是一回事：RTMP 的 TCP 连接仍活着、FFmpeg 不会退出、本地 FLV 响应不结束，mpegts 既不派发 ERROR 也不触发 `ended`；而看门狗在 `canplay` 时已撤销。状态机因此零输入，等多久都不会出失败卡。
+
+- `main/stream-idle-guard.ts` 从 spawn 起算、每次 `ffmpeg.stdout` 数据刷新，10s 无数据即 `res.end('')` + 结束转流会话，把静默挂死转成媒体元素 `ended`，复用 §7.5 的既有重试链；渲染层不为它新增状态或定时器。正常流每秒几十个音频 tag，10s 是极大余量，误触发也只是重连一次。
+- 所有失败路径收敛到 `loadFailureKind`（`stream | detail | offline`）与唯一写入口 `markLoadFailed()`：停看门狗/重试计时器、上报一次 `live:load-failed { by }`；文案由 `describeLoadFailure()` 纯函数派生。`stream` = 起播静默或重试耗尽，`detail` = 首次详情失败，`offline` = 本机断网。
+- 离线时任何来源都归一为 `offline`；`recoverStream()` 与 `confirmExhaustedEnding()` 走同一个 `shortCircuitIfOffline()`，避免断网时白打详情与列表请求。`online` 事件触发 `retryAfterStall()` 自动重建。
+- 埋点分工：`live:stall` 起播超时、`live:fail` 重试预算耗尽、`live:load-failed` 最终展示的失败卡来源，三者不重复计数。
 
 ## 8. 弹幕链路
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { LiveResultView } from '@renderer/services/live-result'
+import type { LoadFailureKind } from '@renderer/utils/live-stream'
 import type { PocketDisableNotice, PocketRankUser } from '@renderer/utils/pocket-chat-message'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { useDanmakuLayer } from '@renderer/composables/use-danmaku-layer'
@@ -15,16 +16,17 @@ import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import EventBus from '@renderer/services/event-bus'
 import { loadLiveResult } from '@renderer/services/live-result'
 import { danmakuPlacement, ensureDanmakuPlacement, setDanmakuPlacement } from '@renderer/stores/danmaku-placement'
+import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { pocketAuthState } from '@renderer/stores/pocket-auth'
 import { debugLog } from '@renderer/utils/debug'
-import { isUnavailableLiveMessage } from '@renderer/utils/live-stream'
+import { describeLoadFailure, isEndedLiveDetail, isLiveEndedMessage, isLiveRemovedMessage } from '@renderer/utils/live-stream'
 import { flushPlayDuration, markPlayDurationStarted } from '@renderer/utils/play-duration'
 import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
 import { formatViewNum } from '@renderer/utils/view-num'
 
-import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
+import { useDocumentVisibility, useIntervalFn, useOnline } from '@vueuse/core'
 
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
@@ -60,6 +62,13 @@ const videoBoxRef = ref<HTMLElement | null>(null)
 const mediaLoading = ref(true)
 // 下播结束态：停流后画面切复盘卡片（官方 LiveCloseFragment 同构），用户点关闭才关窗
 const liveEnded = ref(false)
+/** 加载失败的唯一状态源：所有失败路径都走 markLoadFailed，按来源决定文案与恢复方式 */
+const loadFailureKind = ref<LoadFailureKind | null>(null)
+const loadFailed = computed(() => loadFailureKind.value !== null)
+const loadFailure = computed(() => loadFailureKind.value ? describeLoadFailure(loadFailureKind.value) : null)
+const isOnline = useOnline()
+/** 耗尽后的状态查询只跑一次：查询在途时拦住新到的 ERROR 事件 */
+let confirmingEnding = false
 /** 复盘数据（live/result）；null = 没拉到（未登录 / 接口失败），结束卡降级简版 */
 const liveResult = ref<LiveResultView | null>(null)
 /** 结束卡头像加载失败记账（按 userId）：回退用户名首字母 */
@@ -71,12 +80,20 @@ let livePlayTracked = false
 
 const isRadio = computed(() => props.liveType !== 1)
 
-/** 详情/轮询明确反馈直播已终结：广播下架 + 关闭浮窗 */
+/** 详情明确反馈直播已被删除：广播下架 + 关闭浮窗 */
 function closeUnavailableLive() {
   debugLog('live', `①直播:直播反馈不可用，关闭浮窗（liveId=${props.liveId}）`)
   ElMessage.error('直播不存在')
   EventBus.emit('live-unavailable', props.liveId)
   emit('close')
+}
+
+/** 状态查询确认本场已下播：埋点后进结束卡（不关窗） */
+function finishLiveEnded(by: 'detail' | 'error' | 'list') {
+  if (liveEnded.value || isManuallyUnmounted.value)
+    return
+  trackEvent('live:end', { by, auth: pocketAuthState.value.loggedIn ? 'in' : 'guest' })
+  void enterLiveEnded()
 }
 
 // 播放防休眠（use-sleep-blocker，与 PlaybackPlayer 共用）
@@ -173,8 +190,13 @@ const session = useLiveSession({
   onOnlineNum: (num) => {
     onlineNum.value = num
   },
-  // 详情都取不到通常意味着直播已下架：广播通知列表页刷新
+  // 详情反馈下播/下架：前者进结束卡，后者广播通知列表页刷新并关窗
+  onEnded: by => finishLiveEnded(by),
   onUnavailable: closeUnavailableLive,
+  onSessionError: (error) => {
+    debugLog('live', `①直播:首次详情获取失败 ${error}`)
+    markLoadFailed('detail')
+  },
   // 回调依赖 retry/player，创建顺序成环，统一走提升的函数声明（见文件末尾）
   onBeforeRebuild: rebuildMedia,
   onSessionStart: beginSession,
@@ -310,6 +332,7 @@ const player = useLivePlayer({
 })
 
 // ── 断流重试状态机 ───────────────────────────────────────────────
+const { refreshLiveStatus } = useLiveStatusStore()
 const retry = useStreamRetry({
   // 结束态后不再安排任何重试：停流触发的错误事件与在途 attempt 都必须失效
   isDisposed: () => isManuallyUnmounted.value || liveEnded.value,
@@ -318,21 +341,129 @@ const retry = useStreamRetry({
   onExhausted: handleRetryExhausted,
 })
 
-/** 单次恢复尝试：拉详情 → 重建流（节奏由重试状态机安排） */
+// ── 加载失败态（唯一入口） ──────────────────────────────────────
+/** 离线时任何来源都归一为 offline，等网络恢复自动重建；同一来源重复进入不重复上报 */
+function markLoadFailed(kind: LoadFailureKind) {
+  if (liveEnded.value || isManuallyUnmounted.value)
+    return
+  const resolved: LoadFailureKind = isOnline.value ? kind : 'offline'
+  if (loadFailureKind.value === resolved)
+    return
+  loadFailureKind.value = resolved
+  stopStallTimer()
+  retry.clearTimer()
+  trackEvent('live:load-failed', { by: resolved })
+  debugLog('live', `①直播:加载失败（${resolved}），交出失败卡`)
+}
+
+function clearLoadFailure() {
+  loadFailureKind.value = null
+}
+
+/** 离线时的恢复尝试与状态查询都注定失败：直接进离线卡，省掉必然失败的请求 */
+function shortCircuitIfOffline(): boolean {
+  if (isOnline.value)
+    return false
+  markLoadFailed('offline')
+  return true
+}
+
+watch(isOnline, (online) => {
+  if (liveEnded.value || isManuallyUnmounted.value)
+    return
+  if (!online)
+    markLoadFailed('offline')
+  else if (loadFailureKind.value === 'offline')
+    void retryAfterStall()
+})
+
+// ── 起播看门狗 ──────────────────────────────────────────────────
+// mpegts 遇到异常流可能既不 canplay 也不派发 ERROR，mediaLoading 会一直转下去。
+// 15s 未出画自动重建一次（给上游推流恢复的机会），仍失败则交出可重试的失败卡。
+const STALL_TIMEOUT_MS = 15000
+const stallRecovering = ref(false)
+let stallRetries = 0
+let stallTimer: ReturnType<typeof setTimeout> | null = null
+
+function stopStallTimer() {
+  if (stallTimer) {
+    clearTimeout(stallTimer)
+    stallTimer = null
+  }
+}
+
+/** 每次挂载播放器都重新计时（首播 / 重建），出画即撤销 */
+function armStallWatchdog() {
+  stopStallTimer()
+  if (isManuallyUnmounted.value || liveEnded.value || loadFailed.value)
+    return
+  stallTimer = setTimeout(() => {
+    stallTimer = null
+    // ERROR 重试链的每次重建都会重新计时，正常出画则直接撤销；
+    // 这里只兜住「既没出画也没任何错误事件」的静默卡顿
+    if (!mediaLoading.value || liveEnded.value || loadFailed.value || isManuallyUnmounted.value)
+      return
+    trackEvent('live:stall', { title: realName.value, phase: stallRetries === 0 ? 'first' : 'after-rebuild' })
+    if (stallRetries >= 1) {
+      markLoadFailed('stream')
+      return
+    }
+    stallRetries += 1
+    stallRecovering.value = true
+    debugLog('live', '①直播:起播超时，自动重建直播流')
+    void recoverStream().catch((error) => {
+      debugLog('live', `①直播:起播重建失败 ${error}`)
+      markLoadFailed('stream')
+    })
+  }, STALL_TIMEOUT_MS)
+}
+
+/** 失败卡上的手动重试：清状态后完整重建一次，看门狗随之重新计时 */
+async function retryAfterStall() {
+  clearLoadFailure()
+  stallRecovering.value = false
+  stallRetries = 0
+  // 耗尽后的重试预算要归零，否则下一次 ERROR 一进 schedule() 就又耗尽
+  retry.reset()
+  mediaLoading.value = true
+  try {
+    await recoverStream()
+    armStallWatchdog()
+  }
+  catch (error) {
+    debugLog('live', `①直播:手动重试失败 ${error}`)
+    markLoadFailed('stream')
+  }
+}
+
+/** 单次恢复尝试：拉详情 → 判状态 → 重建流（节奏由重试状态机安排） */
 async function recoverStream() {
+  if (shortCircuitIfOffline())
+    return
   debugLog('live', `①直播:重试恢复尝试（第 ${retry.retryCount.value + 1} 次）`)
   try {
     const data = await session.fetchLiveDetail()
     // 拉详情期间可能已进结束态（CLOSELIVE 与断流常结伴而来）：此时再重建就是把停掉的流拉回来
     if (isManuallyUnmounted.value || liveEnded.value)
       return
+    // 详情已转回放态：不能再把 VOD 地址喂给直播转流链
+    if (isEndedLiveDetail(data, props.source)) {
+      debugLog('live', '①直播:详情已转为回放，判定本场下播')
+      finishLiveEnded('detail')
+      return
+    }
     session.applyLiveDetail(data)
     await session.restartLiveStream(data.playStreamPath)
   }
   catch (error) {
-    // 详情明确返回直播已终结（已删除/回放生成中）：跳过剩余重试，直接关闭
-    if (error instanceof Error && isUnavailableLiveMessage(error.message)) {
-      debugLog('live', `①直播:重试时详情反馈「${error.message}」，立即关闭直播窗口`)
+    // 下播瞬间回放尚未生成：进结束卡；内容被删除才关窗
+    if (error instanceof Error && isLiveEndedMessage(error.message)) {
+      debugLog('live', `①直播:重试时详情反馈「${error.message}」，判定本场下播`)
+      finishLiveEnded('error')
+      return
+    }
+    if (error instanceof Error && isLiveRemovedMessage(error.message)) {
+      debugLog('live', `①直播:重试时详情反馈「${error.message}」，关闭直播窗口`)
       session.stopStreamNow()
       closeUnavailableLive()
       return
@@ -351,13 +482,20 @@ function beginSession() {
 /** canplay：加载完成，复位恢复态与重试预算并刷新视频尺寸 */
 function onPlayerCanPlay() {
   debugLog('live', '①直播:播放就绪（canplay），复位恢复态与重试预算')
+  stopStallTimer()
+  stallRecovering.value = false
+  clearLoadFailure()
+  stallRetries = 0
   retry.markRecovered()
-  // Umami 事件：首次出画才算成功播放；断流重连后的 canplay 不重复计数。
-  // 属性也计费，只留标题
+  // 首次出画才算成功播放；断流重连后的 canplay 不重复计数
   if (!livePlayTracked) {
     livePlayTracked = true
     markPlayDurationStarted()
-    trackEvent('live:play', { title: realName.value })
+    trackEvent('live:play', {
+      title: realName.value,
+      media: isRadio.value ? 'radio' : 'video',
+      source: props.source === 'open' ? 'open' : 'user',
+    })
   }
   if (!isRadio.value)
     updateVideoDimensions()
@@ -373,11 +511,17 @@ function rebuildMedia() {
 
 /** 媒体元素/FLV 错误统一处理：网络错误保持 loading 重试，致命错误先销毁播放器 */
 function handleStreamError(reason: string, isNetwork: boolean) {
-  // 结束态后停流必然触发错误事件：不再进重试链，否则会把已结束的直播反复重拉
-  if (liveEnded.value)
+  // 结束态、失败卡、状态查询在途都不再驱动自动重试：前两者已有明确归属，
+  // 查询在途时重复 schedule 会重复触发 onExhausted
+  if (liveEnded.value || loadFailed.value || confirmingEnding)
     return
   // 网络类错误随后会自动重试，这里只记发生频率
-  trackEvent('player:error', { type: 'live', network: isNetwork ? 'net' : 'other' })
+  trackEvent('player:error', {
+    type: 'live',
+    network: isNetwork ? 'net' : 'other',
+    title: realName.value,
+    liveId: props.liveId,
+  })
   if (isNetwork) {
     debugLog('live', `①直播:网络错误（${reason}），保持 loading 并重试`)
     mediaLoading.value = true
@@ -392,8 +536,8 @@ function handleStreamError(reason: string, isNetwork: boolean) {
 
 /**
  * 进入下播结束态（官方 LiveCloseFragment 同构：停流后画面切结束卡，用户点关闭才关窗）。
- * 两个入口：CLOSELIVE 快路径（服务端推送即达）与重试耗尽兜底（未登录 / 公演 / 消息丢失）。
- * 去重：两条路径可能结伴到达（下播时推流中断必触发错误）。
+ * 入口：CLOSELIVE 推送（仅登录用户）、详情/列表状态确认（游客同样可用）。
+ * 去重：多条路径可能结伴到达（下播时推流中断必触发错误）。
  */
 async function enterLiveEnded() {
   if (liveEnded.value)
@@ -402,6 +546,7 @@ async function enterLiveEnded() {
   debugLog('live', `①直播:进入结束态（liveId=${props.liveId}），停流并拉复盘`)
   // 先收摊再拉复盘：计时 / 重试 / 弹幕会话全部停掉，停流触发的错误事件被 liveEnded 拦下
   elapsedTimer.pause()
+  stopStallTimer()
   retry.reset()
   stopDanmaku()
   session.stopStreamNow()
@@ -426,10 +571,47 @@ async function enterLiveEnded() {
   }
 }
 
-/** 重试耗尽视为直播结束（兜底路径）：进结束态展示复盘，不再直接关窗 */
+/** 重试耗尽：查全站进行中列表确认是否下播，否则只报告加载失败 */
 function handleRetryExhausted() {
-  debugLog('live', `①直播:重试耗尽（${retry.retryCount.value} 次），视为直播结束，进入结束态`)
-  void enterLiveEnded()
+  // 已进失败卡（如离线短路）就不必再查状态
+  if (confirmingEnding || loadFailed.value)
+    return
+  confirmingEnding = true
+  void confirmExhaustedEnding()
+}
+
+async function confirmExhaustedEnding() {
+  // 查询跨网络；期间网络恢复或手动重试会 reset 计数，旧结论须作废
+  const epoch = retry.retryCount.value
+  const isStale = () => retry.retryCount.value !== epoch || liveEnded.value || isManuallyUnmounted.value
+  try {
+    if (shortCircuitIfOffline())
+      return
+    debugLog('live', `①直播:重试耗尽（${retry.retryCount.value} 次），核对直播状态`)
+    // 只有个人直播在 getLiveList 里，公演查了必然「不在列表」被误判为下播
+    if (props.source === 'user') {
+      try {
+        const ongoing = await refreshLiveStatus(true)
+        if (isStale())
+          return
+        if (!ongoing.some(item => String(item.liveId) === String(props.liveId))) {
+          debugLog('live', '①直播:进行中列表已无本场，判定下播')
+          finishLiveEnded('list')
+          return
+        }
+        debugLog('live', '①直播:本场仍在进行中列表，按加载失败处理')
+      }
+      catch (error) {
+        debugLog('live', `①直播:直播状态查询失败，按加载失败处理 ${error}`)
+      }
+    }
+    if (isStale())
+      return
+    markLoadFailed('stream')
+  }
+  finally {
+    confirmingEnding = false
+  }
 }
 
 /** 主播下播（CLOSELIVE，官方收到即切结束态）：进结束态展示复盘，不再直接关窗 */
@@ -441,7 +623,7 @@ function closeLiveEnded() {
 /**
  * 连麦/PK 换流信号（INFORM_PULL_STREAM）：推流地址主体不变、token 变，
  * 拉详情拿新 token 重建本地会话；地址没变则跳过（服务端推了信号但详情未变）。
- * 不走重试计数——重建失败才转重试链兜底；下播判决归 CLOSELIVE 与重试耗尽
+ * 不走重试计数——重建失败才转重试链兜底；下播判决归 CLOSELIVE 与详情/列表状态确认
  */
 async function handleLiveRestream() {
   debugLog('live', '①直播:收到换流信号（连麦/PK），拉详情换 token 重建流')
@@ -501,8 +683,13 @@ useMediaShortcuts({
 
 /** 挂载播放器；环境不支持 HTTP-FLV 时统一在此提示 */
 function mountPlayer(path: string) {
-  if (!player.setupPlayer(path))
+  if (!player.setupPlayer(path)) {
     ElMessage.error('当前环境不支持 HTTP-FLV 直播播放')
+    return
+  }
+  // 空地址时播放器并未挂载，等真正拿到本地 FLV 地址再开始计时
+  if (path)
+    armStallWatchdog()
 }
 
 /** 续播：浮窗回到前台 / 重新挂载时按播放器现存状态恢复 */
@@ -546,6 +733,7 @@ onMounted(() => {
 onUnmounted(() => {
   // 先 dispose：所有在途异步回包（详情响应、开会话响应）立即失效
   session.dispose()
+  stopStallTimer()
   retry.clearTimer()
   elapsedTimer.pause()
   if (playerWatchStopHandle) {
@@ -638,12 +826,28 @@ onUnmounted(() => {
       </div>
 
       <PlayerLoading
-        v-if="mediaLoading && !liveEnded"
+        v-if="mediaLoading && !liveEnded && !loadFailed"
         :masked="isRadio"
         :background="coverImage"
-        label="正在加载直播"
-        hint="连接直播源中，请稍候"
+        :label="stallRecovering ? '加载较慢' : '正在加载直播'"
+        :hint="stallRecovering ? '正在重新连接直播源…' : '连接直播源中，请稍候'"
       />
+
+      <!-- 加载失败（流异常 / 详情失败 / 网络断开）：复用结束卡外壳，文案按来源派生 -->
+      <div v-if="loadFailed && !liveEnded" class="live-end live-load-failed" :class="{ 'is-compact': compact }">
+        <div class="live-end__title">
+          {{ loadFailure?.title }}
+        </div>
+        <div class="live-end__name" :title="realName">
+          {{ realName }}
+        </div>
+        <div class="live-load-failed__hint">
+          {{ loadFailure?.hint }}
+        </div>
+        <button class="live-end__close" @click="retryAfterStall">
+          {{ loadFailure?.action }}
+        </button>
+      </div>
       <!-- 悬浮按钮整组随加载隐藏：蒙层盖住全部浮层，且流就绪前录制无从谈起 -->
       <div v-show="!mediaLoading && !liveEnded" class="player-actions">
         <RotationControls
@@ -914,6 +1118,14 @@ onUnmounted(() => {
 
 .live-end__close:hover {
   filter: brightness(1.12);
+}
+
+/* 加载失败卡复用结束卡外壳，只补一行原因说明 */
+.live-load-failed__hint {
+  max-width: 280px;
+  font-size: 12px;
+  line-height: 1.6;
+  opacity: 0.55;
 }
 
 /* compact 小浮窗：收紧间距与字号，榜单同步缩小保留（窄窗高度够，只省横向） */
