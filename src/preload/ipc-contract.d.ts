@@ -488,7 +488,8 @@ interface StaticIpcInvokeMap {
   netRequest: InvokeSpec<[options: NetRequestOptions], NetResponse>
   /**
    * 白名单内的图片转成 data URL。生日贺卡的分享图要把远程头像画进 canvas，
-   * 直接画跨域 <img> 会污染画布导致 toDataURL 抛错，故由主进程取二进制再回传
+   * 直接画跨域 <img> 会污染画布导致 toDataURL 抛错，故由主进程取二进制再回传；
+   * 与 netRequest 共用出口闸门，重定向每一跳都重新过白名单
    * （对端：main/ipc/register-system-ipc.ts）。
    */
   imageDataUrl: InvokeSpec<[url: string], string>

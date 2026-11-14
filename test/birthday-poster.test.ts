@@ -1,4 +1,5 @@
 import type { BirthdayEntry } from '../src/renderer/src/utils/member-birthday'
+import { Buffer } from 'node:buffer'
 import { describe, expect, it, vi } from 'vitest'
 import {
   BIRTHDAY_PALETTES,
@@ -7,12 +8,13 @@ import {
   nextBirthdayWish,
   pad2,
   pickBirthdayPalette,
+  pngDataUrlToBlob,
   posterFileName,
   randomBirthdayWish,
 } from '../src/renderer/src/utils/birthday-poster'
 import { makeMember } from './fixtures/member'
 
-/** 只测不碰 DOM 的纯函数；绘制函数需要 canvas，由应用内实际导出覆盖 */
+/** 只测不碰 DOM 的纯函数；Canvas 绘制仍靠应用内实况核对 */
 const TODAY = new Date(2026, 10, 13)
 
 function makeEntry(): BirthdayEntry {
@@ -66,6 +68,22 @@ describe('生日贺卡文案', () => {
     expect(posterFileName(entry, TODAY)).toBe('Desktop48-生日贺卡-member-20261113.png')
   })
 
+  it('非法字符与空白全部去掉，中文姓名保留（Windows）', () => {
+    const entry = makeEntry()
+    entry.member.realName = '小\\/*:?"><|测 试'
+    expect(posterFileName(entry, TODAY)).toBe('Desktop48-生日贺卡-小测试-20261113.png')
+  })
+
+  it('个位月日补零，跨年也按传入的 today 落款', () => {
+    expect(posterFileName(makeEntry(), new Date(2027, 0, 2))).toBe('Desktop48-生日贺卡-小测试-20270102.png')
+  })
+
+  it('姓名全是非法字符时回落到 member，不拼出空段', () => {
+    const entry = makeEntry()
+    entry.member.realName = '///'
+    expect(posterFileName(entry, TODAY)).toBe('Desktop48-生日贺卡-member-20261113.png')
+  })
+
   it('装扮变体循环取值且每套配色完整，负变体也归一到有效下标', () => {
     const size = BIRTHDAY_PALETTES.length
     expect(pickBirthdayPalette(0)).toBe(BIRTHDAY_PALETTES[0])
@@ -76,5 +94,20 @@ describe('生日贺卡文案', () => {
       expect(palette.flags.length).toBeGreaterThan(0)
       expect(palette.gold).toMatch(/^#[\da-f]{6}$/i)
     }
+  })
+})
+
+describe('pngDataUrlToBlob（卡面只编码一次）', () => {
+  it('还原出的字节与原 PNG 一致，MIME 固定 image/png', async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0, 1, 2, 255])
+    const dataUrl = `data:image/png;base64,${Buffer.from(bytes).toString('base64')}`
+    const blob = pngDataUrlToBlob(dataUrl)
+    expect(blob.type).toBe('image/png')
+    expect(blob.size).toBe(bytes.length)
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes)
+  })
+
+  it('非 PNG data URL 直接拒绝，不把别的内容当成图片载荷', () => {
+    expect(() => pngDataUrlToBlob('data:image/jpeg;base64,AAAA')).toThrow('不是 PNG data URL')
   })
 })

@@ -1,18 +1,14 @@
 /**
- * 生日贺卡卡面 / 分享图（纯 Canvas 2D，无第三方依赖）。
+ * 生日贺卡卡面 / 分享图（纯 Canvas 2D）：预览、复制、保存共用同一张 1080×1440 PNG。
+ * 顶部是可脱离 DOM 单测的纯函数（祝福语 / 日期 / 文件名 / 配色 / data URL 转 Blob），底部才碰 document。
  *
- * ⚠️ 这一张 PNG 同时是「弹卡里看到的卡面」和「复制 / 保存出去的图片」：
- * 组件把 renderBirthdayPoster 产出的 dataUrl 直接作为 <img> 显示，所见即所得。
- * 早期版本卡面是 DOM、分享图另画一张，祝福语 / 头像 / 装饰都对不上，故不再分两套绘制。
- *
- * 分成两层：文件顶部的纯函数（祝福语 / 日期 / 文件名 / 配色，可脱离 DOM 单测）与
- * 底部的绘制函数（只有调用时才碰 document）。分享图固定 1080×1440 竖版。
- *
- * ⚠️ 头像必须走 `loadPosterAvatar`（主进程取回 data URL）再画进画布：
- * 直接画跨域 <img> 会污染 canvas，toDataURL / toBlob 会抛 SecurityError。
+ * 头像必须走 `loadPosterAvatar`（主进程取回 data URL）再画进画布：
+ * 直接画跨域 <img> 会污染 canvas，toDataURL 会抛 SecurityError。
  */
 import type { BirthdayEntry } from '@renderer/utils/member-birthday'
 import type { MemberDetail } from '@renderer/utils/member-merge'
+import { sanitizeFileName } from '@common/image-download'
+import dayjs from 'dayjs'
 
 export interface BirthdayPosterOptions {
   entry: BirthdayEntry
@@ -124,11 +120,22 @@ export function birthdayStamp(entry: BirthdayEntry): string {
 /** 卡面身份标签：贺卡只承载今日寿星 */
 const BADGE_LABEL = '今日生辰'
 
-/** 保存对话框的建议文件名：中文姓名保留，去掉路径分隔符等非法字符 */
+/** 保存对话框的建议文件名：中文姓名保留，非法字符与空白按共用规则去掉 */
 export function posterFileName(entry: BirthdayEntry, today: Date): string {
-  const name = entry.member.realName.replace(/[\\/:*?"<>|\s]/g, '') || 'member'
-  const date = `${today.getFullYear()}${pad2(today.getMonth() + 1)}${pad2(today.getDate())}`
-  return `Desktop48-生日贺卡-${name}-${date}.png`
+  const name = sanitizeFileName(entry.member.realName, '').replace(/\s+/g, '') || 'member'
+  return `Desktop48-生日贺卡-${name}-${dayjs(today).format('YYYYMMDD')}.png`
+}
+
+/** PNG data URL → Blob：卡面只做一次 PNG 编码，剪贴板兜底载荷由 base64 还原 */
+export function pngDataUrlToBlob(dataUrl: string): Blob {
+  const prefix = 'data:image/png;base64,'
+  if (!dataUrl.startsWith(prefix))
+    throw new Error('不是 PNG data URL')
+  const binary = atob(dataUrl.slice(prefix.length))
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++)
+    bytes[i] = binary.charCodeAt(i)
+  return new Blob([bytes], { type: 'image/png' })
 }
 
 /**
@@ -674,7 +681,7 @@ function drawAvatar(
 }
 
 /** 生成一张 PNG；返回的 dataUrl 与 blob 是同一份图像，卡面预览 / 复制 / 保存全部复用 */
-export async function renderBirthdayPoster(options: BirthdayPosterOptions): Promise<BirthdayPosterResult> {
+export function renderBirthdayPoster(options: BirthdayPosterOptions): BirthdayPosterResult {
   const { entry, today, wish, avatar, decor = 0 } = options
   const member = entry.member
   const palette = pickBirthdayPalette(decor)
@@ -747,16 +754,8 @@ export async function renderBirthdayPoster(options: BirthdayPosterOptions): Prom
   ctx.font = `400 26px ${CN_FONT}`
   ctx.fillStyle = 'rgba(255, 248, 235, 0.66)'
   ctx.textAlign = 'center'
-  ctx.fillText(`Desktop48 · 与你一起庆祝 · ${today.getFullYear()}`, POSTER_WIDTH / 2, 1374)
+  ctx.fillText(`Desktop48 · 与你一起庆祝 · ${dayjs(today).format('YYYY')}`, POSTER_WIDTH / 2, 1374)
 
   const dataUrl = canvas.toDataURL('image/png')
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((result) => {
-      if (result)
-        resolve(result)
-      else
-        reject(new Error('分享图导出失败'))
-    }, 'image/png')
-  })
-  return { dataUrl, blob }
+  return { dataUrl, blob: pngDataUrlToBlob(dataUrl) }
 }

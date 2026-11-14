@@ -1,8 +1,10 @@
 // Umami 手动上报。
 //
 // 页面以 file:// 加载，自动采集会把本机安装路径当作 URL 上报，故统一由这里清洗后发送。
-// 不上报数字 ID 与恒定属性：前者把 Pages / 维度列表撑成不可读，后者不携带任何信息。
-// player:error 例外：带 title / liveId 才能定位出错的场次。
+// 计费口径：pageview、自定义事件、每条事件属性各算 1 条配额。
+// 因此不带数字 ID（撑爆维度）与恒定属性，高频事件只带低基数枚举 / 分桶。
+// 例外：低频排障事件 player:error / live:stall 带 title（前者另带 liveId）才能定位场次；
+// rooms:enter 每日按房间去重，保留 starName 作为唯一业务维度。
 import { debugLog } from '@renderer/utils/debug'
 
 interface UmamiTrackProps {
@@ -154,6 +156,9 @@ export function trackEvent(name: string, data?: Record<string, string | number>)
 
 /** 数量类属性只上报分桶：原始条数会随单次操作波动，分桶足够回答规模分布 */
 export function countBucket(count: number): string {
+  // 0 单独成桶：批量保存可能一张都没成功，归到 '1' 会把空操作算成有结果
+  if (!Number.isFinite(count) || count <= 0)
+    return '0'
   if (count <= 1)
     return '1'
   if (count <= 5)

@@ -19,9 +19,11 @@ import { isPathInAllowedRoots } from '../allowed-path'
 import { Database } from '../database'
 import { collectFeedbackMeta, isFeedbackEndpointReady, submitFeedback } from '../feedback'
 import { inspectFfmpegDir } from '../ffmpeg/ffmpeg-process'
+import { decodePngDataUrl, ensurePngExtension, safePngFileName } from '../image-file'
 import { log } from '../logger'
 import { diagnoseTargets } from '../net-diagnose'
-import { acquireNetSlot, parseRetryAfterMs, penalizeHost } from '../net-rate-limit'
+import { parseRetryAfterMs, penalizeHost, withNetSlot } from '../net-rate-limit'
+import { guardRedirects } from '../net-redirect-guard'
 import { mergeAppIdentity, needsAppIdentity } from '../net-request-headers'
 import { pocketAppHeaders } from '../pocket48/pocket-auth'
 import { handleTraced } from './trace'
@@ -33,8 +35,6 @@ const NET_REQUEST_MAX_BYTES = 32 * 1024 * 1024
 /** 分享图的远程头像：上限 8MB / 15 秒，避免 CDN 异常时把主进程拖住 */
 const IMAGE_FETCH_TIMEOUT = 15 * 1000
 const IMAGE_MAX_BYTES = 8 * 1024 * 1024
-const PNG_DATA_URL_REGEX = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/
-const PNG_DATA_URL_MAX_CHARS = 16 * 1024 * 1024
 
 /**
  * 取图片二进制。不能复用 performNetRequest：它把响应体按 UTF-8 解码成字符串，
@@ -70,6 +70,7 @@ function fetchBinaryImage(url: string): Promise<{ data: Buffer, mime: string }> 
       resolve(value)
     }
 
+    guardRedirects(request, fail)
     request.on('response', (response) => {
       if (response.statusCode < 200 || response.statusCode >= 300) {
         request.abort()
@@ -102,14 +103,6 @@ function fetchBinaryImage(url: string): Promise<{ data: Buffer, mime: string }> 
     request.on('error', fail)
     request.end()
   })
-}
-
-/** 只接受 PNG data URL：写盘 / 写剪贴板前把渲染层传来的内容收窄，避免任意 base64 落盘 */
-function decodePngDataUrl(dataUrl: string): Buffer {
-  const match = PNG_DATA_URL_REGEX.exec(dataUrl)
-  if (!match || match[1].length > PNG_DATA_URL_MAX_CHARS)
-    throw new Error('图片数据格式不正确')
-  return Buffer.from(match[1], 'base64')
 }
 
 /**
@@ -180,6 +173,7 @@ function performNetRequest(
       resolve(response)
     }
 
+    guardRedirects(request, fail)
     request.on('response', (response) => {
       // 必须先收齐 Buffer 再整体解码：逐块 toString 会把跨块的 UTF-8 多字节字符切成乱码
       const chunks: Buffer[] = []
@@ -256,10 +250,13 @@ export function registerSystemIPC(): void {
 
   // 生日贺卡分享图：跨域 <img> 画进 canvas 会污染画布，头像改由主进程取成 data URL
   handleTraced('imageDataUrl', async (_event: IpcMainInvokeEvent, url: string) => {
-    if (!isAllowedUrl(url))
+    if (!url || !isAllowedUrl(url))
       throw new Error(`请求被拒绝：域名不在白名单中 (${url})`)
-    const { data, mime } = await fetchBinaryImage(url)
-    return `data:${mime};base64,${data.toString('base64')}`
+    // 与 netRequest 共用出口闸门：图片通道不该成为绕过限流的第二条路
+    return withNetSlot(url, async () => {
+      const { data, mime } = await fetchBinaryImage(url)
+      return `data:${mime};base64,${data.toString('base64')}`
+    })
   })
 
   handleTraced('copyImageToClipboard', async (_event: IpcMainInvokeEvent, dataUrl: string) => {
@@ -271,8 +268,7 @@ export function registerSystemIPC(): void {
 
   handleTraced('saveImageFile', async (_event: IpcMainInvokeEvent, dataUrl: string, suggestedName: string) => {
     const buffer = decodePngDataUrl(dataUrl)
-    // 渲染层给的是建议文件名，先剥掉目录与非法字符再拼默认路径
-    const safeName = path.basename(suggestedName).replace(/[^\w\u4E00-\u9FA5.-]/g, '_') || 'birthday-card.png'
+    const safeName = safePngFileName(suggestedName)
     const options = {
       title: '保存生日贺卡',
       defaultPath: path.join(app.getPath('pictures'), safeName),
@@ -283,8 +279,9 @@ export function registerSystemIPC(): void {
     const result = await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath)
       return null
-    await writeFile(result.filePath, buffer)
-    return result.filePath
+    const filePath = ensurePngExtension(result.filePath)
+    await writeFile(filePath, buffer)
+    return filePath
   })
 
   handleTraced('netRequest', async (_event: IpcMainInvokeEvent, options: NetRequestOptions) => {
@@ -293,20 +290,14 @@ export function registerSystemIPC(): void {
       throw new Error(`请求被拒绝：域名不在白名单中 (${url})`)
     }
     const requestHeaders = await resolveNetRequestHeaders(url, headers)
-    // 白名单校验已保证 URL 可解析
-    const host = new URL(url).hostname
-    // 出口闸门放在发请求之前：排队等待不计入请求超时，超时由 acquire 自己判
-    const release = await acquireNetSlot(host)
-    try {
+    // 排队等待不计入请求超时：闸门放在发请求之前，超时由 performNetRequest 自己判
+    return withNetSlot(url, async (host) => {
       const response = await performNetRequest(url, method || 'GET', requestHeaders, body)
       // 服务端明说「多久之后再来」时让整域冷却，别让轮询接着撞
       if (response.status === 429)
         penalizeHost(host, parseRetryAfterMs(response.headers['retry-after']))
       return response
-    }
-    finally {
-      release()
-    }
+    })
   })
 
   // ffmpeg 环境：不传 dir 时校验当前生效配置，传 dir 时校验指定目录

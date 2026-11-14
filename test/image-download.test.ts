@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest'
+import { sanitizeFileName } from '../src/common/image-download'
 import { buildAlbumFileName, isSmallImage, pickFileName } from '../src/renderer/src/utils/image-download'
+
+describe('sanitizeFileName（主进程与渲染层共用的非法字符定义）', () => {
+  it('非法字符一律替换，两端空白裁掉（Windows）', () => {
+    expect(sanitizeFileName('a\\b/c:d*e?f"g<h>i|j')).toBe('a_b_c_d_e_f_g_h_i_j')
+    expect(sanitizeFileName('  card.png  ')).toBe('card.png')
+  })
+
+  it('替换串传空串时只删除，两端空白仍裁掉', () => {
+    expect(sanitizeFileName(' 小 /测:试 ', '')).toBe('小 测试')
+  })
+
+  it('中文、点号、连字符、下划线原样保留', () => {
+    expect(sanitizeFileName('card-小测.1_a')).toBe('card-小测.1_a')
+  })
+})
 
 describe('pickFileName', () => {
   it('取 URL 末段并丢掉 query', () => {

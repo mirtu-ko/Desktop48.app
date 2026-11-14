@@ -21,17 +21,20 @@ async function fetchImage(url: string): Promise<FetchedImage> {
   return { blob, name: pickFileName(url, blob.type || res.headers.get('content-type') || '') }
 }
 
-function saveFetchedImage(image: FetchedImage): void {
-  const href = URL.createObjectURL(image.blob)
+/** Chromium 异步读取 blob，同步回收 URL 会让下载静默失败 */
+const BLOB_URL_REVOKE_DELAY_MS = 2000
+
+/** 渲染层下载 Blob 的唯一出口：远程图片与贺卡兜底下载共用 */
+export function saveBlobImage(blob: Blob, filename: string): void {
+  const href = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = href
-  anchor.download = image.name
+  anchor.download = filename
   anchor.style.display = 'none'
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
-  // 不能立刻 revoke：Chromium 是异步取 blob 的，同步回收会让下载静默失败
-  setTimeout(() => URL.revokeObjectURL(href), 2000)
+  setTimeout(() => URL.revokeObjectURL(href), BLOB_URL_REVOKE_DELAY_MS)
 }
 
 /**
@@ -40,6 +43,6 @@ function saveFetchedImage(image: FetchedImage): void {
  */
 export async function downloadImage(url: string): Promise<string> {
   const image = await fetchImage(url)
-  saveFetchedImage(image)
+  saveBlobImage(image.blob, image.name)
   return image.name
 }

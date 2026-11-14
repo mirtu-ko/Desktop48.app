@@ -15,9 +15,16 @@ const EXT_BY_MIME: Record<string, string> = {
   'image/svg+xml': 'svg',
 }
 
-/** Windows 文件名非法字符统一替换，避免下载被系统改名或拒绝 */
+/** Windows 非法字符：主进程落盘、渲染层建议名共用这一份定义 */
+const INVALID_FILENAME_CHARS = /[\\/:*?"<>|]/g
+
+/** 替换非法字符；replacement 传空串适合拼「好看的」建议名，默认下划线更可读 */
+export function sanitizeFileName(name: string, replacement = '_'): string {
+  return name.replace(INVALID_FILENAME_CHARS, replacement).trim()
+}
+
 function sanitize(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, '_').trim()
+  return sanitizeFileName(name)
 }
 
 function urlBaseName(url: string): string {

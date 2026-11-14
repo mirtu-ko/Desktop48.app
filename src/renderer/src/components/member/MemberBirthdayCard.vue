@@ -10,21 +10,18 @@ import {
   randomBirthdayWish,
   renderBirthdayPoster,
 } from '@renderer/utils/birthday-poster'
+import { saveBlobImage } from '@renderer/utils/image-download'
+import { trackEvent } from '@renderer/utils/umami'
 import { useEventListener } from '@vueuse/core'
 import { ElMessage } from 'element-plus'
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
 
 /**
- * 生日贺卡：成员页生日墙条幅内的「生日贺卡」按钮打开本浮层。
- *
- * 三层结构：半透明蒙层（页面仍可见）→ 居中弹出卡片 → 覆盖蒙层的 Canvas 撒花。
- * 卡面不是另画的一套 DOM，而是直接显示 renderBirthdayPoster 产出的 PNG：
- * 预览、复制、保存复用同一份 dataUrl，所见即所得，不会再出现「复制的效果和实际不一致」。
- * 只承载今天生日的成员（入参已由页面过滤），同一天有多人时才提供左右切换；今日无人时不渲染浮层。
- * 每次打开随机取一句祝福语，「换一句」在词库内顺序轮换；同一张卡不重绘时文案保持稳定。
- *
- * 视觉：CSS 3D 透视倾斜 + 镜面高光（跟随鼠标），Canvas 星尘 / 彩带爆发 / 天降撒花；
- * prefers-reduced-motion 下退化为静态卡面。不引入 WebGL，离线可用、不增加安装包体积。
+ * 生日贺卡浮层：成员页生日墙条幅的「生日贺卡」按钮打开。
+ * 三层结构：半透明蒙层 → 居中弹出卡片 → 覆盖蒙层的 Canvas 撒花。
+ * 卡面直接显示 renderBirthdayPoster 产出的 PNG，预览 / 复制 / 保存共用同一份，所见即所得。
+ * 只承载今日寿星（入参已由页面过滤），多人时才提供左右切换；祝福语打开时随机取、按钮按词库轮换。
+ * 视觉：CSS 3D 倾斜 + 镜面高光跟随鼠标；prefers-reduced-motion 下退化为静态卡面。
  */
 const props = defineProps<{
   /** 今日寿星（todayBirthdays 的输出）；同一天多人时按姓名定序 */
@@ -41,9 +38,7 @@ const emit = defineEmits<{
 }>()
 
 // ===== 撒花粒子状态 =====
-// ⚠️ 必须声明在所有 immediate watcher 之前：immediate 回调在 setup 期间同步执行，
-// 以 open=false 挂载时会立刻走清理分支读写 frame / ribbons；若声明放在后面会命中
-// let 的暂时性死区，抛 ReferenceError 并由 App.vue 判为页面渲染失败（整页白屏）。
+// ⚠️ 必须声明在 immediate watcher 之前：后者在 setup 期间同步读写 frame / ribbons，命中 let 暂时性死区会整页白屏。
 
 interface Dust {
   x: number
@@ -131,6 +126,7 @@ function selectMember(index: number): void {
   wish.value = randomBirthdayWish(wish.value)
   resetTilt()
   burst()
+  trackEvent('birthday:customize', { action: 'member' })
 }
 
 function stepMember(delta: number): void {
@@ -141,11 +137,13 @@ function stepMember(delta: number): void {
 
 function nextWish(): void {
   wish.value = nextBirthdayWish(wish.value)
+  trackEvent('birthday:customize', { action: 'wish' })
 }
 
 function nextDecor(): void {
   decorVariant.value += 1
   burst()
+  trackEvent('birthday:customize', { action: 'decor' })
 }
 
 function viewProfile(): void {
@@ -205,7 +203,7 @@ async function renderPreview(): Promise<void> {
   rendering.value = true
   try {
     await ensureAvatar(entry)
-    const poster = await renderBirthdayPoster({
+    const poster = renderBirthdayPoster({
       entry,
       today: props.today,
       wish: wish.value,
@@ -426,6 +424,7 @@ function stopParticles(): void {
 watch(() => props.open, async (open) => {
   if (!open)
     return
+  trackEvent('birthday:card_open')
   activeIndex.value = 0
   // 同步赋值（在 await nextTick 之前）：绘制 watcher 的微任务读 wish 时必须已经抽好
   wish.value = randomBirthdayWish(wish.value)
@@ -436,9 +435,6 @@ watch(() => props.open, async (open) => {
   startParticles()
   burst()
 }, { immediate: true })
-
-useEventListener(window, 'resize', resizeCanvas)
-onUnmounted(stopParticles)
 
 function onKeydown(event: KeyboardEvent): void {
   if (!props.open)
@@ -454,23 +450,23 @@ function onKeydown(event: KeyboardEvent): void {
     stepMember(1)
   }
 }
-useEventListener(window, 'keydown', onKeydown)
+
+// 弹层打开时才挂全局监听：keep-alive 失活的页面不该留着窗口级回调
+const listenerTarget = computed(() => props.open ? window : null)
+useEventListener(listenerTarget, 'resize', resizeCanvas)
+useEventListener(listenerTarget, 'keydown', onKeydown)
+
+/** 卸载与页面失活共用一份清理：粒子帧、头像缓存、当前头像 */
+function disposeCard(): void {
+  stopParticles()
+  avatarCache.clear()
+  avatarPending.clear()
+  avatarEl.value = null
+}
+onUnmounted(disposeCard)
+onDeactivated(disposeCard)
 
 // ===== 分享：全部复用卡面那份预览，不重新绘制 =====
-
-/** 渲染层 blob 下载兜底：原生保存对话框异常时不至于一张图都拿不到 */
-function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.style.display = 'none'
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  // Electron 的下载是异步落盘的，过早 revoke 会让文件写一半
-  window.setTimeout(() => URL.revokeObjectURL(url), 30_000)
-}
 
 async function copyImage(): Promise<void> {
   const dataUrl = posterDataUrl.value
@@ -478,9 +474,11 @@ async function copyImage(): Promise<void> {
   if (!dataUrl || !blob)
     return
   busy.value = true
+  let result: 'ok' | 'fail' = 'fail'
   try {
     // 主进程 clipboard.write 会写入系统原生位图格式，粘贴到聊天窗口兼容性最好
     await window.mainAPI.copyImageToClipboard(dataUrl)
+    result = 'ok'
     ElMessage.success('贺卡图片已复制，粘贴即可分享')
   }
   catch (mainError) {
@@ -489,6 +487,7 @@ async function copyImage(): Promise<void> {
       if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined')
         throw new Error('渲染层剪贴板不可用')
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      result = 'ok'
       ElMessage.success('贺卡图片已复制，粘贴即可分享')
     }
     catch (error) {
@@ -498,6 +497,7 @@ async function copyImage(): Promise<void> {
   }
   finally {
     busy.value = false
+    trackEvent('birthday:copy', { result })
   }
 }
 
@@ -509,15 +509,23 @@ async function saveImage(): Promise<void> {
     return
   busy.value = true
   suspendParticles()
+  let result: 'ok' | 'cancel' | 'fail' = 'fail'
   try {
     const saved = await window.mainAPI.saveImageFile(dataUrl, posterFileName(entry, props.today))
-    if (saved)
+    if (saved) {
+      result = 'ok'
       ElMessage.success('贺卡图片已保存')
+    }
+    else {
+      result = 'cancel'
+    }
   }
   catch (error) {
     console.error('保存贺卡图片失败:', error)
     try {
-      downloadBlob(blob, posterFileName(entry, props.today))
+      // 原生保存对话框异常时，退回渲染层下载，仍保证用户拿到图
+      saveBlobImage(blob, posterFileName(entry, props.today))
+      result = 'ok'
       ElMessage.success('已保存到默认下载目录')
     }
     catch {
@@ -528,6 +536,7 @@ async function saveImage(): Promise<void> {
     busy.value = false
     if (props.open)
       startParticles()
+    trackEvent('birthday:save', { result })
   }
 }
 </script>
@@ -667,6 +676,11 @@ async function saveImage(): Promise<void> {
 </template>
 
 <style scoped lang="scss">
+/* 贺卡是独立暖金主题：圆角 / 药丸用全局 token，其余配色集中在此便于整套调整 */
+$bday-white: #fff;
+$bday-ink: #fff3dc;
+$bday-gold: #ffd166;
+
 /* ===== 半透明蒙层：不是全屏接管，透出后面的成员页 ===== */
 .bday-overlay {
   position: fixed;
@@ -713,26 +727,70 @@ async function saveImage(): Promise<void> {
   flex-direction: column;
   gap: 10px;
   padding: 16px 20px 14px;
-  border: 1px solid rgba(255, 214, 148, 0.32);
-  border-radius: 22px;
+  border-radius: var(--radius-card);
+  /* 圆角容器用 inset 描边：overflow 裁圆角时 border 会在四角留下缺口 */
   overflow: auto;
   background: linear-gradient(165deg, rgba(46, 27, 76, 0.96), rgba(28, 17, 50, 0.97));
   box-shadow:
     0 34px 90px -28px rgba(6, 3, 18, 0.9),
-    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
-  animation: bday-pop-in 0.4s cubic-bezier(0.2, 0.9, 0.25, 1) both;
+    inset 0 0 0 1px rgba(255, 214, 148, 0.32);
+  animation: bday-pop-in 0.24s ease both;
 }
 
+/* 整卡只淡入，内容元素各自错峰上浮；带 key 的内容重放不会晃整张卡 */
 @keyframes bday-pop-in {
   from {
     opacity: 0;
-    transform: translateY(24px) scale(0.94);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
   }
+}
+
+@keyframes bday-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.bday-pop__head,
+.bday-pop__stage,
+.bday-pop__tools,
+.bday-dots,
+.bday-pop__actions,
+.bday-pop__tip {
+  animation: bday-content-in 0.42s cubic-bezier(0.2, 0.9, 0.25, 1) both;
+}
+
+.bday-pop__head {
+  animation-delay: 0.06s;
+}
+
+.bday-pop__stage {
+  animation-delay: 0.12s;
+}
+
+.bday-pop__tools {
+  animation-delay: 0.18s;
+}
+
+.bday-dots {
+  animation-delay: 0.22s;
+}
+
+.bday-pop__actions {
+  animation-delay: 0.26s;
+}
+
+.bday-pop__tip {
+  animation-delay: 0.3s;
 }
 
 .bday-pop__spark {
@@ -811,15 +869,15 @@ async function saveImage(): Promise<void> {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba($bday-white, 0.18);
   border-radius: 50%;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.08);
+  color: $bday-white;
+  background: rgba($bday-white, 0.08);
   cursor: pointer;
   transition: background-color 0.18s ease;
 
   &:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba($bday-white, 0.2);
   }
 }
 
@@ -852,13 +910,13 @@ async function saveImage(): Promise<void> {
   position: relative;
   width: 100%;
   height: 100%;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background: linear-gradient(158deg, #3a2065, #8a3559);
   box-shadow:
     0 26px 56px -20px rgba(8, 4, 22, 0.9),
     0 0 0 1px rgba(255, 220, 160, 0.55),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+    inset 0 0 0 1px rgba($bday-white, 0.12);
 }
 
 .bday-card__img {
@@ -881,9 +939,9 @@ async function saveImage(): Promise<void> {
   color: rgba(255, 240, 214, 0.82);
   background: linear-gradient(
     110deg,
-    rgba(255, 255, 255, 0.04) 30%,
-    rgba(255, 255, 255, 0.14) 50%,
-    rgba(255, 255, 255, 0.04) 70%
+    rgba($bday-white, 0.04) 30%,
+    rgba($bday-white, 0.14) 50%,
+    rgba($bday-white, 0.04) 70%
   );
   background-size: 220% 100%;
   animation: bday-loading 1.6s linear infinite;
@@ -916,8 +974,8 @@ async function saveImage(): Promise<void> {
   background: linear-gradient(
     118deg,
     transparent 24%,
-    rgba(255, 255, 255, 0.16) 44%,
-    rgba(255, 255, 255, 0.02) 56%,
+    rgba($bday-white, 0.16) 44%,
+    rgba($bday-white, 0.02) 56%,
     transparent 72%
   );
   background-position: var(--glow-x) var(--glow-y);
@@ -932,16 +990,16 @@ async function saveImage(): Promise<void> {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba($bday-white, 0.16);
   border-radius: 50%;
   color: rgba(255, 244, 224, 0.88);
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba($bday-white, 0.07);
   cursor: pointer;
   transform: translateY(-50%);
   transition: background-color 0.18s ease;
 
   &:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba($bday-white, 0.2);
   }
 
   &--prev {
@@ -974,17 +1032,17 @@ async function saveImage(): Promise<void> {
   gap: 4px;
   align-items: center;
   padding: 5px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba($bday-white, 0.2);
   border-radius: var(--radius-pill);
   font-family: inherit;
   font-size: 11px;
-  color: #fff3dc;
-  background: rgba(255, 255, 255, 0.08);
+  color: $bday-ink;
+  background: rgba($bday-white, 0.08);
   cursor: pointer;
   transition: background-color 0.18s ease;
 
   &:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba($bday-white, 0.2);
   }
 }
 
@@ -1003,7 +1061,7 @@ async function saveImage(): Promise<void> {
   padding: 0;
   border: none;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba($bday-white, 0.28);
   cursor: pointer;
   transition:
     transform 0.18s ease,
@@ -1011,7 +1069,7 @@ async function saveImage(): Promise<void> {
 
   &.is-active {
     transform: scale(1.7);
-    background: #ffd166;
+    background: $bday-gold;
   }
 }
 
@@ -1029,12 +1087,12 @@ async function saveImage(): Promise<void> {
   gap: 6px;
   align-items: center;
   padding: 8px 13px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba($bday-white, 0.2);
   border-radius: var(--radius-pill);
   font-family: inherit;
   font-size: 12px;
-  color: #fff3dc;
-  background: rgba(255, 255, 255, 0.09);
+  color: $bday-ink;
+  background: rgba($bday-white, 0.09);
   cursor: pointer;
   transition:
     transform 0.18s ease,
@@ -1043,7 +1101,7 @@ async function saveImage(): Promise<void> {
 
   &:hover:not(:disabled) {
     transform: translateY(-2px);
-    background: rgba(255, 255, 255, 0.18);
+    background: rgba($bday-white, 0.18);
   }
 
   &:disabled {
@@ -1059,7 +1117,7 @@ async function saveImage(): Promise<void> {
     box-shadow: 0 8px 20px -8px rgba(255, 197, 61, 0.9);
 
     &:hover:not(:disabled) {
-      background: linear-gradient(135deg, #fff8e4, #ffd166 70%, #ffb1cd);
+      background: linear-gradient(135deg, #fff8e4, $bday-gold 70%, #ffb1cd);
     }
   }
 }
@@ -1075,6 +1133,12 @@ async function saveImage(): Promise<void> {
 @media (prefers-reduced-motion: reduce) {
   .bday-overlay,
   .bday-pop,
+  .bday-pop__head,
+  .bday-pop__stage,
+  .bday-pop__tools,
+  .bday-dots,
+  .bday-pop__actions,
+  .bday-pop__tip,
   .bday-card__loading,
   .bday-card__loading-star,
   .bday-pop__spark {
