@@ -22,7 +22,7 @@ import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/p
 import { copyText } from '@renderer/utils/clipboard'
 import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
-import { resolveRoomArchiveStart } from '@renderer/utils/room-date-jump'
+import { resolveDateChannel, resolveRoomArchiveStart } from '@renderer/utils/room-date-jump'
 import { shouldTrackRoomEnter } from '@renderer/utils/room-enter-tracker'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
@@ -55,6 +55,8 @@ const {
   chatStatus,
   chatStatusText,
   roomClosed,
+  isRoomClosedOf,
+  archiveChannelOf,
   historyExhausted,
   loadingMore,
   essenceMessages,
@@ -129,14 +131,23 @@ watch(selectedUserId, async (userId) => {
 /** 按日期查看的可查起点：入团日与归档日取较晚者 */
 const roomArchiveStart = computed(() => resolveRoomArchiveStart(roomJoinTime.value))
 
-/** 按日期查看读取的频道：与当前消息流一致（大房间 / 小房间） */
-const activeDateChannel = computed(() => {
-  if (viewMode.value === 'small') {
-    const small = smallChannel.value
-    return small?.channelId && small.serverId ? { serverId: small.serverId, channelId: small.channelId } : null
+/**
+ * 按日期查看的读取频道与不可用原因：关闭态只认历史存档频道，其余按视图取小房间 / 大房间
+ * （见 resolveDateChannel）。关闭却没解析到存档频道时按日期无可读内容，弹层据此说明原因。
+ */
+const dateTarget = computed(() => {
+  const closed = roomClosed.value
+  const archive = archiveChannelOf(selectedUserId.value)
+  return {
+    channel: resolveDateChannel({
+      closed,
+      archive,
+      viewMode: viewMode.value,
+      small: smallChannel.value,
+      room: selectedRoom.value,
+    }),
+    missing: closed && !archive,
   }
-  const room = selectedRoom.value
-  return room?.channelId && room.serverId ? { serverId: room.serverId, channelId: room.channelId } : null
 })
 
 /** 小房间上锁时收起弹层：门禁未通过不该留着房间历史 */
@@ -1573,6 +1584,7 @@ onMounted(() => {
                   <span class="room-name ellipsis">{{ room.nickname }}</span>
                   <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
                   <span v-if="room.temporary" class="room-temp-tag">临时</span>
+                  <span v-if="isRoomClosedOf(room.userId)" class="room-closed-tag">已关闭</span>
                 </span>
 
                 <span v-if="room.preview" class="room-preview ellipsis">{{ room.preview }}</span>
@@ -2218,10 +2230,11 @@ onMounted(() => {
           <!-- 按日期查看弹层：独立只读轨道，不进主消息流、不碰已读与轮询 -->
           <RoomDateDialog
             v-model="dateOpen"
-            :channel="activeDateChannel"
+            :channel="dateTarget.channel"
             :scope="messageScope"
             :room-name="selectedRoom?.nickname ?? ''"
             :archive-start="roomArchiveStart"
+            :empty-reason="dateTarget.missing ? '该房间已关闭，暂未取到关闭前的留言频道' : ''"
           />
         </template>
 
@@ -2829,6 +2842,19 @@ onMounted(() => {
   color: var(--color-rooms);
   background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 34%, transparent);
+}
+
+/* 「已关闭」标记：与临时标签同规格，用中性色表达不可用，不抢直播 / 未读的强调 */
+.room-closed-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--el-text-color-secondary);
+  background: color-mix(in srgb, var(--el-text-color-secondary) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--el-text-color-secondary) 28%, transparent);
 }
 
 /* 条目右缘竖排小标签列：口袋关注星标在上、队伍徽标在下。

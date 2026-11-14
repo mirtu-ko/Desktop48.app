@@ -19,8 +19,11 @@ const props = withDefaults(defineProps<{
   roomName: string
   /** 本房间可查起点（yyyy-MM-dd）：入团日与归档起点取较晚者 */
   archiveStart?: string
+  /** 频道不可用的原因：关闭房间没解析到历史频道时由页面给出 */
+  emptyReason?: string
 }>(), {
   archiveStart: ROOM_ARCHIVE_START,
+  emptyReason: '',
 })
 
 const emit = defineEmits<{
@@ -61,6 +64,15 @@ const fallbackDate = computed(() => {
   return nearest ? dayjs(nearest.msgTime).format('YYYY-MM-DD') : ''
 })
 const imageUrls = computed(() => messages.value.filter(item => item.imageUrl).map(item => item.imageUrl))
+
+/** 空态主文案：没有可查频道时优先说明原因，避免「请选择日期」把用户引到无效操作上 */
+const emptyText = computed(() => {
+  if (loading.value)
+    return '正在加载该日期附近的消息…'
+  if (!props.channel)
+    return props.emptyReason || '正在解析房间频道…'
+  return hasQueried.value ? '这一天前后没有消息' : '选择日期查看历史消息'
+})
 
 /** 本房间起点之前与未来都禁用：前者没有房间消息，后者服务端会回空页 */
 function disableDate(date: Date): boolean {
@@ -335,7 +347,7 @@ watch(
           <el-icon :size="26">
             <Calendar />
           </el-icon>
-          <p>{{ loading ? '正在加载该日期附近的消息…' : hasQueried ? '这一天前后没有消息' : '选择日期查看历史消息' }}</p>
+          <p>{{ emptyText }}</p>
           <p class="date-empty-hint">
             {{ emptyHint }}
           </p>

@@ -3,7 +3,7 @@ import type { PocketRoomMessageView } from '../src/renderer/src/utils/pocket-roo
 import dayjs from 'dayjs'
 import { describe, expect, it } from 'vitest'
 import { normalizePocketRoomMessage } from '../src/renderer/src/utils/pocket-room-message'
-import { classifyRoomDateError, dateToNextTime, hasMessageOnDay, isRoomDateQueryable, mergeRoomMessagePages, nextRoomPageCursor, resolveRoomArchiveStart, ROOM_ARCHIVE_START } from '../src/renderer/src/utils/room-date-jump'
+import { classifyRoomDateError, dateToNextTime, hasMessageOnDay, isRoomDateQueryable, mergeRoomMessagePages, nextRoomPageCursor, resolveDateChannel, resolveRoomArchiveStart, ROOM_ARCHIVE_START } from '../src/renderer/src/utils/room-date-jump'
 
 const DAY = '2026-05-13'
 const dayStart = dayjs(DAY).startOf('day')
@@ -181,5 +181,71 @@ describe('room-date-jump.mergeRoomMessagePages', () => {
   it('空 incoming 不新增条目，已有页也重排为正序', () => {
     const existing = [view('a', 300), view('b', 200)]
     expect(mergeRoomMessagePages(existing, []).map(item => item.id)).toEqual(['b', 'a'])
+  })
+})
+
+describe('room-date-jump.resolveDateChannel', () => {
+  const big = { serverId: 's1', channelId: 'big' }
+  const archive = { serverId: 's1', channelId: 'archive' }
+  const small = { serverId: 's1', channelId: 'small' }
+
+  it('关闭态用存档频道，视图停在小房间也不让位（大房间关了小房间必然也关了）', () => {
+    expect(resolveDateChannel({
+      closed: true,
+      archive,
+      viewMode: 'small',
+      small,
+      room: big,
+    })).toEqual(archive)
+  })
+
+  it('关闭态没解析到存档频道时返回 null，不回落直播频道', () => {
+    expect(resolveDateChannel({
+      closed: true,
+      archive: null,
+      viewMode: 'room',
+      small: null,
+      room: big,
+    })).toBeNull()
+  })
+
+  it('未关闭时小房间视图取小房间频道', () => {
+    expect(resolveDateChannel({
+      closed: false,
+      archive,
+      viewMode: 'small',
+      small,
+      room: big,
+    })).toEqual(small)
+  })
+
+  it('未关闭时小房间频道未解析返回 null，不拿大房间顶替', () => {
+    expect(resolveDateChannel({
+      closed: false,
+      archive,
+      viewMode: 'small',
+      small: null,
+      room: big,
+    })).toBeNull()
+  })
+
+  it('未关闭时大房间视图取当前频道', () => {
+    expect(resolveDateChannel({
+      closed: false,
+      archive: null,
+      viewMode: 'room',
+      small,
+      room: big,
+    })).toEqual(big)
+  })
+
+  it('频道 id 缺失按未解析处理', () => {
+    expect(resolveDateChannel({
+      closed: false,
+      archive: null,
+      viewMode: 'room',
+      small: null,
+      room: { serverId: '', channelId: '' },
+    })).toBeNull()
   })
 })

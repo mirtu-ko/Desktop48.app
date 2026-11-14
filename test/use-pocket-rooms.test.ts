@@ -185,7 +185,7 @@ interface SetupOptions {
   /** channelId → { 请求 nextTime: 响应页 }；精华消息（与 roomPages 分开配置：与消息范围无关） */
   essencePages?: Record<string, Record<number, { nextTime: number, messages: ReturnType<typeof roomMsg>[] }>>
   /** serverId → 最新一条消息（team/classic/last/message/get 的 lastMsgList 条目） */
-  lastMessages?: Array<{ channelId: string, starName?: string, msgContent: string, msgTime?: number }>
+  lastMessages?: Array<{ channelId: string, serverId?: string, starName?: string, msgContent: string, msgTime?: number }>
   /** serverId → 该 server 下的频道（seine 频道详情，页签显示真实频道名用） */
   serverChannels?: Record<string, Array<{ channelId: string, channelName: string }>>
   /** userId → 已发现的小房间频道；未设置 = 未发现（页签只有大房间） */
@@ -196,6 +196,8 @@ interface SetupOptions {
   roomQuestions?: Record<string, { questionId: string, question: string }>
   /** channelId → 正确暗号；不设置则该频道的提交一律判错 */
   roomAnswers?: Record<string, string>
+  /** channelId → room/info 报错文案（关闭中的旧频道 / 已删除频道） */
+  roomPermissionErrors?: Record<string, string>
   /** channelId → 发言权限；未设置 = 未知（null，不禁用输入，仍由服务端兜底） */
   roomPermissions?: Record<string, PocketRoomPermission>
 }
@@ -249,12 +251,16 @@ async function setup(options: SetupOptions = {}) {
         return { serverId: `srv-${userId}`, channelId: `ch-${userId}` }
       }),
       // 房间发言权限：默认未知（null = 不禁用输入）；roomPermissions 用于构造禁言房间
-      pocketGetRoomPermissions: vi.fn(async (channelId: string) =>
-        options.roomPermissions?.[channelId] ?? null),
+      pocketGetRoomPermissions: vi.fn(async (channelId: string) => {
+        const error = options.roomPermissionErrors?.[channelId]
+        if (error)
+          throw new Error(error)
+        return options.roomPermissions?.[channelId] ?? null
+      }),
       pocketGetRoomLastMessages: vi.fn(async (serverIds: string[]) => {
         calls.lastMessageFetched.push(serverIds)
         return (options.lastMessages ?? []).filter(item =>
-          serverIds.includes(`srv-${item.channelId.replace('ch-', '')}`),
+          serverIds.includes(item.serverId ?? `srv-${item.channelId.replace('ch-', '')}`),
         )
       }),
       pocketGetRoomMessages: vi.fn(async (channelId: string, _serverId: string, nextTime = 0, scope: 'member' | 'all' = 'member') => {
@@ -366,8 +372,9 @@ async function setup(options: SetupOptions = {}) {
     extra.stop()
   // 未读镜像也是模块级单例：清空后才建新实例，免得上个用例的未读影响本次排序
   const { markRoomRead, unreadCountOf, usePocketUnreadStore } = await import('@renderer/stores/pocket-unread')
-  const { unreadRooms } = usePocketUnreadStore()
+  const { unreadRooms, closedChannels } = usePocketUnreadStore()
   unreadRooms.value = {}
+  closedChannels.value = []
   // 关注 / 屏蔽名单 store 同样是模块级单例，且 ensureLoaded 只灌一次：显式重灌，
   // 还原成「进程刚起来」的状态（否则上个用例的屏蔽名单会漏到本次）
   const { useBlockedMembersStore, useFollowedMembersStore } = await import('@renderer/stores/member-flags')
@@ -391,6 +398,10 @@ async function setup(options: SetupOptions = {}) {
           { count, bigCount: count, smallCount: 0, latestTime: latestTimes[Number(userId)] ?? 0 },
         ]),
       )
+    },
+    /** 模拟主进程关闭频道快照广播（不点房间也能标记） */
+    setClosedChannels: (channels: Array<{ serverId: string, channelId: string }>) => {
+      closedChannels.value = channels
     },
     /** 详情卡入口显隐用的那条解析路径（与临时房间共用缓存） */
     resolveRoomChannel: resolveMemberRoomChannel,
@@ -2420,5 +2431,368 @@ describe('use-pocket-rooms / QChat 订阅同步', () => {
     // 实时链路失败只禁发送；HTTP 轮询仍是消息链路兜底
     expect(api.chatStatus.value).toBe('ready')
     expect(api.messages.value).toHaveLength(1)
+  })
+})
+
+/** 已关闭房间的 room/info：无留言板 */
+const closedPermission: PocketRoomPermission = {
+  sendText: false,
+  cdTime: 30,
+  roomRole: '0',
+  followFlag: true,
+  hasMsgBoard: false,
+}
+/** 正常房间的 room/info：有留言板、可发言 */
+const openPermission: PocketRoomPermission = {
+  sendText: true,
+  cdTime: 10,
+  roomRole: '0',
+  followFlag: true,
+  hasMsgBoard: true,
+}
+/** 关闭前的留言频道（主进程快照里的存档） */
+const ARCHIVE = { serverId: 'srv-10001', channelId: 'ch-archive' }
+
+describe('use-pocket-rooms / 关闭房间的判定与轮询', () => {
+  it('进房回包无留言板：标记关闭，存档频道与预览取自快照', async () => {
+    const { api, setClosedChannels } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': closedPermission },
+      lastMessages: [
+        { channelId: 'ch-10001', serverId: 'srv-10001', msgContent: '' },
+        { channelId: 'ch-archive', serverId: 'srv-10001', msgContent: '不说再见👋拜，后会有期！' },
+      ],
+    })
+    // 快照先到：load 时即可按存档频道取预览
+    setClosedChannels([{ ...ARCHIVE }])
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(api.isRoomClosedOf(10001)).toBe(true)
+    expect(api.roomClosed.value).toBe(true)
+    expect(api.archiveChannelOf(10001)).toEqual(ARCHIVE)
+    expect(api.rooms.value.find(room => room.userId === 10001)?.preview).toBe('不说再见👋拜，后会有期！')
+
+    // 批量预览轮询不得用直播频道的回包把关闭前那条覆盖掉
+    await api.refreshRoomPreviews()
+    expect(api.rooms.value.find(room => room.userId === 10001)?.preview).toBe('不说再见👋拜，后会有期！')
+  })
+
+  it('正常房间不标关闭', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': openPermission },
+      lastMessages: [{ channelId: 'ch-gone', serverId: 'srv-10001', msgContent: '旧频道' }],
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(api.isRoomClosedOf(10001)).toBe(false)
+    expect(api.roomClosed.value).toBe(false)
+    expect(api.archiveChannelOf(10001)).toBeNull()
+    expect(api.rooms.value.find(room => room.userId === 10001)?.preview).toBe('')
+  })
+
+  it('关闭形态是 room/info 直接回错：同样标记关闭', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      roomPermissionErrors: { 'ch-10001': '房间已关闭，暂不可进入' },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(api.roomClosed.value).toBe(true)
+    expect(api.archiveChannelOf(10001)).toBeNull()
+  })
+
+  it('关闭但没解析到历史频道：仍标记关闭，历史入口回退当前频道', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': closedPermission },
+      lastMessages: [],
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(api.isRoomClosedOf(10001)).toBe(true)
+    expect(api.archiveChannelOf(10001)).toBeNull()
+  })
+
+  it('切房后关闭标记按 userId 归属，不串到别的成员', async () => {
+    const { api } = await setup({
+      pocketIds: [10001, 10002],
+      roomPermissions: { 'ch-10001': closedPermission, 'ch-10002': openPermission },
+      lastMessages: [],
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    await api.selectRoom(10002)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(api.isRoomClosedOf(10001)).toBe(true)
+    expect(api.isRoomClosedOf(10002)).toBe(false)
+    expect(api.roomClosed.value).toBe(false)
+  })
+
+  it('关闭判定晚到也会刷新右侧空态（computed 依赖 closedRooms）', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': closedPermission },
+      lastMessages: [],
+    })
+    await api.load()
+    vi.mocked(window.mainAPI.pocketGetRoomPermissions).mockImplementation(async () => {
+      await new Promise(resolve => setTimeout(resolve, 20))
+      return closedPermission
+    })
+
+    await api.selectRoom(10001)
+    // 权限还没回：右侧先按「未关闭」渲染，computed 已被求值并缓存
+    expect(api.roomClosed.value).toBe(false)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.roomClosed.value).toBe(true)
+  })
+
+  it('已关闭房间：判定后不再发 5s 消息轮询', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': closedPermission },
+      lastMessages: [],
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(api.roomClosed.value).toBe(true)
+    const before = calls.messageFetched.length
+    await vi.advanceTimersByTimeAsync(15_000)
+
+    expect(calls.messageFetched).toHaveLength(before)
+  })
+
+  it('正常房间：5s 轮询照常发，不被关闭态早退误停', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': openPermission },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(api.roomClosed.value).toBe(false)
+    const before = calls.messageFetched.length
+    await vi.advanceTimersByTimeAsync(15_000)
+
+    expect(calls.messageFetched.length).toBe(before + 3)
+  })
+
+  it('房间重新开放：关闭态清除后轮询自动恢复', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': closedPermission },
+      lastMessages: [],
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.roomClosed.value).toBe(true)
+
+    vi.mocked(window.mainAPI.pocketGetRoomPermissions).mockImplementation(async () => openPermission)
+    await api.selectRoom(null)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.roomClosed.value).toBe(false)
+
+    const before = calls.messageFetched.length
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls.messageFetched.length).toBe(before + 1)
+  })
+
+  it('load 重建列表后，已关闭房间的预览仍从存档频道回填', async () => {
+    const { api, setClosedChannels } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': closedPermission },
+      lastMessages: [
+        { channelId: 'ch-archive', serverId: 'srv-10001', msgContent: '不说再见👋拜，后会有期！' },
+      ],
+    })
+    setClosedChannels([{ ...ARCHIVE }])
+    await api.load()
+    expect(api.rooms.value[0].preview).toBe('不说再见👋拜，后会有期！')
+
+    await api.load()
+    expect(api.isRoomClosedOf(10001)).toBe(true)
+    expect(api.rooms.value[0].preview).toBe('不说再见👋拜，后会有期！')
+  })
+
+  it('正常房间 load 仍按 jump 频道取预览，不误读同 server 的其它频道', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': openPermission },
+      lastMessages: [
+        { channelId: 'ch-10001', serverId: 'srv-10001', msgContent: '当前频道最新' },
+        { channelId: 'ch-other', serverId: 'srv-10001', msgContent: '别的频道' },
+      ],
+    })
+    await api.load()
+    expect(api.rooms.value[0].preview).toBe('当前频道最新')
+  })
+
+  it('关闭但没解析到历史频道：预览不被同 server 的其它频道误填', async () => {
+    const { api } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': closedPermission },
+      lastMessages: [
+        { channelId: 'ch-other', serverId: 'srv-10001', msgContent: '别的频道' },
+      ],
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.archiveChannelOf(10001)).toBeNull()
+    expect(api.rooms.value[0].preview).toBe('')
+
+    await api.load()
+    expect(api.rooms.value[0].preview).toBe('')
+  })
+})
+
+describe('use-pocket-rooms / 关闭频道快照（首屏）', () => {
+  it('不点房间：快照到达即写入关闭标记、存档频道与告别语预览', async () => {
+    const { api, setClosedChannels } = await setup({
+      pocketIds: [10001],
+      lastMessages: [{ channelId: 'ch-archive', serverId: 'srv-10001', msgContent: '不说再见👋拜，后会有期！' }],
+    })
+    await api.load()
+    expect(api.isRoomClosedOf(10001)).toBe(false)
+
+    setClosedChannels([{ ...ARCHIVE }])
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.isRoomClosedOf(10001)).toBe(true)
+    expect(api.archiveChannelOf(10001)).toEqual(ARCHIVE)
+    expect(api.rooms.value[0].preview).toBe('不说再见👋拜，后会有期！')
+  })
+
+  it('进房先判关闭、快照后到：存档频道随快照补齐', async () => {
+    const { api, setClosedChannels } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': closedPermission },
+      lastMessages: [{ channelId: 'ch-archive', serverId: 'srv-10001', msgContent: '告别' }],
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.roomClosed.value).toBe(true)
+    expect(api.archiveChannelOf(10001)).toBeNull()
+
+    setClosedChannels([{ ...ARCHIVE }])
+    await nextTick()
+    expect(api.archiveChannelOf(10001)).toEqual(ARCHIVE)
+  })
+
+  it('快照不再列出该 server 的关闭频道：标记随即消失', async () => {
+    const { api, setClosedChannels } = await setup({ pocketIds: [10001] })
+    await api.load()
+    setClosedChannels([{ ...ARCHIVE }])
+    await nextTick()
+    expect(api.isRoomClosedOf(10001)).toBe(true)
+
+    // 房间重开后主进程复核会删掉该条目，标记不能留在渲染层
+    setClosedChannels([])
+    await nextTick()
+    expect(api.isRoomClosedOf(10001)).toBe(false)
+    expect(api.archiveChannelOf(10001)).toBeNull()
+  })
+
+  it('快照早于列表到达：load 末尾补同步', async () => {
+    const { api, setClosedChannels } = await setup({
+      pocketIds: [10001],
+      lastMessages: [{ channelId: 'ch-archive', serverId: 'srv-10001', msgContent: '告别' }],
+    })
+    setClosedChannels([{ ...ARCHIVE }])
+    await api.load()
+
+    expect(api.isRoomClosedOf(10001)).toBe(true)
+    expect(api.rooms.value[0].preview).toBe('告别')
+  })
+
+  it('别的 server 或当前 jump 频道都不算关闭历史频道', async () => {
+    const { api, setClosedChannels } = await setup({ pocketIds: [10001] })
+    await api.load()
+    setClosedChannels([
+      { serverId: 'srv-99999', channelId: 'ch-archive' },
+      { serverId: 'srv-10001', channelId: 'ch-10001' },
+    ])
+    await nextTick()
+
+    expect(api.isRoomClosedOf(10001)).toBe(false)
+  })
+
+  it('进房只为当前频道打一次 room/info，不逐个试同 server 的候选频道', async () => {
+    const { api, setClosedChannels } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': closedPermission },
+      lastMessages: [
+        { channelId: 'ch-archive', serverId: 'srv-10001', msgContent: '告别' },
+        { channelId: 'ch-other', serverId: 'srv-10001', msgContent: '别的频道' },
+      ],
+    })
+    await api.load()
+    setClosedChannels([{ ...ARCHIVE }])
+    await nextTick()
+
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(vi.mocked(window.mainAPI.pocketGetRoomPermissions).mock.calls.map(([cid]) => cid))
+      .toEqual(['ch-10001'])
+  })
+
+  it('进房判为未关闭后，快照回填不再把标记带回来', async () => {
+    const { api, setClosedChannels } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': openPermission },
+      lastMessages: [{ channelId: 'ch-archive', serverId: 'srv-10001', msgContent: '告别' }],
+    })
+    await api.load()
+    setClosedChannels([{ ...ARCHIVE }])
+    await nextTick()
+    expect(api.isRoomClosedOf(10001)).toBe(true)
+
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.isRoomClosedOf(10001)).toBe(false)
+
+    setClosedChannels([{ ...ARCHIVE }])
+    await nextTick()
+    expect(api.isRoomClosedOf(10001)).toBe(false)
+  })
+
+  it('同一 server 有多个已关闭频道：取快照首个（最新大房间），不被后一条覆盖', async () => {
+    const { api, setClosedChannels } = await setup({
+      pocketIds: [10001],
+      lastMessages: [
+        { channelId: 'ch-new', serverId: 'srv-10001', msgContent: '我好啦！' },
+        { channelId: 'ch-old', serverId: 'srv-10001', msgContent: '[图片消息]' },
+      ],
+    })
+    await api.load()
+    // 主进程快照按 lastMsgList 顺序（最新在前）排好；旧频道排在后面
+    setClosedChannels([
+      { serverId: 'srv-10001', channelId: 'ch-new' },
+      { serverId: 'srv-10001', channelId: 'ch-old' },
+    ])
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.archiveChannelOf(10001)).toEqual({ serverId: 'srv-10001', channelId: 'ch-new' })
+    expect(api.rooms.value[0].preview).toBe('我好啦！')
   })
 })

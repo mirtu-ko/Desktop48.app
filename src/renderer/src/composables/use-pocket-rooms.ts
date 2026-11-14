@@ -135,7 +135,7 @@ export function usePocketRooms() {
   const { blockedMembers, ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
   const { findMemberByUserId, findOfficialAccount } = useMemberDirectoryStore()
   /** 未读镜像（主进程唯一真相）：左列排序与角标共用同一判据，见 sortRooms */
-  const { unreadRooms } = usePocketUnreadStore()
+  const { unreadRooms, closedChannels } = usePocketUnreadStore()
   const {
     liveByUserId,
     liveIdSet,
@@ -208,11 +208,50 @@ export function usePocketRooms() {
   /** 正在拉权限的频道 id：切房后旧回包不得覆盖新房间 */
   let permissionChannelId = ''
   /**
-   * 房间已关闭：`room/info` 回包无留言板（hasMsgBoard=0）或直接回错时置真。
-   * 关闭的房间 jump 会退到该 server 的直播频道，消息恒为空页——与「没人说话」同形，
-   * 只有这个接口能分辨，消息区据此换掉「暂无消息」的文案。
+   * 进房 room/info 的实时结论，优先于主进程快照：`'open'` = 确认已重开、
+   * `'closed'` = 确认已关闭。存档频道一律取快照，这里只记判定。
    */
-  const roomClosed = ref(false)
+  const closureOverrides = ref<Record<number, 'open' | 'closed'>>({})
+  /**
+   * 主进程关闭频道快照 → userId → 关闭前的留言频道。同一 server 取首个（主进程已按
+   * lastMsgList 顺序排好）；与当前 jump 频道重合的不算存档——那是关闭后退到的直播频道。
+   */
+  const snapshotClosed = computed(() => {
+    const byServer = new Map<string, PocketRoomChannel>()
+    for (const item of closedChannels.value) {
+      if (!byServer.has(item.serverId))
+        byServer.set(item.serverId, { serverId: item.serverId, channelId: item.channelId })
+    }
+    const byUser = new Map<number, PocketRoomChannel>()
+    for (const room of rooms.value) {
+      const archive = byServer.get(room.serverId)
+      if (archive && archive.channelId !== room.channelId)
+        byUser.set(room.userId, archive)
+    }
+    return byUser
+  })
+  /** 房间关闭态：undefined = 未关闭，null = 已关闭但还没解析到存档频道（历史仍在旧频道） */
+  function closureOf(userId: number | null): PocketRoomChannel | null | undefined {
+    if (userId === null)
+      return undefined
+    const override = closureOverrides.value[userId]
+    if (override === 'open')
+      return undefined
+    const archive = snapshotClosed.value.get(userId)
+    if (archive)
+      return archive
+    return override === 'closed' ? null : undefined
+  }
+  /** 当前选中房间是否已关闭 */
+  const roomClosed = computed(() => closureOf(selectedUserId.value) !== undefined)
+  /** 已关闭房间的历史留言频道；null = 未关闭或没解析到 */
+  function archiveChannelOf(userId: number | null): PocketRoomChannel | null {
+    return closureOf(userId) ?? null
+  }
+  /** 左列标记用：该成员的房间是否已关闭 */
+  function isRoomClosedOf(userId: number): boolean {
+    return closureOf(userId) !== undefined
+  }
   /**
    * 用户是否已确认「连接云信会挤掉其他登录端」。默认 false：进房只跑 HTTP 轮询，
    * 不建连、不订阅；点聊天框确认后置位，登出即复位。
@@ -458,22 +497,56 @@ export function usePocketRooms() {
     }
   })
 
-  /** 批量最新消息 → channelId → 消息；失败返回空 Map（预览静默降级，不影响房间可用） */
-  async function fetchLastMessageMap(serverIds: string[]): Promise<Map<string, PocketRoomLastMessage>> {
+  /** lastMsgList → channelId → 消息 */
+  function toLastMessageMap(items: PocketRoomLastMessage[]): Map<string, PocketRoomLastMessage> {
     const map = new Map<string, PocketRoomLastMessage>()
-    if (!serverIds.length)
-      return map
-    try {
-      for (const item of await window.mainAPI.pocketGetRoomLastMessages(serverIds)) {
-        if (item.channelId)
-          map.set(item.channelId, item)
-      }
-    }
-    catch (error) {
-      debugLog('pocket-rooms', '房间最新消息拉取失败（无预览降级）', error)
+    for (const item of items) {
+      if (item.channelId)
+        map.set(item.channelId, item)
     }
     return map
   }
+
+  /** 批量最新消息 → channelId → 消息；失败返回空 Map（预览静默降级，不影响房间可用） */
+  async function fetchLastMessageMap(serverIds: string[]): Promise<Map<string, PocketRoomLastMessage>> {
+    if (!serverIds.length)
+      return new Map<string, PocketRoomLastMessage>()
+    try {
+      return toLastMessageMap(await window.mainAPI.pocketGetRoomLastMessages(serverIds))
+    }
+    catch (error) {
+      debugLog('pocket-rooms', '房间最新消息拉取失败（无预览降级）', error)
+      return new Map<string, PocketRoomLastMessage>()
+    }
+  }
+
+  /**
+   * 左列预览的唯一写入口：已关闭房间取关闭前的留言频道，其余取 jump 出来的当前频道。
+   * msgTime 常为 0（降级回包），此时不做时间守卫。
+   */
+  function applyRoomPreview(room: PocketRoom, map: Map<string, PocketRoomLastMessage>): void {
+    const channelId = archiveChannelOf(room.userId)?.channelId ?? room.channelId
+    const last = map.get(channelId)
+    if (!last)
+      return
+    if (last.msgTime > 0) {
+      if (last.msgTime < room.previewTime)
+        return
+      room.previewTime = last.msgTime
+    }
+    const nextPreview = normalizePocketRoomPreview(last.msgContent)
+    if (nextPreview !== room.preview)
+      room.preview = nextPreview
+  }
+
+  /**
+   * 快照让某个成员的关闭态变化时重拉一次预览：左列要显示的是关闭前那条告别语，
+   * 而 load() 拿的是 jump 频道的（恒空）。关闭集合很少变，代价是一次批量请求。
+   */
+  watch(
+    () => closedChannels.value.map(item => `${item.serverId}:${item.channelId}`).join(','),
+    () => void refreshRoomPreviews(),
+  )
 
   /**
    * 遍历解析全部关注成员的房间频道。
@@ -589,11 +662,6 @@ export function usePocketRooms() {
       const nextRooms = resolved.map(({ entry, channel }) => {
         entry.serverId = channel.serverId
         entry.channelId = channel.channelId
-        const last = lastMessageMap.get(channel.channelId)
-        if (last?.msgContent) {
-          entry.preview = normalizePocketRoomPreview(last.msgContent)
-          entry.previewTime = last.msgTime
-        }
         return entry
       })
 
@@ -602,6 +670,9 @@ export function usePocketRooms() {
       // 临时房间不在关注名单里，重建列表会把它的条目一起冲掉：这里重新并入。
       // 必须早于下面的选中复核 —— 用户正看着的可能就是它
       insertTemporaryRoom()
+      // 关闭态由 rooms 与快照派生，列表就位后再写预览才读得到关闭前的留言频道
+      for (const room of rooms.value)
+        applyRoomPreview(room, lastMessageMap)
       // 选中项已不在列表（取关/刷新/房间被过滤）时清空右侧；仍在则保持选中（消息流不动）
       const stillSelected = rooms.value.some(room => room.userId === selectedUserId.value)
       if (!stillSelected && selectedUserId.value !== null) {
@@ -633,25 +704,17 @@ export function usePocketRooms() {
    *   「小房间」视图时该房预览无人维护，会冻死。
    *
    * 回包若仍带真实 msgTime（pa 特征齐全时），退化为按时间单调：更旧的快照不采纳。
+   * 取哪一条由 applyRoomPreview 决定：已关闭房间读历史留言频道，其余读当前频道。
    */
   async function refreshRoomPreviews() {
     if (!pocketAuthState.value.loggedIn || !rooms.value.length)
       return
     const lastMessageMap = await fetchLastMessageMap(rooms.value.map(room => room.serverId))
     for (const room of rooms.value) {
-      const last = lastMessageMap.get(room.channelId)
-      if (!last)
+      // 选中房间的预览由 5s 轮询维护，本函数不覆盖；关闭房间的轮询已停，只能由这里回填
+      if (room.userId === selectedUserId.value && viewMode.value === 'room' && !isRoomClosedOf(room.userId))
         continue
-      if (room.userId === selectedUserId.value && viewMode.value === 'room')
-        continue
-      if (last.msgTime > 0) {
-        if (last.msgTime < room.previewTime)
-          continue
-        room.previewTime = last.msgTime
-      }
-      const nextPreview = normalizePocketRoomPreview(last.msgContent)
-      if (nextPreview !== room.preview)
-        room.preview = nextPreview
+      applyRoomPreview(room, lastMessageMap)
     }
   }
 
@@ -1303,26 +1366,35 @@ export function usePocketRooms() {
    * 拉取当前频道发言权限（进房时与消息并行，不阻塞消息渲染）。
    * 失败一律保持「未知」：小房间暗号未通过（status 2001）、网络异常都只影响输入框提示，
    * 不能把「没查到」当成「被禁言」——真禁言时服务端发送会拒绝，主进程也会回错误文案。
+   * 关闭判定顺带用这里的回包做实时结论，优先于主进程快照。
    */
-  async function loadRoomPermission(channelId: string): Promise<void> {
+  async function loadRoomPermission(userId: number, channelId: string): Promise<void> {
     permissionChannelId = channelId
     roomPermission.value = null
-    roomClosed.value = false
     try {
       const permission = await window.mainAPI.pocketGetRoomPermissions(channelId)
       // 回包期间已切房：旧频道的权限不得贴到新房间的输入框上
       if (permissionChannelId !== channelId)
         return
       roomPermission.value = permission
-      // 无留言板 = 房间已关闭（jump 退到了该 server 的直播频道，消息永远为空）
-      roomClosed.value = isRoomClosed(permission?.hasMsgBoard ?? null)
+      applyRoomClosure(userId, channelId, isRoomClosed(permission?.hasMsgBoard ?? null))
     }
     catch (error) {
       // 也有的关闭形态是直接回错，文案由服务端给
       if (permissionChannelId === channelId)
-        roomClosed.value = isRoomClosed(null, error instanceof Error ? error.message : String(error))
+        applyRoomClosure(userId, channelId, isRoomClosed(null, error instanceof Error ? error.message : String(error)))
       debugLog('pocket-rooms', '房间发言权限拉取失败', error)
     }
+  }
+
+  /**
+   * 关闭态实时结论的唯一写入口。存档频道只认主进程快照（关闭频道由检测轮统一反查），
+   * 这里不再拿 lastMsgList 逐条试 room/info —— 那份探测与主进程完全同源，多打一轮只是浪费。
+   */
+  function applyRoomClosure(userId: number, channelId: string, closed: boolean): void {
+    if (permissionChannelId !== channelId || selectedUserId.value !== userId)
+      return
+    closureOverrides.value[userId] = closed ? 'closed' : 'open'
   }
 
   /** 在选中成员下打开指定频道（大房间或小房间）：首屏拉取 + 启动轮询 */
@@ -1333,7 +1405,7 @@ export function usePocketRooms() {
     chatStatusText.value = ''
     // 精华、首屏消息、发言权限三路并行：禁言态晚到也不影响消息先显示
     void fetchEssencePage(channel, 'replace')
-    void loadRoomPermission(channel.channelId)
+    void loadRoomPermission(userId, channel.channelId)
     try {
       await fetchRoomPage(channel, 0, 'replace')
     }
@@ -1575,7 +1647,8 @@ export function usePocketRooms() {
 
   /** 轮询用：拉最新一页，只追加新消息（无新消息零开销） */
   async function pollRoomMessages() {
-    if (!activeChannel || chatStatus.value !== 'ready')
+    // 已关闭房间的当前频道恒空；判定后停掉空转轮询，历史由按日期入口走旧频道
+    if (!activeChannel || chatStatus.value !== 'ready' || roomClosed.value)
       return
     try {
       await fetchRoomPage(activeChannel, 0, 'append')
@@ -1740,6 +1813,8 @@ export function usePocketRooms() {
     chatStatus,
     chatStatusText,
     roomClosed,
+    isRoomClosedOf,
+    archiveChannelOf,
     historyExhausted,
     loadingMore,
     essenceMessages,

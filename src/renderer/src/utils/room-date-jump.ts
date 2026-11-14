@@ -1,4 +1,5 @@
 // 房间消息「按日期查看」的时刻换算、分页合并与错误分类。纯函数，不引 Vue / Element Plus。
+import type { PocketRoomChannel } from '@preload/ipc-contract'
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import dayjs from 'dayjs'
 
@@ -94,4 +95,30 @@ export function classifyRoomDateError(error: unknown): { empty: boolean, message
   const raw = error instanceof Error ? error.message : String(error ?? '')
   const message = raw.split('Error: ').pop()?.trim() || '读取消息失败'
   return { empty: message.includes('系统处理异常'), message }
+}
+
+/** 频道可用性：两个 id 都在才算解析完成 */
+function usableChannel(channel: PocketRoomChannel | null): PocketRoomChannel | null {
+  return channel?.channelId && channel.serverId ? channel : null
+}
+
+/**
+ * 按日期查看读取的频道。
+ * - 关闭态只认关闭前的留言频道（大房间留言板）：大房间关闭时小房间必然也已关闭，
+ *   视图停在 small 也不能盖过存档频道；没解析到就返回 null，不回落 jump 的直播频道
+ *   （它对 message/list 恒空，回落等于必然空页）。
+ * - 未关闭时按视图取：小房间视图只认小房间频道，大房间视图只认当前频道。
+ */
+export function resolveDateChannel(input: {
+  closed: boolean
+  archive: PocketRoomChannel | null
+  viewMode: 'room' | 'small'
+  small: PocketRoomChannel | null
+  room: PocketRoomChannel | null
+}): PocketRoomChannel | null {
+  if (input.closed)
+    return usableChannel(input.archive)
+  if (input.viewMode === 'small')
+    return usableChannel(input.small)
+  return usableChannel(input.room)
 }

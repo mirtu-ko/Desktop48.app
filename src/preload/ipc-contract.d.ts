@@ -464,6 +464,8 @@ export interface PocketUnreadBatch {
   rooms: Record<string, PocketUnreadRoomState>
   /** 全部房间未读总数（Dock tab / 任务栏角标用） */
   total: number
+  /** 已判定「房间关闭中」的旧留言频道；渲染层据此标记左列并恢复按日期查看 */
+  closedChannels: PocketRoomChannel[]
 }
 
 // ===== 类型化 IPC 通道映射 =====

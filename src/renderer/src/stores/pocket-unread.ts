@@ -6,7 +6,7 @@
  * markRead 走 invoke 由主进程推进已读水位后广播回来（本地乐观清零只为避免数字闪现，
  * 广播到达后值一致）。页面没开 / 窗口最小化时未读照常积累，与页面自身轮询无关。
  */
-import type { PocketRoomReadMark, PocketUnreadBatch, PocketUnreadRoomState } from '@preload/ipc-contract'
+import type { PocketRoomChannel, PocketRoomReadMark, PocketUnreadBatch, PocketUnreadRoomState } from '@preload/ipc-contract'
 import { computed, ref } from 'vue'
 
 /** 未读快照镜像：userId（字符串键）→ 单房间状态 */
@@ -17,8 +17,12 @@ const totalUnread = computed(() =>
   Object.values(unreadRooms.value).reduce((sum, item) => sum + item.count, 0),
 )
 
+/** 已判定「房间关闭中」的旧留言频道（主进程快照镜像）；房间页据此标记左列并恢复按日期查看 */
+const closedChannels = ref<PocketRoomChannel[]>([])
+
 function applyState(state: PocketUnreadBatch): void {
   unreadRooms.value = state.rooms
+  closedChannels.value = state.closedChannels ?? []
 }
 
 let installed = false
@@ -94,7 +98,7 @@ export async function markRoomRead(userId: number, target: 'room' | 'small' = 'r
 
 /** 未读 store：房间未读的全局镜像与已读标记（模块级单例） */
 export function usePocketUnreadStore() {
-  return { unreadRooms, totalUnread, unreadCountOf, unreadChannelOf, latestUnreadTimeOf, markRoomRead }
+  return { unreadRooms, closedChannels, totalUnread, unreadCountOf, unreadChannelOf, latestUnreadTimeOf, markRoomRead }
 }
 
 export default usePocketUnreadStore
