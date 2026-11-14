@@ -37,6 +37,7 @@ const api = {
   // ===== 网络请求 =====
   // 对端：main/ipc/register-system-ipc.ts，走 Electron net 模块 + 域名白名单
   netRequest: (options: NetRequestOptions) => invokeIpc('netRequest', options),
+  imageDataUrl: (url: string) => invokeIpc('imageDataUrl', url),
   netDiagnose: () => invokeIpc('netDiagnose'),
   feedbackMeta: () => invokeIpc('feedbackMeta'),
   submitFeedback: (input: FeedbackInput) => invokeIpc('submitFeedback', input),
@@ -64,6 +65,8 @@ const api = {
   openPath: (filePath: string) => invokeIpc('openPath', filePath),
   selectDirectory: () => invokeIpc('selectDirectory'),
   pathJoin: (...paths: string[]) => invokeIpc('pathJoin', ...paths),
+  copyImageToClipboard: (dataUrl: string) => invokeIpc('copyImageToClipboard', dataUrl),
+  saveImageFile: (dataUrl: string, suggestedName: string) => invokeIpc('saveImageFile', dataUrl, suggestedName),
   roomAlbumDownload: (sources: RoomAlbumDownloadSource[], filterSmall: boolean) =>
     invokeIpc('roomAlbumDownload', sources, filterSmall),
   roomAlbumDownloadProgress: (callback: (_progress: RoomAlbumDownloadProgress) => void) =>

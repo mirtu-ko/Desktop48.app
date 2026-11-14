@@ -487,12 +487,15 @@ function onPlayerCanPlay() {
   clearLoadFailure()
   stallRetries = 0
   retry.markRecovered()
-  // Umami 事件：首次出画才算成功播放；断流重连后的 canplay 不重复计数。
-  // 属性也计费，只留标题
+  // 首次出画才算成功播放；断流重连后的 canplay 不重复计数
   if (!livePlayTracked) {
     livePlayTracked = true
     markPlayDurationStarted()
-    trackEvent('live:play', { title: realName.value })
+    trackEvent('live:play', {
+      title: realName.value,
+      media: isRadio.value ? 'radio' : 'video',
+      source: props.source === 'open' ? 'open' : 'user',
+    })
   }
   if (!isRadio.value)
     updateVideoDimensions()

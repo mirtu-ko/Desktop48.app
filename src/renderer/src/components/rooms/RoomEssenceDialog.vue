@@ -97,6 +97,7 @@ const essenceImageUrls = computed(() =>
               <PreviewImage
                 v-if="item.imageUrl"
                 class="essence-image"
+                from="essence"
                 :src="item.imageUrl"
                 :image-width="item.imageWidth"
                 :image-height="item.imageHeight"

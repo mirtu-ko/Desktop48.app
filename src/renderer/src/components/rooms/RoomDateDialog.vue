@@ -319,6 +319,7 @@ watch(
               <PreviewImage
                 v-if="item.imageUrl"
                 class="date-image"
+                from="date"
                 :src="item.imageUrl"
                 :image-width="item.imageWidth"
                 :image-height="item.imageHeight"

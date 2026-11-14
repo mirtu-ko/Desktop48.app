@@ -201,12 +201,15 @@ const {
   onTimeUpdate: onDanmakuTimeUpdate,
   onSeeking: time => seekBarragesTo(time),
   onMetadataLoaded: async () => {
-    // Umami 事件：换清晰度 / 重试重挂也会触发 loadedmetadata，用标记只计首播。
-    // 属性也计费，只留标题
+    // 换清晰度 / 重试重挂也会触发 loadedmetadata，用标记只计首播
     if (!playbackTracked) {
       playbackTracked = true
       markPlayDurationStarted()
-      trackEvent('playback:play', { title: realName.value })
+      trackEvent('playback:play', {
+        title: realName.value,
+        media: isRadio.value ? 'radio' : 'video',
+        source: props.source === 'open' ? 'open' : 'user',
+      })
     }
     debugLog('playback', `④元数据就绪: 刷新画面尺寸${isRadio.value ? '（电台无尺寸）' : ''} → 加载弹幕`)
     // 记录源尺寸供旋转缩放计算，并按（可能旋转后的）画面比例上报浮窗

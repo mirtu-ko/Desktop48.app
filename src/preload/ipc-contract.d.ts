@@ -486,6 +486,12 @@ export type { FfmpegProblem, FfmpegStatus }
 
 interface StaticIpcInvokeMap {
   netRequest: InvokeSpec<[options: NetRequestOptions], NetResponse>
+  /**
+   * 白名单内的图片转成 data URL。生日贺卡的分享图要把远程头像画进 canvas，
+   * 直接画跨域 <img> 会污染画布导致 toDataURL 抛错，故由主进程取二进制再回传
+   * （对端：main/ipc/register-system-ipc.ts）。
+   */
+  imageDataUrl: InvokeSpec<[url: string], string>
   /** 网络诊断：对核心服务域名逐一发轻量 GET，返回状态码/耗时/失败原因（对端：main/net-diagnose.ts） */
   netDiagnose: InvokeSpec<[], NetDiagnoseItem[]>
   /** 反馈用环境摘要与通道可用性：版本/平台/身份档/登录态，不含账号与内容（对端：main/feedback.ts） */
@@ -508,6 +514,10 @@ interface StaticIpcInvokeMap {
   openPath: InvokeSpec<[filePath: string], void>
   selectDirectory: InvokeSpec<[], string | null>
   pathJoin: InvokeSpec<[...paths: string[]], string>
+  /** PNG data URL 写入系统剪贴板（对端：main/ipc/register-system-ipc.ts） */
+  copyImageToClipboard: InvokeSpec<[dataUrl: string], void>
+  /** 打开无父窗口的保存对话框写入 PNG，返回保存路径；用户取消返回 null（模态对话框会让 frameless 窗白屏） */
+  saveImageFile: InvokeSpec<[dataUrl: string, suggestedName: string], string | null>
   /** 打开一次目录选择器，随后把相册图片逐张写入所选目录（对端：main/pocket48/room-album-download.ts） */
   roomAlbumDownload: InvokeSpec<[sources: RoomAlbumDownloadSource[], filterSmall: boolean], RoomAlbumDownloadResult>
   /** FFmpeg 环境状态：省略 dir 时校验当前生效配置，传入时校验指定目录（选择/下载后的即时校验） */

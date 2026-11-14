@@ -10,8 +10,10 @@ import type { NetRequestOptions, NetResponse } from '@preload/ipc-contract'
  */
 import type { IpcMainInvokeEvent } from 'electron'
 import { Buffer } from 'node:buffer'
+import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { app, dialog, net, shell } from 'electron'
+import { SITE_USER_AGENT } from '@common/android-device'
+import { app, clipboard, ClipboardItem, dialog, net, shell } from 'electron'
 import { isAllowedUrl } from '../allowed-hosts'
 import { isPathInAllowedRoots } from '../allowed-path'
 import { Database } from '../database'
@@ -27,6 +29,88 @@ import { handleTraced } from './trace'
 // 网络请求 - 域名白名单校验
 const NET_REQUEST_TIMEOUT = 20 * 1000
 const NET_REQUEST_MAX_BYTES = 32 * 1024 * 1024
+
+/** 分享图的远程头像：上限 8MB / 15 秒，避免 CDN 异常时把主进程拖住 */
+const IMAGE_FETCH_TIMEOUT = 15 * 1000
+const IMAGE_MAX_BYTES = 8 * 1024 * 1024
+const PNG_DATA_URL_REGEX = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/
+const PNG_DATA_URL_MAX_CHARS = 16 * 1024 * 1024
+
+/**
+ * 取图片二进制。不能复用 performNetRequest：它把响应体按 UTF-8 解码成字符串，
+ * 会把 JPEG/PNG 的字节破坏掉。这里逐块收 Buffer，整体拼好再交给调用方转 base64。
+ */
+function fetchBinaryImage(url: string): Promise<{ data: Buffer, mime: string }> {
+  return new Promise((resolve, reject) => {
+    const request = net.request({ url, method: 'GET' })
+    // 静态 CDN 沿用站点身份（与 renderer/services/request.ts 同源）；不带 UA 时
+    // net.request 会报 Electron 默认标识，部分图片 CDN 直接拒绝，头像会降级成姓名首字
+    request.setHeader('User-Agent', SITE_USER_AGENT)
+    request.setHeader('Accept', 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8')
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled)
+        return
+      settled = true
+      request.abort()
+      reject(new Error(`图片请求超时（${IMAGE_FETCH_TIMEOUT}ms）: ${url}`))
+    }, IMAGE_FETCH_TIMEOUT)
+    const fail = (err: Error) => {
+      if (settled)
+        return
+      settled = true
+      clearTimeout(timer)
+      reject(err)
+    }
+    const succeed = (value: { data: Buffer, mime: string }) => {
+      if (settled)
+        return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+
+    request.on('response', (response) => {
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        request.abort()
+        fail(new Error(`图片请求失败（${response.statusCode}）: ${url}`))
+        return
+      }
+      const header = response.headers['content-type']
+      const mime = String((Array.isArray(header) ? header[0] : header) || '').split(';')[0].trim()
+      if (!mime.startsWith('image/')) {
+        request.abort()
+        fail(new Error(`响应不是图片: ${url}`))
+        return
+      }
+      const chunks: Buffer[] = []
+      let received = 0
+      response.on('data', (chunk: Buffer) => {
+        received += chunk.length
+        if (received > IMAGE_MAX_BYTES) {
+          request.abort()
+          fail(new Error(`图片超过上限（${IMAGE_MAX_BYTES} 字节）: ${url}`))
+          return
+        }
+        chunks.push(chunk)
+      })
+      response.on('end', () => succeed({ data: Buffer.concat(chunks), mime }))
+      response.on('aborted', () => fail(new Error(`图片响应被中断: ${url}`)))
+      response.on('error', fail)
+    })
+    request.on('abort', () => fail(new Error(`图片请求被中断: ${url}`)))
+    request.on('error', fail)
+    request.end()
+  })
+}
+
+/** 只接受 PNG data URL：写盘 / 写剪贴板前把渲染层传来的内容收窄，避免任意 base64 落盘 */
+function decodePngDataUrl(dataUrl: string): Buffer {
+  const match = PNG_DATA_URL_REGEX.exec(dataUrl)
+  if (!match || match[1].length > PNG_DATA_URL_MAX_CHARS)
+    throw new Error('图片数据格式不正确')
+  return Buffer.from(match[1], 'base64')
+}
 
 /**
  * 请求头收口：打口袋体系**业务接口**（pocketapi / h5）的请求改报 App 身份
@@ -169,6 +253,39 @@ export function registerSystemIPC(): void {
   })
 
   handleTraced('pathJoin', (_event: IpcMainInvokeEvent, ...paths: string[]) => path.join(...paths))
+
+  // 生日贺卡分享图：跨域 <img> 画进 canvas 会污染画布，头像改由主进程取成 data URL
+  handleTraced('imageDataUrl', async (_event: IpcMainInvokeEvent, url: string) => {
+    if (!isAllowedUrl(url))
+      throw new Error(`请求被拒绝：域名不在白名单中 (${url})`)
+    const { data, mime } = await fetchBinaryImage(url)
+    return `data:${mime};base64,${data.toString('base64')}`
+  })
+
+  handleTraced('copyImageToClipboard', async (_event: IpcMainInvokeEvent, dataUrl: string) => {
+    const buffer = decodePngDataUrl(dataUrl)
+    // Electron 44 起 clipboard 换成 W3C 风格：write() + ClipboardItem，旧的 writeImage 已移除
+    const blob = new Blob([new Uint8Array(buffer)], { type: 'image/png' })
+    await clipboard.write([new ClipboardItem({ 'image/png': blob })])
+  })
+
+  handleTraced('saveImageFile', async (_event: IpcMainInvokeEvent, dataUrl: string, suggestedName: string) => {
+    const buffer = decodePngDataUrl(dataUrl)
+    // 渲染层给的是建议文件名，先剥掉目录与非法字符再拼默认路径
+    const safeName = path.basename(suggestedName).replace(/[^\w\u4E00-\u9FA5.-]/g, '_') || 'birthday-card.png'
+    const options = {
+      title: '保存生日贺卡',
+      defaultPath: path.join(app.getPath('pictures'), safeName),
+      filters: [{ name: 'PNG 图片', extensions: ['png'] }],
+    }
+    // ⚠️ 不传父窗口：主窗口是 frameless，模态原生对话框会在对话框期间让渲染层
+    // 停止合成、整窗刷白（用户报「点保存后白屏」）。与 selectDirectory 一致用无父窗口对话框。
+    const result = await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath)
+      return null
+    await writeFile(result.filePath, buffer)
+    return result.filePath
+  })
 
   handleTraced('netRequest', async (_event: IpcMainInvokeEvent, options: NetRequestOptions) => {
     const { url, method, headers, body } = options

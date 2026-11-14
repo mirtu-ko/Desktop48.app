@@ -4,6 +4,7 @@ import { Download, Filter, Loading } from '@element-plus/icons-vue'
 import ImageViewerToolbar from '@renderer/components/ui/ImageViewerToolbar.vue'
 import { debugLog } from '@renderer/utils/debug'
 import { isSmallImage, SMALL_IMAGE_MIN_SIDE } from '@renderer/utils/image-download'
+import { countBucket, trackEvent } from '@renderer/utils/umami'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue'
 
@@ -177,6 +178,12 @@ async function downloadAll() {
     if (result.canceled)
       return
 
+    // 批量保存是相册最重的动作，只记本次范围与成功规模，不记房间或成员
+    trackEvent('image:album_save', {
+      count: countBucket(snapshot.length),
+      saved: countBucket(result.downloaded),
+    })
+
     const summary = [`已下载 ${result.downloaded} 张`]
     if (result.skipped)
       summary.push(`过滤小图 ${result.skipped} 张`)
@@ -248,6 +255,7 @@ async function downloadAll() {
         fit="cover"
         hide-on-click-modal
         @load="onPhotoLoad($event, photo)"
+        @click="trackEvent('image:view', { from: 'album' })"
       >
         <!-- 预览时可按需下载当前这张（工具条由 rooms 共用组件提供） -->
         <template #toolbar="{ actions, reset, activeIndex }">
@@ -256,6 +264,7 @@ async function downloadAll() {
             :reset="reset"
             :urls="urls"
             :active-index="activeIndex"
+            from="album"
           />
         </template>
       </el-image>

@@ -1,6 +1,7 @@
 /** 页面级成员详情卡片：列表点成员名 → 按 userId 从 stores/member-directory 反查合并详情并打开卡片。关注 / 屏蔽的互斥规则见 use-member-actions，状态每页各持一份故落在 composables */
 import type { MemberDetail } from '@renderer/utils/member-merge'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
+import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { computed, ref } from 'vue'
 import { useMemberActions } from './use-member-actions'
@@ -17,7 +18,7 @@ export function useMemberDetail() {
   const detailBlocked = computed(() => !!selectedMember.value?.userId && isBlocked(selectedMember.value.userId))
 
   /** 打开卡片：入参是列表条目上的 userId（number / string 都收，归一化在 store） */
-  async function openMemberDetail(userId: number | string | undefined | null) {
+  async function openMemberDetail(userId: number | string | undefined | null, from: 'live' | 'playback') {
     let member: MemberDetail | null = null
     try {
       member = await findMemberByUserId(userId)
@@ -33,11 +34,16 @@ export function useMemberDetail() {
       return
     }
     selectedMember.value = member
+    trackEvent('member:detail_open', { from })
   }
 
   function closeMemberDetail() {
     selectedMember.value = null
   }
+
+  // 详情抽屉里的按钮统一按 detail 来源记账，页面无需知道埋点参数
+  const toggleFollowInDetail = (member: MemberDetail) => toggleFollowMember(member, 'detail')
+  const toggleBlockInDetail = (member: MemberDetail) => toggleBlockMember(member, 'detail')
 
   return {
     selectedMember,
@@ -45,7 +51,7 @@ export function useMemberDetail() {
     detailBlocked,
     openMemberDetail,
     closeMemberDetail,
-    toggleFollowMember,
-    toggleBlockMember,
+    toggleFollowMember: toggleFollowInDetail,
+    toggleBlockMember: toggleBlockInDetail,
   }
 }

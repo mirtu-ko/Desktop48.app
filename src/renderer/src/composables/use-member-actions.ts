@@ -20,12 +20,16 @@ import type { MemberDetail } from '@renderer/utils/member-merge'
 import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { refreshPocketAuthState } from '@renderer/stores/pocket-auth'
 import { debugLog } from '@renderer/utils/debug'
+import { trackEvent } from '@renderer/utils/umami'
+
+/** 关注 / 屏蔽的入口来源：卡片按钮与详情抽屉，不含成员身份信息 */
+type MemberActionFrom = 'card' | 'detail'
 
 export function useMemberActions() {
   const { isFollowed, toggleFollow } = useFollowedMembersStore()
   const { isBlocked, toggleBlock, unblockMember } = useBlockedMembersStore()
 
-  async function toggleFollowMember(member: MemberDetail) {
+  async function toggleFollowMember(member: MemberDetail, from: MemberActionFrom = 'card') {
     const { userId } = member
     if (typeof userId !== 'number')
       return
@@ -37,9 +41,13 @@ export function useMemberActions() {
     if (blocked)
       await unblockMember(userId)
     // 本次只是解除屏蔽、关注态不变（账号侧本来就关注着）：无需动名单，也不必双写
-    if (willFollow === followed)
+    if (willFollow === followed) {
+      // 点击落在「解除屏蔽」上，按屏蔽操作记账，否则这一次交互没有数据
+      trackEvent('member:block', { action: 'unblock', from })
       return
+    }
     await toggleFollow({ ...member, userId })
+    trackEvent('member:follow', { action: willFollow ? 'follow' : 'unfollow', from })
     // 双写口袋关注：登录态现读现刷新（本地读文件无网络）：ensurePocketAuthState 首调会同步返回
     // 刷新前的旧值，没打开过设置页就点关注的场景会静默丢双写
     const auth = await refreshPocketAuthState()
@@ -53,12 +61,14 @@ export function useMemberActions() {
     }
   }
 
-  async function toggleBlockMember(member: MemberDetail) {
+  async function toggleBlockMember(member: MemberDetail, from: MemberActionFrom = 'card') {
     const { userId } = member
     if (typeof userId !== 'number')
       return
     // 屏蔽只动屏蔽名单：关注是账号维度的事实，取关不由屏蔽代劳（见文件头）
+    const blocked = isBlocked(userId)
     await toggleBlock({ ...member, userId })
+    trackEvent('member:block', { action: blocked ? 'unblock' : 'block', from })
   }
 
   return { isFollowed, isBlocked, toggleFollowMember, toggleBlockMember }

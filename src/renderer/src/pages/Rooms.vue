@@ -100,6 +100,12 @@ const essenceOpen = ref(false)
 /** 按日期查看弹层是否打开 */
 const dateOpen = ref(false)
 
+/** 打开按日期查看：入口只有头部一处，埋点放在这里 */
+function openDateDialog() {
+  dateOpen.value = true
+  trackEvent('room:date_open')
+}
+
 const { findMemberByUserId } = useMemberDirectoryStore()
 
 /** 当前房间成员的入团时间；名录未同步或查不到时为空，起点回落到归档日 */
@@ -398,6 +404,8 @@ async function submitSmallAnswer() {
   smallAnswerError.value = ''
   const result = await unlockSmall(answer)
   smallSubmitting.value = false
+  // 门禁通过率是这块功能唯一有效的指标，不记录暗号本身
+  trackEvent('room:unlock_small', { result: result.ok ? 'ok' : 'fail' })
   if (!result.ok) {
     smallAnswerError.value = result.message || '暗号不正确'
     return
@@ -1042,7 +1050,7 @@ function onComposerClick(): void {
 function onDraftEnter(event: KeyboardEvent) {
   if (event.isComposing)
     return
-  void onSendClick()
+  void onSendClick('enter')
 }
 
 /** 输入条上的「断开连接」：回到只看模式（不再顶手机），断开前二次确认 */
@@ -1067,7 +1075,7 @@ async function onDisconnectClick(): Promise<void> {
   ElMessage.success('已断开房间连接')
 }
 
-async function onSendClick() {
+async function onSendClick(via: 'enter' | 'button') {
   if (!composerUsable.value)
     return
   if (!canSend.value) {
@@ -1082,6 +1090,11 @@ async function onSendClick() {
   if (!text)
     return
   const result = await sendMessage(text)
+  trackEvent('room:send', {
+    result: result.ok ? 'ok' : 'fail',
+    via,
+    hasReply: replyTarget.value ? 'yes' : 'no',
+  })
   if (result.ok) {
     draft.value = ''
     return
@@ -1695,7 +1708,7 @@ onMounted(() => {
                   type="button"
                   class="date-jump-btn"
                   title="按日期查看历史消息"
-                  @click="dateOpen = true"
+                  @click="openDateDialog"
                 >
                   <el-icon :size="12">
                     <Calendar />
@@ -2103,7 +2116,7 @@ onMounted(() => {
                     :loading="sendBusy"
                     :disabled="!composerUsable"
                     :title="sendButtonHint"
-                    @click="onSendClick"
+                    @click="onSendClick('button')"
                   >
                     {{ sendButtonLabel }}
                   </el-button>

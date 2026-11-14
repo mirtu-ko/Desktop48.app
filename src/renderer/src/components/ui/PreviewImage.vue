@@ -5,6 +5,7 @@
 // 尺寸/底色等外观由使用处的 class 提供（如 .msg-image / .essence-image），本组件不持样式。
 // imageWidth/imageHeight 来自房间消息归一层；其它模块的图片源没有该字段，缺省时回退自然加载。
 import ImageViewerToolbar from '@renderer/components/ui/ImageViewerToolbar.vue'
+import { trackEvent } from '@renderer/utils/umami'
 import { computed } from 'vue'
 
 const props = withDefaults(defineProps<{
@@ -24,9 +25,12 @@ const props = withDefaults(defineProps<{
   previewList?: string[]
   /** 打开 viewer 时定位到的下标（src 在 previewList 中的位置）；缺省 0 */
   initialIndex?: number
+  /** 来源，仅用于埋点区分入口；缺省按消息流计 */
+  from?: 'room' | 'essence' | 'date' | 'album'
 }>(), {
   maxWidth: 240,
   lazy: false,
+  from: 'room',
 })
 
 const emit = defineEmits<{ load: [], error: [] }>()
@@ -58,6 +62,7 @@ const boxStyle = computed(() => {
     referrerpolicy="no-referrer"
     @load="emit('load')"
     @error="emit('error')"
+    @click="trackEvent('image:view', { from })"
   >
     <!-- 预览工具条：整排自绘后追加下载一项 -->
     <template #toolbar="{ actions, reset, activeIndex }">
@@ -66,6 +71,7 @@ const boxStyle = computed(() => {
         :reset="reset"
         :urls="viewerUrls"
         :active-index="activeIndex"
+        :from="from"
       />
     </template>
   </el-image>

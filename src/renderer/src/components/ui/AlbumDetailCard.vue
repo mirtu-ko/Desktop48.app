@@ -136,13 +136,13 @@ function onVisibilityChange(value: boolean) {
               <el-button v-if="album.link" :icon="Link" @click="openAlbumConcept(album)">
                 专辑概念
               </el-button>
-              <el-button v-if="album.href" :icon="ShoppingCart" @click="openAlbumShop(album)">
+              <el-button v-if="album.href" :icon="ShoppingCart" @click="openAlbumShop(album, 'detail')">
                 购买专辑
               </el-button>
             </div>
 
             <div class="side-actions">
-              <el-button type="primary" :icon="VideoPlay" @click="playWholeAlbum(album)">
+              <el-button type="primary" :icon="VideoPlay" @click="playWholeAlbum(album, 'detail')">
                 播放全部
               </el-button>
               <el-button :icon="Plus" @click="queueWholeAlbum(album)">
