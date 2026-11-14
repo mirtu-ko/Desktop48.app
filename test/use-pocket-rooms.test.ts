@@ -469,6 +469,23 @@ describe('use-pocket-rooms / 房间列表构建', () => {
     expect(api.rooms.value[2].avatar).toBe('')
   })
 
+  it('已关闭的房间沉到列表下方，压过直播与未读', async () => {
+    const { api, setUnread, setClosedChannels } = await setup({
+      pocketIds: [10001, 10002],
+      livePages: [{ next: '0', liveList: [live('L1', 10001, '甲的直播')] }],
+      directory: {
+        10001: { realName: '甲', avatar: '', teamName: 'TEAM SII', teamColor: '88ccff' },
+        10002: { realName: '乙', avatar: '', teamName: 'TEAM NII', teamColor: 'ffcc88' },
+      },
+    })
+    // 10001 在直播且有未读，但房间已关闭（快照给了旧留言频道）：关闭优先，仍然沉底
+    setClosedChannels([{ serverId: 'srv-10001', channelId: 'ch-archive' }])
+    setUnread({ 10001: 2 }, { 10001: 1_700_000_000 })
+    await api.load()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10002, 10001])
+  })
+
   it('直播列表分页拉全：next 非 0 继续翻，关注成员在哪页都能匹配', async () => {
     const { api, calls } = await setup({
       pocketIds: [10002],

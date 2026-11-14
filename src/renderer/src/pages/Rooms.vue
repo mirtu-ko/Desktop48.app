@@ -2162,34 +2162,38 @@ onMounted(() => {
 
               <!-- 进房遗留未读的跳转浮标：贴底且分割线不在视口内才出现，点它滚到那里。
                    与下面的「新消息」浮标互斥（一个只在贴底、一个只在离开底部时出现） -->
-              <button
-                v-if="atBottom && unreadAnchor && unreadIndex >= 0 && !unreadJumped && !unreadAnchorVisible"
-                type="button"
-                class="new-msg-float new-msg-float--up"
-                :style="newMsgFloatStyle"
-                title="跳到未读消息的起点"
-                @click="jumpToUnread"
-              >
-                <el-icon :size="12">
-                  <ArrowRight />
-                </el-icon>
-                {{ unreadText(unreadAnchor.count) }} 条未读
-              </button>
+              <Transition name="msg-float">
+                <button
+                  v-if="atBottom && unreadAnchor && unreadIndex >= 0 && !unreadJumped && !unreadAnchorVisible"
+                  type="button"
+                  class="new-msg-float new-msg-float--up"
+                  :style="newMsgFloatStyle"
+                  title="跳到未读消息的起点"
+                  @click="jumpToUnread"
+                >
+                  <el-icon :size="12">
+                    <ArrowRight />
+                  </el-icon>
+                  {{ unreadText(unreadAnchor.count) }} 条未读
+                </button>
+              </Transition>
 
               <!-- 上翻历史时收到新消息的浮标：点击回底（贴在输入条上方，见 newMsgFloatStyle） -->
-              <button
-                v-if="newCount > 0 && !atBottom"
-                type="button"
-                class="new-msg-float"
-                :style="newMsgFloatStyle"
-                title="回到最新消息"
-                @click="scrollToBottom"
-              >
-                <el-icon :size="12">
-                  <ArrowRight />
-                </el-icon>
-                {{ newCount }} 条新消息
-              </button>
+              <Transition name="msg-float">
+                <button
+                  v-if="newCount > 0 && !atBottom"
+                  type="button"
+                  class="new-msg-float"
+                  :style="newMsgFloatStyle"
+                  title="回到最新消息"
+                  @click="scrollToBottom"
+                >
+                  <el-icon :size="12">
+                    <ArrowRight />
+                  </el-icon>
+                  {{ newCount }} 条新消息
+                </button>
+              </Transition>
 
               <!-- 消息右键菜单（Teleport 到 body 定位在光标处）：复制正文 / 媒体直链 -->
               <RoomMessageMenu
@@ -3985,6 +3989,27 @@ onMounted(() => {
  * 同特异度，必须定义在 .new-msg-float 之后才生效 */
 .new-msg-float--up .el-icon {
   transform: rotate(-90deg);
+}
+
+/* 浮标出入场：与 BackTopButton 同款的下沉淡入淡出；reduced-motion 下瞬切 */
+.msg-float-enter-active,
+.msg-float-leave-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+
+.msg-float-enter-from,
+.msg-float-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-float-enter-active,
+  .msg-float-leave-active {
+    transition: none;
+  }
 }
 
 .msg-empty,

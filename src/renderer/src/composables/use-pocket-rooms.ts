@@ -419,20 +419,22 @@ export function usePocketRooms() {
   }
 
   /**
-   * 左列排序，五级判据：
+   * 左列排序，六级判据：
    * 1. 临时房间恒置顶（用户刚点进来的那个，要第一眼看到）；
-   * 2. 在直播的排在没直播的前面——「谁的房间开着」是第一眼信息；
-   * 3. 其次是有未读的——「谁的房间有新消息」是第二眼信息；
-   * 4. 同为有未读按最新一条未读的时刻降序——「谁刚说话」一眼可见；
-   * 5. 同档按昵称 localeCompare('zh')。
+   * 2. 已关闭的房间沉底——留言已停，没有「谁在说话」可看；
+   * 3. 在直播的排在没直播的前面——「谁的房间开着」是第一眼信息；
+   * 4. 其次是有未读的——「谁的房间有新消息」是第二眼信息；
+   * 5. 同为有未读按最新一条未读的时刻降序——「谁刚说话」一眼可见；
+   * 6. 同档按昵称 localeCompare('zh')。
    *
    * 未读判据取大房间 + 小房间合计（与左列角标同源），不是只看大房间：
    * 左列条目上只有一个角标，排序与它不一致会自相矛盾。
-   * latestTime 取两频道最大值（aggregate 口径）；无未读恒为 0，已被第 3 级分走。
+   * latestTime 取两频道最大值（aggregate 口径）；无未读恒为 0，已被第 4 级分走。
    */
   function sortRooms(list: PocketRoom[]) {
     list.sort((a, b) =>
       Number(!!b.temporary) - Number(!!a.temporary)
+      || Number(isRoomClosedOf(a.userId)) - Number(isRoomClosedOf(b.userId))
       || Number(!!b.live) - Number(!!a.live)
       || Number(unreadCountOf(b.userId) > 0) - Number(unreadCountOf(a.userId) > 0)
       || latestUnreadTimeOf(b.userId) - latestUnreadTimeOf(a.userId)
@@ -540,12 +542,16 @@ export function usePocketRooms() {
   }
 
   /**
-   * 快照让某个成员的关闭态变化时重拉一次预览：左列要显示的是关闭前那条告别语，
-   * 而 load() 拿的是 jump 频道的（恒空）。关闭集合很少变，代价是一次批量请求。
+   * 关闭集合变化：已关闭的房间要沉到列表下方，左列还要显示关闭前那条告别语
+   * （load 拿的是 jump 频道的，恒空）。关闭集合很少变，代价是一次批量请求。
    */
   watch(
     () => closedChannels.value.map(item => `${item.serverId}:${item.channelId}`).join(','),
-    () => void refreshRoomPreviews(),
+    () => {
+      if (rooms.value.length)
+        sortRooms(rooms.value)
+      void refreshRoomPreviews()
+    },
   )
 
   /**
@@ -665,8 +671,9 @@ export function usePocketRooms() {
         return entry
       })
 
-      sortRooms(nextRooms)
       rooms.value = nextRooms
+      // 关闭态按列表里的 serverId 归属，先落列表再排序（否则首批关闭房间沉不下去）
+      sortRooms(rooms.value)
       // 临时房间不在关注名单里，重建列表会把它的条目一起冲掉：这里重新并入。
       // 必须早于下面的选中复核 —— 用户正看着的可能就是它
       insertTemporaryRoom()
