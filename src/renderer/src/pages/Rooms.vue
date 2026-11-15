@@ -1157,12 +1157,18 @@ async function confirmDeleteOwn(message: PocketRoomMessageView) {
     ElMessage.error(result.message || '删除失败')
 }
 
-// 输入条高度联动「新消息浮标」：浮标贴在输入条上方，不挡住发送钮
+// 输入条高度联动「新消息浮标」：浮标贴在输入条上方，不挡住发送钮。
 const composerRef = ref<HTMLElement | null>(null)
 const composerHeight = ref(0)
-useResizeObserver(composerRef, (entries) => {
-  composerHeight.value = entries[0]?.contentRect.height ?? 0
-})
+useResizeObserver(
+  composerRef,
+  (entries) => {
+    composerHeight.value = entries[0]?.borderBoxSize?.[0]?.blockSize
+      ?? entries[0]?.contentRect.height
+      ?? 0
+  },
+  { box: 'border-box' },
+)
 const newMsgFloatStyle = computed(() => ({
   bottom: `${12 + (composerVisible.value ? composerHeight.value : 0)}px`,
 }))
