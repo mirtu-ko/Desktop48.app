@@ -934,7 +934,7 @@ const draftInput = ref<InputInstance | null>(null)
 
 /** 输入条可见条件：已登录 + 选中房间 + 消息就绪 + 不在小房间暗号锁定态。
  * 连接状态不影响可见性——未连接也要把输入条摆出来，点它才引导连接。
- * 房间禁言也不隐藏：要让用户看到「为什么说不了话」，而不是输入框凭空消失。
+ * 房间禁言 / 未关注也不隐藏：要让用户看到「为什么说不了话」，而不是输入框凭空消失。
  * 房间已关闭则隐藏：没有留言板，禁言文案（「房主已开启全员禁言」）在这里是错的。
  */
 const composerVisible = computed(() =>
@@ -945,16 +945,31 @@ const composerVisible = computed(() =>
   && !roomClosed.value,
 )
 
-/** 房主开了房间级禁言（room/info 的 userFunction.sendText === false） */
-const composerMuted = computed(() => composerVisible.value && !canSpeak.value)
+/**
+ * 发言阻断原因（房间级不可发言的唯一判定口）：
+ * unfollowed = 该成员不在口袋账号关注里（只有本地名单或临时房间），服务端不接受发言；
+ * muted = 房主开了房间级禁言（room/info 的 userFunction.sendText === false）。
+ * null = 可发言，剩下的只看连接与冷却。
+ */
+const speakBlock = computed<'unfollowed' | 'muted' | null>(() => {
+  if (!composerVisible.value)
+    return null
+  // 口袋关注拉取失败时所有房间的来源都退化成 local，此时无从判断真实关注关系，
+  // 不拦（否则整页误禁言），交给服务端拒
+  if (!pocketFollowError.value && !isPocketFollowed(selectedRoom.value?.followSource))
+    return 'unfollowed'
+  return canSpeak.value ? null : 'muted'
+})
 
-/** 禁言提示节流：反复点输入框时只每 3s 提示一次，不堆一屏 toast */
-let muteToastAt = 0
+const composerMuted = computed(() => speakBlock.value === 'muted')
 
-/** 输入条可交互（不含连接状态）：未连接时点击它用于引导连接；禁言态直接不可交互 */
+/** 阻断提示节流：反复点输入框时只每 3s 提示一次，不堆一屏 toast */
+let speakBlockToastAt = 0
+
+/** 输入条可交互（不含连接状态）：未连接时点击它用于引导连接；阻断态直接不可交互 */
 const composerUsable = computed(() =>
   composerVisible.value
-  && canSpeak.value
+  && !speakBlock.value
   && !sendBusy.value
   && sendCooldownLeft.value === 0,
 )
@@ -970,8 +985,10 @@ const canSend = computed(() =>
 const composerPlaceholder = computed(() => {
   if (!composerVisible.value)
     return ''
-  // 禁言优先于连接状态：连接了也发不出去，别让文案引导用户去建连
-  if (composerMuted.value)
+  // 阻断原因优先于连接状态：连接了也发不出去，别让文案引导用户去建连
+  if (speakBlock.value === 'unfollowed')
+    return '请关注后发言'
+  if (speakBlock.value === 'muted')
     return '暂时不能发言'
   if (sendBusy.value)
     return '正在发送…'
@@ -999,7 +1016,9 @@ const sendButtonLabel = computed(() => {
 
 /** 发送钮 hover：说明倒数与禁用原因，这些状态不写在按钮文字里 */
 const sendButtonHint = computed(() => {
-  if (composerMuted.value)
+  if (speakBlock.value === 'unfollowed')
+    return '该成员未在口袋账号关注，关注后才能发言'
+  if (speakBlock.value === 'muted')
     return '全员禁言，暂不能发言'
   if (sendBusy.value)
     return '正在发送消息'
@@ -1059,18 +1078,21 @@ async function requestQChatConnection(): Promise<boolean> {
   return true
 }
 
-/** 禁言态点输入框：只解释原因，绝不发起 QChat 建连（建连会顶掉手机端，而这里本就发不出去） */
-function onMutedComposerClick(): void {
-  if (Date.now() - muteToastAt < 3000)
+/** 阻断态点输入框：只解释原因，绝不发起 QChat 建连（建连会顶掉手机端，而这里本就发不出去） */
+function noticeSpeakBlock(): void {
+  const block = speakBlock.value
+  if (!block || Date.now() - speakBlockToastAt < 3000)
     return
-  muteToastAt = Date.now()
-  ElMessage.info('房主已开启全员禁言，暂时不能发言')
+  speakBlockToastAt = Date.now()
+  ElMessage.info(block === 'unfollowed'
+    ? '该成员未在口袋账号关注，关注后才能发言'
+    : '房主已开启全员禁言，暂时不能发言')
 }
 
 /** 未连接时点输入框：先确认再连接，不吞掉用户的输入意图 */
 function onComposerClick(): void {
-  if (composerMuted.value) {
-    onMutedComposerClick()
+  if (speakBlock.value) {
+    noticeSpeakBlock()
     return
   }
   if (!composerUsable.value || qchatOptIn.value)
@@ -2130,7 +2152,7 @@ onMounted(() => {
                     ref="draftInput"
                     v-model="draft"
                     class="composer-input"
-                    :class="{ 'is-muted': composerMuted }"
+                    :class="{ 'is-blocked': !!speakBlock }"
                     :placeholder="composerPlaceholder"
                     :readonly="!canSend"
                     maxlength="500"
@@ -4096,14 +4118,14 @@ onMounted(() => {
   }
 }
 
-/* 禁言态与输入框合并：锁定标记常驻在输入框内，警告色只落在这一处 */
-.composer-input.is-muted :deep(.el-input__wrapper) {
+/* 阻断态与输入框合并：锁定标记常驻在输入框内，警告色只落在这一处 */
+.composer-input.is-blocked :deep(.el-input__wrapper) {
   background: var(--el-color-warning-light-9);
   box-shadow: 0 0 0 1px var(--el-color-warning-light-5) inset;
 }
 
-.composer-input.is-muted :deep(.el-input__inner),
-.composer-input.is-muted :deep(.el-input__inner::placeholder) {
+.composer-input.is-blocked :deep(.el-input__inner),
+.composer-input.is-blocked :deep(.el-input__inner::placeholder) {
   color: var(--el-color-warning-dark-2);
 }
 
