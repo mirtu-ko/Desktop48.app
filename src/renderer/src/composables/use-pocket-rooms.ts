@@ -36,6 +36,7 @@ import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { pocketAuthState, refreshPocketAuthState } from '@renderer/stores/pocket-auth'
 import { latestUnreadTimeOf, unreadCountOf, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
+import { useRoomPinsStore } from '@renderer/stores/room-pins'
 import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, normalizePocketRoomMessage, normalizePocketRoomPreview, normalizePocketRoomQChatMessage } from '@renderer/utils/pocket-room-message'
 
@@ -136,6 +137,8 @@ export function usePocketRooms() {
   const { findMemberByUserId, findOfficialAccount } = useMemberDirectoryStore()
   /** 未读镜像（主进程唯一真相）：左列排序与角标共用同一判据，见 sortRooms */
   const { unreadRooms, closedChannels } = usePocketUnreadStore()
+  /** 置顶名单（本地展示偏好）：参与 sortRooms，变化即重排 */
+  const { pinnedIds, isRoomPinned } = useRoomPinsStore()
   const {
     liveByUserId,
     liveIdSet,
@@ -419,21 +422,23 @@ export function usePocketRooms() {
   }
 
   /**
-   * 左列排序，六级判据：
+   * 左列排序，七级判据：
    * 1. 临时房间恒置顶（用户刚点进来的那个，要第一眼看到）；
-   * 2. 已关闭的房间沉底——留言已停，没有「谁在说话」可看；
-   * 3. 在直播的排在没直播的前面——「谁的房间开着」是第一眼信息；
-   * 4. 其次是有未读的——「谁的房间有新消息」是第二眼信息；
-   * 5. 同为有未读按最新一条未读的时刻降序——「谁刚说话」一眼可见；
-   * 6. 同档按昵称 localeCompare('zh')。
+   * 2. 其次是用户手动置顶的成员（压过直播与未读：这是显式意图，见 stores/room-pins）；
+   * 3. 已关闭的房间沉底——留言已停，没有「谁在说话」可看；
+   * 4. 在直播的排在没直播的前面——「谁的房间开着」是第一眼信息；
+   * 5. 其次是有未读的——「谁的房间有新消息」是第二眼信息；
+   * 6. 同为有未读按最新一条未读的时刻降序——「谁刚说话」一眼可见；
+   * 7. 同档按昵称 localeCompare('zh')。
    *
    * 未读判据取大房间 + 小房间合计（与左列角标同源），不是只看大房间：
    * 左列条目上只有一个角标，排序与它不一致会自相矛盾。
-   * latestTime 取两频道最大值（aggregate 口径）；无未读恒为 0，已被第 4 级分走。
+   * latestTime 取两频道最大值（aggregate 口径）；无未读恒为 0，已被第 5 级分走。
    */
   function sortRooms(list: PocketRoom[]) {
     list.sort((a, b) =>
       Number(!!b.temporary) - Number(!!a.temporary)
+      || Number(isRoomPinned(b.userId)) - Number(isRoomPinned(a.userId))
       || Number(isRoomClosedOf(a.userId)) - Number(isRoomClosedOf(b.userId))
       || Number(!!b.live) - Number(!!a.live)
       || Number(unreadCountOf(b.userId) > 0) - Number(unreadCountOf(a.userId) > 0)
@@ -451,6 +456,15 @@ export function usePocketRooms() {
       room.live = liveMap.get(room.userId) ?? null
     sortRooms(rooms.value)
   }, { immediate: true })
+
+  /**
+   * 置顶变化 → 立即重排：置顶是用户当场点下的，等下一次自然排序会看起来没生效。
+   * 排序判据只此一处（sortRooms），页面不再按置顶二次分组。
+   */
+  watch(pinnedIds, () => {
+    if (rooms.value.length)
+      sortRooms(rooms.value)
+  })
 
   /**
    * 未读变化 → 重排左列（新消息浮上来），只在两种「浮上来」时重排：

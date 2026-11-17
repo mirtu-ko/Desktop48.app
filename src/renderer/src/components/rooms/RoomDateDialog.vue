@@ -338,6 +338,7 @@ watch(
                 :preview-list="imageUrls"
                 :initial-index="imageUrls.indexOf(item.imageUrl)"
                 :max-width="260"
+                :max-height="220"
               />
             </div>
           </article>

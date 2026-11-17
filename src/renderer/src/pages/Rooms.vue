@@ -15,11 +15,13 @@ import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
 
 import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promotion'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
+import { useRoomPinsStore } from '@renderer/stores/room-pins'
 import { copyText } from '@renderer/utils/clipboard'
 import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
@@ -113,13 +115,20 @@ const { findMemberByUserId } = useMemberDirectoryStore()
 
 /** 房间展示队伍：整列一次派生，模板只读 displayTeam；服务端原值仍留在 room 上 */
 const { displayTeamOf } = useMemberTeamPromotionStore()
+/** 置顶名单（本地展示偏好，见 stores/room-pins）：顺序由 composable 的 sortRooms 统一决定，这里只读标记与切换 */
+const { isRoomPinned, toggleRoomPin } = useRoomPinsStore()
 const displayRooms = computed(() => rooms.value.map(room => ({
   ...room,
+  pinned: isRoomPinned(room.userId),
   displayTeam: displayTeamOf(room.userId, room.teamName, room.teamColor),
 })))
+/** 当前列表里的置顶条数：置顶过但已取消关注 / 房间关掉的成员不算，免得数与所见不一致 */
+const pinnedRoomCount = computed(() => displayRooms.value.filter(room => room.pinned).length)
 const selectedRoomTeam = computed(() => selectedRoom.value
   ? displayTeamOf(selectedRoom.value.userId, selectedRoom.value.teamName, selectedRoom.value.teamColor)
   : { teamName: '', teamColor: '' })
+/** 头部置顶按钮的当前态：入口与左列标记共用同一份名单 */
+const selectedRoomPinned = computed(() => !!selectedRoom.value && isRoomPinned(selectedRoom.value.userId))
 
 /** 当前房间成员的入团时间；名录未同步或查不到时为空，起点回落到归档日 */
 const roomJoinTime = ref('')
@@ -580,7 +589,9 @@ function roomItemHint(room: PocketRoom): string {
   if (room.userId === selectedUserId.value)
     hints.push('双击回到最新消息')
   if (unreadCountOf(room.userId))
-    hints.push('右键标为已读')
+    hints.push('右键置顶 / 标为已读')
+  else
+    hints.push('右键置顶')
   return hints.join(' · ')
 }
 
@@ -1301,19 +1312,31 @@ function onMenuPick(key: string) {
   void runCopy(key as PocketRoomCopyKey, target.message)
 }
 
-// ===== 左列房间条目的未读出口 =====
-// 进房清零要求首屏消息加载成功（见 settleBigRoomEnter）：频道失效 / 空页时那条路走不通，
-// 角标会一直挂着。右键条目直接标已读，是这类房间当前唯一的手动出口。
+// ===== 左列房间条目的右键菜单 =====
+// 两件事：置顶 / 取消置顶（展示顺序），以及未读的手动出口。
+// 未读出口的由来：进房清零要求首屏消息加载成功（见 settleBigRoomEnter），频道失效 / 空页时
+// 那条路走不通，角标会一直挂着；右键直接标已读是这类房间当前唯一的手动出口。
 
 const roomMenu = ref<{ x: number, y: number, room: PocketRoom } | null>(null)
 
-/** 按未读分部给出口：大 / 小房间是两个独立频道，进哪个清哪个 */
+/**
+ * 图钉（MediaIcon 实心壳）：菜单只接受组件，这里把 name 固定住；
+ * 列标记与菜单共用同一枚，避免「同一个概念两套图标语言」。
+ */
+const PinIcon = () => h(MediaIcon, { name: 'pushpinFilled' })
+
+/** 置顶恒有；未读按分部各给一条：大 / 小房间是两个独立频道，进哪个清哪个 */
 const roomMenuItems = computed<RoomMenuItem[]>(() => {
   const target = roomMenu.value
   if (!target)
     return []
+  const pinned = isRoomPinned(target.room.userId)
+  const items: RoomMenuItem[] = [
+    pinned
+      ? { key: 'unpin', label: '取消置顶', icon: PinIcon }
+      : { key: 'pin', label: '置顶', icon: PinIcon },
+  ]
   const unread = unreadChannelOf(target.room.userId)
-  const items: RoomMenuItem[] = []
   if (unread.big > 0)
     items.push({ key: 'read-room', label: '大房间标为已读', icon: Check })
   if (unread.small > 0)
@@ -1321,12 +1344,9 @@ const roomMenuItems = computed<RoomMenuItem[]>(() => {
   return items
 })
 
-/** 没有未读就不拦原生菜单：这个菜单只有「标已读」一件事 */
+/** 右键必定接管：置顶是常规操作，不再只在有未读时才弹菜单 */
 function onRoomContextMenu(room: PocketRoom, event: MouseEvent) {
   closeRoomMenu()
-  const unread = unreadChannelOf(room.userId)
-  if (!unread.big && !unread.small)
-    return
   event.preventDefault()
   closeMenu()
   roomMenu.value = { x: event.clientX, y: event.clientY, room }
@@ -1336,12 +1356,19 @@ function closeRoomMenu() {
   roomMenu.value = null
 }
 
-/** 清不掉时主进程广播会把角标打回来，用户直接看到真实结果，这里不做「成功」推断 */
+/**
+ * 置顶不走推断：按当前状态切换即可，顺序变化本身就是反馈（不弹 toast）。
+ * 标已读清不掉时主进程广播会把角标打回来，用户直接看到真实结果。
+ */
 async function onRoomMenuPick(key: string) {
   const target = roomMenu.value
   roomMenu.value = null
   if (!target)
     return
+  if (key === 'pin' || key === 'unpin') {
+    toggleRoomPin(target.room.userId)
+    return
+  }
   const channel = key === 'read-small' ? 'small' : 'room'
   await markRoomRead(target.room.userId, channel)
 }
@@ -1553,6 +1580,8 @@ onMounted(() => {
             <p class="side-sub">
               {{ rooms.length }} 个房间<template v-if="liveCount">
                 · {{ liveCount }} 个正在直播
+              </template><template v-if="pinnedRoomCount">
+                · {{ pinnedRoomCount }} 个置顶
               </template><template v-if="hiddenRoomCount">
                 · 已隐藏 {{ hiddenRoomCount }} 个
               </template>
@@ -1621,6 +1650,15 @@ onMounted(() => {
               <span class="room-meta">
                 <span class="room-name-row">
                   <span class="room-name ellipsis">{{ room.nickname }}</span>
+                  <!-- 置顶标记紧跟名字：名字不撑满整行（见 .room-name），标记才贴得住，
+                       名字起始位置也不因置顶而变 -->
+                  <el-tooltip
+                    v-if="room.pinned"
+                    content="已置顶（右键可取消）"
+                    placement="top"
+                  >
+                    <MediaIcon class="room-pin-ico" name="pushpinFilled" :size="13" />
+                  </el-tooltip>
                   <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
                   <span v-if="room.temporary" class="room-temp-tag">临时</span>
                   <span v-if="isRoomClosedOf(room.userId)" class="room-closed-tag">已关闭</span>
@@ -1751,6 +1789,20 @@ onMounted(() => {
                 <span v-if="tab.unread" class="unread-badge">{{ unreadText(tab.unread) }}</span>
               </button>
             </div>
+
+            <!-- 置顶入口：右键菜单之外的可发现入口，落在头部右端。
+                 左列的图钉是「已置顶」状态，这里是操作，同一枚图标串起两者；
+                 带文字是因为纯图标没人认得出来（藏起来就等于没有入口） -->
+            <button
+              type="button"
+              class="head-pin-btn"
+              :class="{ 'is-on': selectedRoomPinned }"
+              :title="selectedRoomPinned ? '取消置顶：不再排在左列最前' : '置顶：把该房间排到左列最前'"
+              @click="toggleRoomPin(selectedRoom.userId)"
+            >
+              <MediaIcon name="pushpinFilled" :size="13" />
+              {{ selectedRoomPinned ? '已置顶' : '置顶' }}
+            </button>
           </header>
 
           <!-- 右区双栏：左侧聊天流，右侧成员信息卡 + 相册 -->
@@ -2855,11 +2907,26 @@ onMounted(() => {
   min-width: 0;
 }
 
+/* 名字不撑满整行：置顶图钉要贴得住名字，撑满会把标记推到行尾。
+ * 过长时照常收缩截断（min-width: 0 + ellipsis），不挤掉右侧标记 */
 .room-name {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   font-size: 13px;
   color: var(--el-text-color-primary);
+}
+
+/* 名字行里的状态标签仍靠右：名字不再撑满后，靠 auto 外边距占住这段空隙 */
+.room-name-row .room-temp-tag,
+.room-name-row .room-closed-tag {
+  margin-left: auto;
+}
+
+/* 置顶标记：图钉（实心壳，手写 SVG 见 MediaIcon），紧跟名字。
+ * 13px 是下限——11px 时针脚缩到不足一个物理像素，糊成小圆点 */
+.room-pin-ico {
+  flex: none;
+  color: var(--color-rooms);
 }
 
 .room-team {
@@ -2907,7 +2974,8 @@ onMounted(() => {
   flex: none;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  /* 星标 11 + 队伍徽标 16 + 间隔 = 29，低于头像 42，两条都在也不撑高行 */
+  gap: 2px;
   width: 38px;
   margin-left: 6px;
 }
@@ -2980,6 +3048,43 @@ onMounted(() => {
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+/* 头部置顶按钮：右键菜单之外的可发现入口。
+ * 未置顶是中性底（提示可操作），置顶后转房间青 + 淡底 + 细描边，与左列图钉标记同一观感。
+ * min-width 固定「置顶 / 已置顶」两态的宽度，切换时不推动左侧页签 */
+.head-pin-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 74px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--el-text-color-regular);
+  background: var(--el-fill-color-light);
+  /* 暗色主题下填充与页底差得少，靠一圈内描边把按钮边界交代清楚 */
+  box-shadow: inset 0 0 0 1px var(--el-border-color-lighter);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+
+  &:hover {
+    color: var(--color-rooms);
+    background: color-mix(in srgb, var(--color-rooms) 10%, transparent);
+  }
+
+  &.is-on {
+    color: var(--color-rooms);
+    background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 30%, transparent);
+  }
 }
 
 /* 消息范围切换（只看房主 / 全部消息）：聊天区右上角，中性配色。
@@ -3862,9 +3967,12 @@ onMounted(() => {
 
 .msg-image {
   display: block;
-  max-width: 240px;
+  /* 宽高由组件按原图算定（见 PreviewImage 的 boxStyle）；这两行只兜窄窗与超限 */
+  max-width: min(240px, 100%);
   max-height: 280px;
   border-radius: var(--msg-radius);
+  /* 加载前/透明图的底色，避免空白一块再突然出图 */
+  background: var(--el-fill-color-light);
   cursor: zoom-in;
 }
 

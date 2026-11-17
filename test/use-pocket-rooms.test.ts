@@ -436,7 +436,7 @@ beforeEach(() => {
   vi.useFakeTimers()
 })
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers()
   activeScope?.stop()
   activeScope = null
@@ -446,6 +446,10 @@ afterEach(() => {
   vi.clearAllMocks()
   // 登录态是模块级单例：收尾必须在实例全部 stop 之后，翻转才不会唤醒 watch(loggedIn)
   authMock.setLoggedIn(true)
+  // 置顶名单同为模块级单例（node 环境没有 localStorage，内存态仍要复位）
+  const { pinnedIds, toggleRoomPin } = (await import('@renderer/stores/room-pins')).useRoomPinsStore()
+  for (const userId of [...pinnedIds.value])
+    toggleRoomPin(userId)
 })
 
 describe('use-pocket-rooms / 房间列表构建', () => {
@@ -665,6 +669,62 @@ describe('use-pocket-rooms / 左列排序', () => {
 
     expect(api.rooms.value.map(room => [room.userId, !!room.temporary]))
       .toEqual([[10004, true], [10001, false], [10002, false], [10003, false]])
+  })
+
+  /** 置顶切换直接打 store：与页面右键菜单同一个入口，连带验证 watch(pinnedIds) 的重排 */
+  async function pin(userId: number) {
+    const { toggleRoomPin } = await import('@renderer/stores/room-pins')
+    toggleRoomPin(userId)
+    await nextTick()
+  }
+
+  it('置顶优先于直播与未读；取消置顶回到自然排序', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+    setUnread({ 10001: 9 })
+    await nextTick()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+
+    await pin(10003)
+    // 置顶是显式意图：既压过在播的 10001，也压过它的未读
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+
+    await pin(10003)
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+  })
+
+  it('多个置顶：置顶档内仍按自然判据（直播、未读、昵称依次兜底）', async () => {
+    const { api, setUnread } = await setup(sortFixture())
+    await api.load()
+
+    await pin(10002)
+    await pin(10003)
+    setUnread({ 10002: 4 })
+    await nextTick()
+
+    // 10002 / 10003 同档 → 有未读的 10002 在前；10001 没置顶，在播也排后面
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10002, 10003, 10001])
+  })
+
+  it('置顶压得过「已关闭沉底」：关了的房间用户点名要就照样排最前', async () => {
+    const { api, setClosedChannels } = await setup(sortFixture())
+    setClosedChannels([{ serverId: 'srv-10001', channelId: 'ch-archive' }])
+    await api.load()
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10002, 10003, 10001])
+
+    await pin(10001)
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+  })
+
+  it('置顶压不过临时房间：刚点进来的那个恒在最前', async () => {
+    const { api } = await setup(sortFixture())
+    await api.load()
+    await pin(10001)
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002, 10003])
+
+    await api.openTemporaryRoom(10004)
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10004, 10001, 10002, 10003])
   })
 
   it('多个有未读：非直播档内按最新一条未读的时刻降序，昵称只兜底', async () => {
