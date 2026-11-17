@@ -13,6 +13,7 @@ import type { AppConfig, ConfigKey } from '@common/app-config'
 import type { FeedbackInput, FeedbackMetaResponse } from '@common/feedback'
 import type { LiveDanmaku } from '@common/live-danmaku'
 import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
+import type { MemberTeamPromotion } from '@common/member-team-promotion'
 import type { PocketClientProfileId } from '@common/pocket-client-profile'
 import type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { FfmpegProblem, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
@@ -49,6 +50,8 @@ export type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctIte
 
 // 类型随契约一起暴露（preload/index.ts 实现侧与渲染端引用）
 export type { MemberFlag, MemberFlagKind }
+// 预备生的本地升格：ownerId 只留在主进程，跨进程只传升格内容
+export type { MemberTeamPromotion }
 // 客户端身份档位（口袋48 / 塞纳河48）：跨进程传递与界面选项共用，来源 common
 export type { PocketClientProfileId }
 export type MemberInfo = StarInfoItem & { teamColor: string }
@@ -71,6 +74,8 @@ export interface MemberTreeTeamPayload {
   value: string
   /** 队伍徽章（可能是相对路径，展示前需归一化） */
   teamBadge: string
+  /** 队伍色（teamInfo 派生）；旧快照缺字段时为空串 */
+  teamColor?: string
   children: MemberTreeLeafNode[]
 }
 
@@ -512,6 +517,10 @@ interface StaticIpcInvokeMap {
   /** 批量幂等合并（口袋关注同步）：整批一次读改写 */
   addMemberFlags: InvokeSpec<[kind: MemberFlagKind, userIds: number[]], void>
   removeMemberFlag: InvokeSpec<[kind: MemberFlagKind, userId: number], void>
+  /** 预备生的本地升格（归属当前登录账号）：读取只回本人，写入由主进程补身份 */
+  getMemberTeamPromotions: InvokeSpec<[], MemberTeamPromotion[]>
+  setMemberTeamPromotion: InvokeSpec<[promotion: MemberTeamPromotion], void>
+  removeMemberTeamPromotion: InvokeSpec<[userId: number], void>
   getConfig: InvokeSpec<[key: ConfigKey], string>
   setConfig: InvokeSpec<[key: ConfigKey, value: string], void>
   openPath: InvokeSpec<[filePath: string], void>

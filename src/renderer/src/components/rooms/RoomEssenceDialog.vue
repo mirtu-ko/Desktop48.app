@@ -104,6 +104,7 @@ const essenceImageUrls = computed(() =>
                 :preview-list="essenceImageUrls"
                 :initial-index="essenceImageUrls.indexOf(item.imageUrl)"
                 :max-width="300"
+                :max-height="260"
               />
             </div>
           </article>

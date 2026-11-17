@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import type { LiveListItem } from '@renderer/services/api-types'
 import type { MemberDetail } from '@renderer/utils/member-merge'
+import { isTraineeTeam } from '@common/member-team-promotion'
 import { Star, StarFilled } from '@element-plus/icons-vue'
+import RoomPromotionDialog from '@renderer/components/rooms/RoomPromotionDialog.vue'
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { useFloatPlayersStore } from '@renderer/stores/float-players'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
+import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promotion'
 import Tools from '@renderer/utils/tools'
 import dayjs from 'dayjs'
+import { ElMessage } from 'element-plus'
 import { computed, ref, watch } from 'vue'
 
 /** 左栏房间条目（PocketRoom 的最小子集；live 为该成员当前在播直播） */
@@ -52,8 +57,54 @@ watch(
 )
 
 const cardAvatar = computed(() => member.value?.avatar || props.avatar)
-const cardTeamName = computed(() => member.value?.teamName || props.teamName)
-const cardTeamColor = computed(() => member.value?.teamColor || props.teamColor)
+
+/** 展示队伍用房间页同一份服务端原值派生，不再用名录反查另起一套口径 */
+const { promotionOf, displayTeamOf, clearPromotion } = useMemberTeamPromotionStore()
+const shownTeam = computed(() => displayTeamOf(props.userId, props.teamName, props.teamColor))
+const promotion = computed(() => promotionOf(props.userId))
+const isTrainee = computed(() => isTraineeTeam(props.teamName))
+
+/** 升格三态：还没设 / 她仍是预备生 / 她已正式升格（升格后本地记录可清） */
+type PromotionState = 'none' | 'active' | 'fulfilled'
+const promotionState = computed<PromotionState>(() => {
+  if (!promotion.value)
+    return 'none'
+  return isTrainee.value ? 'active' : 'fulfilled'
+})
+const promotionButtonLabel = computed(() => ({
+  none: '让她升格（仅本机）',
+  active: '调整升格队伍',
+  fulfilled: '她已正式升格，点击清除本机记录',
+})[promotionState.value])
+
+/** 弹窗开关：队伍目录、预演与写入都在 RoomPromotionDialog 里，这里只管按钮三态 */
+const promotionOpen = ref(false)
+const clearingRecord = ref(false)
+
+function onPromotionButton() {
+  if (promotionState.value === 'fulfilled')
+    void clearFulfilledPromotion()
+  else
+    promotionOpen.value = true
+}
+
+/** 她已正式升格：清掉不再生效的本地记录 */
+async function clearFulfilledPromotion() {
+  if (clearingRecord.value)
+    return
+  clearingRecord.value = true
+  try {
+    await clearPromotion(props.userId)
+    ElMessage.success(`她已正式升格，${props.nickname} 的本机记录已清除`)
+  }
+  catch (error) {
+    console.error('[RoomProfileCard]清除已升格记录失败:', error)
+    ElMessage.error('清除失败，请稍后重试')
+  }
+  finally {
+    clearingRecord.value = false
+  }
+}
 
 /** 生日行：有生日就带星座，无生日整行隐藏 */
 const birthdayLine = computed(() => {
@@ -103,11 +154,27 @@ function enterLive() {
           {{ nickname }}
         </h4>
       </div>
+      <button
+        v-if="promotionState !== 'none' || isTrainee"
+        type="button"
+        class="promote-btn"
+        :class="{ 'is-revert': promotionState !== 'none', 'is-fulfilled': promotionState === 'fulfilled' }"
+        :title="promotionButtonLabel"
+        :aria-label="promotionButtonLabel"
+        @click="onPromotionButton"
+      >
+        <span v-if="promotionState === 'none'">升</span>
+        <MediaIcon
+          v-else
+          :name="promotionState === 'fulfilled' ? 'check' : 'undo'"
+          :size="11"
+        />
+      </button>
       <span
-        v-if="cardTeamName"
+        v-if="shownTeam.teamName"
         class="profile-team"
-        :style="Tools.colorVarStyle('--tb-color', cardTeamColor)"
-      >{{ Tools.shortTeamName(cardTeamName) }}</span>
+        :style="Tools.colorVarStyle('--tb-color', shownTeam.teamColor)"
+      >{{ Tools.shortTeamName(shownTeam.teamName) }}</span>
     </div>
 
     <dl v-if="member" class="profile-info">
@@ -168,6 +235,15 @@ function enterLive() {
   <span v-else class="profile-offline">
     未开播
   </span>
+
+  <!-- 预备生升格弹窗：队伍目录与写入都在子组件里，资料卡只给身份与开关 -->
+  <RoomPromotionDialog
+    v-model="promotionOpen"
+    :user-id="userId"
+    :nickname="nickname"
+    :avatar="cardAvatar"
+    :team-name="teamName"
+  />
 </template>
 
 <style scoped lang="scss">
@@ -232,6 +308,82 @@ function enterLive() {
   color: #fff;
   background: linear-gradient(135deg, color-mix(in srgb, var(--tb-color) 72%, #fff), var(--tb-color));
   box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--tb-color) 55%, transparent);
+}
+
+/* 升格入口：20px 单字徽章。渐变亮底 = 还没升格，浅底描边 = 已设好队伍，绿勾 = 她已正式升格 */
+.promote-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  background: radial-gradient(72% 72% at 32% 24%, rgba(255, 255, 255, 0.55), transparent 62%), var(--gradient-brand);
+  box-shadow: 0 2px 7px -3px rgba(var(--brand-rgb), 0.7);
+  cursor: pointer;
+  /* 光晕走 filter：box-shadow 要留给 hover 的描边，同一属性挂两条动画会互相覆盖 */
+  animation: promote-breathe 3.4s ease-in-out infinite;
+  transition:
+    box-shadow 0.22s ease,
+    transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  &:hover {
+    box-shadow:
+      0 3px 10px -3px rgba(var(--brand-rgb), 0.7),
+      0 0 0 3px rgba(var(--brand-rgb), 0.13);
+    transform: scale(1.1);
+  }
+
+  &:active {
+    transform: scale(0.94);
+  }
+
+  /* 已设好队伍（含她已正式升格）：收成浅底描边，不再抢眼 */
+  &.is-revert {
+    color: var(--el-text-color-secondary);
+    background: var(--el-fill-color-light);
+    box-shadow: inset 0 0 0 1px var(--el-border-color);
+    filter: none;
+    animation: none;
+
+    &:hover {
+      color: var(--el-text-color-primary);
+      background: var(--el-fill-color);
+    }
+  }
+
+  /* 她已正式升格：换完成色 + 勾，点击直接清本地记录而不再开弹窗 */
+  &.is-fulfilled {
+    color: var(--el-color-success);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--el-color-success) 40%, transparent);
+  }
+}
+
+@keyframes promote-breathe {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 2px rgba(var(--brand-rgb), 0.12));
+  }
+
+  50% {
+    filter: drop-shadow(0 0 5px rgba(var(--brand-rgb), 0.42));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .promote-btn {
+    animation: none;
+  }
+
+  .promote-btn:hover {
+    transform: none;
+  }
 }
 
 .profile-info {

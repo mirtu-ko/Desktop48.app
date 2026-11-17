@@ -12,6 +12,7 @@ import { useHomeUpdateToast } from '@renderer/composables/use-home-update-toast'
 import { useMemberSync } from '@renderer/composables/use-member-sync'
 import { useNativeTitle } from '@renderer/composables/use-native-title'
 import EventBus from '@renderer/services/event-bus'
+import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promotion'
 import { installPocketUnread, usePocketUnreadStore } from '@renderer/stores/pocket-unread'
 import Constants from '@renderer/utils/constants'
 import { scrollPageToTop } from '@renderer/utils/page-scroll'
@@ -134,6 +135,8 @@ useHomeUpdateToast(isHome)
 // ffmpeg 环境自检完成后再访问数据库，避免初始化阶段触发数据依赖
 watch(isInitialized, async (ready) => {
   if (ready) {
+    // 本地升格是账号级配置：启动灌一次，登录态变化由 store 自己重拉
+    void useMemberTeamPromotionStore().ensureLoaded()
     await ensureMembers()
   }
 })

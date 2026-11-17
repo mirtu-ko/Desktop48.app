@@ -68,6 +68,8 @@ export interface MemberTreeMemberNode {
 /** 队伍节点 */
 export interface MemberTreeTeamNode extends MemberTreeTeamSummary {
   teamBadge: string
+  /** 队伍色（teamInfo 派生），供升格选项与徽标共用 */
+  teamColor: string
   children: MemberTreeMemberNode[]
 }
 
@@ -158,6 +160,7 @@ export function buildMemberTree(
           value: String(team.teamId),
           // 队伍徽章（seineTeamBadge，可能是相对路径，渲染端负责归一化），供成员页分组标题展示
           teamBadge: teamBadgeOf(team.teamId),
+          teamColor: teamColorOf(teamInfo, team.teamId) || '',
           children: team.members.map((member): MemberTreeMemberNode => ({
             label: member.realName || '',
             value: String(member.userId),
