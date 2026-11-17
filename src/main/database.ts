@@ -1,5 +1,6 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
 import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
+import type { MemberTeamPromotion, MemberTeamPromotionRecord } from '@common/member-team-promotion'
 import type {
   AllMemberItem,
   DomainInfoItem,
@@ -18,6 +19,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { CONFIG_DEFAULTS, CONFIG_ENUMS } from '@common/app-config'
 import { assertMemberFlagKind } from '@common/member-flags'
+import { assertMemberTeamPromotion, normalizeMemberTeamPromotions } from '@common/member-team-promotion'
 import { app } from 'electron'
 import data from './data'
 import { addMemberFlagId, addMemberFlagIds, removeMemberFlagId, resolveMemberFlags } from './domain/member-flags'
@@ -79,6 +81,12 @@ export interface DatabaseShape {
   blockedMemberIds?: Array<number | string>
   /** 已关注成员的 userId 列表（宽容 number|string，与 blockedMemberIds 同款设计） */
   followedMemberIds?: Array<number | string>
+  /**
+   * 预备生的本地升格记录（仅本机生效，不写回口袋账号）。
+   * 记录归属口袋账号（ownerId）：同一账号重登仍有效，换号后不再套用；
+   * 同一账号的同一成员只保留最后一条。
+   */
+  memberTeamPromotions?: MemberTeamPromotionRecord[]
   config?: AppConfig
   /** 兼容旧库残留字段（init() 清理）：迁移来源 / 已废弃的持久化树 / 已停止拉取的精简名单 */
   hiddenMemberIds?: number[]
@@ -143,6 +151,9 @@ class Database {
     // 读路径（memberFlagIds）才可能是纯读——它在旧库上被调用时会同步 fsync 全量数据，阻塞主进程。
     this.db.blockedMemberIds = normalizeFlagIds(this.db.blockedMemberIds)
     this.db.followedMemberIds = normalizeFlagIds(this.db.followedMemberIds)
+    // 本地升格记录：缺字段保持缺失（新库首次设置时才落盘），存在时清掉脏记录并去重
+    if (this.db.memberTeamPromotions !== undefined)
+      this.db.memberTeamPromotions = normalizeMemberTeamPromotions(this.db.memberTeamPromotions)
 
     // memberTree 是内存派生数据，清理旧库中的持久化副本
     delete this.db.memberTree
@@ -303,6 +314,48 @@ class Database {
     assertMemberFlagKind(kind)
     const key = memberFlagKey(kind)
     this.db[key] = removeMemberFlagId(this.db[key], userId)
+    this.storage.write(this.db)
+  }
+
+  /** 读取当前账号的升格：只回该账号、且不带 ownerId（渲染层不接触账号身份） */
+  public getMemberTeamPromotions(ownerId: string): MemberTeamPromotion[] {
+    return (this.db.memberTeamPromotions || [])
+      .filter(item => item.ownerId === ownerId)
+      .map(({ userId, teamName, teamColor }) => ({ userId, teamName, teamColor }))
+  }
+
+  /** 写入 / 覆盖同一账号对同一成员的升格：身份由主进程给出，入参只保留白名单字段 */
+  public setMemberTeamPromotion(promotion: MemberTeamPromotion, ownerId: string) {
+    assertMemberTeamPromotion(promotion)
+    const owner = String(ownerId ?? '').trim()
+    if (!owner)
+      throw new TypeError('Invalid member team promotion ownerId')
+    const record: MemberTeamPromotionRecord = {
+      ownerId: owner,
+      userId: Number(promotion.userId),
+      teamName: promotion.teamName.trim(),
+      teamColor: promotion.teamColor,
+    }
+    const next = (this.db.memberTeamPromotions || [])
+      .filter(item => !(item.ownerId === owner && Number(item.userId) === record.userId))
+    next.push(record)
+    this.db.memberTeamPromotions = next
+    this.storage.write(this.db)
+  }
+
+  /** 取消升格：只删当前账号的记录，不影响其他账号；记录不存在时不写盘 */
+  public removeMemberTeamPromotion(ownerId: string, userId: number) {
+    const owner = String(ownerId ?? '').trim()
+    if (!owner)
+      throw new TypeError('Invalid member team promotion ownerId')
+    const id = Number(userId)
+    if (!Number.isFinite(id))
+      throw new TypeError(`Invalid member team promotion userId: ${String(userId)}`)
+    const current = this.db.memberTeamPromotions || []
+    const next = current.filter(item => !(item.ownerId === owner && Number(item.userId) === id))
+    if (next.length === current.length)
+      return
+    this.db.memberTeamPromotions = next
     this.storage.write(this.db)
   }
 

@@ -18,6 +18,7 @@ import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
+import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promotion'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { copyText } from '@renderer/utils/clipboard'
 import { debugLog } from '@renderer/utils/debug'
@@ -109,6 +110,16 @@ function openDateDialog() {
 }
 
 const { findMemberByUserId } = useMemberDirectoryStore()
+
+/** 房间展示队伍：整列一次派生，模板只读 displayTeam；服务端原值仍留在 room 上 */
+const { displayTeamOf } = useMemberTeamPromotionStore()
+const displayRooms = computed(() => rooms.value.map(room => ({
+  ...room,
+  displayTeam: displayTeamOf(room.userId, room.teamName, room.teamColor),
+})))
+const selectedRoomTeam = computed(() => selectedRoom.value
+  ? displayTeamOf(selectedRoom.value.userId, selectedRoom.value.teamName, selectedRoom.value.teamColor)
+  : { teamName: '', teamColor: '' })
 
 /** 当前房间成员的入团时间；名录未同步或查不到时为空，起点回落到归档日 */
 const roomJoinTime = ref('')
@@ -1576,7 +1587,7 @@ onMounted(() => {
         <div v-else-if="rooms.length" class="room-list detail-scroll">
           <!-- 关闭钮是条目的兄弟节点而非子节点：条目本体是 <button>，嵌套交互元素会破坏语义 -->
           <div
-            v-for="room in rooms"
+            v-for="room in displayRooms"
             :key="room.userId"
             class="room-wrap"
             :class="{ 'is-temp': room.temporary }"
@@ -1630,10 +1641,10 @@ onMounted(() => {
                   <el-icon class="room-follow-ico"><StarFilled /></el-icon>
                 </el-tooltip>
                 <span
-                  v-if="room.teamName"
+                  v-if="room.displayTeam.teamName"
                   class="room-team"
-                  :style="Tools.colorVarStyle('--tb-color', room.teamColor)"
-                >{{ Tools.shortTeamName(room.teamName) }}</span>
+                  :style="Tools.colorVarStyle('--tb-color', room.displayTeam.teamColor)"
+                >{{ Tools.shortTeamName(room.displayTeam.teamName) }}</span>
               </span>
             </button>
 
@@ -1702,10 +1713,10 @@ onMounted(() => {
                   {{ selectedRoom.nickname }}
                 </h3>
                 <span
-                  v-if="selectedRoom.teamName"
+                  v-if="selectedRoomTeam.teamName"
                   class="room-team"
-                  :style="Tools.colorVarStyle('--tb-color', selectedRoom.teamColor)"
-                >{{ Tools.shortTeamName(selectedRoom.teamName) }}</span>
+                  :style="Tools.colorVarStyle('--tb-color', selectedRoomTeam.teamColor)"
+                >{{ Tools.shortTeamName(selectedRoomTeam.teamName) }}</span>
                 <span v-if="selectedRoom.temporary" class="room-temp-tag">临时</span>
                 <span v-if="selectedRoom.live" class="main-live-tag">直播中</span>
               </div>

@@ -1,6 +1,6 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
 import type { FeedbackInput } from '@common/feedback'
-import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, NetRequestOptions, PocketClientProfileId, PocketDanmakuBatch, PocketRoomBatch, PocketRoomReplyTarget, PocketUnreadBatch, RoomAlbumDownloadProgress, RoomAlbumDownloadSource, TaskSnapshot, UpdaterState } from './ipc-contract'
+import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, MemberTeamPromotion, NetRequestOptions, PocketClientProfileId, PocketDanmakuBatch, PocketRoomBatch, PocketRoomReplyTarget, PocketUnreadBatch, RoomAlbumDownloadProgress, RoomAlbumDownloadSource, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
 
 /**
@@ -54,6 +54,9 @@ const api = {
   addMemberFlag: (kind: MemberFlagKind, userId: number) => invokeIpc('addMemberFlag', kind, userId),
   addMemberFlags: (kind: MemberFlagKind, userIds: number[]) => invokeIpc('addMemberFlags', kind, userIds),
   removeMemberFlag: (kind: MemberFlagKind, userId: number) => invokeIpc('removeMemberFlag', kind, userId),
+  getMemberTeamPromotions: () => invokeIpc('getMemberTeamPromotions'),
+  setMemberTeamPromotion: (promotion: MemberTeamPromotion) => invokeIpc('setMemberTeamPromotion', promotion),
+  removeMemberTeamPromotion: (userId: number) => invokeIpc('removeMemberTeamPromotion', userId),
 
   // ===== 应用配置 =====
   // 对端：main/ipc/register-database-ipc.ts

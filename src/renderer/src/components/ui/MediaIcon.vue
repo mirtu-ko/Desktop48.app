@@ -58,6 +58,12 @@ const ICONS = {
   trophy: 'M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4v1a4 4 0 0 0 3 3.87M17 6h3v1a4 4 0 0 1-3 3.87',
   // 弹幕摆放到左侧黑边（左分栏）：外框 + 左侧竖分隔线
   panelLeft: 'M3 4h18v16H3zM10 4v16',
+  // 确认勾（升格选中态）：一笔折角，与 close 的叉成对
+  check: 'M5 12.5 10 17.5 19 6.5',
+  // 爱心（实心壳）：升格弹窗的「粉丝心意」标记
+  heartFilled: 'M12 21C12 21 3.4 15.3 3.4 9.6A4.85 4.85 0 0 1 12 6.1a4.85 4.85 0 0 1 8.6 3.5C20.6 15.3 12 21 12 21z',
+  // 还原（回转折角箭头）：撤销本地升格，与 rotateLeft 的整圈回环区分开
+  undo: 'M9 14 4 9l5-5M20 20v-7a4 4 0 0 0-4-4H4',
 } as const
 
 const filled = computed(() => props.name.endsWith('Filled'))

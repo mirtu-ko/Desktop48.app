@@ -21,6 +21,8 @@
   --shadow-lg: 0 12px 28px -8px rgba(var(--shadow-rgb), 0.18), 0 30px 60px -12px rgba(var(--shadow-rgb), 0.3);
   /* 品牌主色光晕：渐变按钮 / 激活态使用 */
   --shadow-glow: 0 6px 18px -6px rgba(var(--brand-rgb), 0.55);
+  /* 蒙版底色：各弹层按需要的透明度取用，不在选择器里重复写三元组 */
+  --overlay-scrim-rgb: 20, 18, 32;
 
   /* ===== 圆角体系：xs 用于标签 / 徽章等小元素，sm 以上用于面板与卡片 ===== */
   --radius-xs: 4px;
@@ -799,7 +801,7 @@ body,
 
 /* 蒙版：让背景虚化退场，而不是被纯黑盖住 */
 .detail-card-overlay.el-overlay {
-  background: rgba(20, 18, 32, 0.5);
+  background: rgba(var(--overlay-scrim-rgb), 0.5);
   backdrop-filter: blur(6px);
 }
 
@@ -841,6 +843,35 @@ body,
 /* 按日期查看弹层：与精华弹层同宽，日期条占用后列表自己滚 */
 .detail-card-dialog.room-date-dialog.el-dialog {
   width: min(92vw, 660px);
+}
+
+/* ===== 预备生升格弹窗（房间资料卡） =====
+ * 弹窗根节点是 el-dialog 的 Teleport 内容，组件 scoped 样式够不到，
+ * 所以外壳（底色 / 圆角 / EP 内部盒的 padding / 蒙版）写在这里；插槽内容仍在组件内。 */
+.promote-overlay.el-overlay {
+  background: rgba(var(--overlay-scrim-rgb), 0.42);
+  backdrop-filter: blur(6px);
+}
+
+.promote-dialog.el-dialog {
+  --el-dialog-padding-primary: 20px;
+  --el-dialog-border-radius: 22px;
+  /* 队色缺省：某个队伍没下发颜色时整弹窗统一回落到品牌紫 */
+  --tc: var(--brand-primary);
+
+  width: min(400px, 92vw);
+  background: radial-gradient(120% 90% at 50% -30%, rgba(var(--brand-rgb), 0.16), transparent 62%), var(--el-bg-color);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+
+  .el-dialog__header {
+    padding: 0;
+    margin: 0;
+  }
+
+  .el-dialog__footer {
+    padding-top: 14px;
+  }
 }
 
 /* 卡面：左右怎么分栏由调用方定（成员卡是上立绘下操作条，专辑卡是左专辑栏右曲目） */

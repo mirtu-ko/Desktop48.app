@@ -12,6 +12,10 @@ vi.mock('../src/main/database', () => ({
   },
 }))
 
+vi.mock('../src/main/pocket48/pocket-auth', () => ({
+  getAuthState: vi.fn(() => ({ loggedIn: false, userId: '', mobileMasked: '' })),
+}))
+
 describe('registerDatabaseIPC 通道注册', () => {
   beforeEach(() => {
     vi.mocked(handleTraced).mockClear()
@@ -28,12 +32,15 @@ describe('registerDatabaseIPC 通道注册', () => {
       'getConfig',
       'getMemberFlags',
       'getMemberInfo',
+      'getMemberTeamPromotions',
       'getMemberTree',
       'hasMembers',
       'removeMemberFlag',
+      'removeMemberTeamPromotion',
       'saveMemberData',
       'setConfig',
       'setMemberFlags',
+      'setMemberTeamPromotion',
     ])
   })
 })

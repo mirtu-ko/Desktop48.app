@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { LiveListItemView } from '@renderer/services/api-types'
 import { StarFilled, UserFilled, VideoCameraFilled } from '@element-plus/icons-vue'
+import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promotion'
 import { formatRelativeDate } from '@renderer/utils/relative-date'
 import Tools from '@renderer/utils/tools'
 import { formatViewNum } from '@renderer/utils/view-num'
@@ -33,6 +34,12 @@ const coverSrc = computed(() => {
   const separator = source.includes('?') ? '&' : '?'
   return `${source}${separator}_r=${encodeURIComponent(String(props.imageVersion))}`
 })
+
+/** 展示用队伍：预备生的本地升格只在直播 / 录播卡片生效 */
+const { displayTeamOf } = useMemberTeamPromotionStore()
+const team = computed(() =>
+  displayTeamOf(props.item.userInfo.userId, props.item.member?.teamName, props.item.member?.teamColor),
+)
 
 // 直播类型角标：直播 / 录屏 / 电台
 const liveBadge = computed(() => {
@@ -103,11 +110,11 @@ const liveBadge = computed(() => {
           {{ item.userInfo.nickname }}
         </button>
         <span
-          v-if="item.member?.teamName"
+          v-if="team.teamName"
           class="team-badge"
-          :style="Tools.colorVarStyle('--tb-color', item.member.teamColor)"
+          :style="Tools.colorVarStyle('--tb-color', team.teamColor)"
         >
-          {{ Tools.shortTeamName(item.member.teamName) }}
+          {{ Tools.shortTeamName(team.teamName) }}
         </span>
       </div>
       <p class="live-date" :title="item.date">

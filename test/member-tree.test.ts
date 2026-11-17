@@ -39,6 +39,9 @@ describe('buildMemberTree（database.ts 抽出的纯函数）', () => {
     const tree = buildMemberTree(members, teams, groups)
     const sii = tree.find(g => g.groupName === 'SNH48')!.children.find(t => t.teamName === 'TEAM SII')!
     expect(sii.teamBadge).toBe('badge-sii.png')
+    // 队伍节点也带队色：升格选项与徽标共用同一份 teamInfo，不再另抄名单
+    expect(sii.teamColor).toBe('#f00')
+    expect(tree.find(g => g.groupName === 'SNH48')!.children.find(t => t.teamName === 'TEAM NII')!.teamColor).toBe('#0f0')
     // 有队伍色的成员：覆盖旧色
     expect(sii.children[0].teamColor).toBe('#f00')
     // 无队伍色记录的成员：取队伍色

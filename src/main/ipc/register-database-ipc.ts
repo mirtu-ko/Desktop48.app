@@ -7,8 +7,19 @@
  */
 import type { ConfigKey } from '@common/app-config'
 import type { MemberFlagKind } from '@common/member-flags'
+import type { MemberTeamPromotion } from '@common/member-team-promotion'
+import { promotionOwnerId } from '@common/member-team-promotion'
 import { Database } from '../database'
+import { getAuthState } from '../pocket48/pocket-auth'
 import { handleTraced } from './trace'
+
+/** 升格归属只认主进程的登录凭证；身份不全时拒绝写入 */
+function requireOwnerId(): string {
+  const owner = promotionOwnerId(getAuthState())
+  if (!owner)
+    throw new Error('登录口袋账号后才能设置升格')
+  return owner
+}
 
 export function registerDatabaseIPC(): void {
   const db = () => Database.instance()
@@ -22,6 +33,12 @@ export function registerDatabaseIPC(): void {
   handleTraced('addMemberFlag', async (_event, kind: MemberFlagKind, userId: number) => db().addMemberFlag(kind, userId))
   handleTraced('addMemberFlags', async (_event, kind: MemberFlagKind, userIds: number[]) => db().addMemberFlags(kind, userIds))
   handleTraced('removeMemberFlag', async (_event, kind: MemberFlagKind, userId: number) => db().removeMemberFlag(kind, userId))
+  handleTraced('getMemberTeamPromotions', async () => {
+    const owner = promotionOwnerId(getAuthState())
+    return owner ? db().getMemberTeamPromotions(owner) : []
+  })
+  handleTraced('setMemberTeamPromotion', async (_event, promotion: MemberTeamPromotion) => db().setMemberTeamPromotion(promotion, requireOwnerId()))
+  handleTraced('removeMemberTeamPromotion', async (_event, userId: number) => db().removeMemberTeamPromotion(requireOwnerId(), userId))
   handleTraced('getConfig', async (_event, key: ConfigKey) => db().getConfig(key))
   handleTraced('setConfig', async (_event, key: ConfigKey, value: string) => db().setConfig(key, value))
   // memberTree 是内存派生数据（不落盘），直接返回内存字段
