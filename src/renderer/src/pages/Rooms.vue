@@ -2530,7 +2530,8 @@ onMounted(() => {
   display: flex;
   flex: none;
   flex-direction: column;
-  width: 300px;
+  /* 窗口 ≥1000 时稳定 300；更窄时按 30vw 收，最低 240，把余量让给消息流 */
+  width: clamp(240px, 30vw, 300px);
   min-height: 0;
   border-radius: var(--radius-card);
   background: var(--glass-fill);
@@ -3098,6 +3099,9 @@ onMounted(() => {
   padding: 10px 16px 0;
 }
 
+/* 只有精华条让位：右侧两个控件定宽不压缩，否则窄栏里按钮会被挤到文字逐字换行
+ * （<button> 的 min-width 是 auto，中文没有断词点，压缩后每行只剩一个字） */
+
 /* 顶部精华条：房间置顶精华消息的入口，展示最新一条。
  * 与右侧消息范围同一行——两者都是消息区的次级控件，不额外占一行高度。
  * 整条可点，正文单行省略；没有精华时整条不渲染（见模板 v-if） */
@@ -3105,6 +3109,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
+  overflow: hidden;
   min-width: 0;
   max-width: min(520px, 66%);
   /* 独占左侧，把消息范围推到右边；无精华条时 scope-tabs 仍靠右（justify-content） */
@@ -3135,9 +3140,14 @@ onMounted(() => {
   color: color-mix(in srgb, var(--color-follow) 62%, #000);
 }
 
+/* 昵称可压缩并省略：栏窄时先牺牲它，正文与标签仍完整 */
 .essence-bar-nick {
-  flex: none;
+  flex: 0 1 auto;
+  overflow: hidden;
+  min-width: 0;
   color: var(--el-text-color-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .essence-bar-text {
@@ -3158,6 +3168,7 @@ onMounted(() => {
 
 .scope-tabs {
   display: flex;
+  flex: none;
   gap: 2px;
   padding: 2px;
   border-radius: var(--radius-pill);
@@ -3166,6 +3177,9 @@ onMounted(() => {
 
 .scope-tab {
   @extend %pill-tab;
+
+  flex: none;
+  white-space: nowrap;
 
   &:hover {
     color: var(--el-text-color-primary);
@@ -3184,8 +3198,10 @@ onMounted(() => {
   @extend %pill-tab;
 
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 4px;
+  white-space: nowrap;
   background: var(--el-fill-color-light);
 
   &:hover {
@@ -3599,7 +3615,9 @@ onMounted(() => {
 
 .msg-bubble {
   display: inline-block;
-  max-width: 100%;
+  /* 封顶 760：超宽屏上聊天区能有 1900px，长消息整行横跨整屏无法阅读；
+   * 常规窗口下聊天区不足 760，这里不生效 */
+  max-width: min(760px, 100%);
   padding: 7px 12px;
   border-radius: var(--radius-xs) var(--msg-radius) var(--msg-radius) var(--msg-radius);
   font-size: 13px;
@@ -4272,5 +4290,54 @@ onMounted(() => {
 .composer-send {
   flex: none;
   min-width: 64px;
+}
+
+/* 紧凑档：两张面板的头、房间行、消息行一起收一档，同样的高度能多看两三条消息。
+ * 断点值由 test/density-breakpoint.test.ts 守卫 */
+@media (max-height: 760px) {
+  .rooms-page {
+    gap: 10px;
+    padding: 10px 10px var(--dock-reserve);
+  }
+
+  .side-head {
+    padding: 10px 10px 8px;
+  }
+
+  .room-item {
+    gap: 8px;
+    padding: 7px 6px;
+  }
+
+  .room-avatar {
+    width: 36px;
+    height: 36px;
+  }
+
+  .main-head {
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  /* 矮屏通常同时是窄屏：工具栏左右与间隙各收一档，给两个定宽控件腾 20px */
+  .chat-tools {
+    gap: 8px;
+    padding: 8px 12px 0;
+  }
+
+  .main-avatar {
+    width: 38px;
+    height: 38px;
+  }
+
+  .msg-row {
+    gap: 8px;
+    padding: 4px 2px;
+  }
+
+  .msg-avatar {
+    width: 30px;
+    height: 30px;
+  }
 }
 </style>

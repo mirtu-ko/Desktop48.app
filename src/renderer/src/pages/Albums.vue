@@ -270,8 +270,8 @@ onMounted(fetchAlbums)
 
 .albums-grid {
   display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--card-gap);
+  grid-template-columns: repeat(auto-fill, minmax(var(--album-min), 1fr));
   transition:
     opacity 0.25s ease,
     filter 0.25s ease;

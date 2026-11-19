@@ -1,7 +1,7 @@
 import type { WebContents } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
-import { app, BrowserWindow, powerSaveBlocker, shell } from 'electron'
+import { app, BrowserWindow, powerSaveBlocker, screen, shell } from 'electron'
 import iconWin from '../../resources/icon-win.ico?asset'
 import icon from '../../resources/icon.png?asset'
 import trayIco from '../../resources/tray.ico?asset'
@@ -21,6 +21,7 @@ import { startPocketUnread, stopPocketUnread } from './pocket48/pocket-unread'
 import { cleanupStreamSessions } from './stream'
 import { destroyTray, installTray, isTrayActive } from './tray'
 import { initUpdater } from './updater'
+import { centerWindow, computeWindowBounds } from './window-bounds'
 import { wireWindowMaximizeEvents } from './window-events'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
 
@@ -134,13 +135,20 @@ function openRoomFromTray(userId: number): void {
 const appIcon = process.platform === 'win32' ? iconWin : icon
 
 function createWindow(): void {
+  // 初始尺寸随工作区伸缩：窄屏收敛并让出留白（1366×768 这类低分辨率屏上 1400×900 会撑出屏幕，
+  // 无边框窗口的标题栏一旦跑到屏幕外，最小化 / 关闭按钮就点不到了），宽屏按比例放大。
+  // 下限跟着收敛是必须的 —— Electron 会把小于 minHeight 的初始高度强行抻到下限。
+  const { workArea } = screen.getPrimaryDisplay()
+  const bounds = computeWindowBounds(workArea)
+  const { x, y } = centerWindow(workArea, bounds)
   // 创建浏览器窗口。
   const win = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    // 详情卡片是定宽双栏（左栏 clamp 下限 + 右栏），窄于这个尺寸卡片就压不成形了
-    minWidth: 900,
-    minHeight: 620,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: bounds.minWidth,
+    minHeight: bounds.minHeight,
+    x,
+    y,
     show: false,
     frame: false, // 纯自定义标题栏：去掉系统边框与默认按钮
     autoHideMenuBar: true,

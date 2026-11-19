@@ -218,7 +218,8 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
   display: flex;
   align-items: center;
   gap: 6px;
-  /* 4px 内边距 + 32px 头像块 = 40，与右侧工具条（4 + 32）等高，三者齐平 */
+  /* 4px 内边距 + 32px 头像块 = 40，与右侧工具条（4 + 32）等高，三者齐平；
+   * 紧凑档三处同步收到 34（见文件末尾），不要单独改其中一个 */
   padding: 4px;
   border-radius: var(--radius-pill);
   /* 玻璃底由全局 .frosted-surface 提供，与左上 tab 栏 / 右上工具条同一套 token */
@@ -400,6 +401,18 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
 
   &.is-open {
     color: var(--el-text-color-regular);
+  }
+}
+
+/* 紧凑档：内距与头像块一起收一档（4+32 → 3+28 = 34），与同排的 tab 栏、刷新浮层等高 */
+@media (max-height: 760px) {
+  .follow-strip {
+    padding: 3px;
+  }
+
+  .follow-chip {
+    width: 28px;
+    height: 28px;
   }
 }
 

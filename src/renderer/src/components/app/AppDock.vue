@@ -165,7 +165,7 @@ onMounted(async () => {
   z-index: 100;
   display: flex;
   align-items: flex-end;
-  gap: 8px;
+  gap: var(--dock-gap);
   padding: 8px 30px 10px;
   user-select: none;
   transform: translateX(-50%);
@@ -255,7 +255,7 @@ onMounted(async () => {
   flex-direction: column;
   align-items: center;
   gap: 5px;
-  width: 56px;
+  width: var(--dock-item-w);
   padding: 0 0 4px;
   border: none;
   background: transparent;
@@ -276,8 +276,8 @@ onMounted(async () => {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    width: var(--dock-icon);
+    height: var(--dock-icon);
     border-radius: 13px;
     transform-origin: center bottom;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.62));
@@ -385,6 +385,28 @@ onMounted(async () => {
   .dock-item,
   .dock-indicator {
     animation: none;
+  }
+}
+
+/* 紧凑档：整条 80 高收到 65、底距 16 收到 12（--dock-reserve 在 app.scss 里对齐到 80），
+ * 宽度 564 收到 443，窄窗口下左右仍有富余。断点值由 density-breakpoint 测试守卫 */
+@media (max-height: 760px) {
+  .app-dock {
+    bottom: 12px;
+    padding: 6px 20px 8px;
+  }
+
+  .dock-item {
+    gap: 4px;
+    padding-bottom: 3px;
+  }
+
+  .dock-icon .el-icon {
+    font-size: 19px;
+  }
+
+  .dock-label {
+    font-size: 10px;
   }
 }
 </style>

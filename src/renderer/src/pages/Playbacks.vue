@@ -387,7 +387,7 @@ watch(selectedFilter, () => {
  * 容器本身不接收点击（中间空白处留给内容），只有胶囊可点 */
 .page-toolbar {
   position: absolute;
-  top: 12px;
+  top: var(--float-top);
   left: 6px;
   right: 8px;
   z-index: 6;
@@ -420,6 +420,14 @@ watch(selectedFilter, () => {
 /* 筛选控件不压缩，避免窄窗口下按钮被挤掉文案 */
 :deep(.el-button) {
   flex-shrink: 0;
+}
+
+/* 紧凑档：整行顶距跟着 --float-top 下调（12→8，见 app.scss），
+ * 筛选器也收到 28 —— 它留在 32 会把整行撑到 38，同排的 tab 栏就被居中推低 */
+@media (max-height: 760px) {
+  .page-toolbar :deep(.el-cascader) {
+    --el-component-size: 28px;
+  }
 }
 
 /* 筛选控件：圆角化、弱化生硬边框，与胶囊标签呼应 */

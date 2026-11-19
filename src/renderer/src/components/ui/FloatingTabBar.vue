@@ -151,7 +151,7 @@ function dblClick(tab: FloatingTabItem) {
 <style scoped lang="scss">
 .float-tab-bar {
   position: absolute;
-  top: 12px;
+  top: var(--float-top);
   left: 6px;
   z-index: 6;
   display: flex;
@@ -226,6 +226,20 @@ function dblClick(tab: FloatingTabItem) {
     font-weight: 600;
     /* 激活态背景由内联主题渐变提供，见 tabStyle */
     box-shadow: var(--shadow-glow);
+  }
+}
+
+/* 紧凑档：条目 33 高收到 27、整条 41 收到 33（顶距由 --float-top 统一下调，见 app.scss） */
+@media (max-height: 760px) {
+  .float-tab-bar {
+    gap: 3px;
+    padding: 3px;
+  }
+
+  .float-tab {
+    gap: 5px;
+    padding: 7px 15px;
+    font-size: 13px;
   }
 }
 </style>

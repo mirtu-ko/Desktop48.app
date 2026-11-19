@@ -65,9 +65,37 @@
 
   /* ===== 浮层让位：页面内容为悬浮控件预留的空间 ===== */
   --tabbar-offset-top: 64px; // 左上角 FloatingTabBar 的高度 + 间距
+  /* 页首浮动控件（左上 tab 栏 / 右上工具条 / 回放页整行）的顶距：
+   * 三处共用一个值，否则紧凑档只收其中一个，换页时整行会跳。 */
+  --float-top: 12px;
   --dock-reserve: 96px; // 底部悬浮 AppDock 预留的滚动留白（Dock 视觉高约 96px，含后仰板的投影）
-  /* 列表页内容区统一内边距：上留浮动 tab 栏、左右 16、下留卡片悬停上浮与阴影 */
-  --page-pad: var(--tabbar-offset-top) 16px 8px;
+  /* 列表页内容区统一内边距：上留浮动 tab 栏、左右统一值、下留卡片悬停上浮与阴影 */
+  --page-pad: var(--tabbar-offset-top) var(--space-page-x) 8px;
+
+  /* ===== 密度 token：紧凑档（紧随其后的 max-height 覆盖）只改这一组 =====
+   * 跨组件共用的尺寸放这里；单组件内部的一两处走各自 scoped 的紧凑块
+   * （断点值统一为 max-height: 760px，由 test/density-breakpoint.test.ts 守卫）。
+   * 只压留白与装饰尺寸，正文与消息字号不降：低 DPI 屏上小字是净损失。 */
+  /* 列表页左右内边距随窗口宽度增长：1400 窗口下 1.1vw=15.4 仍取下限 16（满意档零变化），
+   * 2560 拉满时约 28，内容不再贴着窗口边缘。紧凑档固定 12 不参与——矮屏缺的是高度，
+   * 且那里的宽度普遍不大，再压边距反而让卡片挤在一起 */
+  --space-page-x: clamp(16px, 1.1vw, 32px);
+  /* 卡片列宽：单卡宽度恒定落在「舒适带」内，只由窗口宽度决定（紧凑档不碰这三个值，
+   * 否则同一宽度换个窗口高度就换一套列数）。
+   * 写法 min(带上限, 按 m 列均分内容宽)：宽度够时取上限，于是 1400 窗口下单卡宽与
+   * 0.2.11 一致、更宽的窗口也不会被 1fr 撑胖；窄到 m 列装不下上限时保持 m 列、卡片等比收窄，
+   * 不会掉列把卡片撑大。 */
+  /* 下限 225 是「1280×800 工作区的 1216 窗口排 5 列」与「1920 窗口仍排 7 列」的唯一交集：
+   * 5 列要求下限 ≤225.6，7 列要求下限 >224，可用区间只有 1.6px。 */
+  --card-min: min(225px, calc((100% - 3 * var(--card-gap)) / 4)); // 1:1 封面卡（直播 / 回放）：带 225–265
+  --card-gap: 16px; // 卡片网格间距
+  --show-min: min(300px, calc((100% - 3 * var(--show-gap)) / 4)); // 16:9 封面卡（公演）：带 300–380
+  --show-gap: 20px; // 公演网格间距比 1:1 卡宽松
+  --album-min: min(265px, calc((100% - 3 * var(--card-gap)) / 4)); // 专辑卡（唱片套 + 曲目摘要横排）：带 265–335
+  --card-body-pad: 10px 12px 12px; // 封面下方文字区
+  --dock-item-w: 56px; // Dock 单项宽
+  --dock-icon: 40px; // Dock 图标磁贴边长
+  --dock-gap: 8px; // Dock 项间距
 
   /* ===== 浅色玻璃表层 token：底部 Dock / 左上 tab 栏 / 右上工具条 / 左下播放条共用 =====
    * 观感由四层叠出来：光带给体积、底色定通透、边给厚度、落影让它浮起来。
@@ -96,6 +124,66 @@
   --player-glass-bg: rgba(15, 17, 26, 0.68);
   --player-glass-ring: rgba(255, 255, 255, 0.16);
   --player-glass-hover: rgba(255, 255, 255, 0.12);
+}
+
+/* ===== 紧凑档：低分辨率屏（1366×768 / 1080p@150% 等有效高度 ≤760 的机器） =====
+ * 只认高度不认宽度：这些设备窗口宽度通常仍在 1093 以上，缺的是垂直空间；
+ * 一块 21:9 的矮屏同样缺高度，所以不与 max-width 做与运算。
+ * 只管垂直留白与组件内部留白，不碰卡片列宽（--card-min / --card-gap）：
+ * 同一窗口宽度下改高度就换一套列数，用户会以为布局坏了。 */
+@media (max-height: 760px) {
+  :root {
+    /* 浮动 tab 栏收到 35 高、顶距 8，底边落在 43，留 7px 呼吸 */
+    --tabbar-offset-top: 50px;
+    --float-top: 8px;
+    /* Dock 紧凑高 65 + 底距 12，留白必须盖住它，否则最后一张卡被压住 */
+    --dock-reserve: 80px;
+    --space-page-x: 12px;
+    --card-body-pad: 7px 9px 9px;
+    --dock-item-w: 46px;
+    --dock-icon: 32px;
+    --dock-gap: 5px;
+    --radius-card: 16px;
+  }
+
+  /* 默认尺寸按钮收到 28：EP 的高度是构建期写死的 32px，运行时没有可调的变量。
+   * 圆钮保持 32（回顶钮与 44px 下载入口靠它对齐），small / large / 文字按钮各有自己的尺寸，不动 */
+  .el-button:not(.is-circle):not(.el-button--small):not(.el-button--large):not(.is-link):not(.is-text) {
+    height: 28px;
+    padding: 6px 13px;
+  }
+
+  /* 分区标题：间距与药丸高度各收一档，列表页每多一个分区就省 8px */
+  .section-title {
+    margin: 12px 2px 8px;
+    font-size: 13px;
+
+    &::before {
+      height: 12px;
+    }
+  }
+
+  /* 详情卡：侧标题与右栏标题头收窄，把高度让给内容区 */
+  .detail-side-title {
+    font-size: 17px;
+  }
+
+  /* 矮屏上 86vh 只剩五百出头：卡片改吃 90vh，多出来的 30px 全给可滚区 */
+  .detail-card-dialog.el-dialog,
+  .detail-card-dialog.election-history-dialog.el-dialog {
+    height: min(90vh, 660px);
+  }
+
+  .detail-pane-head {
+    padding: 12px 44px 8px var(--pane-head-pad, 18px);
+  }
+
+  .detail-close {
+    top: 10px;
+    right: 10px;
+    width: 26px;
+    height: 26px;
+  }
 }
 
 /* ===== Element Plus 变量覆写（浅色） =====
@@ -439,11 +527,12 @@ body,
 /* ===== 跨页共用的版式片段 =====
  * 出现在 ≥2 处、且值完全一致的片段收敛到这里，页面与组件里只挂类名 */
 
-/* 卡片网格：直播 / 回放两个列表页共用列宽与内容区留白 */
+/* 卡片网格：直播 / 回放两个列表页共用列宽与内容区留白。
+ * minmax 再套一层 min()：容器比 --card-min 还窄时（窄窗口分屏）列宽跟随容器，不撑出横向滚动 */
 .card-grid {
   display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--card-gap);
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min), 100%), 1fr));
   padding: var(--page-pad);
 }
 
@@ -826,6 +915,9 @@ body,
     height: 100%;
     padding: 0;
     overflow: hidden;
+    /* 详情卡内部按「卡自己的宽度」适配（见下方 .detail-side 的容器查询）；
+     * inline-size 只建立行轴容器，不影响高度 */
+    container-type: inline-size;
   }
 }
 
@@ -975,6 +1067,15 @@ body,
   display: flex;
   overflow: hidden;
   background: var(--el-fill-color-light);
+}
+
+/* 卡宽 92vw 缩到 740 以下（窗口约 804）时左栏收到 220，把宽度让给右栏；
+ * 两栏结构保持不变，下卡注入的 --side-basis 在宽屏下照常生效。
+ * 用容器查询而非媒体查询：卡宽由 min(92vw, 980px) 决定，判断要贴着卡自己 */
+@container (max-width: 740px) {
+  .detail-side {
+    max-width: 220px;
+  }
 }
 
 .detail-side-body {
