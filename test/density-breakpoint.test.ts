@@ -367,6 +367,7 @@ describe('紧凑档布局不变量', () => {
       '--float-top': [[8, 12]],
       '--dock-reserve': [[80, 96]],
       '--radius-card': [[16, 20]],
+      '--radius-lg': [[14, 16]],
       '--dock-item-w': [[46, 56]],
       '--dock-icon': [[32, 40]],
       '--dock-gap': [[5, 8]],

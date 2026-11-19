@@ -30,7 +30,8 @@
   --radius-xs: 4px;
   --radius-sm: 8px;
   --radius-md: 12px;
-  --radius-lg: 16px;
+  /* lg 跟随高度轴收一点下限，保证矮窗下仍比 md 大一档、与卡片圆角仍有层级差 */
+  --radius-lg: #{fluid(14px, 16px)};
   /* 全屏详情卡片的卡面圆角（比 lg 再大一档，卡感来自圆角与留白） */
   --radius-card: #{fluid(16px, 20px)};
   --radius-pill: 999px;
