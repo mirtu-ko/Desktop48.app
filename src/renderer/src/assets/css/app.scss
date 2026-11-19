@@ -444,8 +444,11 @@ body,
   -webkit-app-region: no-drag;
 }
 
+/* 按钮宽 / 图标边长由各窗注入：主窗不定义即用默认值（44 / 15），
+   独立播放窗在 .fw-bar 里按窗口宽度收窄（窄窗三个按钮会吃掉四成屏宽）；
+   高度始终撑满整条栏，栏高本身由 .fw-bar 按宽度收 */
 .app-title-bar-btn {
-  width: 44px;
+  width: var(--bar-btn-w, 44px);
   height: 100%;
   padding: 0;
   border: none;
@@ -455,6 +458,8 @@ body,
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* 图标不传 size 即 1em，由字号决定边长 */
+  font-size: var(--bar-icon-size, 15px);
   cursor: pointer;
   transition:
     background-color 0.15s ease,

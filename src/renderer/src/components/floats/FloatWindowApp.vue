@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { FloatTopmost } from '@common/app-config'
 import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
-import { FLOAT_BAR_HEIGHT, isFloatTopmostPinned, nextFloatTopmost } from '@common/float-window'
+import { isFloatTopmostPinned, nextFloatTopmost } from '@common/float-window'
 import LivePlayer from '@renderer/components/player/LivePlayer.vue'
 import PlaybackPlayer from '@renderer/components/player/PlaybackPlayer.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
@@ -187,7 +187,6 @@ useEventListener(document, 'fullscreenchange', () => {
     <div
       class="fw-bar app-title-bar"
       :class="{ 'is-html-fullscreen': htmlFullscreen }"
-      :style="{ height: `${FLOAT_BAR_HEIGHT}px` }"
       @dblclick="onToggleMaximize"
     >
       <!-- 置顶图钉：本窗二态，点亮 = 当前实际在最前（含「仅播放时」策略下的播放中）。
@@ -199,7 +198,7 @@ useEventListener(document, 'fullscreenchange', () => {
         @click.stop="onToggleTopmost"
         @dblclick.stop
       >
-        <MediaIcon name="pushpinFilled" :size="15" />
+        <MediaIcon name="pushpinFilled" />
       </button>
       <span class="fw-kind" :class="{ 'is-playback': kind === 'playback' }">
         {{ kind === 'live' ? '直播' : '回放' }}
@@ -209,13 +208,13 @@ useEventListener(document, 'fullscreenchange', () => {
       <!-- 双击标题栏同效；按钮区拦住冒泡，免得双击按钮时顺带切换最大化 -->
       <div class="app-title-bar-actions" @dblclick.stop>
         <button class="app-title-bar-btn" title="最小化" @click.stop="onMinimize">
-          <MediaIcon name="minus" :size="15" />
+          <MediaIcon name="minus" />
         </button>
         <button class="app-title-bar-btn" :title="isMaximized ? '还原' : '最大化'" @click.stop="onToggleMaximize">
-          <MediaIcon :name="isMaximized ? 'windowRestore' : 'windowMaximize'" :size="15" />
+          <MediaIcon :name="isMaximized ? 'windowRestore' : 'windowMaximize'" />
         </button>
         <button class="app-title-bar-btn app-title-bar-btn--close" title="关闭" @click.stop="onClose">
-          <MediaIcon name="close" :size="15" />
+          <MediaIcon name="close" />
         </button>
       </div>
     </div>
@@ -277,9 +276,18 @@ useEventListener(document, 'fullscreenchange', () => {
 }
 
 /* 皮肤全在共享配方 .app-title-bar，此处只留本窗的内容排布与自持的 padding。
-   高度由 FLOAT_BAR_HEIGHT 经 :style 注入，主进程算窗口尺寸用同一个值。 */
+   高度与 common/float-window.ts 的 floatBarHeight() 是同一条曲线：
+   窄窗 30px（省下的高度归视频区）、900 及以上 36px，两端由 clamp 收住。 */
 .fw-bar {
-  gap: 8px;
+  --bar-h: clamp(30px, calc(30px + 6 * var(--fp-step)), 36px);
+  height: var(--bar-h);
+
+  /* 标题栏窄窗最挤：三个窗口按钮各 44px 时，320 宽里占掉四成屏宽、标题只剩六七个字，
+     故宽度也随窗口收；高度不必另收——栏本身就矮了，按钮撑满即可 */
+  --bar-btn-w: clamp(28px, calc(28px + 16 * var(--fp-step)), 44px);
+  --bar-icon-size: clamp(13px, calc(13px + 2 * var(--fp-step)), 15px);
+
+  gap: clamp(6px, calc(6px + 2 * var(--fp-step)), 8px);
   /* 图钉贴左，故比主窗口更窄的内边距 */
   padding: 0 0 0 6px;
 }
@@ -295,11 +303,13 @@ useEventListener(document, 'fullscreenchange', () => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: clamp(24px, calc(24px + 4 * var(--fp-step)), 28px);
+  height: clamp(24px, calc(24px + 4 * var(--fp-step)), 28px);
   padding: 0;
   border: none;
   border-radius: 50%;
+  /* 图标是 1em：字号即图标边长，与窗口按钮同一档 */
+  font-size: var(--bar-icon-size);
   color: var(--el-text-color-secondary);
   background: transparent;
   cursor: pointer;
@@ -332,9 +342,9 @@ useEventListener(document, 'fullscreenchange', () => {
 
 .fw-kind {
   flex-shrink: 0;
-  padding: 2px 8px;
+  padding: 2px clamp(6px, calc(6px + 2 * var(--fp-step)), 8px);
   border-radius: var(--radius-pill);
-  font-size: 11px;
+  font-size: clamp(10px, calc(10px + 1 * var(--fp-step)), 11px);
   line-height: 1.4;
   color: #fff;
   background: var(--gradient-brand);
@@ -345,8 +355,8 @@ useEventListener(document, 'fullscreenchange', () => {
 }
 
 .fw-avatar {
-  width: 22px;
-  height: 22px;
+  width: clamp(20px, calc(20px + 2 * var(--fp-step)), 22px);
+  height: clamp(20px, calc(20px + 2 * var(--fp-step)), 22px);
   border-radius: 50%;
   flex-shrink: 0;
   object-fit: cover;
@@ -358,7 +368,7 @@ useEventListener(document, 'fullscreenchange', () => {
 .fw-title {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: clamp(12px, calc(12px + 1 * var(--fp-step)), 13px);
   font-weight: 500;
   color: var(--el-text-color-primary);
 }

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { DENSITY_BREAKPOINT, resolveDensity } from '../src/common/density'
+import { FLOAT_BAR_HEIGHT, FLOAT_BAR_HEIGHT_MIN } from '../src/common/float-window'
 import { computeWindowBounds, WINDOW_MAX_ASPECT } from '../src/main/window-bounds'
 import { applyDensity } from '../src/renderer/src/utils/apply-density'
 
@@ -455,6 +456,21 @@ describe('独立播放窗浮层尺寸轴', () => {
       expect({ name, startsAtMin: base === low, alive: low !== high })
         .toEqual({ name, startsAtMin: true, alive: true })
     }
+  })
+
+  /* 栏高是唯一跨进程的尺寸：CSS 决定渲染层实际条高，主进程 floatBarHeight() 决定
+   * 窗口总高，两边漂了不会报错，只表现为视频区比预期高/矮几像素。 */
+  it('浮窗标题栏高度与主进程 floatBarHeight 同一条曲线', () => {
+    const vue = read('components/floats/FloatWindowApp.vue')
+    expect(vue).toMatch(/height:\s*var\(--bar-h\)/)
+
+    const raw = /--bar-h:([^;]+);/.exec(vue)?.[1].replace(/\s+/g, ' ').trim() ?? ''
+    const parsed = /^clamp\((\d+)px, calc\((\d+)px \+ ([\d.]+) \* var\(--fp-step\)\), (\d+)px\)$/.exec(raw)
+    expect(parsed, `--bar-h 不是 --fp-step 曲线：${raw}`).not.toBeNull()
+
+    const [low, base, , high] = parsed!.slice(1, 5).map(Number)
+    expect({ low, base, high })
+      .toEqual({ low: FLOAT_BAR_HEIGHT_MIN, base: FLOAT_BAR_HEIGHT_MIN, high: FLOAT_BAR_HEIGHT })
   })
 })
 

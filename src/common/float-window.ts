@@ -12,8 +12,30 @@ export interface WindowSize {
  */
 export const FLOAT_WINDOW_HASH_PATH = '/float'
 
-/** 独立播放窗自定义标题栏（.fw-bar）高度；FloatWindowApp.vue 经 :style 同源引用 */
+/**
+ * 浮窗标题栏高度的上端值，同时是主窗口标题栏（.app-title-bar）的固定高度。
+ * 浮窗按窗口宽度在 30–36 之间取（见 floatBarHeight），主窗口不参与该曲线。
+ */
 export const FLOAT_BAR_HEIGHT = 36
+
+/** 浮窗标题栏在窄窗（≤320 宽）下的高度：再低头像与点击目标就挤了 */
+export const FLOAT_BAR_HEIGHT_MIN = 30
+
+/** 栏高曲线的宽度区间，与渲染层 `--fp-step` 的 320 → 900 一致，两端之外钳住 */
+const FLOAT_BAR_WIDTH_START = 320
+const FLOAT_BAR_WIDTH_END = 900
+
+/**
+ * 浮窗标题栏高度：由窗口宽度决定，渲染层 .fw-bar 的 CSS 走同一条曲线。
+ * 窄窗栏矮、视频区更高；宽窗回到 FLOAT_BAR_HEIGHT 的整条通栏。
+ */
+export function floatBarHeight(windowWidth: number): number {
+  const progress = Math.min(
+    1,
+    Math.max(0, (windowWidth - FLOAT_BAR_WIDTH_START) / (FLOAT_BAR_WIDTH_END - FLOAT_BAR_WIDTH_START)),
+  )
+  return Math.round(FLOAT_BAR_HEIGHT_MIN + (FLOAT_BAR_HEIGHT - FLOAT_BAR_HEIGHT_MIN) * progress)
+}
 
 /** 视频元数据未就绪时的兜底宽高比（多数直播为竖屏） */
 export const FLOAT_DEFAULT_ASPECT = 9 / 16
@@ -119,26 +141,42 @@ function initialRatios(workArea: Pick<WorkArea, 'width' | 'height'>): { width: n
  *
  * 比例框先按工作区比例算出，再按下限撑开（竖屏撑高、横屏撑宽），
  * 撑开后夹回工作区可容纳范围——下限只在小屏上起效，不能把窗口顶出屏幕。
+ *
+ * 栏高由窗口宽决定，而宽度又受可用高度（含栏高）约束：先按上端估一轮，
+ * 再把算出的宽度回代，收敛后栏高与宽度才自洽（窄窗省下的栏高归视频区）。
  */
 export function computeInitialWindowSize(aspect: number, workArea: WorkArea): WindowSize {
   const minVideoW = initialMinVideoWidth(aspect)
   const ratios = initialRatios(workArea)
-  const maxW = Math.min(
-    Math.max(Math.round(workArea.width * ratios.width), minVideoW),
-    workArea.width - FLOAT_EDGE_MARGIN * 2,
-  )
-  const maxH = Math.min(
-    Math.max(
-      Math.round(workArea.height * ratios.height) - FLOAT_BAR_HEIGHT,
-      Math.round(minVideoW / aspect),
-    ),
-    workArea.height - FLOAT_BAR_HEIGHT - FLOAT_EDGE_MARGIN * 2,
-  )
-  const video = fitAspectInBox(aspect, maxW, maxH)
-  return {
-    w: Math.max(FLOAT_MIN_WIDTH, video.w),
-    h: Math.max(FLOAT_MIN_HEIGHT, video.h + FLOAT_BAR_HEIGHT),
+
+  const layout = (bar: number): WindowSize => {
+    const maxW = Math.min(
+      Math.max(Math.round(workArea.width * ratios.width), minVideoW),
+      workArea.width - FLOAT_EDGE_MARGIN * 2,
+    )
+    const maxH = Math.min(
+      Math.max(
+        Math.round(workArea.height * ratios.height) - bar,
+        Math.round(minVideoW / aspect),
+      ),
+      workArea.height - bar - FLOAT_EDGE_MARGIN * 2,
+    )
+    const video = fitAspectInBox(aspect, maxW, maxH)
+    return {
+      w: Math.max(FLOAT_MIN_WIDTH, video.w),
+      h: Math.max(FLOAT_MIN_HEIGHT, video.h + bar),
+    }
   }
+
+  let size = layout(FLOAT_BAR_HEIGHT)
+  // 回代到不动点；栏高是宽度的阶梯函数，最多两轮即稳定，guard 防意外振荡
+  for (let guard = 0; guard < 4; guard += 1) {
+    const next = layout(floatBarHeight(size.w))
+    if (next.w === size.w && next.h === size.h)
+      break
+    size = next
+  }
+  return size
 }
 
 /* 自动定形前的状态判定（纯函数：主进程侧依赖 electron，无法单测） */
