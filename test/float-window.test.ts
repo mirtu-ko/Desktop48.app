@@ -1,6 +1,6 @@
 import type { FloatFitState } from '../src/common/float-window'
 import { describe, expect, it } from 'vitest'
-import { computeInitialWindowSize, decideAutoFit, fitAspectInBox, FLOAT_BAR_HEIGHT, FLOAT_BAR_HEIGHT_MIN, FLOAT_CASCADE_STEP, FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, floatBarHeight, initialFloatTopmost, isFloatTopmostPinned, nextFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '../src/common/float-window'
+import { computeInitialWindowSize, decideAutoFit, fitAspectInBox, FLOAT_BAR_HEIGHT, FLOAT_BAR_HEIGHT_MIN, FLOAT_CASCADE_STEP, FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE, FLOAT_MIN_WIDTH, floatBarHeight, initialFloatTopmost, isFloatTopmostPinned, nextFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '../src/common/float-window'
 
 /** 基准工作区：1080p @100%，原点在屏幕左上（workArea 是 DIP，缩放已折算，故 4K@200% 等价） */
 const HD = { x: 0, y: 0, width: 1920, height: 1080 }
@@ -143,25 +143,6 @@ describe('floatBarHeight', () => {
     // 总高仍贴着 80% 工作区高，栏矮 6px 则视频区高 6px
     expect(h).toBe(640)
     expect(h - floatBarHeight(w)).toBe(610)
-  })
-})
-
-describe('fLOAT_RADIO_WINDOW_SIZE', () => {
-  it('竖屏：高度大于宽度', () => {
-    expect(FLOAT_RADIO_WINDOW_SIZE.h).toBeGreaterThan(FLOAT_RADIO_WINDOW_SIZE.w)
-  })
-
-  it('不小于窗口最小尺寸（否则会被 BrowserWindow 的 minWidth / minHeight 顶回去）', () => {
-    expect(FLOAT_RADIO_WINDOW_SIZE.w).toBeGreaterThanOrEqual(FLOAT_MIN_WIDTH)
-    expect(FLOAT_RADIO_WINDOW_SIZE.h).toBeGreaterThanOrEqual(FLOAT_MIN_HEIGHT)
-  })
-
-  it('扣掉标题栏后视频区仍留有高度', () => {
-    expect(FLOAT_RADIO_WINDOW_SIZE.h - FLOAT_BAR_HEIGHT).toBeGreaterThan(0)
-  })
-
-  it('比同屏横屏视频窗更窄（电台不该占得比视频还宽）', () => {
-    expect(FLOAT_RADIO_WINDOW_SIZE.w).toBeLessThan(computeInitialWindowSize(16 / 9, HD).w)
   })
 })
 

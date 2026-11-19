@@ -37,15 +37,11 @@ export function floatBarHeight(windowWidth: number): number {
   return Math.round(FLOAT_BAR_HEIGHT_MIN + (FLOAT_BAR_HEIGHT - FLOAT_BAR_HEIGHT_MIN) * progress)
 }
 
-/** 视频元数据未就绪时的兜底宽高比（多数直播为竖屏） */
-export const FLOAT_DEFAULT_ASPECT = 9 / 16
-
 /**
- * 电台窗（`liveType === 2`）的**固定**尺寸（含标题栏），竖屏。
- * 电台无视频轨、永不上报 aspect，形状不需跟画面走；不随分辨率自适应，
- * 只受窗口最小尺寸约束，屏幕装不下时用户可自行缩放。
+ * 视频元数据未就绪时的兜底宽高比（多数直播为竖屏）；
+ * 电台窗（liveType===2）无视频轨、永不上报 aspect，恒用此比例，随工作区按比例缩放。
  */
-export const FLOAT_RADIO_WINDOW_SIZE: WindowSize = { w: 360, h: 640 }
+export const FLOAT_DEFAULT_ASPECT = 9 / 16
 
 /** 窗口最小尺寸：再小控制条会挤爆，且比例内接需要有效输入 */
 export const FLOAT_MIN_WIDTH = 240

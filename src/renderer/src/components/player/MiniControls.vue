@@ -74,12 +74,15 @@ function onRangeInput(event: Event) {
   /* 进度条轨道 / 滑块：随浮层曲线收放，滑块垂直居中按两者差值算 */
   --mini-track: clamp(4px, calc(4px + 2 * var(--fp-step)), 6px);
   --mini-thumb: clamp(10px, calc(10px + 2 * var(--fp-step)), 12px);
+  /* 左右留白与「离底边悬空量」是两回事：后者（--fp-control-gap）管纵向距离，
+     拿它当横向留白会让窄窗胶囊横向撑满、几乎贴到窗边 */
+  --mini-gutter: clamp(12px, calc(12px + 6 * var(--fp-step)), 18px);
 
   position: absolute;
   bottom: var(--fp-control-gap);
   left: 50%;
   transform: translateX(-50%);
-  max-width: calc(100% - 2 * var(--fp-control-gap));
+  max-width: calc(100% - 2 * var(--mini-gutter));
   min-width: 0;
   gap: 0px;
   /* 上下内距走 --fp-capsule-pad：胶囊总高与弹幕避让量（use-danmaku-layer）同一条式子 */
@@ -90,7 +93,7 @@ function onRangeInput(event: Event) {
 /* 有进度段（录播/回放）：容器足够宽时胶囊随容器拉伸，520px 封顶，富余空间由进度条吸收；
  * 直播（无进度段）与窄容器仍走 shrink-to-fit + max-width 兜底 */
 .mini-controls--progress {
-  width: min(calc(100% - 2 * var(--fp-control-gap)), 520px);
+  width: min(calc(100% - 2 * var(--mini-gutter)), 520px);
 }
 
 /* 按钮永不收缩：拥挤时让位给进度条 / 时间 / leading 插槽内容。

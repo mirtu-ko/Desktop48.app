@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { centerWindow, computeWindowBounds, fitWindowToWorkArea, WINDOW_EDGE_GAP, WINDOW_MAX_ASPECT, WINDOW_PREFERRED } from '../src/main/window-bounds'
+import { centerWindow, computeWindowBounds, fitWindowToWorkArea, WIDE_SCREEN_MAX_SCALE, WINDOW_EDGE_GAP, WINDOW_MAX_ASPECT, WINDOW_PREFERRED } from '../src/main/window-bounds'
 
 /** 大屏：期望尺寸原样使用，留白不影响 */
 const BIG = { width: 1920, height: 1160 }
@@ -79,13 +79,23 @@ describe('computeWindowBounds', () => {
     expect(computeWindowBounds({ width: 2560, height: 1346 }).width).toBe(1664)
   })
 
-  it('4K@100% 上宽高一起放大', () => {
-    expect(computeWindowBounds({ width: 3840, height: 2055 })).toEqual({
-      width: 2496,
-      height: 1336,
+  it('4K@100% 上宽高按同一倍率放大，封顶在基准的 1.3 倍', () => {
+    const bounds = computeWindowBounds({ width: 3840, height: 2055 })
+    expect(bounds).toEqual({
+      width: Math.round(WINDOW_PREFERRED.width * WIDE_SCREEN_MAX_SCALE),
+      height: Math.round(WINDOW_PREFERRED.height * WIDE_SCREEN_MAX_SCALE),
       minWidth: WINDOW_PREFERRED.minWidth,
       minHeight: WINDOW_PREFERRED.minHeight,
     })
+    // 宽高共用倍率，所以大屏放大不会把窗口拉扁
+    expect(Math.round(bounds.width / bounds.height * 100) / 100)
+      .toBe(Math.round(WINDOW_PREFERRED.width / WINDOW_PREFERRED.height * 100) / 100)
+  })
+
+  it('放大倍率封顶后不再随工作区变宽，但区间内单调', () => {
+    const widths = [2154, 2560, 3000, 3840].map(width => computeWindowBounds({ width, height: 2055 }).width)
+    expect(widths).toEqual([...widths].sort((a, b) => a - b))
+    expect(widths[2]).toBe(widths[3])
   })
 
   it('高度被工作区压低时，窗口长宽比不超过 1.7', () => {
@@ -100,7 +110,7 @@ describe('computeWindowBounds', () => {
     expect(computeWindowBounds(BIG).width).toBe(WINDOW_PREFERRED.width)
     expect(computeWindowBounds({ width: 1920, height: 1040 }).width).toBe(WINDOW_PREFERRED.width)
     expect(computeWindowBounds({ width: 2560, height: 1346 }).width).toBe(1664)
-    expect(computeWindowBounds({ width: 3840, height: 2055 }).width).toBe(2496)
+    expect(computeWindowBounds({ width: 3840, height: 2055 }).width).toBe(Math.round(WINDOW_PREFERRED.width * WIDE_SCREEN_MAX_SCALE))
   })
 
   it('工作区极矮时宽度仍不低于 minWidth', () => {

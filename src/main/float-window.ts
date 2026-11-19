@@ -9,7 +9,7 @@ import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 import type { WebContents } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { isFloatTopmost } from '@common/app-config'
-import { computeInitialWindowSize, decideAutoFit, FLOAT_DEFAULT_ASPECT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, FLOAT_WINDOW_HASH_PATH, initialFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '@common/float-window'
+import { computeInitialWindowSize, decideAutoFit, FLOAT_DEFAULT_ASPECT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_WINDOW_HASH_PATH, initialFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '@common/float-window'
 import { is } from '@electron-toolkit/utils'
 import { BrowserWindow, screen, shell } from 'electron'
 import iconWin from '../../resources/icon-win.ico?asset'
@@ -128,14 +128,10 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
     return
   }
 
-  // 电台（liveType===2）无视频轨、永不上报 aspect：给固定竖屏尺寸。
-  // 回放列表项自带 liveType（Playbacks.vue 透传），建窗时即可判定，不必等详情接口
-  const isRadio = payload.liveType === 2
+  // 电台（liveType===2）无视频轨、永不上报 aspect，恒保持竖屏兜底比例的初始尺寸；
   // 视频窗按主窗口所在显示器的工作区比例推导（见 common/float-window.ts 的尺寸策略）
   const workArea = resolveAnchorDisplay(mainWindow).workArea
-  const { w: width, h: height } = isRadio
-    ? FLOAT_RADIO_WINDOW_SIZE
-    : computeInitialWindowSize(FLOAT_DEFAULT_ASPECT, workArea)
+  const { w: width, h: height } = computeInitialWindowSize(FLOAT_DEFAULT_ASPECT, workArea)
   const { x, y } = resolveFloatWindowPosition(workArea, { w: width, h: height }, records.size)
   // 建窗即按全局偏好定态：never 不置顶，其余先顶上，避免打开瞬间被主窗口盖住
   const preference = topmostPreference()

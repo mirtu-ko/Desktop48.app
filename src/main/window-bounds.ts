@@ -30,8 +30,11 @@ export const WINDOW_PREFERRED: WindowSizeSpec = {
   minHeight: 560,
 }
 
-/** 宽屏放大比例；阈值是工作区宽 1944，1920 及以下与旧版逐像素一致 */
+/** 宽屏放大比例；阈值是工作区宽 2154，1920 及以下与旧版逐像素一致 */
 export const WIDE_SCREEN_RATIO = 0.65
+
+/** 相对基准尺寸的最大放大倍率；宽高共用，避免大屏放大把窗口拉扁 */
+export const WIDE_SCREEN_MAX_SCALE = 1.3
 
 /** 窗口四边与工作区之间的留白 */
 export const WINDOW_EDGE_GAP = 32
@@ -39,9 +42,11 @@ export const WINDOW_EDGE_GAP = 32
 /** 高度被工作区压低时，窗口宽不超过这个长宽比；宽屏按比例放大的尺寸不受约束 */
 export const WINDOW_MAX_ASPECT = 1.7
 
-/** 单边收敛：放大期望值 → 让出留白 → 夹到 [下限, 工作区]；工作区小于下限时放弃留白 */
+/** 单边收敛：按工作区放大（倍率封顶）→ 让出留白 → 夹到 [下限, 工作区]；工作区小于下限时放弃留白 */
 function fitEdge(area: number, preferred: number, min: number): number {
-  const wanted = Math.max(preferred, Math.round(area * WIDE_SCREEN_RATIO))
+  const threshold = preferred / WIDE_SCREEN_RATIO
+  const scale = Math.min(WIDE_SCREEN_MAX_SCALE, area / threshold)
+  const wanted = Math.max(preferred, Math.round(preferred * scale))
   const withGap = area - 2 * WINDOW_EDGE_GAP
   return Math.min(wanted, Math.min(area, Math.max(withGap, min)))
 }
