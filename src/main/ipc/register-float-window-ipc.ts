@@ -2,9 +2,11 @@
  * 独立播放窗口的 IPC 通道注册；窗口状态与生命周期归 main/float-window.ts 管理。
  * 通道清单与 preload/index.ts 的 mainAPI 契约一一对应，两边改动请同步。
  */
+import type { FloatTopmost } from '@common/app-config'
 import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 import { activeWindow } from '../app'
-import { fitFloatWindowAspect, getFloatWindowPayload, openFloatWindow, setFloatWindowPlaying } from '../float-window'
+import { Database } from '../database'
+import { applyFloatTopmostPreference, fitFloatWindowAspect, getFloatWindowPayload, getFloatWindowTopmost, openFloatWindow, setFloatWindowPlaying, setFloatWindowTopmost } from '../float-window'
 import { sendIpc } from './send'
 import { handleTraced } from './trace'
 
@@ -23,6 +25,15 @@ export function registerFloatWindowIPC(): void {
   // 置顶策略：播放中置顶、暂停取消（由播放器上报播放状态变化）
   handleTraced('floatWindowSetPlaying', (event, playing: boolean) => {
     setFloatWindowPlaying(event.sender, playing)
+  })
+  // 置顶：前两个作用于发起窗口（标题栏图钉），最后一个写全局偏好并波及所有窗（设置页）
+  handleTraced('floatWindowGetTopmost', event => getFloatWindowTopmost(event.sender))
+  handleTraced('floatWindowSetTopmost', (event, topmost: FloatTopmost) => {
+    setFloatWindowTopmost(event.sender, topmost)
+  })
+  handleTraced('floatWindowSetTopmostPreference', (_event, topmost: FloatTopmost) => {
+    Database.instance().setConfig('floatTopmost', topmost)
+    applyFloatTopmostPreference(topmost)
   })
   // 播放窗 → 主进程 → 主窗口：跨渲染进程的 live-unavailable 中转
   handleTraced('notifyLiveUnavailable', (_event, liveId: string) => {

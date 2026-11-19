@@ -1,6 +1,6 @@
 import type { FloatFitState } from '../src/common/float-window'
 import { describe, expect, it } from 'vitest'
-import { computeInitialWindowSize, decideAutoFit, fitAspectInBox, FLOAT_BAR_HEIGHT, FLOAT_CASCADE_STEP, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, resolveFloatWindowPosition } from '../src/common/float-window'
+import { computeInitialWindowSize, decideAutoFit, fitAspectInBox, FLOAT_BAR_HEIGHT, FLOAT_CASCADE_STEP, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, initialFloatTopmost, isFloatTopmostPinned, nextFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '../src/common/float-window'
 
 /** 基准工作区：1080p @100%，原点在屏幕左上（workArea 是 DIP，缩放已折算，故 4K@200% 等价） */
 const HD = { x: 0, y: 0, width: 1920, height: 1080 }
@@ -182,5 +182,72 @@ describe('resolveFloatWindowPosition', () => {
   it('工作区比窗口还小：钉在工作区原点而不是负坐标', () => {
     expect(resolveFloatWindowPosition({ x: 0, y: 0, width: 200, height: 100 }, { w: 240, h: 160 }, 3))
       .toEqual({ x: 0, y: 0 })
+  })
+})
+
+describe('resolveFloatTopmost', () => {
+  it('always 与播放状态无关，恒置顶', () => {
+    expect(resolveFloatTopmost('always', true)).toBe(true)
+    expect(resolveFloatTopmost('always', false)).toBe(true)
+  })
+
+  it('playing 跟随播放状态：播放中置顶，暂停让出层级', () => {
+    expect(resolveFloatTopmost('playing', true)).toBe(true)
+    expect(resolveFloatTopmost('playing', false)).toBe(false)
+  })
+
+  it('never 恒不置顶', () => {
+    expect(resolveFloatTopmost('never', true)).toBe(false)
+    expect(resolveFloatTopmost('never', false)).toBe(false)
+  })
+})
+
+describe('initialFloatTopmost', () => {
+  // 建窗时还没有播放状态上报：playing 策略也必须先置顶，否则新窗一出现就被主窗口盖住
+  it('非 never 都先置顶', () => {
+    expect(initialFloatTopmost('always')).toBe(true)
+    expect(initialFloatTopmost('playing')).toBe(true)
+  })
+
+  it('never 建窗即不置顶', () => {
+    expect(initialFloatTopmost('never')).toBe(false)
+  })
+})
+
+describe('isFloatTopmostPinned', () => {
+  // 亮灭以「此刻是否真的置顶」为准：仅播放时策略在播放中也算点亮，暂停时熄灭
+  it('always 恒点亮，never 恒熄灭', () => {
+    for (const playing of [null, false, true] as const) {
+      expect(isFloatTopmostPinned('always', playing)).toBe(true)
+      expect(isFloatTopmostPinned('never', playing)).toBe(false)
+    }
+  })
+
+  it('playing 随播放状态：播放中点亮，暂停熄灭', () => {
+    expect(isFloatTopmostPinned('playing', true)).toBe(true)
+    expect(isFloatTopmostPinned('playing', false)).toBe(false)
+  })
+
+  it('播放状态未上报时按建窗态算，免得首帧图钉与窗口层级相反', () => {
+    expect(isFloatTopmostPinned('playing', null)).toBe(true)
+  })
+})
+
+describe('nextFloatTopmost', () => {
+  // 图钉是本窗二态开关：点亮 → 取消置顶；未点亮 → 始终置顶
+  it('默认策略下播放中（点亮）第一击取消置顶，第二击改为始终置顶', () => {
+    const first = nextFloatTopmost('playing', true)
+    expect(first).toBe('never')
+    expect(nextFloatTopmost(first, true)).toBe('always')
+  })
+
+  it('已暂停（未点亮）时点击改为始终置顶', () => {
+    expect(nextFloatTopmost('playing', false)).toBe('always')
+    expect(nextFloatTopmost('never', false)).toBe('always')
+  })
+
+  it('始终置顶（点亮）点击取消', () => {
+    expect(nextFloatTopmost('always', true)).toBe('never')
+    expect(nextFloatTopmost('always', false)).toBe('never')
   })
 })

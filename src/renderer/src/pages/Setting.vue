@@ -4,12 +4,13 @@ import type { NetDiagnoseItem, PocketClientProfileId, PocketVerifyResult } from 
 import type { InputInstance } from 'element-plus'
 import { FEEDBACK_CONTACT_MAX, FEEDBACK_CONTENT_MAX, formatFeedbackMeta } from '@common/feedback'
 import { DEFAULT_POCKET_CLIENT_PROFILE, POCKET_CLIENT_PROFILE_OPTIONS, pocketClientProfileOption } from '@common/pocket-client-profile'
-import { ChatDotRound, Connection, Cpu, Document, Download, Folder, Hide, Lock, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
+import { ChatDotRound, Connection, Cpu, Document, Download, Folder, Hide, Lock, Position, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
 import appIcon from '@renderer/assets/icon.png'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
 import { useUpdater } from '@renderer/composables/use-updater'
+import { ensureFloatTopmost, floatTopmost, setFloatTopmost } from '@renderer/stores/float-topmost'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
 import {
   checkInPocket,
@@ -115,6 +116,7 @@ async function handleCheckIn() {
 
 onMounted(async () => {
   await loadAppConfig()
+  await ensureFloatTopmost()
   // FFmpeg 就绪状态每次都重新判定：目录可能在应用之外被删除或移动
   await refreshFfmpeg()
   await refreshBlockedMembers()
@@ -124,6 +126,12 @@ onMounted(async () => {
   await loadFeedbackMeta()
   consumeUpdateFocus()
 })
+
+/** 单选组的事件是宽联合类型，这里收窄成三个合法取值再落盘，其余值忽略 */
+function onPickFloatTopmost(value: string | number | boolean | undefined) {
+  if (value === 'always' || value === 'playing' || value === 'never')
+    void setFloatTopmost(value)
+}
 
 /** FFmpeg 行状态徽章：可用 / 未配置 / 目录不存在 / 缺少 ffmpeg */
 const ffmpegStateLabel = computed(() => {
@@ -1185,6 +1193,42 @@ onActivated(consumeUpdateFocus)
           </div>
         </section>
 
+        <!-- 播放窗置顶：标题栏图钉是同一偏好的第二个视图，完整三态只在这里给 -->
+        <section class="setting-card glass-card">
+          <div class="setting-row">
+            <span
+              class="row-icon icon-tile"
+              :style="{ '--tile-color': 'var(--color-shows)' }"
+            >
+              <el-icon><Position /></el-icon>
+            </span>
+            <div class="row-text row-text--fluid">
+              <div class="row-title">
+                播放窗置顶
+              </div>
+              <div class="row-desc">
+                播放窗与其他窗口的前后层级；标题栏的图钉可单独调整当前窗
+              </div>
+            </div>
+            <div class="topmost-actions">
+              <el-radio-group
+                :model-value="floatTopmost"
+                @update:model-value="onPickFloatTopmost"
+              >
+                <el-radio-button value="always">
+                  始终置顶
+                </el-radio-button>
+                <el-radio-button value="playing">
+                  仅播放时
+                </el-radio-button>
+                <el-radio-button value="never">
+                  从不置顶
+                </el-radio-button>
+              </el-radio-group>
+            </div>
+          </div>
+        </section>
+
         <!-- 内容与可见性 -->
         <h2 class="setting-group-label" data-setting-group="content">
           内容与可见性
@@ -2202,6 +2246,13 @@ onActivated(consumeUpdateFocus)
 .row-actions {
   flex-shrink: 0;
   /* 屏蔽成员行没有 row-control 占位，auto 外边距保证按钮与其他行一样靠右 */
+  margin-left: auto;
+  display: flex;
+}
+
+/* 三态单选靠右：宽度由内容决定，不像 .row-control 那样撑满中间 */
+.topmost-actions {
+  flex-shrink: 0;
   margin-left: auto;
   display: flex;
 }

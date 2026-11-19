@@ -1,4 +1,4 @@
-import type { AppConfig, ConfigKey } from '@common/app-config'
+import type { AppConfig, ConfigKey, FloatTopmost } from '@common/app-config'
 import type { FeedbackInput } from '@common/feedback'
 import type { DanmakuBatch, FfmpegDownloadProgress, FloatPlayerKind, FloatPlayerPayload, IpcEventArgs, IpcEventChannel, IpcInvokeArgs, IpcInvokeChannel, IpcInvokeReturn, mainAPI, MemberDataContent, MemberFlagKind, MemberTeamPromotion, NetRequestOptions, PocketClientProfileId, PocketDanmakuBatch, PocketRoomBatch, PocketRoomReplyTarget, PocketUnreadBatch, RoomAlbumDownloadProgress, RoomAlbumDownloadSource, TaskSnapshot, UpdaterState } from './ipc-contract'
 import { contextBridge, ipcRenderer } from 'electron'
@@ -134,6 +134,10 @@ const api = {
   floatPlayerGetPayload: (kind: FloatPlayerKind, liveId: string) => invokeIpc('floatPlayerGetPayload', kind, liveId),
   floatWindowFitAspect: (aspect: number) => invokeIpc('floatWindowFitAspect', aspect),
   floatWindowSetPlaying: (playing: boolean) => invokeIpc('floatWindowSetPlaying', playing),
+  // 置顶：get/set 作用于发起窗口，SetTopmostPreference 写全局偏好并波及所有窗
+  floatWindowGetTopmost: () => invokeIpc('floatWindowGetTopmost'),
+  floatWindowSetTopmost: (topmost: FloatTopmost) => invokeIpc('floatWindowSetTopmost', topmost),
+  floatWindowSetTopmostPreference: (topmost: FloatTopmost) => invokeIpc('floatWindowSetTopmostPreference', topmost),
   notifyLiveUnavailable: (liveId: string) => invokeIpc('notifyLiveUnavailable', liveId),
   // liveUnavailable 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   liveUnavailable: (callback: (_liveId: string) => void) =>
@@ -147,6 +151,9 @@ const api = {
   windowIsMaximized: () => invokeIpc('windowIsMaximized'),
   windowOnMaximizeChange: (callback: (_isMaximized: boolean) => void) =>
     onIpc('windowOnMaximizeChange', callback),
+  // windowOnTopmostChange 由 IpcEventMap 派生：主进程写入置顶偏好后广播
+  windowOnTopmostChange: (callback: (_preference: FloatTopmost) => void) =>
+    onIpc('windowOnTopmostChange', callback),
   preventSleep: () => invokeIpc('preventSleep'),
   allowSleep: (id: number) => invokeIpc('allowSleep', id),
 

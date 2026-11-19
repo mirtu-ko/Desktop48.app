@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import type { FloatTopmost } from '@common/app-config'
 import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
-import { FLOAT_BAR_HEIGHT } from '@common/float-window'
+import { FLOAT_BAR_HEIGHT, isFloatTopmostPinned, nextFloatTopmost } from '@common/float-window'
 import LivePlayer from '@renderer/components/player/LivePlayer.vue'
 import PlaybackPlayer from '@renderer/components/player/PlaybackPlayer.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
@@ -35,6 +36,14 @@ const viewportWidth = ref(window.innerWidth)
 // 最大化状态由主进程持有：挂载时查一次初值，之后靠 windowOnMaximizeChange 推回来
 const isMaximized = ref(false)
 let disposeMaximizeChange: (() => void) | undefined
+// 本窗置顶策略同样由主进程持有（图钉只改这一扇窗，不落盘）
+const topmost = ref<FloatTopmost>('playing')
+let disposeTopmostChange: (() => void) | undefined
+// null = 播放器还没上报；图钉亮灭要以「此刻是否真的置顶」为准，缺了它「仅播放时」算不出来
+const playing = ref<boolean | null>(null)
+
+/** 图钉点亮 = 窗口当前实际在最前（含「仅播放时」策略下的播放中） */
+const pinned = computed(() => isFloatTopmostPinned(topmost.value, playing.value))
 
 onMounted(() => {
   EventBus.on('live-unavailable', onLiveUnavailable)
@@ -43,6 +52,14 @@ onMounted(() => {
   })
   void window.mainAPI.windowIsMaximized().then((value) => {
     isMaximized.value = value
+  })
+  // 先订阅再取初值：取的过程中被改动也不会停在旧值上
+  disposeTopmostChange = window.mainAPI.windowOnTopmostChange((preference) => {
+    topmost.value = preference
+  })
+  void window.mainAPI.floatWindowGetTopmost().then((preference) => {
+    if (preference)
+      topmost.value = preference
   })
   // 订阅式通道返回退订函数，必须在 onUnmounted 调用，否则重挂载会累积监听器
   disposeMaximizeChange = window.mainAPI.windowOnMaximizeChange((value) => {
@@ -95,9 +112,43 @@ function onAvatar(url: string) {
     avatarUrl.value = url
 }
 
-/** 播放状态变化 → 主进程据此决定置顶：播放中置顶，暂停 / 结束取消 */
-function onPlaying(playing: boolean) {
-  void window.mainAPI.floatWindowSetPlaying(playing)
+/** 播放状态变化 → 主进程据此决定置顶：播放中置顶，暂停 / 结束取消；本地留一份决定图钉亮灭 */
+function onPlaying(value: boolean) {
+  playing.value = value
+  void window.mainAPI.floatWindowSetPlaying(value)
+}
+
+/** 图钉是本窗二态：点亮时取消置顶，未点亮时改为始终置顶；新策略由主进程回推，不做本地乐观更新 */
+function onToggleTopmost() {
+  const next = nextFloatTopmost(topmost.value, playing.value)
+  void window.mainAPI.floatWindowSetTopmost(next).then(() => {
+    // 浮窗常被别的窗口压住一角，只改图标容易被忽略，成功后再压一条提示
+    showHint(next === 'always' ? '本窗已置顶 · 始终在最前' : '本窗已取消置顶 · 播放时也不置顶')
+  })
+}
+
+/** 点亮时说明「已置顶」并区分是策略继承还是本窗钉住；未点亮时说清下一击会变成什么 */
+const topmostTitle = computed(() => {
+  if (pinned.value) {
+    return topmost.value === 'always'
+      ? '本窗已置顶 · 点击取消置顶'
+      : '本窗播放中置顶（设置页策略）· 点击取消置顶'
+  }
+  return topmost.value === 'never'
+    ? '本窗不置顶 · 点击始终置顶'
+    : '本窗已暂停，暂不置顶（设置页策略）· 点击始终置顶'
+})
+
+/** 切换提示：浮窗尺寸小，用画面顶部的一条胶囊，1.8s 后自动消失 */
+const hint = ref('')
+let hintTimer: ReturnType<typeof setTimeout> | undefined
+
+function showHint(text: string) {
+  hint.value = text
+  clearTimeout(hintTimer)
+  hintTimer = setTimeout(() => {
+    hint.value = ''
+  }, 1800)
 }
 
 /** 播放窗与主窗口不共享 EventBus：上报主进程转发给主窗口，列表页才能刷新 */
@@ -116,6 +167,8 @@ useEventListener(window, 'pagehide', () => {
 onUnmounted(() => {
   EventBus.off('live-unavailable', onLiveUnavailable)
   disposeMaximizeChange?.()
+  disposeTopmostChange?.()
+  clearTimeout(hintTimer)
 })
 
 // 全屏时标题栏虽不可见，其原生拖拽区仍可能吞点击（与 AppTitleBar 同款问题）：全屏期间停用 drag
@@ -137,6 +190,17 @@ useEventListener(document, 'fullscreenchange', () => {
       :style="{ height: `${FLOAT_BAR_HEIGHT}px` }"
       @dblclick="onToggleMaximize"
     >
+      <!-- 置顶图钉：本窗二态，点亮 = 当前实际在最前（含「仅播放时」策略下的播放中）。
+           放最左侧而不是窗口按钮组里 —— 那里是「最小化 / 关闭」的肌肉记忆区，误触代价完全不同 -->
+      <button
+        class="fw-pin"
+        :class="{ 'is-on': pinned }"
+        :title="topmostTitle"
+        @click.stop="onToggleTopmost"
+        @dblclick.stop
+      >
+        <MediaIcon name="pushpinFilled" :size="15" />
+      </button>
       <span class="fw-kind" :class="{ 'is-playback': kind === 'playback' }">
         {{ kind === 'live' ? '直播' : '回放' }}
       </span>
@@ -192,6 +256,14 @@ useEventListener(document, 'fullscreenchange', () => {
       <div v-else class="fw-hint">
         正在打开播放窗口…
       </div>
+
+      <!-- 图钉切换的即时反馈：不挡住播放器控制（pointer-events: none），1.8s 后自消 -->
+      <Transition name="fw-toast">
+        <div v-if="hint" class="fw-toast" role="status">
+          <MediaIcon name="pushpinFilled" :size="13" />
+          <span>{{ hint }}</span>
+        </div>
+      </Transition>
     </div>
   </div>
 </template>
@@ -208,11 +280,54 @@ useEventListener(document, 'fullscreenchange', () => {
    高度由 FLOAT_BAR_HEIGHT 经 :style 注入，主进程算窗口尺寸用同一个值。 */
 .fw-bar {
   gap: 8px;
-  padding: 0 0 0 12px;
+  /* 图钉贴左，故比主窗口更窄的内边距 */
+  padding: 0 0 0 6px;
 }
 
 .fw-bar.is-html-fullscreen {
   -webkit-app-region: no-drag;
+}
+
+/* 置顶图钉：本窗二态（钉住 / 未钉住），hover 给品牌色、按下缩一圈，
+   与右侧窗口按钮的整块底色反馈区分开 */
+.fw-pin {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: var(--el-text-color-secondary);
+  background: transparent;
+  cursor: pointer;
+  /* 标题栏整条是拖拽区，按钮必须让出 */
+  -webkit-app-region: no-drag;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease,
+    transform 0.12s ease;
+
+  &:hover {
+    color: var(--brand-primary);
+    background: rgba(var(--brand-rgb), 0.1);
+  }
+
+  &:active {
+    transform: scale(0.9);
+  }
+}
+
+/* 钉住：品牌色 + 实心圆底 */
+.fw-pin.is-on {
+  color: var(--brand-primary);
+  background: rgba(var(--brand-rgb), 0.16);
+
+  &:hover {
+    background: rgba(var(--brand-rgb), 0.22);
+  }
 }
 
 .fw-kind {
@@ -249,10 +364,56 @@ useEventListener(document, 'fullscreenchange', () => {
 }
 
 .fw-body {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
   background: #000;
+}
+
+/* 切换提示：压在画面顶部居中，深底浅字保证在亮暗画面上都读得清；
+   层级要盖过播放器控制条（20 / 29 / 35），但不吃指针事件 */
+.fw-toast {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 40;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  padding: 8px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  line-height: 1.4;
+  color: #fff;
+  background: rgba(22, 18, 38, 0.82);
+  box-shadow: 0 10px 26px -14px rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.fw-toast-enter-active,
+.fw-toast-leave-active {
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.fw-toast-enter-from,
+.fw-toast-leave-to {
+  opacity: 0;
+  /* 保留水平居中，只做垂直位移 */
+  transform: translate(-50%, -6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fw-toast-enter-active,
+  .fw-toast-leave-active {
+    transition: none;
+  }
 }
 
 .fw-hint {

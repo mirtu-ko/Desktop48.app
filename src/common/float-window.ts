@@ -1,4 +1,5 @@
 /** 独立播放窗的共享常量与几何工具，主进程与渲染端跨进程共用的唯一来源。 */
+import type { FloatTopmost } from './app-config'
 
 export interface WindowSize {
   w: number
@@ -110,6 +111,45 @@ export function decideAutoFit(
       userResized = true
   }
   return { userResized, fit: !userResized }
+}
+
+/* ---------------------------------------------------------------------------
+ * 置顶策略：偏好（always / playing / never）× 播放状态 → 目标置顶态。
+ * 判定只此一处，主进程负责把结果写回窗口，别在别处再拼一遍条件。
+ * ------------------------------------------------------------------------- */
+
+/**
+ * 目标置顶态：`always` 恒置顶；`playing` 随播放状态走（暂停 / 结束让出层级）；`never` 恒不置顶。
+ */
+export function resolveFloatTopmost(preference: FloatTopmost, playing: boolean): boolean {
+  if (preference === 'always')
+    return true
+  return preference === 'playing' && playing
+}
+
+/**
+ * 建窗瞬间的置顶态：此刻还没有播放状态上报，`playing` 策略下也要先置顶，
+ * 否则新窗一出现就被主窗口盖住，像是没打开；`never` 是用户明确拒绝，照办。
+ */
+export function initialFloatTopmost(preference: FloatTopmost): boolean {
+  return preference !== 'never'
+}
+
+/**
+ * 图钉亮灭 = 窗口当前是否真的置顶，而不是策略字面值：
+ * 「仅播放时」在播放中也算点亮，否则图钉与窗口层级相反，用户第一下点击会得到相反的结果。
+ * `playing` 为 null 表示播放器尚未上报，按建窗态算（见 initialFloatTopmost）。
+ */
+export function isFloatTopmostPinned(preference: FloatTopmost, playing: boolean | null): boolean {
+  return playing === null ? initialFloatTopmost(preference) : resolveFloatTopmost(preference, playing)
+}
+
+/**
+ * 图钉是**本窗**的二态开关：点亮时点击取消置顶，未点亮时点击改为始终置顶。
+ * 「仅播放时」只是从设置页继承来的默认策略，图钉不做三态循环——窗口级临时选择用不到它。
+ */
+export function nextFloatTopmost(preference: FloatTopmost, playing: boolean | null): FloatTopmost {
+  return isFloatTopmostPinned(preference, playing) ? 'never' : 'always'
 }
 
 /* ---------------------------------------------------------------------------
