@@ -388,9 +388,8 @@ onMounted(async () => {
   }
 }
 
-/* 紧凑档：整条 80 高收到 65、底距 16 收到 12（--dock-reserve 在 app.scss 里对齐到 80），
- * 宽度 564 收到 443，窄窗口下左右仍有富余。断点值由 density-breakpoint 测试守卫 */
-@media (max-height: 760px) {
+/* 紧凑档：整条 80 高收到 65、宽度 564 收到 443，底距跟着 --dock-reserve 收到 80 */
+:root[data-density='compact'] {
   .app-dock {
     bottom: 12px;
     padding: 6px 20px 8px;

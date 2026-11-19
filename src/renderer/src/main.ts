@@ -8,12 +8,17 @@ import { installElement } from './plugins/element-plus'
 import routes from './routes'
 import { installFloatPlayers } from './stores/float-players'
 import { installTasks } from './stores/tasks'
+import { installDensitySignal } from './utils/apply-density'
 import { trackEvent, trackPage } from './utils/umami'
 
 // 只引 Element Plus 的变量层与基础重置，组件样式随 plugins/element-plus 按需进入；
 // 必须排在 app.scss 之前——app.scss 的 --el-* 覆盖已提特异性，顺序不再决定胜负，但仍保持「基础在前」的直觉
 import 'element-plus/theme-chalk/base.css'
 import './assets/css/app.scss'
+
+// 密度档在首次渲染前同步写入 html：晚一步会先按常规档画一帧再跳。
+// 主窗口与独立播放窗共用本入口，两处都装。
+installDensitySignal()
 
 // 独立播放窗与主窗口复用同一份 index.html，靠 hash 分流：命中 FLOAT_WINDOW_HASH_PATH 即播放窗。
 // 该常量与主进程拼 loadFile hash 时用的是同一个（src/common/float-window.ts），

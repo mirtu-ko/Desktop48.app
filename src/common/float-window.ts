@@ -49,6 +49,16 @@ const FLOAT_INITIAL_WIDTH_RATIO = 0.45
 /** 初始视频区高度上限 = 工作区高度 × 此比例（竖屏视频的实际约束） */
 const FLOAT_INITIAL_HEIGHT_RATIO = 0.7
 
+/**
+ * 视频区宽度下限：比例在 1280 级小屏上算出的窗口太窄（竖屏 ~295、横屏 576），
+ * 控制条与弹幕都挤，故给下限；工作区装不下时按可容纳范围回缩，不做硬保证。
+ */
+const FLOAT_INITIAL_MIN_WIDTH_PORTRAIT = 320
+const FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE = 680
+
+/** 窗口与工作区边缘的留白：初始尺寸的可容纳上限与创建位置共用同一数值 */
+const FLOAT_EDGE_MARGIN = 24
+
 /** 显示器工作区（DIP，含原点），只取计算所需字段 */
 interface WorkArea {
   x: number
@@ -57,13 +67,31 @@ interface WorkArea {
   height: number
 }
 
+/** 视频区初始宽度下限：竖屏看短边，横屏看宽边 */
+function initialMinVideoWidth(aspect: number): number {
+  return aspect < 1 ? FLOAT_INITIAL_MIN_WIDTH_PORTRAIT : FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE
+}
+
 /**
  * 计算独立播放窗的尺寸（含标题栏）：视频区在比例框内内接，结果不小于最小尺寸。
  * 建窗与真实比例到达时共用此函数整体重算，不能只保住兜底宽度。
+ *
+ * 比例框先按工作区比例算出，再按下限撑开（竖屏撑高、横屏撑宽），
+ * 撑开后夹回工作区可容纳范围——下限只在小屏上起效，不能把窗口顶出屏幕。
  */
 export function computeInitialWindowSize(aspect: number, workArea: WorkArea): WindowSize {
-  const maxW = Math.round(workArea.width * FLOAT_INITIAL_WIDTH_RATIO)
-  const maxH = Math.round(workArea.height * FLOAT_INITIAL_HEIGHT_RATIO) - FLOAT_BAR_HEIGHT
+  const minVideoW = initialMinVideoWidth(aspect)
+  const maxW = Math.min(
+    Math.max(Math.round(workArea.width * FLOAT_INITIAL_WIDTH_RATIO), minVideoW),
+    workArea.width - FLOAT_EDGE_MARGIN * 2,
+  )
+  const maxH = Math.min(
+    Math.max(
+      Math.round(workArea.height * FLOAT_INITIAL_HEIGHT_RATIO) - FLOAT_BAR_HEIGHT,
+      Math.round(minVideoW / aspect),
+    ),
+    workArea.height - FLOAT_BAR_HEIGHT - FLOAT_EDGE_MARGIN * 2,
+  )
   const video = fitAspectInBox(aspect, maxW, maxH)
   return {
     w: Math.max(FLOAT_MIN_WIDTH, video.w),
@@ -155,9 +183,6 @@ export function nextFloatTopmost(preference: FloatTopmost, playing: boolean | nu
 /* ---------------------------------------------------------------------------
  * 创建位置：锚定工作区右上角，多窗按对角级联错开，避免新窗完全叠在旧窗上。
  * ------------------------------------------------------------------------- */
-
-/** 播放窗距工作区右上角的留白 */
-const FLOAT_EDGE_MARGIN = 24
 
 /** 级联偏移步长（DIP）：约一行标题栏高，错开即可辨认 */
 export const FLOAT_CASCADE_STEP = 28

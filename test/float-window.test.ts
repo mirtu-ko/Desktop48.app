@@ -43,12 +43,35 @@ describe('computeInitialWindowSize', () => {
   })
 
   it('两个方向各自的比例都不受对方影响', () => {
-    // 横屏吃宽度上限，竖屏吃高度上限；同一块屏幕上两者互不干扰
+    // 横屏吃宽度下限，竖屏吃高度上限（下限撑开）；同一块屏幕上两者互不干扰
     const small = { x: 0, y: 0, width: 1366, height: 768 }
-    // 竖屏：高度封顶 502，宽度回缩到 282
-    expect(computeInitialWindowSize(9 / 16, small)).toEqual({ w: 282, h: 502 + FLOAT_BAR_HEIGHT })
-    // 横屏：宽度 615 未被高度封顶，直接铺满
-    expect(computeInitialWindowSize(16 / 9, small)).toEqual({ w: 615, h: 346 + FLOAT_BAR_HEIGHT })
+    // 竖屏：300 短边下限撑到 533 高（> 768*0.7-36 的 502）
+    expect(computeInitialWindowSize(9 / 16, small)).toEqual({ w: 300, h: 533 + FLOAT_BAR_HEIGHT })
+    // 横屏：615 低于 640 下限，撑到 640 宽、360 高
+    expect(computeInitialWindowSize(16 / 9, small)).toEqual({ w: 640, h: 360 + FLOAT_BAR_HEIGHT })
+  })
+
+  it('1280 级小屏按下限撑开，不再得到 295 / 576 的小窗', () => {
+    const hd = { x: 0, y: 0, width: 1280, height: 800 }
+    // 竖屏：9:16 下 300 宽即 533 高
+    expect(computeInitialWindowSize(9 / 16, hd)).toEqual({ w: 300, h: 533 + FLOAT_BAR_HEIGHT })
+    // 横屏：640x360
+    expect(computeInitialWindowSize(16 / 9, hd)).toEqual({ w: 640, h: 360 + FLOAT_BAR_HEIGHT })
+  })
+
+  it('下限只抬小屏，大屏仍按工作区比例', () => {
+    // 1920 上竖屏 405 / 横屏 864，均高于下限，数值不受影响
+    expect(computeInitialWindowSize(9 / 16, HD).w).toBe(405)
+    expect(computeInitialWindowSize(16 / 9, HD).w).toBe(864)
+  })
+
+  it('工作区装不下下限时按可容纳范围回缩', () => {
+    // 1024x600：竖屏要 533 高，只留得下 600-36-48=516 → 290x516
+    const tiny = { x: 0, y: 0, width: 1024, height: 600 }
+    const portrait = computeInitialWindowSize(9 / 16, tiny)
+    expect(portrait).toEqual({ w: 290, h: 516 + FLOAT_BAR_HEIGHT })
+    expect(portrait.h).toBeLessThanOrEqual(tiny.height)
+    expect(portrait.w).toBeLessThan(tiny.width)
   })
 
   it('分辨率翻倍时窗口同步翻倍，占屏比保持一致', () => {
@@ -67,7 +90,8 @@ describe('computeInitialWindowSize', () => {
 
   it('小屏不会占掉半个屏幕', () => {
     const small = computeInitialWindowSize(9 / 16, { x: 0, y: 0, width: 1366, height: 768 })
-    expect(small.h).toBeLessThanOrEqual(Math.round(768 * 0.7))
+    // 下限撑开后高度为 569，仍在工作区（留 32 边距）内
+    expect(small.h).toBeLessThanOrEqual(768 - 32)
     expect(small.w).toBeLessThan(small.h)
   })
 

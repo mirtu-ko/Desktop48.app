@@ -66,16 +66,15 @@ const displayLoading = useMinVisibleLoading(() => props.loading)
   }
 }
 
-/* 紧凑档：内距与圆钮一起收一档（4+32 → 3+28 = 34），与同排的 tab 栏（33）、
- * 关注条（34）等高。只收 tab 栏不收这里，工具行会被最高的那个撑住，
- * tab 栏被居中推低约 4px，换页时整行跳动 */
-@media (max-height: 760px) {
+/* 紧凑档：内距与圆钮收到 34，与同排 tab 栏（33）、关注条（34）等高；
+ * 只收 tab 栏会让工具行被最高项撑住，换页时整行跳动 */
+:root[data-density='compact'] {
   .floating-dock {
     gap: 8px;
     padding: 3px;
   }
 
-  :deep(.el-button.is-circle) {
+  .floating-dock :deep(.el-button.is-circle) {
     width: 28px;
     height: 28px;
   }

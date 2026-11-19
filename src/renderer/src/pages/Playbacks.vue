@@ -422,9 +422,8 @@ watch(selectedFilter, () => {
   flex-shrink: 0;
 }
 
-/* 紧凑档：整行顶距跟着 --float-top 下调（12→8，见 app.scss），
- * 筛选器也收到 28 —— 它留在 32 会把整行撑到 38，同排的 tab 栏就被居中推低 */
-@media (max-height: 760px) {
+/* 紧凑档：筛选器收到 28，否则同排 tab 栏会被居中推低 */
+:root[data-density='compact'] {
   .page-toolbar :deep(.el-cascader) {
     --el-component-size: 28px;
   }

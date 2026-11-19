@@ -404,8 +404,8 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
   }
 }
 
-/* 紧凑档：内距与头像块一起收一档（4+32 → 3+28 = 34），与同排的 tab 栏、刷新浮层等高 */
-@media (max-height: 760px) {
+/* 紧凑档：内距与头像块收到 34，与同排 tab 栏、刷新浮层等高 */
+:root[data-density='compact'] {
   .follow-strip {
     padding: 3px;
   }

@@ -72,26 +72,36 @@
   /* 列表页内容区统一内边距：上留浮动 tab 栏、左右统一值、下留卡片悬停上浮与阴影 */
   --page-pad: var(--tabbar-offset-top) var(--space-page-x) 8px;
 
-  /* ===== 密度 token：紧凑档（紧随其后的 max-height 覆盖）只改这一组 =====
-   * 跨组件共用的尺寸放这里；单组件内部的一两处走各自 scoped 的紧凑块
-   * （断点值统一为 max-height: 760px，由 test/density-breakpoint.test.ts 守卫）。
-   * 只压留白与装饰尺寸，正文与消息字号不降：低 DPI 屏上小字是净损失。 */
-  /* 列表页左右内边距随窗口宽度增长：1400 窗口下 1.1vw=15.4 仍取下限 16（满意档零变化），
-   * 2560 拉满时约 28，内容不再贴着窗口边缘。紧凑档固定 12 不参与——矮屏缺的是高度，
-   * 且那里的宽度普遍不大，再压边距反而让卡片挤在一起 */
-  --space-page-x: clamp(16px, 1.1vw, 32px);
-  /* 卡片列宽：单卡宽度恒定落在「舒适带」内，只由窗口宽度决定（紧凑档不碰这三个值，
-   * 否则同一宽度换个窗口高度就换一套列数）。
-   * 写法 min(带上限, 按 m 列均分内容宽)：宽度够时取上限，于是 1400 窗口下单卡宽与
-   * 0.2.11 一致、更宽的窗口也不会被 1fr 撑胖；窄到 m 列装不下上限时保持 m 列、卡片等比收窄，
-   * 不会掉列把卡片撑大。 */
-  /* 下限 225 是「1280×800 工作区的 1216 窗口排 5 列」与「1920 窗口仍排 7 列」的唯一交集：
-   * 5 列要求下限 ≤225.6，7 列要求下限 >224，可用区间只有 1.6px。 */
-  --card-min: min(225px, calc((100% - 3 * var(--card-gap)) / 4)); // 1:1 封面卡（直播 / 回放）：带 225–265
-  --card-gap: 16px; // 卡片网格间距
-  --show-min: min(300px, calc((100% - 3 * var(--show-gap)) / 4)); // 16:9 封面卡（公演）：带 300–380
-  --show-gap: 20px; // 公演网格间距比 1:1 卡宽松
-  --album-min: min(265px, calc((100% - 3 * var(--card-gap)) / 4)); // 专辑卡（唱片套 + 曲目摘要横排）：带 265–335
+  /* ===== 密度 token：紧凑档只覆盖这一组，跨组件共用的尺寸放这里 =====
+   * 档位由 html[data-density] 提供，断点值见 src/common/density.ts；正文与消息字号不降。 */
+  /* 水平内距只由窗口宽度决定：1vw 里的 vw 是窗口宽，主进程按工作区宽定窗口宽，两者是上下游。
+   * 紧凑档不覆盖，它参与内容宽计算，改了会让同宽换高度就换列数。
+   * 下限 12 保住小屏排 5 列，宽屏渐增到 32 */
+  --space-page-x: clamp(12px, 1vw, 32px);
+  /* 卡片尺寸只由窗口宽度决定（紧凑档不碰这一组）：小屏按 vw 连续收一档，≥1400 宽回到基准值。
+   * clamp 系数 = 基准值 / 1400，满意档与既有观感逐像素一致。 */
+  --card-gap: clamp(12px, 1.15vw, 16px); // 1:1 卡与专辑网格间距
+  --show-gap: clamp(15px, 1.43vw, 20px); // 公演网格间距比 1:1 卡宽松
+  /* 基准 225 是「1216 窗口排 5 列」与「1920 窗口仍排 7 列」的唯一交集，区间仅 1.6px。
+   * 小屏收到 200：窗口按 1.7 比例变窄后仍保住 5 列，单卡等比缩小而不是掉列撑大。 */
+  --card-min: min(
+    clamp(200px, 16.1vw, 225px),
+    calc((100% - 3 * var(--card-gap)) / 4)
+  ); // 1:1 封面卡（直播 / 回放）：带 200–265
+  --show-min: min(
+    300px,
+    max(clamp(230px, 18.6vw, 260px), calc((100% - 3 * var(--show-gap)) / 4))
+  ); // 16:9 封面卡（公演）：带 300–380，地板 260→230
+  --album-min: min(
+    265px,
+    max(clamp(215px, 17.2vw, 240px), calc((100% - 3 * var(--card-gap)) / 4))
+  ); // 专辑横排卡：带 265–335，地板 240→215
+  /* 卡片内部尺寸：与卡宽同源，封面 / 黑胶 / 横排间距 / 内距一起收 */
+  --album-cover: clamp(86px, 6.9vw, 96px);
+  --album-vinyl: clamp(74px, 5.9vw, 82px);
+  --album-label: clamp(30px, 2.45vw, 34px);
+  --album-inner-gap: clamp(20px, 2.3vw, 32px);
+  --album-inset: clamp(9px, 0.86vw, 12px);
   --card-body-pad: 10px 12px 12px; // 封面下方文字区
   --dock-item-w: 56px; // Dock 单项宽
   --dock-icon: 40px; // Dock 图标磁贴边长
@@ -126,34 +136,24 @@
   --player-glass-hover: rgba(255, 255, 255, 0.12);
 }
 
-/* ===== 紧凑档：低分辨率屏（1366×768 / 1080p@150% 等有效高度 ≤760 的机器） =====
- * 只认高度不认宽度：这些设备窗口宽度通常仍在 1093 以上，缺的是垂直空间；
- * 一块 21:9 的矮屏同样缺高度，所以不与 max-width 做与运算。
- * 只管垂直留白与组件内部留白，不碰卡片列宽（--card-min / --card-gap）：
- * 同一窗口宽度下改高度就换一套列数，用户会以为布局坏了。 */
-@media (max-height: 760px) {
-  :root {
-    /* 浮动 tab 栏收到 35 高、顶距 8，底边落在 43，留 7px 呼吸 */
-    --tabbar-offset-top: 50px;
-    --float-top: 8px;
-    /* Dock 紧凑高 65 + 底距 12，留白必须盖住它，否则最后一张卡被压住 */
-    --dock-reserve: 80px;
-    --space-page-x: 12px;
-    --card-body-pad: 7px 9px 9px;
-    --dock-item-w: 46px;
-    --dock-icon: 32px;
-    --dock-gap: 5px;
-    --radius-card: 16px;
-  }
+/* ===== 紧凑档：html[data-density='compact'] 由 main.ts 按 src/common/density.ts 的断点写入 =====
+ * 只压垂直留白与装饰尺寸，不碰参与内容宽计算的变量（列宽 / 网格间距 / 水平内距）。 */
+:root[data-density='compact'] {
+  --tabbar-offset-top: 50px;
+  --float-top: 8px;
+  --dock-reserve: 80px;
+  --card-body-pad: 7px 9px 9px;
+  --dock-item-w: 46px;
+  --dock-icon: 32px;
+  --dock-gap: 5px;
+  --radius-card: 16px;
 
-  /* 默认尺寸按钮收到 28：EP 的高度是构建期写死的 32px，运行时没有可调的变量。
-   * 圆钮保持 32（回顶钮与 44px 下载入口靠它对齐），small / large / 文字按钮各有自己的尺寸，不动 */
+  /* EP 默认按钮高度构建期写死 32px，只能运行时覆写；圆钮与 small / large 保持原尺寸 */
   .el-button:not(.is-circle):not(.el-button--small):not(.el-button--large):not(.is-link):not(.is-text) {
     height: 28px;
     padding: 6px 13px;
   }
 
-  /* 分区标题：间距与药丸高度各收一档，列表页每多一个分区就省 8px */
   .section-title {
     margin: 12px 2px 8px;
     font-size: 13px;
@@ -163,15 +163,18 @@
     }
   }
 
-  /* 详情卡：侧标题与右栏标题头收窄，把高度让给内容区 */
   .detail-side-title {
     font-size: 17px;
   }
 
-  /* 矮屏上 86vh 只剩五百出头：卡片改吃 90vh，多出来的 30px 全给可滚区 */
-  .detail-card-dialog.el-dialog,
-  .detail-card-dialog.election-history-dialog.el-dialog {
+  /* 86vh 在矮屏只剩五百出头，放宽到 90vh 把空间给可滚区 */
+  .detail-card-dialog.el-dialog {
     height: min(90vh, 660px);
+  }
+
+  /* 履历卡上限仍是 640，不跟着放宽 */
+  .detail-card-dialog.election-history-dialog.el-dialog {
+    height: min(90vh, 640px);
   }
 
   .detail-pane-head {
@@ -915,8 +918,8 @@ body,
     height: 100%;
     padding: 0;
     overflow: hidden;
-    /* 详情卡内部按「卡自己的宽度」适配（见下方 .detail-side 的容器查询）；
-     * inline-size 只建立行轴容器，不影响高度 */
+    /* 详情卡按卡宽适配（见 .detail-side 的容器查询）；inline-size 只建立行轴容器。
+     * 它会让本元素成为绝对定位包含块，卡内浮标须自带 position:relative 锚点 */
     container-type: inline-size;
   }
 }

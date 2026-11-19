@@ -229,8 +229,8 @@ function dblClick(tab: FloatingTabItem) {
   }
 }
 
-/* 紧凑档：条目 33 高收到 27、整条 41 收到 33（顶距由 --float-top 统一下调，见 app.scss） */
-@media (max-height: 760px) {
+/* 紧凑档：条目 33 高收到 27、整条 41 收到 33，顶距由 --float-top 统一下调 */
+:root[data-density='compact'] {
   .float-tab-bar {
     gap: 3px;
     padding: 3px;

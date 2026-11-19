@@ -3446,6 +3446,21 @@ onMounted(() => {
   .rooms-aside {
     display: none;
   }
+
+  /* 窄窗才收水平留白；垂直分量归密度档，两条轴各改各的 */
+  .rooms-page,
+  .side-head {
+    padding-inline: 10px;
+  }
+
+  .room-item {
+    padding-inline: 6px;
+  }
+
+  .main-head,
+  .chat-tools {
+    padding-inline: 12px;
+  }
 }
 
 .msg-scroll {
@@ -4292,21 +4307,22 @@ onMounted(() => {
   min-width: 64px;
 }
 
-/* 紧凑档：两张面板的头、房间行、消息行一起收一档，同样的高度能多看两三条消息。
- * 断点值由 test/density-breakpoint.test.ts 守卫 */
-@media (max-height: 760px) {
+/* 紧凑档：两张面板的头、房间行、消息行只收垂直分量，水平留白交给上面的宽度档。
+ * 同样的高度能多看两三条消息。 */
+:root[data-density='compact'] {
   .rooms-page {
     gap: 10px;
-    padding: 10px 10px var(--dock-reserve);
+    padding-top: 10px;
   }
 
   .side-head {
-    padding: 10px 10px 8px;
+    padding-top: 10px;
+    padding-bottom: 8px;
   }
 
   .room-item {
     gap: 8px;
-    padding: 7px 6px;
+    padding-block: 7px;
   }
 
   .room-avatar {
@@ -4316,13 +4332,12 @@ onMounted(() => {
 
   .main-head {
     gap: 10px;
-    padding: 10px 12px;
+    padding-block: 10px;
   }
 
-  /* 矮屏通常同时是窄屏：工具栏左右与间隙各收一档，给两个定宽控件腾 20px */
   .chat-tools {
     gap: 8px;
-    padding: 8px 12px 0;
+    padding-top: 8px;
   }
 
   .main-avatar {
@@ -4332,7 +4347,7 @@ onMounted(() => {
 
   .msg-row {
     gap: 8px;
-    padding: 4px 2px;
+    padding-block: 4px;
   }
 
   .msg-avatar {
