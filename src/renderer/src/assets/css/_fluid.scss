@@ -1,19 +1,40 @@
 @use 'sass:math';
+@use 'sass:string';
 
-// 高度轴连续插值：窗口内容高 641px 取下限、900px 取上限，中间按 --vh-step 线性过渡。
-// 用法 fluid(7px, 10px) → clamp(7px, calc(7px + 3 * var(--vh-step)), 10px)。
-// 只接受 px（--vh-step 本身是长度，系数必须是纯数）；两端的值就是原「紧凑档 / 基准」值。
+// 两条尺寸轴：主窗口按内容高（--vh-step，641 → 900）、独立播放窗按窗口宽（--fp-step，320 → 900）。
+// 两者同构，只是轴变量不同，故共用一个实现。
 //
-// 返回未加引号的原文而非 clamp() 表达式：Sass 会把 math function 里嵌套的 calc() 化简掉，
-// 而化简后的形式在部分场景（自定义属性）不合法；拼好字符串最稳。
+// 曲线的「基准点」是 step = 1：主窗口 900 高、浮窗 900 宽，此处仍等于传进来的上限值。
+// 基准以下逐像素不变；超过基准后值不封顶，而是沿同一斜率继续长，到 step = $growth 才收住。
+// 想让大窗口的元素更大 / 更小只动这一个数（改回 1 就退化为「到基准即封顶」）。
+$growth: 1.4;
+
+// 拼好 clamp 字符串而非返回 clamp() 表达式：Sass 会把 math function 里嵌套的 calc() 化简掉，
+// 化简后的形式在部分场景（自定义属性）不合法；拼字符串最稳。
 // 自定义属性的值不经过 Sass 求值，那里必须写成 `--x: #{fluid(a, b)};`。
-@function fluid($min, $max) {
+@function _curve($min, $max, $step, $grow) {
   $delta: math.div($max - $min, 1px);
 
-  // 负数（负外边距）也会出现：此时 $max 更小，clamp 的两端要交换，系数取绝对值配减号
+  // 负数（负外边距）也会出现：此时 $max 小于 $min，clamp 的两端要交换，系数取绝对值配减号
   @if $delta < 0 {
-    @return unquote('clamp(#{$max}, calc(#{$min} - #{math.abs($delta)} * var(--vh-step)), #{$min})');
+    @return string.unquote(
+      'clamp(#{$min - math.abs($delta) * $grow}, calc(#{$min} - #{math.abs($delta)} * var(#{$step})), #{$min})'
+    );
   }
 
-  @return unquote('clamp(#{$min}, calc(#{$min} + #{$delta} * var(--vh-step)), #{$max})');
+  // 第三参数是基准值再加一段同样的增量：step 过 1 之后继续长，到 $grow 封顶
+  @return string.unquote('clamp(#{$min}, calc(#{$min} + #{$delta} * var(#{$step})), #{$min + $delta * $grow})');
+}
+
+// 主窗口高度轴：窗口内容高 641px 取下限、900px 取基准值
+@function fluid($min, $max, $grow: $growth) {
+  @return _curve($min, $max, --vh-step, $grow);
+}
+
+// 独立播放窗浮层轴：本窗 100vw 就是窗口内容宽，320 取下限、900 取基准值
+//
+// $grow 传 1 = 到基准值就封顶。用于高度被别处钉死的元素：浮窗标题栏是 36px
+// （FLOAT_BAR_HEIGHT，主进程按它算窗口总高），栏内元素若继续长就会挤成宽扁条。
+@function fp($min, $max, $grow: $growth) {
+  @return _curve($min, $max, --fp-step, $grow);
 }

@@ -974,7 +974,9 @@ onUnmounted(() => {
   </div>
 </template>
 
-<style scoped>
+<style scoped lang="scss">
+@use '../../assets/css/fluid' as *;
+
 .live-player {
   width: 100%;
   height: 100%;
@@ -1008,14 +1010,14 @@ onUnmounted(() => {
   inset: 0;
   z-index: 35;
   /* 卡内文字 / 头像共用一条曲线：12px 正文 → 15px、21px 头像 → 28px（紧凑档另有更紧的覆写） */
-  --le-text: clamp(12px, calc(12px + 3 * var(--fp-step)), 15px);
-  --le-avatar: clamp(21px, calc(21px + 7 * var(--fp-step)), 28px);
+  --le-text: #{fp(12px, 15px)};
+  --le-avatar: #{fp(21px, 28px)};
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: calc(var(--fp-gap) * 2);
-  padding: clamp(13px, calc(13px + 9 * var(--fp-step)), 22px);
+  padding: fp(13px, 22px);
   background: #0c0c0c;
   color: #fff;
   text-align: center;
@@ -1023,14 +1025,14 @@ onUnmounted(() => {
 }
 
 .live-end__title {
-  font-size: clamp(16px, calc(16px + 4 * var(--fp-step)), 20px);
+  font-size: fp(16px, 20px);
   font-weight: 700;
   letter-spacing: 1px;
 }
 
 .live-end__name {
   max-width: 100%;
-  font-size: clamp(13px, calc(13px + 3 * var(--fp-step)), 16px);
+  font-size: fp(13px, 16px);
   opacity: 0.85;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1042,11 +1044,11 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: clamp(5px, calc(5px + 3 * var(--fp-step)), 8px);
+  gap: fp(5px, 8px);
 }
 
 .live-end__stat {
-  padding: clamp(3px, calc(3px + 2 * var(--fp-step)), 5px) clamp(10px, calc(10px + 6 * var(--fp-step)), 16px);
+  padding: fp(3px, 5px) fp(10px, 16px);
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.1);
   font-size: var(--le-text);
@@ -1060,7 +1062,7 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 4px;
   width: 100%;
-  max-width: clamp(230px, calc(230px + 90 * var(--fp-step)), 320px);
+  max-width: fp(230px, 320px);
   margin-top: 2px;
 }
 
@@ -1109,7 +1111,7 @@ onUnmounted(() => {
 /* 关闭：品牌渐变胶囊；纯动作按钮，无状态语义 */
 .live-end__close {
   margin-top: 4px;
-  padding: clamp(5px, calc(5px + 3 * var(--fp-step)), 8px) clamp(17px, calc(17px + 9 * var(--fp-step)), 26px);
+  padding: fp(5px, 8px) fp(17px, 26px);
   border: none;
   border-radius: var(--radius-pill);
   font-family: inherit;
@@ -1125,7 +1127,7 @@ onUnmounted(() => {
 
 /* 加载失败卡复用结束卡外壳，只补一行原因说明 */
 .live-load-failed__hint {
-  max-width: clamp(240px, calc(240px + 100 * var(--fp-step)), 340px);
+  max-width: fp(240px, 340px);
   font-size: var(--le-text);
   line-height: 1.6;
   opacity: 0.55;
@@ -1171,10 +1173,10 @@ onUnmounted(() => {
 .live-status {
   display: inline-flex;
   align-items: center;
-  gap: clamp(4px, calc(4px + 3 * var(--fp-step)), 7px);
+  gap: fp(4px, 7px);
   flex: 0 1 auto;
   min-width: 0;
-  padding: clamp(2px, calc(2px + 3 * var(--fp-step)), 5px) clamp(7px, calc(7px + 5 * var(--fp-step)), 12px);
+  padding: fp(2px, 5px) fp(7px, 12px);
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
@@ -1216,12 +1218,12 @@ onUnmounted(() => {
   /* left / top 由脚本注入（useDanmakuLayer.topLeft）：锚画面左边缘、贴窗口顶，与气泡层同一内缩量。
      宽度 / 内距 / 字号随 --fp-step 放大：面板同比例变宽，行内各件也不挤 */
   z-index: 29;
-  min-width: clamp(118px, calc(118px + 30 * var(--fp-step)), 148px);
-  max-width: clamp(232px, calc(232px + 56 * var(--fp-step)), 288px);
+  min-width: fp(118px, 148px);
+  max-width: fp(232px, 288px);
   max-height: 45%;
   overflow-y: auto;
-  padding: clamp(7px, calc(7px + 5 * var(--fp-step)), 12px) clamp(8px, calc(8px + 6 * var(--fp-step)), 14px);
-  border-radius: clamp(9px, calc(9px + 4 * var(--fp-step)), 13px);
+  padding: fp(7px, 12px) fp(8px, 14px);
+  border-radius: fp(9px, 13px);
   /* 实色深底（非磨砂）：悬在视频上的 backdrop-filter 每帧成本高，加深底色压画面 */
   background: rgba(0, 0, 0, 0.62);
   color: #fff;
@@ -1233,8 +1235,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: var(--fp-gap);
-  padding-bottom: clamp(5px, calc(5px + 3 * var(--fp-step)), 8px);
-  margin-bottom: clamp(3px, calc(3px + 3 * var(--fp-step)), 6px);
+  padding-bottom: fp(5px, 8px);
+  margin-bottom: fp(3px, 6px);
   font-weight: 600;
   color: #f7ba2a;
   border-bottom: 1px solid rgba(255, 255, 255, 0.14);
@@ -1252,8 +1254,8 @@ onUnmounted(() => {
 .rank-panel__row {
   display: flex;
   align-items: center;
-  gap: clamp(5px, calc(5px + 3 * var(--fp-step)), 8px);
-  padding: clamp(1.5px, calc(1.5px + 1.5 * var(--fp-step)), 3px) 0;
+  gap: fp(5px, 8px);
+  padding: fp(1.5px, 3px) 0;
   line-height: 1.4;
 }
 
@@ -1275,8 +1277,8 @@ onUnmounted(() => {
 /* 头像：无图 / 加载失败时回退用户名首字母占位（宽度即行高，随面板一同放大） */
 .rank-panel__avatar {
   flex: none;
-  width: clamp(18px, calc(18px + 6 * var(--fp-step)), 24px);
-  height: clamp(18px, calc(18px + 6 * var(--fp-step)), 24px);
+  width: fp(18px, 24px);
+  height: fp(18px, 24px);
   border-radius: 50%;
   object-fit: cover;
 }
@@ -1337,8 +1339,8 @@ onUnmounted(() => {
 /* 悬浮按钮（录制）与右上角容器样式为全局 .player-actions / .action-btn，见 app.scss */
 
 .live-dot {
-  width: clamp(7px, calc(7px + 3 * var(--fp-step)), 10px);
-  height: clamp(7px, calc(7px + 3 * var(--fp-step)), 10px);
+  width: fp(7px, 10px);
+  height: fp(7px, 10px);
   border-radius: 50%;
   background: #f56c6c;
   animation: live-pulse 1.2s ease-in-out infinite;

@@ -68,15 +68,17 @@ function onRangeInput(event: Event) {
 </template>
 
 <style scoped lang="scss">
+@use '../../assets/css/fluid' as *;
+
 /* 全自绘控制条：不参与旋转，恒定贴在容器底部；窄容器（迷你浮窗）下限宽自适应。
  * 深色玻璃胶囊骨架见全局 .player-capsule */
 .mini-controls {
   /* 进度条轨道 / 滑块：随浮层曲线收放，滑块垂直居中按两者差值算 */
-  --mini-track: clamp(4px, calc(4px + 2 * var(--fp-step)), 6px);
-  --mini-thumb: clamp(10px, calc(10px + 2 * var(--fp-step)), 12px);
+  --mini-track: #{fp(4px, 6px)};
+  --mini-thumb: #{fp(10px, 12px)};
   /* 左右留白与「离底边悬空量」是两回事：后者（--fp-control-gap）管纵向距离，
      拿它当横向留白会让窄窗胶囊横向撑满、几乎贴到窗边 */
-  --mini-gutter: clamp(12px, calc(12px + 6 * var(--fp-step)), 18px);
+  --mini-gutter: #{fp(12px, 18px)};
 
   position: absolute;
   bottom: var(--fp-control-gap);
@@ -86,7 +88,7 @@ function onRangeInput(event: Event) {
   min-width: 0;
   gap: 0px;
   /* 上下内距走 --fp-capsule-pad：胶囊总高与弹幕避让量（use-danmaku-layer）同一条式子 */
-  padding: var(--fp-capsule-pad) clamp(7px, calc(7px + 5 * var(--fp-step)), 12px);
+  padding: var(--fp-capsule-pad) fp(7px, 12px);
   z-index: 20;
 }
 

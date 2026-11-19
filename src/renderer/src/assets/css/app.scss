@@ -1463,27 +1463,29 @@ body,
  * 下端是**竖屏小窗**的档位（320–430 宽，1280 / 1440 屏开出来就是这一段）：
  * 桌面播放窗里最窄的可用窗口，元素按「占窗口宽度的比例」定，32px 的钮在 320 宽里
  * 已占近 1/10，所以这里比早期固定值整体收紧约 12%。
- * 只立跨文件共用的量，单点使用的间距仍写 inline clamp。
+ * 这里只立跨文件共用的量；单点使用的间距就地写 fp()，不另立 token。
+ * fp() 的两端是「320 宽 / 900 宽」，900 以上继续长到 _fluid.scss 的 $growth 倍才封顶
+ * （标题栏那三条传 $grow = 1，因为栏高被主进程钉死）。
  * 挂在 .fw-root（FloatWindowApp）而非 :root：主窗口没有播放浮层，取不到也不会串味 */
 .fw-root {
   --fp-step: calc((100vw - 320px) / 580);
   /* 圆钮直径：右上角动作钮 / 旋转组与底部控制条胶囊各一档 */
-  --fp-btn: clamp(28px, calc(28px + 12 * var(--fp-step)), 40px);
-  --fp-capsule-btn: clamp(25px, calc(25px + 9 * var(--fp-step)), 34px);
+  --fp-btn: #{fp(28px, 40px)};
+  --fp-capsule-btn: #{fp(25px, 34px)};
   /* 胶囊上下内距：胶囊总高 = 钮径 + 2 * 本值（弹幕避让量也按这条式子算） */
-  --fp-capsule-pad: clamp(2.5px, calc(2.5px + 2.5 * var(--fp-step)), 5px);
+  --fp-capsule-pad: #{fp(2.5px, 5px)};
   /* 圆钮内图标边长：MediaIcon 不传 size 即 1em，随按钮 font-size 走 */
-  --fp-icon: clamp(14px, calc(14px + 6 * var(--fp-step)), 20px);
+  --fp-icon: #{fp(14px, 20px)};
   /* 浮层文字：主 / 次 */
-  --fp-font: clamp(11px, calc(11px + 2.5 * var(--fp-step)), 13.5px);
-  --fp-font-sm: clamp(10px, calc(10px + 2.5 * var(--fp-step)), 12.5px);
+  --fp-font: #{fp(11px, 13.5px)};
+  --fp-font-sm: #{fp(10px, 12.5px)};
   /* 浮层内元素间距 */
-  --fp-gap: clamp(3px, calc(3px + 4 * var(--fp-step)), 7px);
+  --fp-gap: #{fp(3px, 7px)};
   /* 底部控制条离窗口底边的悬空量：弹幕避让量把它算在内，改这里一处即可 */
-  --fp-control-gap: clamp(8px, calc(8px + 4 * var(--fp-step)), 12px);
+  --fp-control-gap: #{fp(8px, 12px)};
   /* 浮层距窗口边缘的内缩量：互动榜、右上角动作钮、弹幕层共用同一处口径，
      弹幕层的位置由脚本拼进 calc（use-danmaku-layer 的 DANMAKU_INSET） */
-  --fp-inset: clamp(7px, calc(7px + 5 * var(--fp-step)), 12px);
+  --fp-inset: #{fp(7px, 12px)};
 }
 
 /* ===== 播放器共用（LivePlayer / PlaybackPlayer） ===== */

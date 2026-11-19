@@ -268,6 +268,8 @@ useEventListener(document, 'fullscreenchange', () => {
 </template>
 
 <style scoped lang="scss">
+@use '../../assets/css/fluid' as *;
+
 .fw-root {
   display: flex;
   flex-direction: column;
@@ -279,15 +281,18 @@ useEventListener(document, 'fullscreenchange', () => {
    高度与 common/float-window.ts 的 floatBarHeight() 是同一条曲线：
    窄窗 30px（省下的高度归视频区）、900 及以上 36px，两端由 clamp 收住。 */
 .fw-bar {
-  --bar-h: clamp(30px, calc(30px + 6 * var(--fp-step)), 36px);
+  --bar-h: #{fp(30px, 36px, 1)};
   height: var(--bar-h);
 
-  /* 标题栏窄窗最挤：三个窗口按钮各 44px 时，320 宽里占掉四成屏宽、标题只剩六七个字，
+  /* 标题栏是本窗唯一「高度被钉死」的地方：栏高上限 36 = FLOAT_BAR_HEIGHT，
+     主进程按它算窗口总高，所以这三条都传 $grow = 1，到 900 宽就停——
+     否则按钮会随窗继续变宽、却仍只有 36 高，成了宽扁条。
+     标题栏窄窗最挤：三个窗口按钮各 44px 时，320 宽里占掉四成屏宽、标题只剩六七个字，
      故宽度也随窗口收；高度不必另收——栏本身就矮了，按钮撑满即可 */
-  --bar-btn-w: clamp(28px, calc(28px + 16 * var(--fp-step)), 44px);
-  --bar-icon-size: clamp(13px, calc(13px + 2 * var(--fp-step)), 15px);
+  --bar-btn-w: #{fp(28px, 44px, 1)};
+  --bar-icon-size: #{fp(13px, 15px, 1)};
 
-  gap: clamp(6px, calc(6px + 2 * var(--fp-step)), 8px);
+  gap: fp(6px, 8px);
   /* 图钉贴左，故比主窗口更窄的内边距 */
   padding: 0 0 0 6px;
 }
@@ -303,8 +308,8 @@ useEventListener(document, 'fullscreenchange', () => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: clamp(24px, calc(24px + 4 * var(--fp-step)), 28px);
-  height: clamp(24px, calc(24px + 4 * var(--fp-step)), 28px);
+  width: fp(24px, 28px);
+  height: fp(24px, 28px);
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -342,9 +347,9 @@ useEventListener(document, 'fullscreenchange', () => {
 
 .fw-kind {
   flex-shrink: 0;
-  padding: 2px clamp(6px, calc(6px + 2 * var(--fp-step)), 8px);
+  padding: 2px fp(6px, 8px);
   border-radius: var(--radius-pill);
-  font-size: clamp(10px, calc(10px + 1 * var(--fp-step)), 11px);
+  font-size: fp(10px, 11px);
   line-height: 1.4;
   color: #fff;
   background: var(--gradient-brand);
@@ -355,8 +360,8 @@ useEventListener(document, 'fullscreenchange', () => {
 }
 
 .fw-avatar {
-  width: clamp(20px, calc(20px + 2 * var(--fp-step)), 22px);
-  height: clamp(20px, calc(20px + 2 * var(--fp-step)), 22px);
+  width: fp(20px, 22px);
+  height: fp(20px, 22px);
   border-radius: 50%;
   flex-shrink: 0;
   object-fit: cover;
@@ -368,7 +373,7 @@ useEventListener(document, 'fullscreenchange', () => {
 .fw-title {
   flex: 1;
   min-width: 0;
-  font-size: clamp(12px, calc(12px + 1 * var(--fp-step)), 13px);
+  font-size: fp(12px, 13px);
   font-weight: 500;
   color: var(--el-text-color-primary);
 }
@@ -392,7 +397,7 @@ useEventListener(document, 'fullscreenchange', () => {
   align-items: center;
   gap: 6px;
   max-width: calc(100% - 24px);
-  padding: clamp(8px, calc(8px + 2 * var(--fp-step)), 10px) clamp(16px, calc(16px + 4 * var(--fp-step)), 20px);
+  padding: fp(8px, 10px) fp(16px, 20px);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--radius-pill);
   font-size: var(--fp-font);

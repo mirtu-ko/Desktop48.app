@@ -350,7 +350,8 @@ describe('紧凑档布局不变量', () => {
   })
 
   /* 高度轴改成连续后，两端的取值就是唯一还钉得住的东西：
-   * 641 高必须逐像素等于原紧凑档，900 高必须逐像素等于基准档。
+   * 641 高必须逐像素等于原紧凑档，900 高必须逐像素等于基准档（step = 1）。
+   * 900 以上不停在这里，而是按同一斜率续长到 $growth 倍——这个倍数只在 _fluid.scss 一处。
    * 声明里除 fluid() 之外不允许出现别的数值，否则这条轴又断了。 */
   it('高度轴曲线两端仍落在原档位值上', () => {
     const vars = declarations()
@@ -446,16 +447,39 @@ describe('独立播放窗浮层尺寸轴', () => {
     expect(floor).toBe(320)
     expect(floor + span).toBe(900)
 
-    const call = /^clamp\(([\d.]+)px, calc\(([\d.]+)px \+ ([\d.]+) \* var\(--fp-step\)\), ([\d.]+)px\)$/
+    /* 只认 fp(下限, 基准值) 这一种写法：续长的上限由 _fluid.scss 的 $growth 统一推出，
+     * 手写 clamp 就得自己手算第三参数，大屏放宽时漏一处不会报错、只表现为「这块没变大」。 */
+    const call = /^#\{fp\(([\d.]+)px, ([\d.]+)px\)\}$/
     for (const name of FP_TOKENS) {
       const raw = vars.get(name) ?? ''
       const parsed = call.exec(raw)
-      expect(parsed, `${name} 没挂在 --fp-step 曲线上：${raw}`).not.toBeNull()
-      const [low, base, , high] = parsed!.slice(1, 5).map(Number)
-      // 起点 = 下限，且两端不等（相等的 clamp 是死曲线，浮层只会「没那么大」而不会报错）
-      expect({ name, startsAtMin: base === low, alive: low !== high })
-        .toEqual({ name, startsAtMin: true, alive: true })
+      expect(parsed, `${name} 没走 fp()：${raw}`).not.toBeNull()
+      const [low, base] = parsed!.slice(1, 3).map(Number)
+      // 两端不等：相等的曲线是死的，浮层只会「没那么大」而不会报错
+      expect({ name, alive: low !== base }).toEqual({ name, alive: true })
     }
+  })
+
+  it('浮层尺寸只剩 fp() 一个入口，不再手写 clamp', () => {
+    const offenders: string[] = []
+    for (const file of sourceFiles()) {
+      read(file).split('\n').forEach((line, i) => {
+        if (line.includes('var(--fp-step)'))
+          offenders.push(`${file}:${i + 1} ${line.trim()}`)
+      })
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('只有高度被钉死的标题栏传 $grow = 1', () => {
+    const pinned: string[] = []
+    for (const file of sourceFiles()) {
+      for (const m of read(file).matchAll(/fp\([^)]*, 1\)/g)) {
+        if (!file.endsWith('FloatWindowApp.vue'))
+          pinned.push(`${file}: ${m[0]}`)
+      }
+    }
+    expect(pinned).toEqual([])
   })
 
   /* 栏高是唯一跨进程的尺寸：CSS 决定渲染层实际条高，主进程 floatBarHeight() 决定
@@ -464,13 +488,38 @@ describe('独立播放窗浮层尺寸轴', () => {
     const vue = read('components/floats/FloatWindowApp.vue')
     expect(vue).toMatch(/height:\s*var\(--bar-h\)/)
 
+    // 第三参数 1 = 到 900 宽就封顶：栏高若跟着 $growth 续长，CSS 会比主进程算的高，
+    // 多出来的部分只能压视频区，画面比例就走样了
     const raw = /--bar-h:([^;]+);/.exec(vue)?.[1].replace(/\s+/g, ' ').trim() ?? ''
-    const parsed = /^clamp\((\d+)px, calc\((\d+)px \+ ([\d.]+) \* var\(--fp-step\)\), (\d+)px\)$/.exec(raw)
-    expect(parsed, `--bar-h 不是 --fp-step 曲线：${raw}`).not.toBeNull()
+    const parsed = /^#\{fp\((\d+)px, (\d+)px, (\d+)\)\}$/.exec(raw)
+    expect(parsed, `--bar-h 不是 fp() 曲线：${raw}`).not.toBeNull()
 
-    const [low, base, , high] = parsed!.slice(1, 5).map(Number)
-    expect({ low, base, high })
-      .toEqual({ low: FLOAT_BAR_HEIGHT_MIN, base: FLOAT_BAR_HEIGHT_MIN, high: FLOAT_BAR_HEIGHT })
+    const [low, base, grow] = parsed!.slice(1, 4).map(Number)
+    expect({ low, base, grow })
+      .toEqual({ low: FLOAT_BAR_HEIGHT_MIN, base: FLOAT_BAR_HEIGHT, grow: 1 })
+  })
+})
+
+describe('尺寸轴续长端点', () => {
+  /* 两条轴在基准点（900 高 / 900 宽）之前逐像素不变，之后继续长到 $growth 倍才封顶。
+   * 大窗口下元素不再停在基准值，想调只改这一个数。 */
+  const FLUID = read('assets/css/_fluid.scss')
+
+  it('两条轴共用一份实现，上限由 $growth 统一推出', () => {
+    expect([...FLUID.matchAll(/@function ([\w-]+)\(/g)].map(m => m[1]).sort())
+      .toEqual(['_curve', 'fluid', 'fp'])
+    // 只有 _curve 里拼 clamp，两条轴各自只传轴变量
+    expect([...FLUID.matchAll(/'clamp\(/g)]).toHaveLength(2)
+    // 全局 unquote() 在 Dart Sass 3 会被移除，每次编译刷一屏弃用警告
+    expect(FLUID, '要用 string.unquote').not.toMatch(/(?<![\w.])unquote\(/)
+    expect([...FLUID.matchAll(/\* \$grow/g)]).toHaveLength(2)
+  })
+
+  it('$growth 落在 (1, 2]：小于等于 1 就是「到基准即封顶」，白改一场', () => {
+    const growth = /\$growth:\s*([\d.]+);/.exec(FLUID)?.[1]
+    expect(growth, '没找到 $growth').toBeTruthy()
+    expect(Number(growth)).toBeGreaterThan(1)
+    expect(Number(growth)).toBeLessThanOrEqual(2)
   })
 })
 
