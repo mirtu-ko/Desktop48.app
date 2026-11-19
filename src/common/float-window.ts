@@ -52,9 +52,10 @@ const FLOAT_INITIAL_HEIGHT_RATIO = 0.7
 /**
  * 视频区宽度下限：比例在 1280 级小屏上算出的窗口太窄（竖屏 ~295、横屏 576），
  * 控制条与弹幕都挤，故给下限；工作区装不下时按可容纳范围回缩，不做硬保证。
+ * 只影响小屏，大屏由上面两个比例决定，调这两个值不会改变 1920 及以上的尺寸。
  */
-const FLOAT_INITIAL_MIN_WIDTH_PORTRAIT = 320
-const FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE = 680
+export const FLOAT_INITIAL_MIN_WIDTH_PORTRAIT = 320
+export const FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE = 680
 
 /** 窗口与工作区边缘的留白：初始尺寸的可容纳上限与创建位置共用同一数值 */
 const FLOAT_EDGE_MARGIN = 24

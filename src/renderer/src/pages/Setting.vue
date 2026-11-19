@@ -1442,7 +1442,8 @@ onActivated(consumeUpdateFocus)
         <el-dialog
           v-model="feedbackDialogVisible"
           title="问题反馈"
-          width="520px"
+          width="min(520px, calc(100vw - 32px))"
+          align-center
           append-to-body
           :close-on-click-modal="false"
           :close-on-press-escape="!feedbackSubmitting"
@@ -1599,7 +1600,8 @@ onActivated(consumeUpdateFocus)
     <el-dialog
       v-model="diagnoseDialogVisible"
       title="网络诊断结果"
-      width="640px"
+      width="min(640px, calc(100vw - 32px))"
+      align-center
       append-to-body
     >
       <!-- 等待态复用登录验证弹窗的轻量 spinner -->
@@ -1672,7 +1674,7 @@ onActivated(consumeUpdateFocus)
     <!-- 口袋48登录弹窗：短信验证码 / Token 粘贴 两种方式 -->
     <el-dialog
       v-model="loginDialogVisible"
-      width="480px"
+      width="min(480px, calc(100vw - 32px))"
       align-center
       :close-on-click-modal="false"
       append-to-body
@@ -1843,7 +1845,8 @@ onActivated(consumeUpdateFocus)
     <el-dialog
       v-model="verifyDialogVisible"
       :title="verifyFailed ? '登录状态异常' : '登录状态'"
-      width="460px"
+      width="min(460px, calc(100vw - 32px))"
+      align-center
       append-to-body
       class="verify-dialog"
     >
@@ -3156,5 +3159,51 @@ onActivated(consumeUpdateFocus)
   font-size: 11px;
   line-height: 1.6;
   color: var(--el-text-color-placeholder);
+}
+
+/* ===== 紧凑档：设置页是一列 80px 高的信息行，矮屏下先压行高与卡片内距 =====
+ * 水平内距（24px）是 1400 窗口下调好的量，不随密度轴变；按钮高度由 app.scss 的
+ * 紧凑档统一收到 28px，这里只补信息行自身的垂直节奏。 */
+:root[data-density='compact'] {
+  .setting-root {
+    padding-top: 14px;
+    gap: 18px;
+  }
+
+  .setting-nav {
+    /* 粘性停靠点必须跟随 padding-top，否则导航会浮在卡片上方 */
+    top: 14px;
+
+    .setting-nav-item {
+      padding: 8px 10px;
+    }
+  }
+
+  .setting-content {
+    gap: 10px;
+  }
+
+  .setting-card {
+    padding-block: 14px;
+  }
+
+  .row-icon {
+    width: 38px;
+    height: 38px;
+
+    .el-icon {
+      font-size: 19px;
+    }
+  }
+
+  .row-body {
+    margin-top: 10px;
+    padding-top: 10px;
+  }
+
+  .setting-group-label {
+    margin-top: 6px;
+    margin-bottom: -4px;
+  }
 }
 </style>

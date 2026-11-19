@@ -523,7 +523,7 @@ useEventListener(window, 'keydown', onKeydown)
   align-items: center;
   /* 顶部让开左上角浮动切换器（--tabbar-offset-top） */
   margin-top: var(--tabbar-offset-top);
-  padding: 0 16px 10px;
+  padding: 0 var(--space-page-x) 10px;
 }
 
 .search-box {
@@ -655,7 +655,7 @@ useEventListener(window, 'keydown', onKeydown)
 
 .members-container {
   /* 顶部留白由工具条承担，这里只留内容间距；底部留卡片悬停上浮与阴影 */
-  padding: 6px 16px 8px;
+  padding: 6px var(--space-page-x) 8px;
 }
 
 /* 数据看板：工具条整条隐藏后，顶部让位改由这里的 --page-pad 承担（已含浮动 tab 栏高度） */
@@ -664,7 +664,7 @@ useEventListener(window, 'keydown', onKeydown)
 }
 
 .members-skeleton {
-  padding: 6px 16px 8px;
+  padding: 6px var(--space-page-x) 8px;
 
   /* 骨架与卡片同构（透明底、92px 圆头像、文案行居中），加载完成时不跳版 */
   :deep(.skeleton-card) {
@@ -805,6 +805,58 @@ useEventListener(window, 'keydown', onKeydown)
   .card-move,
   .segmented__item {
     transition: none;
+  }
+}
+
+/* ===== 紧凑档：只压垂直留白与装饰尺寸 =====
+ * 列宽（minmax 118 / 88）与水平内距不参与密度轴：同宽换窗高不能改列数。
+ * 卡片自身的收小走 <MemberCard :compact>，那是用户手动档，与这里互不影响。 */
+:root[data-density='compact'] {
+  .member-toolbar {
+    gap: 8px;
+    padding-bottom: 8px;
+  }
+
+  .search-box {
+    height: 30px;
+  }
+
+  .segmented__item {
+    height: 24px;
+    padding: 0 10px;
+  }
+
+  .segmented--icon .segmented__item {
+    width: 28px;
+    padding: 0;
+  }
+
+  .members-container,
+  .members-skeleton {
+    padding-top: 4px;
+    padding-bottom: 6px;
+  }
+
+  .group-section {
+    /* 标题条的负外边距与分区上内距必须同步收，否则标题条会缩进去 */
+    padding-top: 8px;
+    padding-bottom: 10px;
+
+    & + .group-section {
+      margin-top: 10px;
+    }
+  }
+
+  .team-title {
+    margin-top: -8px;
+    margin-bottom: 8px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+
+    .team-badge-box {
+      width: 36px;
+      height: 36px;
+    }
   }
 }
 </style>

@@ -253,11 +253,24 @@ function jumpToYear(target: number) {
   /* 团体色的可读文字版：浅色团色（GNZ48 黄绿、CKG48 琥珀）本色读不出来，压深一半才达标 */
   --gc-ink: color-mix(in srgb, var(--gc, var(--el-text-color-secondary)) 50%, #000);
 
+  /* 领奖台尺寸集中在这里，紧凑档只改这几个值，不重写整块规则 */
+  --podium-pad-top: 24px;
+  --podium-pad-bottom: 26px;
+  --podium-gap: 22px;
+  --podium-avatar: 164px;
+  --spot-avatar: 116px;
+  /* 皇冠预留位：比图标的 36px 略矮，让皇冠压在头像顶沿上 */
+  --crown-space: 30px;
+  --podium-base-w: 88px;
+  --podium-base-h: 8px;
+  --champion-base-w: 108px;
+  --champion-base-h: 13px;
+
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 22px;
-  padding: 24px 30px 26px;
+  gap: var(--podium-gap);
+  padding: var(--podium-pad-top) 30px var(--podium-pad-bottom);
   border: 1px solid color-mix(in srgb, var(--medal-gold) 34%, var(--el-border-color-lighter));
   border-radius: var(--radius-card);
   /* 加冕舞台：左上庆典红聚光 + 右下金色余晖，把头图从平面衬出纵深 */
@@ -330,8 +343,8 @@ function jumpToYear(target: number) {
 /* 领奖台基座：一截名次色的台面，冠军的最宽最高 */
 .podium-spot::after {
   content: '';
-  width: 88px;
-  height: 8px;
+  width: var(--podium-base-w);
+  height: var(--podium-base-h);
   margin-top: 10px;
   border-radius: var(--radius-pill);
   background: linear-gradient(
@@ -342,8 +355,8 @@ function jumpToYear(target: number) {
 }
 
 .podium-spot.is-champion::after {
-  width: 108px;
-  height: 13px;
+  width: var(--champion-base-w);
+  height: var(--champion-base-h);
 }
 
 /* 加冕徽章：金字金底的药丸，和头图的金环呼应 */
@@ -375,7 +388,7 @@ function jumpToYear(target: number) {
 
 .is-champion .spot-figure {
   /* 皇冠的预留位 */
-  padding-top: 30px;
+  padding-top: var(--crown-space);
 }
 
 .spot-crown {
@@ -418,8 +431,8 @@ function jumpToYear(target: number) {
   position: relative;
   z-index: 1;
   display: block;
-  width: 116px;
-  height: 116px;
+  width: var(--spot-avatar);
+  height: var(--spot-avatar);
   border-radius: 50%;
   overflow: hidden;
   background: var(--el-fill-color-light);
@@ -431,8 +444,8 @@ function jumpToYear(target: number) {
 }
 
 .is-champion .spot-avatar {
-  width: 164px;
-  height: 164px;
+  width: var(--podium-avatar);
+  height: var(--podium-avatar);
   /* 金色加冕双环：内实外虚，像一层金属戒圈 */
   box-shadow:
     0 0 0 3.5px var(--medal-gold),
@@ -562,5 +575,63 @@ function jumpToYear(target: number) {
   display: grid;
   gap: 10px 8px;
   grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+}
+
+/* ===== 紧凑档：领奖台是首屏最大的一块，收它才腾得出一行名次卡 =====
+ * 只改领奖台的尺寸变量、字号与竖直间距；列宽 minmax(136) 与水平内距不动。 */
+:root[data-density='compact'] {
+  .podium {
+    --podium-pad-top: 16px;
+    --podium-pad-bottom: 18px;
+    --podium-gap: 14px;
+    --podium-avatar: 128px;
+    --spot-avatar: 94px;
+    --podium-base-w: 72px;
+    --podium-base-h: 7px;
+    --champion-base-w: 88px;
+    --champion-base-h: 10px;
+  }
+
+  .spot-tag {
+    padding: 2px 9px;
+    font-size: 11px;
+  }
+
+  .spot-name {
+    margin-top: 6px;
+    font-size: 15px;
+  }
+
+  .is-champion .spot-name {
+    max-width: 180px;
+    font-size: 19px;
+  }
+
+  .spot-no {
+    min-width: 22px;
+    height: 22px;
+    padding: 0 7px;
+    font-size: 12px;
+  }
+
+  .avatar-fallback {
+    font-size: 38px;
+  }
+
+  .list-tabs {
+    margin: 16px 0 12px;
+  }
+
+  .list-tab {
+    padding: 6px 13px;
+    font-size: 12px;
+  }
+
+  .rank-grid {
+    /* 只收行间距：列间距参与列数计算，不在密度轴上改 */
+    --avatar-size: 100px;
+
+    row-gap: 8px;
+  }
 }
 </style>

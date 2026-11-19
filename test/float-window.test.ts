@@ -1,6 +1,6 @@
 import type { FloatFitState } from '../src/common/float-window'
 import { describe, expect, it } from 'vitest'
-import { computeInitialWindowSize, decideAutoFit, fitAspectInBox, FLOAT_BAR_HEIGHT, FLOAT_CASCADE_STEP, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, initialFloatTopmost, isFloatTopmostPinned, nextFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '../src/common/float-window'
+import { computeInitialWindowSize, decideAutoFit, fitAspectInBox, FLOAT_BAR_HEIGHT, FLOAT_CASCADE_STEP, FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE, FLOAT_INITIAL_MIN_WIDTH_PORTRAIT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, initialFloatTopmost, isFloatTopmostPinned, nextFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '../src/common/float-window'
 
 /** 基准工作区：1080p @100%，原点在屏幕左上（workArea 是 DIP，缩放已折算，故 4K@200% 等价） */
 const HD = { x: 0, y: 0, width: 1920, height: 1080 }
@@ -42,36 +42,42 @@ describe('computeInitialWindowSize', () => {
     expect(landscape.w).toBeGreaterThan(portrait.w * 2)
   })
 
-  it('两个方向各自的比例都不受对方影响', () => {
-    // 横屏吃宽度下限，竖屏吃高度上限（下限撑开）；同一块屏幕上两者互不干扰
+  it('小屏按方向各取下限：横屏撑宽、竖屏撑高', () => {
+    // 横屏吃宽度下限，竖屏吃高度上限（由下限撑开）；同一块屏幕上两者互不干扰
     const small = { x: 0, y: 0, width: 1366, height: 768 }
-    // 竖屏：300 短边下限撑到 533 高（> 768*0.7-36 的 502）
-    expect(computeInitialWindowSize(9 / 16, small)).toEqual({ w: 300, h: 533 + FLOAT_BAR_HEIGHT })
-    // 横屏：615 低于 640 下限，撑到 640 宽、360 高
-    expect(computeInitialWindowSize(16 / 9, small)).toEqual({ w: 640, h: 360 + FLOAT_BAR_HEIGHT })
+    expect(computeInitialWindowSize(9 / 16, small)).toEqual({
+      w: FLOAT_INITIAL_MIN_WIDTH_PORTRAIT,
+      h: Math.round(FLOAT_INITIAL_MIN_WIDTH_PORTRAIT / (9 / 16)) + FLOAT_BAR_HEIGHT,
+    })
+    expect(computeInitialWindowSize(16 / 9, small)).toEqual({
+      w: FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE,
+      h: Math.round(FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE / (16 / 9)) + FLOAT_BAR_HEIGHT,
+    })
   })
 
-  it('1280 级小屏按下限撑开，不再得到 295 / 576 的小窗', () => {
+  it('1280 级小屏输出的就是下限本身，不是比例算出的 295 / 576', () => {
     const hd = { x: 0, y: 0, width: 1280, height: 800 }
-    // 竖屏：9:16 下 300 宽即 533 高
-    expect(computeInitialWindowSize(9 / 16, hd)).toEqual({ w: 300, h: 533 + FLOAT_BAR_HEIGHT })
-    // 横屏：640x360
-    expect(computeInitialWindowSize(16 / 9, hd)).toEqual({ w: 640, h: 360 + FLOAT_BAR_HEIGHT })
+    // 下限必须真的高于比例公式的值，否则两个常量等于没写
+    expect(FLOAT_INITIAL_MIN_WIDTH_PORTRAIT).toBeGreaterThan(Math.round(Math.round(hd.height * 0.7 - FLOAT_BAR_HEIGHT) * (9 / 16)))
+    expect(FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE).toBeGreaterThan(Math.round(hd.width * 0.45))
+    expect(computeInitialWindowSize(9 / 16, hd).w).toBe(FLOAT_INITIAL_MIN_WIDTH_PORTRAIT)
+    expect(computeInitialWindowSize(16 / 9, hd).w).toBe(FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE)
   })
 
   it('下限只抬小屏，大屏仍按工作区比例', () => {
-    // 1920 上竖屏 405 / 横屏 864，均高于下限，数值不受影响
+    // 1920 上竖屏 405 / 横屏 864，均高于下限，数值不受两个常量影响
     expect(computeInitialWindowSize(9 / 16, HD).w).toBe(405)
     expect(computeInitialWindowSize(16 / 9, HD).w).toBe(864)
   })
 
   it('工作区装不下下限时按可容纳范围回缩', () => {
-    // 1024x600：竖屏要 533 高，只留得下 600-36-48=516 → 290x516
-    const tiny = { x: 0, y: 0, width: 1024, height: 600 }
+    // 800x480：竖屏撑到下限需要更高，只留得下 480-36-48=396 → 高度封顶、宽度退回最小尺寸
+    const tiny = { x: 0, y: 0, width: 800, height: 480 }
     const portrait = computeInitialWindowSize(9 / 16, tiny)
-    expect(portrait).toEqual({ w: 290, h: 516 + FLOAT_BAR_HEIGHT })
-    expect(portrait.h).toBeLessThanOrEqual(tiny.height)
-    expect(portrait.w).toBeLessThan(tiny.width)
+    expect(portrait.h).toBe(396 + FLOAT_BAR_HEIGHT)
+    expect(portrait.w).toBe(FLOAT_MIN_WIDTH)
+    // 含 32px 边距也不出工作区
+    expect(portrait.h + 32).toBeLessThanOrEqual(tiny.height)
   })
 
   it('分辨率翻倍时窗口同步翻倍，占屏比保持一致', () => {

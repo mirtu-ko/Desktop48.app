@@ -276,7 +276,7 @@ describe('密度信号', () => {
     expect(values).toEqual(['760px'])
   })
 
-  it('全部 7 处紧凑样式都挂在 html[data-density] 上', () => {
+  it('紧凑样式只挂在 html[data-density] 上，且文件清单与实现同步', () => {
     const files = sourceFiles().filter(file => read(file).includes(COMPACT_MARKER))
     expect(files).toEqual([
       'assets/css/app.scss',
@@ -284,8 +284,11 @@ describe('密度信号', () => {
       'components/playback/FollowedMemberRail.vue',
       'components/ui/FloatingRefreshDock.vue',
       'components/ui/FloatingTabBar.vue',
+      'pages/Elections.vue',
+      'pages/Members.vue',
       'pages/Playbacks.vue',
       'pages/Rooms.vue',
+      'pages/Setting.vue',
     ])
   })
 
