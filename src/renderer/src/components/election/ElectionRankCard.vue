@@ -111,6 +111,7 @@ const cardStyle = computed(() => {
 
 <style scoped lang="scss">
 .rank-card {
+  position: relative;
   /* 名次徽章的默认色：前三名由内联 --medal 覆盖成金银铜 */
   --medal: var(--el-text-color-secondary);
   /* 团体色的可读文字版：浅色团色（GNZ48 黄绿、CKG48 琥珀）白字或本色都读不出来，压深一半才达标 */

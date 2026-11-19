@@ -44,16 +44,18 @@ const displayLoading = useMinVisibleLoading(() => props.loading)
 </template>
 
 <style scoped lang="scss">
+@use '../../assets/css/fluid' as *;
+
 .floating-dock {
   position: absolute;
   right: 8px;
-  top: 12px;
+  top: var(--float-top);
   z-index: 6;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: fluid(8px, 12px);
   max-width: calc(100% - 40px);
-  padding: 4px;
+  padding: fluid(3px, 4px);
   border-radius: var(--radius-pill);
   overflow-x: auto;
 
@@ -64,5 +66,12 @@ const displayLoading = useMinVisibleLoading(() => props.loading)
     flex: none;
     max-width: none;
   }
+}
+
+/* 圆钮 32 → 28 与同排 tab 栏（41 → 33）、关注条同步连续收，
+ * 三者的「内距 + 内容」都是同一条曲线，工具行才不会在某个高度被最高项撑住 */
+.floating-dock :deep(.el-button.is-circle) {
+  width: fluid(28px, 32px);
+  height: fluid(28px, 32px);
 }
 </style>

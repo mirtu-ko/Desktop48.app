@@ -1,3 +1,4 @@
+import type { FloatTopmost } from '@common/app-config'
 import type { WindowSize } from '@common/float-window'
 import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 /**
@@ -7,11 +8,14 @@ import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
  */
 import type { WebContents } from 'electron'
 import { fileURLToPath } from 'node:url'
-import { computeInitialWindowSize, decideAutoFit, FLOAT_DEFAULT_ASPECT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, FLOAT_WINDOW_HASH_PATH, resolveFloatWindowPosition } from '@common/float-window'
+import { isFloatTopmost } from '@common/app-config'
+import { computeInitialWindowSize, decideAutoFit, FLOAT_DEFAULT_ASPECT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_WINDOW_HASH_PATH, initialFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '@common/float-window'
 import { is } from '@electron-toolkit/utils'
 import { BrowserWindow, screen, shell } from 'electron'
 import iconWin from '../../resources/icon-win.ico?asset'
 import icon from '../../resources/icon.png?asset'
+import { Database } from './database'
+import { sendIpc } from './ipc/send'
 import { log } from './logger'
 import { wireWindowMaximizeEvents } from './window-events'
 
@@ -33,8 +37,12 @@ interface FloatWindowRecord {
   autoFitSettled: boolean
   /** 最近一次程序设置的尺寸；Linux 上 will-resize 不触发，靠尺寸比对反推用户缩放 */
   lastProgrammaticSize: WindowSize | null
-  /** 当前置顶态：setFloatWindowPlaying 据此幂等，断流重试的 pause→play 不再重复重排 z-order */
-  topmost: boolean
+  /** 渲染端上报的播放状态；与本窗的置顶策略一起决定目标层级（见 applyTopmost） */
+  playing: boolean
+  /** 本窗置顶策略：建窗时取全局偏好，图钉改动只作用于本窗、不落盘 */
+  topmost: FloatTopmost
+  /** 实际下发的 alwaysOnTop 状态：只用于幂等比对，不是独立状态源 */
+  applied: boolean
 }
 
 // 按 `${kind}:${liveId}` 持有，兼作去重表与载荷表
@@ -55,6 +63,34 @@ function findByWindow(win: BrowserWindow): FloatWindowRecord | undefined {
       return record
   }
   return undefined
+}
+
+/** 当前全局置顶偏好（新窗的初值）；旧库 / 手改配置里的未知取值按「仅播放时」处理 */
+function topmostPreference(): FloatTopmost {
+  const value = Database.instance().getConfig('floatTopmost')
+  return isFloatTopmost(value) ? value : 'playing'
+}
+
+/**
+ * 置顶的唯一写入口：本窗策略 × 播放状态算出目标态，变了才下发。
+ * setAlwaysOnTop 每次都排一次 z-order，断流重试的 pause→play 不该让它空转。
+ */
+function applyTopmost(record: FloatWindowRecord): void {
+  const desired = resolveFloatTopmost(record.topmost, record.playing)
+  if (record.applied === desired)
+    return
+  record.applied = desired
+  if (!record.win.isDestroyed())
+    record.win.setAlwaysOnTop(desired)
+}
+
+/** 改本窗策略：先回推给渲染端（图钉跟手），再落层级；未变化时不动 z-order */
+function setRecordTopmost(record: FloatWindowRecord, topmost: FloatTopmost): void {
+  if (record.topmost === topmost)
+    return
+  record.topmost = topmost
+  sendIpc(record.win.webContents, 'windowOnTopmostChange', topmost)
+  applyTopmost(record)
 }
 
 /** 主窗口所在显示器；主窗口不可用时退回主显示器（screen 只能在 whenReady 后使用） */
@@ -92,15 +128,14 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
     return
   }
 
-  // 电台（liveType===2）无视频轨、永不上报 aspect：给固定竖屏尺寸。
-  // 回放列表项自带 liveType（Playbacks.vue 透传），建窗时即可判定，不必等详情接口
-  const isRadio = payload.liveType === 2
+  // 电台（liveType===2）无视频轨、永不上报 aspect，恒保持竖屏兜底比例的初始尺寸；
   // 视频窗按主窗口所在显示器的工作区比例推导（见 common/float-window.ts 的尺寸策略）
   const workArea = resolveAnchorDisplay(mainWindow).workArea
-  const { w: width, h: height } = isRadio
-    ? FLOAT_RADIO_WINDOW_SIZE
-    : computeInitialWindowSize(FLOAT_DEFAULT_ASPECT, workArea)
+  const { w: width, h: height } = computeInitialWindowSize(FLOAT_DEFAULT_ASPECT, workArea)
   const { x, y } = resolveFloatWindowPosition(workArea, { w: width, h: height }, records.size)
+  // 建窗即按全局偏好定态：never 不置顶，其余先顶上，避免打开瞬间被主窗口盖住
+  const preference = topmostPreference()
+  const initialTopmost = initialFloatTopmost(preference)
 
   const win = new BrowserWindow({
     width,
@@ -113,8 +148,8 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
     resizable: true,
     maximizable: true, // 标题栏自带最大化 / 还原按钮，见 FloatWindowApp.vue
     fullscreenable: true, // 播放器容器全屏依赖它，关掉会被系统拒绝
-    // 创建即置顶：打开瞬间不会被主窗口盖住；之后由播放状态接管（见 setFloatWindowPlaying）
-    alwaysOnTop: true,
+    // 初值随偏好（见 initialFloatTopmost）；之后的层级变化全部经 applyTopmost
+    alwaysOnTop: initialTopmost,
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#000000',
@@ -133,7 +168,9 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
     userResized: false,
     autoFitSettled: false,
     lastProgrammaticSize: { w: width, h: height },
-    topmost: true, // 创建即置顶（见 BrowserWindow 的 alwaysOnTop）
+    playing: false,
+    topmost: preference,
+    applied: initialTopmost,
   }
   records.set(key, record)
 
@@ -215,20 +252,48 @@ export function fitFloatWindowAspect(sender: WebContents, aspect: number): void 
 }
 
 /**
- * 播放状态驱动置顶：播放中置顶，暂停 / 结束取消置顶。
- * 渲染端只在状态变化时上报，加载期间保持创建时的置顶态；层级用默认 floating。
- * 状态未变直接跳过：Electron 的 setAlwaysOnTop 每次都下发 SetWindowPos，
- * 断流重试的 pause→play 会让它空排一次 z-order。
+ * 播放状态驱动置顶：只记录状态，目标层级由 applyTopmost 统一判定。
+ * 渲染端只在播放状态变化时上报，加载期间保持建窗时的置顶态。
  */
 export function setFloatWindowPlaying(sender: WebContents, playing: boolean): void {
   const win = BrowserWindow.fromWebContents(sender)
   if (!win || win.isDestroyed())
     return
   const record = findByWindow(win)
-  if (!record || record.topmost === playing)
+  if (!record)
     return
-  record.topmost = playing
-  win.setAlwaysOnTop(playing)
+  record.playing = playing
+  applyTopmost(record)
+}
+
+/**
+ * 置顶偏好变更后作用到所有已开窗：全局策略覆盖图钉的临时选择，各窗图钉随之复位。
+ * 参数用写入后的值，避免再读一次配置造成两个真值。
+ */
+export function applyFloatTopmostPreference(preference: FloatTopmost): void {
+  for (const record of records.values())
+    setRecordTopmost(record, preference)
+}
+
+/** 图钉初值：本窗当前策略（渲染端挂载时取一次，之后靠 windowOnTopmostChange 推） */
+export function getFloatWindowTopmost(sender: WebContents): FloatTopmost | null {
+  const win = BrowserWindow.fromWebContents(sender)
+  if (!win || win.isDestroyed())
+    return null
+  return findByWindow(win)?.topmost ?? null
+}
+
+/** 图钉切换：只改本窗、不落盘（关窗即失效）；非法值忽略 */
+export function setFloatWindowTopmost(sender: WebContents, topmost: FloatTopmost): void {
+  if (!isFloatTopmost(topmost))
+    return
+  const win = BrowserWindow.fromWebContents(sender)
+  if (!win || win.isDestroyed())
+    return
+  const record = findByWindow(win)
+  if (!record || record.topmost === topmost)
+    return
+  setRecordTopmost(record, topmost)
 }
 
 /**

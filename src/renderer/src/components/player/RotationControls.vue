@@ -15,7 +15,7 @@ const emit = defineEmits<{
   <div class="action-group player-capsule">
     <el-tooltip content="逆时针旋转 90°（Shift + R）" placement="bottom" :show-after="400">
       <button class="rotate-btn player-capsule__btn" aria-label="逆时针旋转 90 度" @click="emit('rotateLeft')">
-        <MediaIcon name="rotateLeft" :size="16" />
+        <MediaIcon name="rotateLeft" />
       </button>
     </el-tooltip>
     <el-tooltip
@@ -37,7 +37,7 @@ const emit = defineEmits<{
     </el-tooltip>
     <el-tooltip content="顺时针旋转 90°（R）" placement="bottom" :show-after="400">
       <button class="rotate-btn player-capsule__btn" aria-label="顺时针旋转 90 度" @click="emit('rotateRight')">
-        <MediaIcon name="rotateRight" :size="16" />
+        <MediaIcon name="rotateRight" />
       </button>
     </el-tooltip>
   </div>
@@ -50,21 +50,23 @@ const emit = defineEmits<{
   overflow: hidden;
 }
 
-/* 透明圆钮（hover 白纱 / 按下缩放）见全局 .player-capsule__btn */
+/* 透明圆钮（hover 白纱 / 按下缩放）见全局 .player-capsule__btn。
+ * 旋转组排在右上角动作钮旁边，故与 .action-btn 同径（不是底部胶囊的 --fp-capsule-btn） */
 .rotate-btn {
-  width: 32px;
-  height: 32px;
+  width: var(--fp-btn);
+  height: var(--fp-btn);
   border-radius: 0;
-  font-size: 12px;
+  font-size: var(--fp-icon);
 
   & + .rotate-btn {
     border-left: 1px solid rgba(255, 255, 255, 0.14);
   }
 }
 
-/* 当前角度：0° 置灰并禁用，明确「现在没有可重置的东西」 */
+/* 当前角度是文字不是图标：字号回到浮层正文档，宽度留给「90°」三个字符 */
 .rotate-angle {
-  min-width: 36px;
+  min-width: calc(var(--fp-btn) + 4px);
+  font-size: var(--fp-font);
   font-weight: 500;
 
   &.is-zero {

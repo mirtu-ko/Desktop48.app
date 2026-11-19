@@ -1,4 +1,5 @@
 /** 独立播放窗的共享常量与几何工具，主进程与渲染端跨进程共用的唯一来源。 */
+import type { FloatTopmost } from './app-config'
 
 export interface WindowSize {
   w: number
@@ -11,18 +12,36 @@ export interface WindowSize {
  */
 export const FLOAT_WINDOW_HASH_PATH = '/float'
 
-/** 独立播放窗自定义标题栏（.fw-bar）高度；FloatWindowApp.vue 经 :style 同源引用 */
+/**
+ * 浮窗标题栏高度的上端值，同时是主窗口标题栏（.app-title-bar）的固定高度。
+ * 浮窗按窗口宽度在 30–36 之间取（见 floatBarHeight），主窗口不参与该曲线。
+ */
 export const FLOAT_BAR_HEIGHT = 36
 
-/** 视频元数据未就绪时的兜底宽高比（多数直播为竖屏） */
-export const FLOAT_DEFAULT_ASPECT = 9 / 16
+/** 浮窗标题栏在窄窗（≤320 宽）下的高度：再低头像与点击目标就挤了 */
+export const FLOAT_BAR_HEIGHT_MIN = 30
+
+/** 栏高曲线的宽度区间，与渲染层 `--fp-step` 的 320 → 900 一致，两端之外钳住 */
+const FLOAT_BAR_WIDTH_START = 320
+const FLOAT_BAR_WIDTH_END = 900
 
 /**
- * 电台窗（`liveType === 2`）的**固定**尺寸（含标题栏），竖屏。
- * 电台无视频轨、永不上报 aspect，形状不需跟画面走；不随分辨率自适应，
- * 只受窗口最小尺寸约束，屏幕装不下时用户可自行缩放。
+ * 浮窗标题栏高度：由窗口宽度决定，渲染层 .fw-bar 的 CSS 走同一条曲线。
+ * 窄窗栏矮、视频区更高；宽窗回到 FLOAT_BAR_HEIGHT 的整条通栏。
  */
-export const FLOAT_RADIO_WINDOW_SIZE: WindowSize = { w: 360, h: 640 }
+export function floatBarHeight(windowWidth: number): number {
+  const progress = Math.min(
+    1,
+    Math.max(0, (windowWidth - FLOAT_BAR_WIDTH_START) / (FLOAT_BAR_WIDTH_END - FLOAT_BAR_WIDTH_START)),
+  )
+  return Math.round(FLOAT_BAR_HEIGHT_MIN + (FLOAT_BAR_HEIGHT - FLOAT_BAR_HEIGHT_MIN) * progress)
+}
+
+/**
+ * 视频元数据未就绪时的兜底宽高比（多数直播为竖屏）；
+ * 电台窗（liveType===2）无视频轨、永不上报 aspect，恒用此比例，随工作区按比例缩放。
+ */
+export const FLOAT_DEFAULT_ASPECT = 9 / 16
 
 /** 窗口最小尺寸：再小控制条会挤爆，且比例内接需要有效输入 */
 export const FLOAT_MIN_WIDTH = 240
@@ -39,14 +58,33 @@ export function fitAspectInBox(aspect: number, boxW: number, boxH: number): Wind
   return { w: Math.round(w), h: Math.round(h) }
 }
 
-/* 初始尺寸策略：按显示器工作区（DIP，已含系统缩放）比例推导，不写死像素，
-   同一套比例在小屏 / 大屏上观感一致。 */
+/* 初始尺寸策略：以 1280×800 / 1920×1080 两档工作区为锚点做连续插值。
+   小屏直接套用大屏比例会因 1280 的硬下限而出现「1440 反而比 1280 小」的非单调结果，
+   连续插值既保留小屏可读尺寸，也保证窗口随工作区增大而平稳增长。 */
 
-/** 初始视频区宽度 = 工作区宽度 × 此比例（横屏视频的实际约束） */
-const FLOAT_INITIAL_WIDTH_RATIO = 0.45
+/** 紧凑 / 常规工作区的尺寸锚点 */
+const FLOAT_COMPACT_WORK_WIDTH = 1280
+const FLOAT_COMPACT_WORK_HEIGHT = 800
+const FLOAT_REGULAR_WORK_WIDTH = 1920
+const FLOAT_REGULAR_WORK_HEIGHT = 1080
 
-/** 初始视频区高度上限 = 工作区高度 × 此比例（竖屏视频的实际约束） */
-const FLOAT_INITIAL_HEIGHT_RATIO = 0.7
+/** 横屏初始视频区宽度占工作区宽度：1280 档 53%，到 1920 档平滑回落到 45% */
+const FLOAT_COMPACT_WIDTH_RATIO = 0.53
+const FLOAT_REGULAR_WIDTH_RATIO = 0.45
+
+/** 竖屏初始视频区高度占工作区高度：800 档 80%，到 1080 档平滑回落到 70% */
+const FLOAT_COMPACT_HEIGHT_RATIO = 0.8
+const FLOAT_REGULAR_HEIGHT_RATIO = 0.7
+
+/**
+ * 视频区宽度的兜底下限：极端窄屏或超宽屏下仍要留出控制条与弹幕空间；
+ * 工作区装不下时按可容纳范围回缩，不做硬保证。
+ */
+export const FLOAT_INITIAL_MIN_WIDTH_PORTRAIT = 320
+export const FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE = 680
+
+/** 窗口与工作区边缘的留白：初始尺寸的可容纳上限与创建位置共用同一数值 */
+const FLOAT_EDGE_MARGIN = 24
 
 /** 显示器工作区（DIP，含原点），只取计算所需字段 */
 interface WorkArea {
@@ -56,18 +94,85 @@ interface WorkArea {
   height: number
 }
 
+/** 视频区初始宽度下限：竖屏看短边，横屏看宽边 */
+function initialMinVideoWidth(aspect: number): number {
+  return aspect < 1 ? FLOAT_INITIAL_MIN_WIDTH_PORTRAIT : FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE
+}
+
+/** 尺寸越大比例越克制；锚点区间外固定取对应端点的比例 */
+function responsiveRatio(
+  value: number,
+  compactAnchor: number,
+  regularAnchor: number,
+  compactRatio: number,
+  regularRatio: number,
+): number {
+  const progress = Math.min(1, Math.max(0, (value - compactAnchor) / (regularAnchor - compactAnchor)))
+  return compactRatio + (regularRatio - compactRatio) * progress
+}
+
+/** 横屏档位看宽度，竖屏档位看高度：任一维度变大都不会让对应方向的窗口反向缩小 */
+function initialRatios(workArea: Pick<WorkArea, 'width' | 'height'>): { width: number, height: number } {
+  return {
+    width: responsiveRatio(
+      workArea.width,
+      FLOAT_COMPACT_WORK_WIDTH,
+      FLOAT_REGULAR_WORK_WIDTH,
+      FLOAT_COMPACT_WIDTH_RATIO,
+      FLOAT_REGULAR_WIDTH_RATIO,
+    ),
+    height: responsiveRatio(
+      workArea.height,
+      FLOAT_COMPACT_WORK_HEIGHT,
+      FLOAT_REGULAR_WORK_HEIGHT,
+      FLOAT_COMPACT_HEIGHT_RATIO,
+      FLOAT_REGULAR_HEIGHT_RATIO,
+    ),
+  }
+}
+
 /**
  * 计算独立播放窗的尺寸（含标题栏）：视频区在比例框内内接，结果不小于最小尺寸。
  * 建窗与真实比例到达时共用此函数整体重算，不能只保住兜底宽度。
+ *
+ * 比例框先按工作区比例算出，再按下限撑开（竖屏撑高、横屏撑宽），
+ * 撑开后夹回工作区可容纳范围——下限只在小屏上起效，不能把窗口顶出屏幕。
+ *
+ * 栏高由窗口宽决定，而宽度又受可用高度（含栏高）约束：先按上端估一轮，
+ * 再把算出的宽度回代，收敛后栏高与宽度才自洽（窄窗省下的栏高归视频区）。
  */
 export function computeInitialWindowSize(aspect: number, workArea: WorkArea): WindowSize {
-  const maxW = Math.round(workArea.width * FLOAT_INITIAL_WIDTH_RATIO)
-  const maxH = Math.round(workArea.height * FLOAT_INITIAL_HEIGHT_RATIO) - FLOAT_BAR_HEIGHT
-  const video = fitAspectInBox(aspect, maxW, maxH)
-  return {
-    w: Math.max(FLOAT_MIN_WIDTH, video.w),
-    h: Math.max(FLOAT_MIN_HEIGHT, video.h + FLOAT_BAR_HEIGHT),
+  const minVideoW = initialMinVideoWidth(aspect)
+  const ratios = initialRatios(workArea)
+
+  const layout = (bar: number): WindowSize => {
+    const maxW = Math.min(
+      Math.max(Math.round(workArea.width * ratios.width), minVideoW),
+      workArea.width - FLOAT_EDGE_MARGIN * 2,
+    )
+    const maxH = Math.min(
+      Math.max(
+        Math.round(workArea.height * ratios.height) - bar,
+        Math.round(minVideoW / aspect),
+      ),
+      workArea.height - bar - FLOAT_EDGE_MARGIN * 2,
+    )
+    const video = fitAspectInBox(aspect, maxW, maxH)
+    return {
+      w: Math.max(FLOAT_MIN_WIDTH, video.w),
+      h: Math.max(FLOAT_MIN_HEIGHT, video.h + bar),
+    }
   }
+
+  let size = layout(FLOAT_BAR_HEIGHT)
+  // 回代到不动点；栏高是宽度的阶梯函数，最多两轮即稳定，guard 防意外振荡
+  for (let guard = 0; guard < 4; guard += 1) {
+    const next = layout(floatBarHeight(size.w))
+    if (next.w === size.w && next.h === size.h)
+      break
+    size = next
+  }
+  return size
 }
 
 /* 自动定形前的状态判定（纯函数：主进程侧依赖 electron，无法单测） */
@@ -113,11 +218,47 @@ export function decideAutoFit(
 }
 
 /* ---------------------------------------------------------------------------
- * 创建位置：锚定工作区右上角，多窗按对角级联错开，避免新窗完全叠在旧窗上。
+ * 置顶策略：偏好（always / playing / never）× 播放状态 → 目标置顶态。
+ * 判定只此一处，主进程负责把结果写回窗口，别在别处再拼一遍条件。
  * ------------------------------------------------------------------------- */
 
-/** 播放窗距工作区右上角的留白 */
-const FLOAT_EDGE_MARGIN = 24
+/**
+ * 目标置顶态：`always` 恒置顶；`playing` 随播放状态走（暂停 / 结束让出层级）；`never` 恒不置顶。
+ */
+export function resolveFloatTopmost(preference: FloatTopmost, playing: boolean): boolean {
+  if (preference === 'always')
+    return true
+  return preference === 'playing' && playing
+}
+
+/**
+ * 建窗瞬间的置顶态：此刻还没有播放状态上报，`playing` 策略下也要先置顶，
+ * 否则新窗一出现就被主窗口盖住，像是没打开；`never` 是用户明确拒绝，照办。
+ */
+export function initialFloatTopmost(preference: FloatTopmost): boolean {
+  return preference !== 'never'
+}
+
+/**
+ * 图钉亮灭 = 窗口当前是否真的置顶，而不是策略字面值：
+ * 「仅播放时」在播放中也算点亮，否则图钉与窗口层级相反，用户第一下点击会得到相反的结果。
+ * `playing` 为 null 表示播放器尚未上报，按建窗态算（见 initialFloatTopmost）。
+ */
+export function isFloatTopmostPinned(preference: FloatTopmost, playing: boolean | null): boolean {
+  return playing === null ? initialFloatTopmost(preference) : resolveFloatTopmost(preference, playing)
+}
+
+/**
+ * 图钉是**本窗**的二态开关：点亮时点击取消置顶，未点亮时点击改为始终置顶。
+ * 「仅播放时」只是从设置页继承来的默认策略，图钉不做三态循环——窗口级临时选择用不到它。
+ */
+export function nextFloatTopmost(preference: FloatTopmost, playing: boolean | null): FloatTopmost {
+  return isFloatTopmostPinned(preference, playing) ? 'never' : 'always'
+}
+
+/* ---------------------------------------------------------------------------
+ * 创建位置：锚定工作区右上角，多窗按对角级联错开，避免新窗完全叠在旧窗上。
+ * ------------------------------------------------------------------------- */
 
 /** 级联偏移步长（DIP）：约一行标题栏高，错开即可辨认 */
 export const FLOAT_CASCADE_STEP = 28

@@ -197,8 +197,8 @@ function openHistoryStream(show: OpenLive) {
       <div v-if="showSkeleton" class="shows-container">
         <CardSkeletonGrid
           :count="3"
-          min-item-width="320px"
-          gap="20px"
+          min-item-width="var(--show-min)"
+          gap="var(--show-gap)"
           aspect-ratio="16 / 9"
           :line-widths="[72, 42]"
           heading
@@ -206,8 +206,8 @@ function openHistoryStream(show: OpenLive) {
         <CardSkeletonGrid
           class="skeleton-section"
           :count="3"
-          min-item-width="320px"
-          gap="20px"
+          min-item-width="var(--show-min)"
+          gap="var(--show-gap)"
           aspect-ratio="16 / 9"
           :line-widths="[72, 42]"
           heading
@@ -299,8 +299,8 @@ function openHistoryStream(show: OpenLive) {
 .shows-list {
   padding-bottom: 20px;
   display: grid;
-  gap: 20px;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--show-gap);
+  grid-template-columns: repeat(auto-fill, minmax(var(--show-min), 1fr));
 }
 
 /* 卡片皮肤（实底白卡 + hover 上浮）见全局 .lift-card */

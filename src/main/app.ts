@@ -1,7 +1,7 @@
 import type { WebContents } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
-import { app, BrowserWindow, powerSaveBlocker, shell } from 'electron'
+import { app, BrowserWindow, powerSaveBlocker, screen, shell } from 'electron'
 import iconWin from '../../resources/icon-win.ico?asset'
 import icon from '../../resources/icon.png?asset'
 import trayIco from '../../resources/tray.ico?asset'
@@ -21,6 +21,7 @@ import { startPocketUnread, stopPocketUnread } from './pocket48/pocket-unread'
 import { cleanupStreamSessions } from './stream'
 import { destroyTray, installTray, isTrayActive } from './tray'
 import { initUpdater } from './updater'
+import { centerWindow, computeWindowBounds, fitWindowToWorkArea } from './window-bounds'
 import { wireWindowMaximizeEvents } from './window-events'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
 
@@ -134,13 +135,18 @@ function openRoomFromTray(userId: number): void {
 const appIcon = process.platform === 'win32' ? iconWin : icon
 
 function createWindow(): void {
+  // 初始尺寸随工作区伸缩；下限跟着收敛，否则 Electron 会把窗口强行抻出屏幕
+  const { workArea } = screen.getPrimaryDisplay()
+  const bounds = computeWindowBounds(workArea)
+  const { x, y } = centerWindow(workArea, bounds)
   // 创建浏览器窗口。
   const win = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    // 详情卡片是定宽双栏（左栏 clamp 下限 + 右栏），窄于这个尺寸卡片就压不成形了
-    minWidth: 900,
-    minHeight: 620,
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: bounds.minWidth,
+    minHeight: bounds.minHeight,
+    x,
+    y,
     show: false,
     frame: false, // 纯自定义标题栏：去掉系统边框与默认按钮
     autoHideMenuBar: true,
@@ -208,6 +214,18 @@ function createWindow(): void {
   }
 }
 
+/** 显示器插拔 / 分辨率 / 缩放变化后，把已存在的主窗口收回新工作区 */
+function refitMainWindowToDisplay(): void {
+  const win = activeWindow()
+  if (!win || win.isMinimized() || win.isMaximized() || win.isFullScreen())
+    return
+  const bounds = win.getBounds()
+  const area = screen.getDisplayMatching(bounds).workArea
+  const next = fitWindowToWorkArea(bounds, area)
+  if (next.x !== bounds.x || next.y !== bounds.y || next.width !== bounds.width || next.height !== bounds.height)
+    win.setBounds(next)
+}
+
 // 取当前可用主窗口；窗口已销毁时返回 null。
 // 导出供 ipc/register-float-window-ipc.ts 接线播放窗相关通道（窗口引用本身不跨模块共享）
 export function activeWindow(): BrowserWindow | null {
@@ -234,6 +252,7 @@ app.whenReady().then(async () => {
   })
 
   createWindow()
+  screen.on('display-metrics-changed', refitMainWindowToDisplay)
 
   // macOS dev 模式运行的是原生 Electron.app，需手动设置 Dock 图标；打包版由 build/icon.icns 提供
   if (process.platform === 'darwin' && app.dock && icon && is.dev)

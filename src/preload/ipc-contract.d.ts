@@ -9,7 +9,7 @@
  * 成员数据见 main/data.ts，任务快照见 main/ffmpeg/task-registry.ts，
  * 成员树见 main/domain/member-tree.ts（buildMemberTree）。
  */
-import type { AppConfig, ConfigKey } from '@common/app-config'
+import type { AppConfig, ConfigKey, FloatTopmost } from '@common/app-config'
 import type { FeedbackInput, FeedbackMetaResponse } from '@common/feedback'
 import type { LiveDanmaku } from '@common/live-danmaku'
 import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
@@ -544,6 +544,12 @@ interface StaticIpcInvokeMap {
   floatPlayerGetPayload: InvokeSpec<[kind: FloatPlayerKind, liveId: string], FloatPlayerPayload | null>
   floatWindowFitAspect: InvokeSpec<[aspect: number], void>
   floatWindowSetPlaying: InvokeSpec<[playing: boolean], void>
+  /** 本窗置顶策略（图钉初值）；窗口记录不存在时返回 null */
+  floatWindowGetTopmost: InvokeSpec<[], FloatTopmost | null>
+  /** 图钉切换：只改本窗、不落盘（对端：main/ipc/register-float-window-ipc.ts） */
+  floatWindowSetTopmost: InvokeSpec<[topmost: FloatTopmost], void>
+  /** 写全局置顶偏好并作用到所有已开窗（设置页用） */
+  floatWindowSetTopmostPreference: InvokeSpec<[topmost: FloatTopmost], void>
   notifyLiveUnavailable: InvokeSpec<[liveId: string], void>
   windowMinimize: InvokeSpec<[], void>
   windowToggleMaximize: InvokeSpec<[], void>
@@ -694,6 +700,8 @@ export type IpcEventMap = {
   /** 相册批量下载逐张进度，仅回推发起窗口 */
   roomAlbumDownloadProgress: [progress: RoomAlbumDownloadProgress]
   windowOnMaximizeChange: [isMaximized: boolean]
+  /** 本窗置顶策略变化（对端：main/float-window.ts）：图钉切换或全局偏好波及本窗时推送 */
+  windowOnTopmostChange: [preference: FloatTopmost]
   /** 主进程转发：独立播放窗报告某直播已下架，主窗口据此刷新列表（对端：main/float-window.ts） */
   liveUnavailable: [liveId: string]
   /** B 站弹幕攒批下发（对端：main/bilibili/danmaku-session.ts，仅发给订阅了该房间的窗口） */

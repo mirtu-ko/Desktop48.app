@@ -115,6 +115,23 @@ describe('database 配置读写', () => {
     expect(() => ipc.getConfig('constructor')).toThrow('Invalid config key')
     expect(() => ipc.setConfig('toString', 'x')).toThrow('Invalid config key')
   })
+
+  it('枚举型配置拒绝非法取值，旧库里的废弃取值回落默认值', () => {
+    const instance = new Database(dbPath)
+    instance.init()
+
+    expect(() => asRawIpc(instance).setConfig('floatTopmost', 'sometimes')).toThrow('Invalid config value')
+    expect(instance.getConfig('floatTopmost')).toBe(CONFIG_DEFAULTS.floatTopmost)
+
+    // 手改库文件造一个已不存在的枚举值
+    const raw = JSON.parse(readFileSync(dbPath, 'utf-8')) as { config: Record<string, unknown> }
+    raw.config.floatTopmost = 'legacy'
+    writeFileSync(dbPath, JSON.stringify(raw))
+
+    const reopened = new Database(dbPath)
+    reopened.init()
+    expect(reopened.getConfig('floatTopmost')).toBe(CONFIG_DEFAULTS.floatTopmost)
+  })
 })
 
 /** allmembersSimple 已停止拉取（它是 allmembers 的字段子集），旧库残留要在 init() 清掉，否则会一直占着文件 */

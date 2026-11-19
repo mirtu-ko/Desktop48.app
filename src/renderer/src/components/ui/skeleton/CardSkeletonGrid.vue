@@ -8,7 +8,7 @@ import BaseSkeleton from './BaseSkeleton.vue'
  */
 const props = withDefaults(defineProps<{
   count?: number
-  /** 单卡最小宽度，传给 CSS grid 的 minmax */
+  /** 单卡最小宽度，传给 CSS grid 的 minmax；缺省跟随全局 --card-min，与真实网格同档 */
   minItemWidth?: string
   gap?: string
   /** 媒体区宽高比；直播/回放 1，公演 16 / 9，成员 1 */
@@ -21,8 +21,8 @@ const props = withDefaults(defineProps<{
   heading?: boolean
 }>(), {
   count: 12,
-  minItemWidth: '220px',
-  gap: '16px',
+  minItemWidth: 'var(--card-min)',
+  gap: 'var(--card-gap)',
   aspectRatio: '1',
   mediaRadius: '0',
   lineWidths: () => [82, 56, 38],
@@ -91,7 +91,7 @@ const gridStyle = computed(() => ({
 }
 
 .skeleton-body {
-  padding: 10px 12px 12px;
+  padding: var(--card-body-pad);
 }
 
 .skeleton-line {

@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import { describe, expect, it } from 'vitest'
 import { ref } from 'vue'
-import { useDanmakuLayer } from '../src/renderer/src/composables/use-danmaku-layer'
+import { DANMAKU_CONTROL_CLEARANCE, DANMAKU_INSET, useDanmakuLayer } from '../src/renderer/src/composables/use-danmaku-layer'
 
 /**
  * 字号锚画面短边（min(width, height)）而非高度：竖屏直播高度≈窗口全高，
@@ -68,23 +68,23 @@ describe('useDanmakuLayer 字号', () => {
 describe('useDanmakuLayer 定位', () => {
   it('竖屏：横向锚渲染区（左右各内缩），纵向贴窗口底', () => {
     const { position } = setup(makeRect(422, 700))
-    // left = (1000-422)/2 + 10；width 让出左右各 10px；bottom 恒为控制条避让量
+    // left = (1000-422)/2 + 内缩量；width 让出左右各一个内缩量；bottom 恒为控制条避让量
     expect(position.value).toEqual({
-      left: '299.0px',
-      bottom: '46px',
-      width: '402.0px',
+      left: `calc(289.0px + ${DANMAKU_INSET})`,
+      bottom: DANMAKU_CONTROL_CLEARANCE,
+      width: `max(0px, calc(422.0px - 2 * ${DANMAKU_INSET}))`,
     })
   })
 
   it('画面上下有黑边（顶底各 50px）也不抬高底边', () => {
     // 同一画面贴满容器时底边不变：渲染区的 top / bottom 不参与纵向定位
-    expect(setup(makeRect(422, 700)).position.value.bottom).toBe('46px')
-    expect(setup(makeRect(1000, 800)).position.value.bottom).toBe('46px')
+    expect(setup(makeRect(422, 700)).position.value.bottom).toBe(DANMAKU_CONTROL_CLEARANCE)
+    expect(setup(makeRect(1000, 800)).position.value.bottom).toBe(DANMAKU_CONTROL_CLEARANCE)
   })
 
   it('渲染区未就绪：left/bottom 走兜底，不注入 width（由 CSS 兜底宽度）', () => {
     const { position } = setup(null)
-    expect(position.value).toEqual({ left: '10px', bottom: '46px' })
+    expect(position.value).toEqual({ left: DANMAKU_INSET, bottom: DANMAKU_CONTROL_CLEARANCE })
   })
 
   it('支持注入额外最大宽度', () => {

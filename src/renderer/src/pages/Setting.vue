@@ -4,12 +4,13 @@ import type { NetDiagnoseItem, PocketClientProfileId, PocketVerifyResult } from 
 import type { InputInstance } from 'element-plus'
 import { FEEDBACK_CONTACT_MAX, FEEDBACK_CONTENT_MAX, formatFeedbackMeta } from '@common/feedback'
 import { DEFAULT_POCKET_CLIENT_PROFILE, POCKET_CLIENT_PROFILE_OPTIONS, pocketClientProfileOption } from '@common/pocket-client-profile'
-import { ChatDotRound, Connection, Cpu, Document, Download, Folder, Hide, Lock, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
+import { ChatDotRound, Connection, Cpu, Document, Download, Folder, Hide, Lock, Position, Refresh, Top, User, WarningFilled } from '@element-plus/icons-vue'
 import appIcon from '@renderer/assets/icon.png'
 import { useAppConfig } from '@renderer/composables/use-app-config'
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { usePocketFollowSync } from '@renderer/composables/use-pocket-follow'
 import { useUpdater } from '@renderer/composables/use-updater'
+import { ensureFloatTopmost, floatTopmost, setFloatTopmost } from '@renderer/stores/float-topmost'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
 import {
   checkInPocket,
@@ -115,6 +116,7 @@ async function handleCheckIn() {
 
 onMounted(async () => {
   await loadAppConfig()
+  await ensureFloatTopmost()
   // FFmpeg 就绪状态每次都重新判定：目录可能在应用之外被删除或移动
   await refreshFfmpeg()
   await refreshBlockedMembers()
@@ -124,6 +126,12 @@ onMounted(async () => {
   await loadFeedbackMeta()
   consumeUpdateFocus()
 })
+
+/** 单选组的事件是宽联合类型，这里收窄成三个合法取值再落盘，其余值忽略 */
+function onPickFloatTopmost(value: string | number | boolean | undefined) {
+  if (value === 'always' || value === 'playing' || value === 'never')
+    void setFloatTopmost(value)
+}
 
 /** FFmpeg 行状态徽章：可用 / 未配置 / 目录不存在 / 缺少 ffmpeg */
 const ffmpegStateLabel = computed(() => {
@@ -1185,6 +1193,42 @@ onActivated(consumeUpdateFocus)
           </div>
         </section>
 
+        <!-- 播放窗置顶：标题栏图钉是同一偏好的第二个视图，完整三态只在这里给 -->
+        <section class="setting-card glass-card">
+          <div class="setting-row">
+            <span
+              class="row-icon icon-tile"
+              :style="{ '--tile-color': 'var(--color-shows)' }"
+            >
+              <el-icon><Position /></el-icon>
+            </span>
+            <div class="row-text row-text--fluid">
+              <div class="row-title">
+                播放窗置顶
+              </div>
+              <div class="row-desc">
+                播放窗与其他窗口的前后层级；标题栏的图钉可单独调整当前窗
+              </div>
+            </div>
+            <div class="topmost-actions">
+              <el-radio-group
+                :model-value="floatTopmost"
+                @update:model-value="onPickFloatTopmost"
+              >
+                <el-radio-button value="always">
+                  始终置顶
+                </el-radio-button>
+                <el-radio-button value="playing">
+                  仅播放时
+                </el-radio-button>
+                <el-radio-button value="never">
+                  从不置顶
+                </el-radio-button>
+              </el-radio-group>
+            </div>
+          </div>
+        </section>
+
         <!-- 内容与可见性 -->
         <h2 class="setting-group-label" data-setting-group="content">
           内容与可见性
@@ -1398,7 +1442,8 @@ onActivated(consumeUpdateFocus)
         <el-dialog
           v-model="feedbackDialogVisible"
           title="问题反馈"
-          width="520px"
+          width="min(520px, calc(100vw - 32px))"
+          align-center
           append-to-body
           :close-on-click-modal="false"
           :close-on-press-escape="!feedbackSubmitting"
@@ -1555,7 +1600,8 @@ onActivated(consumeUpdateFocus)
     <el-dialog
       v-model="diagnoseDialogVisible"
       title="网络诊断结果"
-      width="640px"
+      width="min(640px, calc(100vw - 32px))"
+      align-center
       append-to-body
     >
       <!-- 等待态复用登录验证弹窗的轻量 spinner -->
@@ -1628,7 +1674,7 @@ onActivated(consumeUpdateFocus)
     <!-- 口袋48登录弹窗：短信验证码 / Token 粘贴 两种方式 -->
     <el-dialog
       v-model="loginDialogVisible"
-      width="480px"
+      width="min(480px, calc(100vw - 32px))"
       align-center
       :close-on-click-modal="false"
       append-to-body
@@ -1799,7 +1845,8 @@ onActivated(consumeUpdateFocus)
     <el-dialog
       v-model="verifyDialogVisible"
       :title="verifyFailed ? '登录状态异常' : '登录状态'"
-      width="460px"
+      width="min(460px, calc(100vw - 32px))"
+      align-center
       append-to-body
       class="verify-dialog"
     >
@@ -1922,29 +1969,31 @@ onActivated(consumeUpdateFocus)
 </template>
 
 <style scoped lang="scss">
+@use '../assets/css/fluid' as *;
+
 .setting-root {
   /* 左 152px 导航 + 24px 间距 + 右侧内容，内容区仍以约 880px 为上限 */
   max-width: 1120px;
   margin: 0 auto;
   /* 底部留出悬浮 Dock 的高度（--dock-reserve），避免最后一张卡片被遮挡 */
-  padding: 20px 24px var(--dock-reserve);
+  padding: fluid(14px, 20px) 24px var(--dock-reserve);
   display: flex;
   align-items: flex-start;
-  gap: 24px;
+  gap: fluid(18px, 24px);
 }
 
 .setting-content {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 14px;
+  gap: fluid(10px, 14px);
   min-width: 0;
 }
 
 /* 左侧分组导航：粘性停靠在滚动容器顶部；激活态竖条与内容区组标签同语言 */
 .setting-nav {
   position: sticky;
-  top: 20px;
+  top: fluid(14px, 20px);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -1969,7 +2018,7 @@ onActivated(consumeUpdateFocus)
 .setting-nav-item {
   position: relative;
   width: 100%;
-  padding: 9px 10px;
+  padding: fluid(8px, 9px) 10px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -2018,7 +2067,7 @@ onActivated(consumeUpdateFocus)
 
 /* 设置卡片：磨砂玻璃基底见全局 .glass-card */
 .setting-card {
-  padding: 18px 20px;
+  padding: fluid(14px, 18px) 20px;
   border-radius: var(--radius-lg);
 }
 
@@ -2028,7 +2077,7 @@ onActivated(consumeUpdateFocus)
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 8px 0 -6px 4px;
+  margin: fluid(6px, 8px) 0 fluid(-4px, -6px) 4px;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -2115,11 +2164,11 @@ onActivated(consumeUpdateFocus)
 
 /* 渐变主题图标磁贴：骨架见全局 .icon-tile（与底部 Dock 的视觉语言一致），此处仅定尺寸 */
 .row-icon {
-  width: 44px;
-  height: 44px;
+  width: fluid(38px, 44px);
+  height: fluid(38px, 44px);
 
   .el-icon {
-    font-size: 21px;
+    font-size: fluid(19px, 21px);
   }
 }
 
@@ -2206,10 +2255,17 @@ onActivated(consumeUpdateFocus)
   display: flex;
 }
 
+/* 三态单选靠右：宽度由内容决定，不像 .row-control 那样撑满中间 */
+.topmost-actions {
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+}
+
 /* 卡片正文：与标题行之间用虚线分隔 */
 .row-body {
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: fluid(10px, 14px);
+  padding-top: fluid(10px, 14px);
   border-top: 1px dashed var(--el-border-color-lighter);
 }
 

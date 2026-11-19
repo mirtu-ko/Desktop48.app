@@ -112,8 +112,8 @@ onMounted(fetchAlbums)
         >
           <BaseSkeleton
             class="album-cover"
-            width="96px"
-            height="96px"
+            width="var(--album-cover)"
+            height="var(--album-cover)"
             radius="var(--radius-lg)"
           />
           <div class="album-skeleton-info">
@@ -252,8 +252,8 @@ onMounted(fetchAlbums)
   position: relative;
   display: flex;
   align-items: center;
-  gap: 32px;
-  padding: 12px;
+  gap: var(--album-inner-gap);
+  padding: var(--album-inset);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: var(--radius-lg);
   background: var(--el-bg-color);
@@ -270,8 +270,8 @@ onMounted(fetchAlbums)
 
 .albums-grid {
   display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--card-gap);
+  grid-template-columns: repeat(auto-fill, minmax(var(--album-min), 1fr));
   transition:
     opacity 0.25s ease,
     filter 0.25s ease;
@@ -290,8 +290,8 @@ onMounted(fetchAlbums)
   position: relative;
   display: flex;
   align-items: center;
-  gap: 32px;
-  padding: 12px;
+  gap: var(--album-inner-gap);
+  padding: var(--album-inset);
   border-radius: var(--radius-lg);
   cursor: pointer;
 
@@ -388,24 +388,24 @@ onMounted(fetchAlbums)
 
 .album-cover {
   position: relative;
-  width: 96px;
-  height: 96px;
+  width: var(--album-cover);
+  height: var(--album-cover);
   flex: none;
 }
 
 /* 黑胶唱片：藏在封面右侧（纹理见全局 .vinyl），列表里悬停才滑出并起转 */
 .vinyl {
   top: 7px;
-  left: 36px;
-  width: 82px;
-  height: 82px;
+  left: calc(var(--album-cover) * 0.375);
+  width: var(--album-vinyl);
+  height: var(--album-vinyl);
 }
 
 /* 唱片中心盘标：用封面图充当 */
 .vinyl-label {
-  width: 34px;
-  height: 34px;
-  margin: -17px 0 0 -17px;
+  width: var(--album-label);
+  height: var(--album-label);
+  margin: calc(var(--album-label) / -2) 0 0 calc(var(--album-label) / -2);
   animation-play-state: paused;
 }
 
@@ -413,8 +413,8 @@ onMounted(fetchAlbums)
   position: relative;
   z-index: 1;
   display: block;
-  width: 96px;
-  height: 96px;
+  width: var(--album-cover);
+  height: var(--album-cover);
   border-radius: var(--radius-md);
   overflow: hidden;
   box-shadow: var(--shadow-sm);

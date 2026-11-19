@@ -244,6 +244,8 @@ function jumpToYear(target: number) {
 </template>
 
 <style scoped lang="scss">
+@use '../assets/css/fluid' as *;
+
 .elections-container {
   padding: var(--page-pad);
 }
@@ -253,11 +255,24 @@ function jumpToYear(target: number) {
   /* 团体色的可读文字版：浅色团色（GNZ48 黄绿、CKG48 琥珀）本色读不出来，压深一半才达标 */
   --gc-ink: color-mix(in srgb, var(--gc, var(--el-text-color-secondary)) 50%, #000);
 
+  /* 领奖台尺寸集中在这里，全部随窗口高连续收：首屏最大的一块，收它才腾得出一行名次卡 */
+  --podium-pad-top: #{fluid(16px, 24px)};
+  --podium-pad-bottom: #{fluid(18px, 26px)};
+  --podium-gap: #{fluid(14px, 22px)};
+  --podium-avatar: #{fluid(128px, 164px)};
+  --spot-avatar: #{fluid(94px, 116px)};
+  /* 皇冠预留位：皇冠图标是固定 36px（模板 :size），所以这 30px 不随头像收 */
+  --crown-space: 30px;
+  --podium-base-w: #{fluid(72px, 88px)};
+  --podium-base-h: #{fluid(7px, 8px)};
+  --champion-base-w: #{fluid(88px, 108px)};
+  --champion-base-h: #{fluid(10px, 13px)};
+
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 22px;
-  padding: 24px 30px 26px;
+  gap: var(--podium-gap);
+  padding: var(--podium-pad-top) 30px var(--podium-pad-bottom);
   border: 1px solid color-mix(in srgb, var(--medal-gold) 34%, var(--el-border-color-lighter));
   border-radius: var(--radius-card);
   /* 加冕舞台：左上庆典红聚光 + 右下金色余晖，把头图从平面衬出纵深 */
@@ -330,8 +345,8 @@ function jumpToYear(target: number) {
 /* 领奖台基座：一截名次色的台面，冠军的最宽最高 */
 .podium-spot::after {
   content: '';
-  width: 88px;
-  height: 8px;
+  width: var(--podium-base-w);
+  height: var(--podium-base-h);
   margin-top: 10px;
   border-radius: var(--radius-pill);
   background: linear-gradient(
@@ -342,8 +357,8 @@ function jumpToYear(target: number) {
 }
 
 .podium-spot.is-champion::after {
-  width: 108px;
-  height: 13px;
+  width: var(--champion-base-w);
+  height: var(--champion-base-h);
 }
 
 /* 加冕徽章：金字金底的药丸，和头图的金环呼应 */
@@ -351,9 +366,9 @@ function jumpToYear(target: number) {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 11px;
+  padding: fluid(2px, 3px) fluid(9px, 11px);
   border-radius: var(--radius-pill);
-  font-size: 12px;
+  font-size: fluid(11px, 12px);
   font-weight: 700;
   letter-spacing: 0.5px;
   color: color-mix(in srgb, var(--medal-gold) 42%, #000);
@@ -375,7 +390,7 @@ function jumpToYear(target: number) {
 
 .is-champion .spot-figure {
   /* 皇冠的预留位 */
-  padding-top: 30px;
+  padding-top: var(--crown-space);
 }
 
 .spot-crown {
@@ -418,8 +433,8 @@ function jumpToYear(target: number) {
   position: relative;
   z-index: 1;
   display: block;
-  width: 116px;
-  height: 116px;
+  width: var(--spot-avatar);
+  height: var(--spot-avatar);
   border-radius: 50%;
   overflow: hidden;
   background: var(--el-fill-color-light);
@@ -431,8 +446,8 @@ function jumpToYear(target: number) {
 }
 
 .is-champion .spot-avatar {
-  width: 164px;
-  height: 164px;
+  width: var(--podium-avatar);
+  height: var(--podium-avatar);
   /* 金色加冕双环：内实外虚，像一层金属戒圈 */
   box-shadow:
     0 0 0 3.5px var(--medal-gold),
@@ -442,30 +457,30 @@ function jumpToYear(target: number) {
 
 /* 亚军 / 季军的名次徽章：走共享 .rank-badge 的金银铜款，按领奖台比例放大一号 */
 .spot-no {
-  min-width: 26px;
-  height: 26px;
-  padding: 0 8px;
+  min-width: fluid(22px, 26px);
+  height: fluid(22px, 26px);
+  padding: 0 fluid(7px, 8px);
   bottom: -1px;
-  font-size: 14px;
+  font-size: fluid(12px, 14px);
 }
 
 /* 头像加载失败时用姓氏占位（共享兜底样式见 app.scss 的 .avatar-fallback） */
 .avatar-fallback {
-  font-size: 48px;
+  font-size: fluid(38px, 48px);
 }
 
 .spot-name {
   max-width: 140px;
-  margin: 8px 0 0;
-  font-size: 16px;
+  margin: fluid(6px, 8px) 0 0;
+  font-size: fluid(15px, 16px);
   font-weight: 600;
   line-height: 1.3;
   color: var(--el-text-color-primary);
 }
 
 .is-champion .spot-name {
-  max-width: 200px;
-  font-size: 22px;
+  max-width: fluid(180px, 200px);
+  font-size: fluid(19px, 22px);
   font-weight: 700;
   letter-spacing: 1px;
 }
@@ -498,7 +513,7 @@ function jumpToYear(target: number) {
   display: flex;
   justify-content: center;
   gap: 10px;
-  margin: 26px 0 18px;
+  margin: fluid(16px, 26px) 0 fluid(12px, 18px);
 }
 
 .list-tab {
@@ -508,10 +523,10 @@ function jumpToYear(target: number) {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 16px;
+  padding: fluid(6px, 7px) fluid(13px, 16px);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: var(--radius-pill);
-  font-size: 13px;
+  font-size: fluid(12px, 13px);
   font-weight: 600;
   color: var(--el-text-color-regular);
   background: var(--el-bg-color);
@@ -557,10 +572,10 @@ function jumpToYear(target: number) {
 /* 名次卡网格：与成员页同构（卡片皮肤 / 头像环复用 card-item / avatar-wrap），
  * 头像比成员卡大一档（92 → 112px），经共享的 --avatar-size 注入 */
 .rank-grid {
-  --avatar-size: 112px;
+  --avatar-size: #{fluid(100px, 112px)};
 
   display: grid;
-  gap: 10px 8px;
+  gap: fluid(8px, 10px) 8px;
   grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
 }
 </style>

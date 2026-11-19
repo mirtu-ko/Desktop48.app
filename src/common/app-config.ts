@@ -4,7 +4,7 @@
  */
 
 /** 配置的合法键（固定集合，IPC 侧以运行时校验防渲染端乱传） */
-export type ConfigKey = 'downloadDirectory' | 'ffmpegDirectory' | 'danmakuPlacement' | 'trayOnClose'
+export type ConfigKey = 'downloadDirectory' | 'ffmpegDirectory' | 'danmakuPlacement' | 'trayOnClose' | 'floatTopmost'
 
 /** 弹幕摆放：video = 画面内；left = 移到左侧黑边（黑边不够宽会自动回落 video） */
 export type DanmakuPlacement = 'video' | 'left'
@@ -12,10 +12,19 @@ export type DanmakuPlacement = 'video' | 'left'
 /** 关闭主窗口的行为（仅 Windows 托盘模式生效）：on = 最小化到托盘；off = 按原逻辑关闭退出 */
 export type TrayOnClose = 'on' | 'off'
 
+/** 独立播放窗置顶策略：always = 始终置顶；playing = 仅播放时置顶；never = 从不置顶 */
+export type FloatTopmost = 'always' | 'playing' | 'never'
+
+/** 取值收窄：跨 IPC 传来的裸字符串与旧配置都靠它兜住 */
+export function isFloatTopmost(value: unknown): value is FloatTopmost {
+  return value === 'always' || value === 'playing' || value === 'never'
+}
+
 /** 枚举型配置的合法取值：载入与写入两侧共用，拦住脏值落盘 */
 export const CONFIG_ENUMS: Partial<Record<ConfigKey, readonly string[]>> = {
   danmakuPlacement: ['video', 'left'],
   trayOnClose: ['on', 'off'],
+  floatTopmost: ['always', 'playing', 'never'],
 }
 
 /** 配置生效值类型：init() 补齐默认值后读取不会缺键 */
@@ -31,4 +40,6 @@ export const CONFIG_DEFAULTS: AppConfig = {
   danmakuPlacement: 'video',
   /** 关闭主窗口是否最小化到 Windows 系统托盘 */
   trayOnClose: 'on',
+  /** 独立播放窗置顶策略：默认沿用「播放中置顶、暂停让出层级」 */
+  floatTopmost: 'playing',
 }

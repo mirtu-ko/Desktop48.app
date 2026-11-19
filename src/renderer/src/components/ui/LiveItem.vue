@@ -257,7 +257,7 @@ const liveBadge = computed(() => {
   }
 
   .card-body {
-    padding: 10px 12px 12px;
+    padding: var(--card-body-pad);
     min-width: 0;
   }
 

@@ -393,7 +393,7 @@ onUnmounted(() => {
   --idle-side-reserve: 224px;
 
   position: absolute;
-  top: 12px;
+  top: var(--float-top);
   left: 50%;
   z-index: 6;
   transform: translateX(-50%);
@@ -516,8 +516,8 @@ onUnmounted(() => {
 /* 公演预告网格：与公演页的卡片网格同口径（16 / 9 封面 + 队伍角标） */
 .idle-shows {
   display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--show-gap);
+  grid-template-columns: repeat(auto-fill, minmax(var(--show-min), 1fr));
 }
 
 .idle-show {
@@ -527,8 +527,8 @@ onUnmounted(() => {
 /* 回放预告网格：列宽与直播/回放列表页的 .card-grid 同口径（1:1 封面） */
 .idle-playbacks {
   display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--card-gap);
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min), 100%), 1fr));
 }
 
 .idle-playback {

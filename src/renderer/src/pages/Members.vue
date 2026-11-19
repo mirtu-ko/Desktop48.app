@@ -507,6 +507,8 @@ useEventListener(window, 'keydown', onKeydown)
 </template>
 
 <style scoped lang="scss">
+@use '../assets/css/fluid' as *;
+
 /* 页面骨架：全局 .page-root 给了相对定位 + 裁剪，这里改成纵向两段
  * （常驻工具条 + 滚动区），浮动 tab 栏 / 工具条仍是绝对定位，不参与这两段 */
 .page-root {
@@ -519,11 +521,11 @@ useEventListener(window, 'keydown', onKeydown)
   flex: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: fluid(8px, 10px);
   align-items: center;
   /* 顶部让开左上角浮动切换器（--tabbar-offset-top） */
   margin-top: var(--tabbar-offset-top);
-  padding: 0 16px 10px;
+  padding: 0 var(--space-page-x) fluid(8px, 10px);
 }
 
 .search-box {
@@ -533,7 +535,7 @@ useEventListener(window, 'keydown', onKeydown)
   align-items: center;
   min-width: 0;
   max-width: 320px;
-  height: 34px;
+  height: fluid(30px, 34px);
   padding: 0 10px 0 12px;
   border-radius: var(--radius-pill);
   color: var(--el-text-color-placeholder);
@@ -601,7 +603,7 @@ useEventListener(window, 'keydown', onKeydown)
   box-shadow: inset 0 0 0 1px var(--el-border-color-light);
 
   &--icon .segmented__item {
-    width: 30px;
+    width: fluid(28px, 30px);
     padding: 0;
   }
 
@@ -609,8 +611,8 @@ useEventListener(window, 'keydown', onKeydown)
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 26px;
-    padding: 0 12px;
+    height: fluid(24px, 26px);
+    padding: 0 fluid(10px, 12px);
     border: none;
     border-radius: var(--radius-pill);
     font-family: inherit;
@@ -655,7 +657,7 @@ useEventListener(window, 'keydown', onKeydown)
 
 .members-container {
   /* 顶部留白由工具条承担，这里只留内容间距；底部留卡片悬停上浮与阴影 */
-  padding: 6px 16px 8px;
+  padding: fluid(4px, 6px) var(--space-page-x) fluid(6px, 8px);
 }
 
 /* 数据看板：工具条整条隐藏后，顶部让位改由这里的 --page-pad 承担（已含浮动 tab 栏高度） */
@@ -664,7 +666,7 @@ useEventListener(window, 'keydown', onKeydown)
 }
 
 .members-skeleton {
-  padding: 6px 16px 8px;
+  padding: fluid(4px, 6px) var(--space-page-x) fluid(6px, 8px);
 
   /* 骨架与卡片同构（透明底、92px 圆头像、文案行居中），加载完成时不跳版 */
   :deep(.skeleton-card) {
@@ -690,13 +692,13 @@ useEventListener(window, 'keydown', onKeydown)
 .group-section {
   --sec-accent: var(--brand-primary);
 
-  padding: 10px 14px 14px;
+  padding: fluid(8px, 10px) 14px fluid(10px, 14px);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--sec-accent) 5%, var(--el-bg-color));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sec-accent) 14%, transparent);
 
   & + .group-section {
-    margin-top: 14px;
+    margin-top: fluid(10px, 14px);
   }
 
   /* 暂休 / 退团：没有队伍色，退成中性灰底，不与在团队伍抢注意力 */
@@ -714,8 +716,8 @@ useEventListener(window, 'keydown', onKeydown)
   gap: 12px;
   align-items: center;
   /* 负外边距抵消分区的内边距：标题条铺满分区整宽 */
-  margin: -10px -14px 10px;
-  padding: 10px 16px;
+  margin: fluid(-8px, -10px) -14px fluid(8px, 10px);
+  padding: fluid(8px, 10px) 16px;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   /* 比分区底色深一档，形成分区头 */
   background: color-mix(in srgb, var(--sec-accent) 11%, var(--el-bg-color));
@@ -728,8 +730,8 @@ useEventListener(window, 'keydown', onKeydown)
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 44px;
-    height: 44px;
+    width: fluid(36px, 44px);
+    height: fluid(36px, 44px);
 
     .team-badge-img {
       max-width: 100%;

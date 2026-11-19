@@ -1,3 +1,5 @@
+@use 'fluid' as *;
+
 /* ============ 精致浅色主题 ============ */
 :root {
   /* 品牌色：轻盈紫罗兰，整体更柔和、不厚重 */
@@ -28,9 +30,10 @@
   --radius-xs: 4px;
   --radius-sm: 8px;
   --radius-md: 12px;
-  --radius-lg: 16px;
+  /* lg 跟随高度轴收一点下限，保证矮窗下仍比 md 大一档、与卡片圆角仍有层级差 */
+  --radius-lg: #{fluid(14px, 16px)};
   /* 全屏详情卡片的卡面圆角（比 lg 再大一档，卡感来自圆角与留白） */
-  --radius-card: 20px;
+  --radius-card: #{fluid(16px, 20px)};
   --radius-pill: 999px;
 
   /* ===== 语义主题色 =====
@@ -63,11 +66,58 @@
    * 1900   生日贺卡半透明蒙层 + 弹卡（低于 Element Plus 弹层 2000+，保证复制/保存提示可见）
    * 注：直播 / 回放播放窗已是独立 BrowserWindow，不再参与本窗口的层叠体系 */
 
-  /* ===== 浮层让位：页面内容为悬浮控件预留的空间 ===== */
-  --tabbar-offset-top: 64px; // 左上角 FloatingTabBar 的高度 + 间距
-  --dock-reserve: 96px; // 底部悬浮 AppDock 预留的滚动留白（Dock 视觉高约 96px，含后仰板的投影）
-  /* 列表页内容区统一内边距：上留浮动 tab 栏、左右 16、下留卡片悬停上浮与阴影 */
-  --page-pad: var(--tabbar-offset-top) 16px 8px;
+  /* ===== 浮层让位：页面内容为悬浮控件预留的空间 =====
+   * 三者都等于某个浮动件的自身高度，因此必须与那几个组件的尺寸同源（都走 fluid），
+   * 否则曲线斜率不一致，栏底到内容顶的间距会随窗口高漂移。 */
+  --tabbar-offset-top: #{fluid(50px, 64px)}; // 左上角 FloatingTabBar 顶距 + 栏高 + 间隙
+  /* 页首浮动控件（左上 tab 栏 / 右上工具条 / 回放页整行）的顶距：四处共用一个值 */
+  --float-top: #{fluid(8px, 12px)};
+  --dock-reserve: #{fluid(80px, 96px)}; // 底部悬浮 AppDock 预留的滚动留白（Dock 高 + 底距，含后仰板投影）
+  /* 列表页内容区统一内边距：上留浮动 tab 栏、左右统一值、下留卡片悬停上浮与阴影 */
+  --page-pad: var(--tabbar-offset-top) var(--space-page-x) 8px;
+
+  /* ===== 高度轴：垂直留白连续变化，不再按档切换 =====
+   * --vh-step 是一个长度：641px（紧凑档原锚点）为 0，900px（基准窗口）为 1。
+   * 垂直量统一写成 fluid(紧凑值, 基准值)（见 _fluid.scss），展开即
+   * clamp(紧凑值, 紧凑值 + 差 * var(--vh-step), 基准值)——
+   * 没有断点，也就没有「窗口矮 1px 整页跳一格」。
+   * data-density 只留给结构性规则（按钮高度、弹窗高度上限、字号台阶）。 */
+  --vh-step: calc((100vh - 641px) / 259);
+
+  /* ===== 密度 token：紧凑档只覆盖这一组，跨组件共用的尺寸放这里 =====
+   * 档位由 html[data-density] 提供，断点值见 src/common/density.ts；正文与消息字号不降。 */
+  /* 水平内距只由窗口宽度决定：1vw 里的 vw 是窗口宽，主进程按工作区宽定窗口宽，两者是上下游。
+   * 紧凑档不覆盖，它参与内容宽计算，改了会让同宽换高度就换列数。
+   * 下限 12 保住小屏排 5 列，宽屏渐增到 32 */
+  --space-page-x: clamp(12px, 1vw, 32px);
+  /* 卡片尺寸只由窗口宽度决定（紧凑档不碰这一组）：小屏按 vw 连续收一档，≥1400 宽回到基准值。
+   * clamp 系数 = 基准值 / 1400，满意档与既有观感逐像素一致。 */
+  --card-gap: clamp(12px, 1.15vw, 16px); // 1:1 卡与专辑网格间距
+  --show-gap: clamp(15px, 1.43vw, 20px); // 公演网格间距比 1:1 卡宽松
+  /* 基准 225 是「1216 窗口排 5 列」与「1920 窗口仍排 7 列」的唯一交集，区间仅 1.6px。
+   * 小屏收到 200：窗口按 1.7 比例变窄后仍保住 5 列，单卡等比缩小而不是掉列撑大。 */
+  --card-min: min(
+    clamp(200px, 16.1vw, 225px),
+    calc((100% - 3 * var(--card-gap)) / 4)
+  ); // 1:1 封面卡（直播 / 回放）：带 200–265
+  --show-min: min(
+    300px,
+    max(clamp(230px, 18.6vw, 260px), calc((100% - 3 * var(--show-gap)) / 4))
+  ); // 16:9 封面卡（公演）：带 300–380，地板 260→230
+  --album-min: min(
+    265px,
+    max(clamp(215px, 17.2vw, 240px), calc((100% - 3 * var(--card-gap)) / 4))
+  ); // 专辑横排卡：带 265–335，地板 240→215
+  /* 卡片内部尺寸：与卡宽同源，封面 / 黑胶 / 横排间距 / 内距一起收 */
+  --album-cover: clamp(86px, 6.9vw, 96px);
+  --album-vinyl: clamp(74px, 5.9vw, 82px);
+  --album-label: clamp(30px, 2.45vw, 34px);
+  --album-inner-gap: clamp(20px, 2.3vw, 32px);
+  --album-inset: clamp(9px, 0.86vw, 12px);
+  --card-body-pad: #{fluid(7px, 10px) fluid(9px, 12px) fluid(9px, 12px)}; // 封面下方文字区
+  --dock-item-w: #{fluid(46px, 56px)}; // Dock 单项宽
+  --dock-icon: #{fluid(32px, 40px)}; // Dock 图标磁贴边长
+  --dock-gap: #{fluid(5px, 8px)}; // Dock 项间距
 
   /* ===== 浅色玻璃表层 token：底部 Dock / 左上 tab 栏 / 右上工具条 / 左下播放条共用 =====
    * 观感由四层叠出来：光带给体积、底色定通透、边给厚度、落影让它浮起来。
@@ -96,6 +146,38 @@
   --player-glass-bg: rgba(15, 17, 26, 0.68);
   --player-glass-ring: rgba(255, 255, 255, 0.16);
   --player-glass-hover: rgba(255, 255, 255, 0.12);
+}
+
+/* ===== 紧凑档：html[data-density='compact'] 由 main.ts 按 src/common/density.ts 的断点写入 =====
+ * 垂直留白与装饰尺寸都已改由 --vh-step 连续驱动（fluid()，见 _fluid.scss），
+ * 这里只剩「不能连续变」的结构性规则：EP 按钮高度（构建期常量）、弹窗高度上限、字号台阶。
+ * 一律不碰参与内容宽计算的变量（列宽 / 网格间距 / 水平内距）。 */
+:root[data-density='compact'] {
+  /* EP 默认按钮高度构建期写死 32px，只能运行时覆写；圆钮与 small / large 保持原尺寸 */
+  .el-button:not(.is-circle):not(.el-button--small):not(.el-button--large):not(.is-link):not(.is-text) {
+    height: 28px;
+    padding: 6px 13px;
+  }
+
+  /* 字号默认是台阶（连续缩放下会落在非整数字号上），
+   * 例外只有决定浮层高度的那两处（tab 栏、Dock 标签），它们必须与高度契约同曲线 */
+  .section-title {
+    font-size: 13px;
+  }
+
+  .detail-side-title {
+    font-size: 17px;
+  }
+
+  /* 86vh 在矮屏只剩五百出头，放宽到 90vh 把空间给可滚区 */
+  .detail-card-dialog.el-dialog {
+    height: min(90vh, 660px);
+  }
+
+  /* 履历卡上限仍是 640，不跟着放宽 */
+  .detail-card-dialog.election-history-dialog.el-dialog {
+    height: min(90vh, 640px);
+  }
 }
 
 /* ===== Element Plus 变量覆写（浅色） =====
@@ -243,7 +325,7 @@ body,
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 20px 2px 12px;
+  margin: fluid(12px, 20px) 2px fluid(8px, 12px);
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.3px;
@@ -253,7 +335,7 @@ body,
     content: '';
     flex: none;
     width: 3px;
-    height: 14px;
+    height: fluid(12px, 14px);
     border-radius: var(--radius-pill);
     background: linear-gradient(180deg, color-mix(in srgb, var(--st-accent) 60%, white), var(--st-accent));
     box-shadow: 0 0 8px color-mix(in srgb, var(--st-accent) 35%, transparent);
@@ -363,8 +445,11 @@ body,
   -webkit-app-region: no-drag;
 }
 
+/* 按钮宽 / 图标边长由各窗注入：主窗不定义即用默认值（44 / 15），
+   独立播放窗在 .fw-bar 里按窗口宽度收窄（窄窗三个按钮会吃掉四成屏宽）；
+   高度始终撑满整条栏，栏高本身由 .fw-bar 按宽度收 */
 .app-title-bar-btn {
-  width: 44px;
+  width: var(--bar-btn-w, 44px);
   height: 100%;
   padding: 0;
   border: none;
@@ -374,6 +459,8 @@ body,
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* 图标不传 size 即 1em，由字号决定边长 */
+  font-size: var(--bar-icon-size, 15px);
   cursor: pointer;
   transition:
     background-color 0.15s ease,
@@ -439,11 +526,12 @@ body,
 /* ===== 跨页共用的版式片段 =====
  * 出现在 ≥2 处、且值完全一致的片段收敛到这里，页面与组件里只挂类名 */
 
-/* 卡片网格：直播 / 回放两个列表页共用列宽与内容区留白 */
+/* 卡片网格：直播 / 回放两个列表页共用列宽与内容区留白。
+ * minmax 再套一层 min()：容器比 --card-min 还窄时（窄窗口分屏）列宽跟随容器，不撑出横向滚动 */
 .card-grid {
   display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--card-gap);
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min), 100%), 1fr));
   padding: var(--page-pad);
 }
 
@@ -826,6 +914,9 @@ body,
     height: 100%;
     padding: 0;
     overflow: hidden;
+    /* 详情卡按卡宽适配（见 .detail-side 的容器查询）；inline-size 只建立行轴容器。
+     * 它会让本元素成为绝对定位包含块，卡内浮标须自带 position:relative 锚点 */
+    container-type: inline-size;
   }
 }
 
@@ -892,14 +983,14 @@ body,
 /* 关闭钮：浮在卡面右上角，悬停转 90° 并转成危险色 */
 .detail-close {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: fluid(10px, 12px);
+  right: fluid(10px, 12px);
   z-index: 3;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: fluid(26px, 28px);
+  height: fluid(26px, 28px);
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -977,6 +1068,15 @@ body,
   background: var(--el-fill-color-light);
 }
 
+/* 卡宽 92vw 缩到 740 以下（窗口约 804）时左栏收到 220，把宽度让给右栏；
+ * 两栏结构保持不变，下卡注入的 --side-basis 在宽屏下照常生效。
+ * 用容器查询而非媒体查询：卡宽由 min(92vw, 980px) 决定，判断要贴着卡自己 */
+@container (max-width: 740px) {
+  .detail-side {
+    max-width: 220px;
+  }
+}
+
 .detail-side-body {
   position: relative;
   flex: 1;
@@ -1028,7 +1128,7 @@ body,
   align-items: center;
   gap: 8px;
   /* 右侧给关闭钮留位 */
-  padding: 17px 50px 12px var(--pane-head-pad, 22px);
+  padding: fluid(12px, 17px) fluid(44px, 50px) fluid(8px, 12px) var(--pane-head-pad, fluid(18px, 22px));
   border-bottom: 1px solid var(--el-border-color-extra-light);
 }
 
@@ -1357,6 +1457,38 @@ body,
   }
 }
 
+/* ===== 独立播放窗浮层尺寸轴 =====
+ * 播放窗是独立 BrowserWindow，本窗 100vw 就是窗口内容宽，浮层尺寸直接按它插值：
+ * 320 → 900 线性推进（竖屏 9:16 常见 320–430、横屏 16:9 常见 640–900），
+ * 两端之外由 clamp 收住。
+ * 下端是**竖屏小窗**的档位（320–430 宽，1280 / 1440 屏开出来就是这一段）：
+ * 桌面播放窗里最窄的可用窗口，元素按「占窗口宽度的比例」定，32px 的钮在 320 宽里
+ * 已占近 1/10，所以这里比早期固定值整体收紧约 12%。
+ * 这里只立跨文件共用的量；单点使用的间距就地写 fp()，不另立 token。
+ * fp() 的两端是「320 宽 / 900 宽」，900 以上继续长到 _fluid.scss 的 $growth 倍才封顶
+ * （标题栏那三条传 $grow = 1，因为栏高被主进程钉死）。
+ * 挂在 .fw-root（FloatWindowApp）而非 :root：主窗口没有播放浮层，取不到也不会串味 */
+.fw-root {
+  --fp-step: calc((100vw - 320px) / 580);
+  /* 圆钮直径：右上角动作钮 / 旋转组与底部控制条胶囊各一档 */
+  --fp-btn: #{fp(28px, 40px)};
+  --fp-capsule-btn: #{fp(25px, 34px)};
+  /* 胶囊上下内距：胶囊总高 = 钮径 + 2 * 本值（弹幕避让量也按这条式子算） */
+  --fp-capsule-pad: #{fp(2.5px, 5px)};
+  /* 圆钮内图标边长：MediaIcon 不传 size 即 1em，随按钮 font-size 走 */
+  --fp-icon: #{fp(14px, 20px)};
+  /* 浮层文字：主 / 次 */
+  --fp-font: #{fp(11px, 13.5px)};
+  --fp-font-sm: #{fp(10px, 12.5px)};
+  /* 浮层内元素间距 */
+  --fp-gap: #{fp(3px, 7px)};
+  /* 底部控制条离窗口底边的悬空量：弹幕避让量把它算在内，改这里一处即可 */
+  --fp-control-gap: #{fp(8px, 12px)};
+  /* 浮层距窗口边缘的内缩量：互动榜、右上角动作钮、弹幕层共用同一处口径，
+     弹幕层的位置由脚本拼进 calc（use-danmaku-layer 的 DANMAKU_INSET） */
+  --fp-inset: #{fp(7px, 12px)};
+}
+
 /* ===== 播放器共用（LivePlayer / PlaybackPlayer） ===== */
 
 /* 原生 video：铺满容器、等比留边 */
@@ -1381,14 +1513,14 @@ body,
   transform-origin: center center;
 }
 
-/* 悬浮操作容器：横排置于画面右上角（直播 / 回放共用） */
+/* 悬浮操作容器：横排置于画面右上角（直播 / 回放共用），贴边量随浮层曲线收放 */
 .player-actions {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: var(--fp-inset);
+  right: var(--fp-inset);
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--fp-gap);
   z-index: 30;
 }
 
@@ -1417,12 +1549,14 @@ body,
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: var(--fp-capsule-btn);
+  height: var(--fp-capsule-btn);
   padding: 0;
   border: none;
   border-radius: 50%;
   font-family: inherit;
+  /* 图标是 1em：这里定字号即定图标边长，按钮放大时图标同比跟上 */
+  font-size: var(--fp-icon);
   font-variant-numeric: tabular-nums;
   color: #fff;
   background: transparent;
@@ -1449,9 +1583,8 @@ body,
  * 的绝对定位父上会解析成 auto，必须定死，面板宽度才不会随内容抖动 */
 .danmaku-list {
   position: absolute;
-  /* 贴窗口顶：不跟画面渲染区顶边的黑边下沉；与 use-danmaku-layer 的 MARGIN 同值，
-     互动榜锚点按该常量注入，差几像素两者就错行 */
-  top: 10px;
+  /* 贴窗口顶：不跟画面渲染区顶边的黑边下沉；与互动榜锚点留同一内缩量，差几像素两者就错行 */
+  top: var(--fp-inset);
   z-index: 10;
   /* 盒子被拉伸到整个可用高度，必须显式声明，否则挡住视频的双击全屏 */
   pointer-events: none;
@@ -1489,8 +1622,8 @@ body,
   --ab-pulse: rgba(255, 255, 255, 0.45);
   --ab-tint: transparent;
 
-  width: 32px;
-  height: 32px;
+  width: var(--fp-btn);
+  height: var(--fp-btn);
   padding: 0;
   flex-shrink: 0;
   display: inline-flex;
@@ -1498,7 +1631,8 @@ body,
   justify-content: center;
   border: none;
   border-radius: 50%;
-  font-size: 12px;
+  /* 图标是 1em：定字号即定图标边长 */
+  font-size: var(--fp-icon);
   font-family: inherit;
   font-variant-numeric: tabular-nums;
   color: #fff;
