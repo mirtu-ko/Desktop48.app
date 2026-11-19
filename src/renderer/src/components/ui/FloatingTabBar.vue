@@ -149,6 +149,8 @@ function dblClick(tab: FloatingTabItem) {
 </template>
 
 <style scoped lang="scss">
+@use '../../assets/css/fluid' as *;
+
 .float-tab-bar {
   position: absolute;
   top: var(--float-top);
@@ -156,8 +158,8 @@ function dblClick(tab: FloatingTabItem) {
   z-index: 6;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px;
+  gap: fluid(3px, 4px);
+  padding: fluid(3px, 4px);
   border-radius: var(--radius-pill);
   max-width: 75%;
   overflow-x: auto;
@@ -190,12 +192,12 @@ function dblClick(tab: FloatingTabItem) {
 .float-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: fluid(5px, 6px);
   flex: none;
-  padding: 9px 24px;
+  padding: fluid(7px, 9px) fluid(15px, 24px);
   border: none;
   border-radius: var(--radius-pill);
-  font-size: 15px;
+  font-size: fluid(13px, 15px);
   font-weight: 500;
   line-height: 1;
   color: var(--el-text-color-primary);
@@ -229,17 +231,7 @@ function dblClick(tab: FloatingTabItem) {
   }
 }
 
-/* 紧凑档：条目 33 高收到 27、整条 41 收到 33，顶距由 --float-top 统一下调 */
-:root[data-density='compact'] {
-  .float-tab-bar {
-    gap: 3px;
-    padding: 3px;
-  }
-
-  .float-tab {
-    gap: 5px;
-    padding: 7px 15px;
-    font-size: 13px;
-  }
-}
+/* 条目高度 = 2 * padding-block + 字号（line-height 1），整条 = 条目 + 2 * 内距；
+ * 三者都走 fluid，栏高才是连续值——--tabbar-offset-top 与 --float-top 依赖这个高度，
+ * 单让某一段连续，页首工具行的对齐就会随窗口高漂移 */
 </style>

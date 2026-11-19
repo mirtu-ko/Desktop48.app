@@ -260,7 +260,7 @@ useEventListener(document, 'fullscreenchange', () => {
       <!-- 图钉切换的即时反馈：不挡住播放器控制（pointer-events: none），1.8s 后自消 -->
       <Transition name="fw-toast">
         <div v-if="hint" class="fw-toast" role="status">
-          <MediaIcon name="pushpinFilled" :size="13" />
+          <MediaIcon name="pushpinFilled" />
           <span>{{ hint }}</span>
         </div>
       </Transition>
@@ -382,10 +382,10 @@ useEventListener(document, 'fullscreenchange', () => {
   align-items: center;
   gap: 6px;
   max-width: calc(100% - 24px);
-  padding: 8px 16px;
+  padding: clamp(8px, calc(8px + 2 * var(--fp-step)), 10px) clamp(16px, calc(16px + 4 * var(--fp-step)), 20px);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--radius-pill);
-  font-size: 13px;
+  font-size: var(--fp-font);
   line-height: 1.4;
   color: #fff;
   background: rgba(22, 18, 38, 0.82);

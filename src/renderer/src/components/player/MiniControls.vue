@@ -37,7 +37,7 @@ function onRangeInput(event: Event) {
     <slot name="leading" />
 
     <button class="player-capsule__btn" :aria-label="playing ? '暂停' : '播放'" @click="emit('togglePlay')">
-      <MediaIcon :name="playing ? 'pause' : 'play'" :size="16" />
+      <MediaIcon :name="playing ? 'pause' : 'play'" />
     </button>
 
     <template v-if="showProgress">
@@ -55,14 +55,14 @@ function onRangeInput(event: Event) {
     </template>
 
     <button class="player-capsule__btn" :aria-label="muted ? '取消静音' : '静音'" @click="emit('toggleMute')">
-      <MediaIcon :name="muted ? 'volumeOff' : 'volumeOn'" :size="16" />
+      <MediaIcon :name="muted ? 'volumeOff' : 'volumeOn'" />
     </button>
     <button
       class="player-capsule__btn"
       :aria-label="isFullscreen ? '退出全屏' : '全屏'"
       @click="emit('toggleFullscreen')"
     >
-      <MediaIcon :name="isFullscreen ? 'minimize' : 'fullscreen'" :size="16" />
+      <MediaIcon :name="isFullscreen ? 'minimize' : 'fullscreen'" />
     </button>
   </div>
 </template>
@@ -71,21 +71,26 @@ function onRangeInput(event: Event) {
 /* 全自绘控制条：不参与旋转，恒定贴在容器底部；窄容器（迷你浮窗）下限宽自适应。
  * 深色玻璃胶囊骨架见全局 .player-capsule */
 .mini-controls {
+  /* 进度条轨道 / 滑块：随浮层曲线收放，滑块垂直居中按两者差值算 */
+  --mini-track: clamp(4px, calc(4px + 2 * var(--fp-step)), 6px);
+  --mini-thumb: clamp(10px, calc(10px + 2 * var(--fp-step)), 12px);
+
   position: absolute;
-  bottom: 12px;
+  bottom: var(--fp-control-gap);
   left: 50%;
   transform: translateX(-50%);
-  max-width: calc(100% - 24px);
+  max-width: calc(100% - 2 * var(--fp-control-gap));
   min-width: 0;
   gap: 0px;
-  padding: 3px 8px;
+  /* 上下内距走 --fp-capsule-pad：胶囊总高与弹幕避让量（use-danmaku-layer）同一条式子 */
+  padding: var(--fp-capsule-pad) clamp(7px, calc(7px + 5 * var(--fp-step)), 12px);
   z-index: 20;
 }
 
 /* 有进度段（录播/回放）：容器足够宽时胶囊随容器拉伸，520px 封顶，富余空间由进度条吸收；
  * 直播（无进度段）与窄容器仍走 shrink-to-fit + max-width 兜底 */
 .mini-controls--progress {
-  width: min(calc(100% - 24px), 520px);
+  width: min(calc(100% - 2 * var(--fp-control-gap)), 520px);
 }
 
 /* 按钮永不收缩：拥挤时让位给进度条 / 时间 / leading 插槽内容。
@@ -102,8 +107,8 @@ function onRangeInput(event: Event) {
   background: transparent;
 
   &::-webkit-slider-runnable-track {
-    height: 6px;
-    border-radius: 3px;
+    height: var(--mini-track);
+    border-radius: calc(var(--mini-track) / 2);
     /* --fill 由模板按 currentTime/duration 注入：填充段品牌渐变，底段半透明白 */
     background: linear-gradient(
       to right,
@@ -116,9 +121,9 @@ function onRangeInput(event: Event) {
 
   &::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 12px;
-    height: 12px;
-    margin-top: -3px;
+    width: var(--mini-thumb);
+    height: var(--mini-thumb);
+    margin-top: calc((var(--mini-track) - var(--mini-thumb)) / 2);
     border-radius: 50%;
     background: var(--brand-primary);
     transition:
@@ -145,7 +150,7 @@ function onRangeInput(event: Event) {
 .mini-time {
   flex: 0 1 auto;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--fp-font-sm);
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.85);
   white-space: nowrap;

@@ -1,6 +1,6 @@
 import type { DanmakuLayerRect } from '../src/renderer/src/composables/use-danmaku-layer'
 import { describe, expect, it } from 'vitest'
-import { computeDanmakuLayout, useDanmakuLayer } from '../src/renderer/src/composables/use-danmaku-layer'
+import { computeDanmakuLayout, DANMAKU_CONTROL_CLEARANCE, DANMAKU_INSET, useDanmakuLayer } from '../src/renderer/src/composables/use-danmaku-layer'
 
 /** 1920×1080 全屏里的 9:16 竖屏画面：高度撑满，左右各 656px 黑边 */
 const PORTRAIT: DanmakuLayerRect = { left: 656, top: 0, width: 607, height: 1080, bottom: 0 }
@@ -24,16 +24,16 @@ describe('computeDanmakuLayout', () => {
   it('横屏按短边取字号，左右各内缩后宽度落在画面内', () => {
     const result = layout(LANDSCAPE)
     expect(result.fontSize).toBe(18)
-    expect(result.width).toBe('1900.0px')
-    expect(result.left).toBe('10.0px')
-    expect(result.bottom).toBe('46px')
+    expect(result.width).toBe(`max(0px, calc(1920.0px - 2 * ${DANMAKU_INSET}))`)
+    expect(result.left).toBe(`calc(0.0px + ${DANMAKU_INSET})`)
+    expect(result.bottom).toBe(DANMAKU_CONTROL_CLEARANCE)
   })
 
   it('画面上下有黑边时底边仍贴窗口，不随渲染区抬升', () => {
     // bottom 与渲染区无关：上下黑边留得再宽，气泡也照旧铺到控制条上方
-    expect(layout(LETTERBOX).bottom).toBe('46px')
-    expect(layout(LETTERBOX).left).toBe('10.0px')
-    expect(layout(LETTERBOX).width).toBe('1260.0px')
+    expect(layout(LETTERBOX).bottom).toBe(DANMAKU_CONTROL_CLEARANCE)
+    expect(layout(LETTERBOX).left).toBe(`calc(0.0px + ${DANMAKU_INSET})`)
+    expect(layout(LETTERBOX).width).toBe(`max(0px, calc(1280.0px - 2 * ${DANMAKU_INSET}))`)
   })
 
   it('横屏非全屏时缩短边缩放，但字号封顶 14px', () => {
@@ -52,10 +52,10 @@ describe('computeDanmakuLayout', () => {
   it('左侧栏贴屏幕最左，宽度铺满屏幕（不按黑边收窄）', () => {
     const result = layout(PORTRAIT, 'left')
     expect(result.floating).toBe(true)
-    expect(result.left).toBe('10px')
-    // 宽度只让出左右各 10px 的留白：长句不折行，短句仍落在黑边内
-    expect(result.width).toBe('calc(100% - 20px)')
-    expect(result.bottom).toBe('46px')
+    expect(result.left).toBe(DANMAKU_INSET)
+    // 宽度只让出左右各一个内缩量：长句不折行，短句仍落在黑边内
+    expect(result.width).toBe(`calc(100% - 2 * ${DANMAKU_INSET})`)
+    expect(result.bottom).toBe(DANMAKU_CONTROL_CLEARANCE)
   })
 
   it('黑边低于 60px 时回落画面内，但仍记录「能否浮到左侧」', () => {
@@ -63,7 +63,7 @@ describe('computeDanmakuLayout', () => {
     const result = layout(narrow, 'left')
     expect(result.canFloatLeft).toBe(false)
     expect(result.floating).toBe(false)
-    expect(result.left).toBe('69.0px')
+    expect(result.left).toBe(`calc(59.0px + ${DANMAKU_INSET})`)
   })
 
   it('黑边达到 60px 边界时允许左侧摆放', () => {
@@ -71,20 +71,21 @@ describe('computeDanmakuLayout', () => {
     const result = layout(edge, 'left')
     expect(result.canFloatLeft).toBe(true)
     expect(result.floating).toBe(true)
-    expect(result.left).toBe('10px')
+    expect(result.left).toBe(DANMAKU_INSET)
   })
 
   it('渲染区未知时不给宽度，交给 .danmaku-list 的 CSS 兜底', () => {
     const result = layout(null)
     expect(result.width).toBeUndefined()
-    expect(result.left).toBe('10px')
-    expect(result.bottom).toBe('46px')
+    expect(result.left).toBe(DANMAKU_INSET)
+    expect(result.bottom).toBe(DANMAKU_CONTROL_CLEARANCE)
   })
 
   it('渲染区窄于两倍内缩量时宽度兜底 0，不产出负值', () => {
     // 负宽度会被 CSS 整条忽略、退回 min(90%, 37em) 兜底，面板宽度反而失控
     const tiny: DanmakuLayerRect = { left: 0, top: 0, width: 12, height: 800, bottom: 0 }
-    expect(layout(tiny).width).toBe('0.0px')
+    // 兜 0 交给 CSS 的 max()：内缩量是变量，脚本算不出最终像素值
+    expect(layout(tiny).width).toBe(`max(0px, calc(12.0px - 2 * ${DANMAKU_INSET}))`)
   })
 
   it('紧凑档字号上下限更小', () => {
@@ -101,7 +102,7 @@ describe('useDanmakuLayer', () => {
       fullscreen: () => true,
       placement: () => 'left',
     })
-    expect(layer.topLeft.value).toEqual({ left: '10px', top: '10px' })
+    expect(layer.topLeft.value).toEqual({ left: DANMAKU_INSET, top: DANMAKU_INSET })
   })
 
   it('画面内模式下互动榜锚渲染区左边缘、贴近窗口顶', () => {
@@ -112,6 +113,6 @@ describe('useDanmakuLayer', () => {
       placement: () => 'video',
     })
     // 纵向与气泡层同口径贴窗口，不跟画面顶边的黑边下沉
-    expect(layer.topLeft.value).toEqual({ left: '666.0px', top: '10px' })
+    expect(layer.topLeft.value).toEqual({ left: `calc(656.0px + ${DANMAKU_INSET})`, top: DANMAKU_INSET })
   })
 })

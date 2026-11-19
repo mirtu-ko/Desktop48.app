@@ -15,18 +15,6 @@ const COMPACT_MARKER = ':root[data-density=\'compact\']'
 const HEIGHT_QUERY = /@media[^{]*max-height:\s*(\d+px)/g
 const WIDTH_QUERY = /@(?:media|container)\s*\(\s*max-width:\s*(\d+px)/g
 
-/** 允许紧凑档覆盖的变量：只影响垂直留白与装饰尺寸 */
-const COMPACT_ALLOWED = new Set([
-  '--tabbar-offset-top',
-  '--float-top',
-  '--dock-reserve',
-  '--card-body-pad',
-  '--dock-item-w',
-  '--dock-icon',
-  '--dock-gap',
-  '--radius-card',
-])
-
 /** 宽度轴断点登记表：各处语义不同，新增或改值都要显式更新这里 */
 const WIDTH_BREAKPOINTS = [
   'assets/css/app.scss:740px',
@@ -276,20 +264,9 @@ describe('密度信号', () => {
     expect(values).toEqual(['760px'])
   })
 
-  it('紧凑样式只挂在 html[data-density] 上，且文件清单与实现同步', () => {
+  it('紧凑样式只挂在 html[data-density] 上，且只剩 app.scss 一处', () => {
     const files = sourceFiles().filter(file => read(file).includes(COMPACT_MARKER))
-    expect(files).toEqual([
-      'assets/css/app.scss',
-      'components/app/AppDock.vue',
-      'components/playback/FollowedMemberRail.vue',
-      'components/ui/FloatingRefreshDock.vue',
-      'components/ui/FloatingTabBar.vue',
-      'pages/Elections.vue',
-      'pages/Members.vue',
-      'pages/Playbacks.vue',
-      'pages/Rooms.vue',
-      'pages/Setting.vue',
-    ])
+    expect(files).toEqual(['assets/css/app.scss'])
   })
 
   it('入口在首次渲染前安装密度信号', () => {
@@ -367,21 +344,58 @@ describe('表达式求值', () => {
 })
 
 describe('紧凑档布局不变量', () => {
-  it('紧凑档只覆盖垂直留白与装饰尺寸', () => {
-    const overrides = compactOverrides()
-    expect(overrides.length).toBeGreaterThan(0)
-    expect(overrides.filter(name => !COMPACT_ALLOWED.has(name))).toEqual([])
+  it('紧凑档不再覆盖任何自定义属性：留白已交给曲线', () => {
+    expect(compactOverrides()).toEqual([])
+  })
+
+  /* 高度轴改成连续后，两端的取值就是唯一还钉得住的东西：
+   * 641 高必须逐像素等于原紧凑档，900 高必须逐像素等于基准档。
+   * 声明里除 fluid() 之外不允许出现别的数值，否则这条轴又断了。 */
+  it('高度轴曲线两端仍落在原档位值上', () => {
+    const vars = declarations()
+    const step = /^calc\(\(100vh - (\d+)px\) \/ (\d+)\)$/.exec(vars.get('--vh-step') ?? '')
+    expect(step).not.toBeNull()
+    const [, floor, span] = step!.map(Number)
+    expect(floor).toBe(641)
+    expect(floor + span).toBe(900)
+
+    const call = /fluid\((-?[\d.]+)px, (-?[\d.]+)px\)/g
+    const pairs: Record<string, Array<[number, number]>> = {
+      '--tabbar-offset-top': [[50, 64]],
+      '--float-top': [[8, 12]],
+      '--dock-reserve': [[80, 96]],
+      '--radius-card': [[16, 20]],
+      '--dock-item-w': [[46, 56]],
+      '--dock-icon': [[32, 40]],
+      '--dock-gap': [[5, 8]],
+      '--card-body-pad': [[7, 10], [9, 12], [9, 12]],
+    }
+    for (const [name, expected] of Object.entries(pairs)) {
+      const raw = vars.get(name) ?? ''
+      const found = [...raw.matchAll(call)].map(match => [Number(match[1]), Number(match[2])] as [number, number])
+      expect({ name, found }).toEqual({ name, found: expected })
+      // 整条声明只由这些 fluid 组成：多写一个硬编码值就说明这条轴又断了
+      expect({ name, rest: raw.replace(call, '').replace(/[#{}]/g, '').trim() }).toEqual({ name, rest: '' })
+    }
+  })
+
+  it('fluid() 只有一份实现，两端不能相等（相等的曲线是死的）', () => {
+    const owners = sourceFiles().filter(file => read(file).includes('@function fluid'))
+    expect(owners).toEqual(['assets/css/_fluid.scss'])
+    for (const file of sourceFiles()) {
+      for (const match of read(file).matchAll(/fluid\((-?[\d.]+)px, (-?[\d.]+)px\)/g))
+        expect({ file, ok: Number(match[1]) !== Number(match[2]) }).toEqual({ file, ok: true })
+    }
+  })
+
+  it('这四个垂直量已连续，紧凑档不再按档覆盖', () => {
+    for (const name of ['--card-body-pad', '--dock-item-w', '--dock-icon', '--dock-gap'])
+      expect(compactOverrides()).not.toContain(name)
   })
 
   it('水平内距只有一个定义，紧凑档不覆盖', () => {
     expect([...read(APP_SCSS).matchAll(/--space-page-x\s*:/g)]).toHaveLength(1)
     expect(compactOverrides()).not.toContain('--space-page-x')
-  })
-
-  it('房间页紧凑块只改垂直内距，水平留白归宽度档', () => {
-    const block = compactBlock('pages/Rooms.vue')
-    expect(block).toContain('padding-block')
-    expect(block).not.toMatch(/\bpadding:\s/)
   })
 
   it('同一宽度下切换高度档不改变列数与单卡宽', () => {
@@ -402,6 +416,45 @@ describe('紧凑档布局不变量', () => {
     expect(grid(1920, false, LIVE).columns).toBe(7)
     expect(grid(1920, false, SHOW).columns).toBe(5)
     expect(grid(1920, false, ALBUM).columns).toBe(6)
+  })
+})
+
+describe('独立播放窗浮层尺寸轴', () => {
+  /* 播放窗（独立 BrowserWindow）的浮层按本窗窗口宽插值，与主窗口的高度轴互不相干。
+   * 两端不许相等：写成固定值就等于把这条轴拔了，而浮层只是看起来「没那么大」不报错，
+   * 靠肉眼很难发现，故在此钉住。 */
+  const FP_TOKENS = [
+    '--fp-btn',
+    '--fp-capsule-btn',
+    '--fp-capsule-pad',
+    '--fp-icon',
+    '--fp-font',
+    '--fp-font-sm',
+    '--fp-gap',
+    /* 控制条悬空量：弹幕避让量按它算，掉出曲线会让气泡与胶囊对不上 */
+    '--fp-control-gap',
+    /* 浮层贴边量：互动榜 / 右上角动作钮 / 弹幕层共用 */
+    '--fp-inset',
+  ]
+
+  it('步长锚在 320 → 900，各 token 都挂在这条曲线上', () => {
+    const vars = declarations()
+    const step = /^calc\(\(100vw - (\d+)px\) \/ (\d+)\)$/.exec(vars.get('--fp-step') ?? '')
+    expect(step).not.toBeNull()
+    const [, floor, span] = step!.map(Number)
+    expect(floor).toBe(320)
+    expect(floor + span).toBe(900)
+
+    const call = /^clamp\(([\d.]+)px, calc\(([\d.]+)px \+ ([\d.]+) \* var\(--fp-step\)\), ([\d.]+)px\)$/
+    for (const name of FP_TOKENS) {
+      const raw = vars.get(name) ?? ''
+      const parsed = call.exec(raw)
+      expect(parsed, `${name} 没挂在 --fp-step 曲线上：${raw}`).not.toBeNull()
+      const [low, base, , high] = parsed!.slice(1, 5).map(Number)
+      // 起点 = 下限，且两端不等（相等的 clamp 是死曲线，浮层只会「没那么大」而不会报错）
+      expect({ name, startsAtMin: base === low, alive: low !== high })
+        .toEqual({ name, startsAtMin: true, alive: true })
+    }
   })
 })
 

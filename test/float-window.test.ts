@@ -1,6 +1,6 @@
 import type { FloatFitState } from '../src/common/float-window'
 import { describe, expect, it } from 'vitest'
-import { computeInitialWindowSize, decideAutoFit, fitAspectInBox, FLOAT_BAR_HEIGHT, FLOAT_CASCADE_STEP, FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE, FLOAT_INITIAL_MIN_WIDTH_PORTRAIT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, initialFloatTopmost, isFloatTopmostPinned, nextFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '../src/common/float-window'
+import { computeInitialWindowSize, decideAutoFit, fitAspectInBox, FLOAT_BAR_HEIGHT, FLOAT_CASCADE_STEP, FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_RADIO_WINDOW_SIZE, initialFloatTopmost, isFloatTopmostPinned, nextFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '../src/common/float-window'
 
 /** 基准工作区：1080p @100%，原点在屏幕左上（workArea 是 DIP，缩放已折算，故 4K@200% 等价） */
 const HD = { x: 0, y: 0, width: 1920, height: 1080 }
@@ -42,26 +42,38 @@ describe('computeInitialWindowSize', () => {
     expect(landscape.w).toBeGreaterThan(portrait.w * 2)
   })
 
-  it('小屏按方向各取下限：横屏撑宽、竖屏撑高', () => {
-    // 横屏吃宽度下限，竖屏吃高度上限（由下限撑开）；同一块屏幕上两者互不干扰
-    const small = { x: 0, y: 0, width: 1366, height: 768 }
-    expect(computeInitialWindowSize(9 / 16, small)).toEqual({
-      w: FLOAT_INITIAL_MIN_WIDTH_PORTRAIT,
-      h: Math.round(FLOAT_INITIAL_MIN_WIDTH_PORTRAIT / (9 / 16)) + FLOAT_BAR_HEIGHT,
-    })
-    expect(computeInitialWindowSize(16 / 9, small)).toEqual({
-      w: FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE,
-      h: Math.round(FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE / (16 / 9)) + FLOAT_BAR_HEIGHT,
-    })
+  it('紧凑屏不再直接套 1920 比例：1280 竖屏按 80% 高度，横屏落到兜底下限', () => {
+    const compact = { x: 0, y: 0, width: 1280, height: 800 }
+    expect(computeInitialWindowSize(9 / 16, compact)).toEqual({ w: 340, h: 604 + FLOAT_BAR_HEIGHT })
+    // 53% 算得 678，横屏仍由 FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE 抬到 680
+    expect(computeInitialWindowSize(16 / 9, compact)).toEqual({ w: FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE, h: 383 + FLOAT_BAR_HEIGHT })
   })
 
-  it('1280 级小屏输出的就是下限本身，不是比例算出的 295 / 576', () => {
-    const hd = { x: 0, y: 0, width: 1280, height: 800 }
-    // 下限必须真的高于比例公式的值，否则两个常量等于没写
-    expect(FLOAT_INITIAL_MIN_WIDTH_PORTRAIT).toBeGreaterThan(Math.round(Math.round(hd.height * 0.7 - FLOAT_BAR_HEIGHT) * (9 / 16)))
-    expect(FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE).toBeGreaterThan(Math.round(hd.width * 0.45))
-    expect(computeInitialWindowSize(9 / 16, hd).w).toBe(FLOAT_INITIAL_MIN_WIDTH_PORTRAIT)
-    expect(computeInitialWindowSize(16 / 9, hd).w).toBe(FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE)
+  it('1440 在 1280 / 1920 之间连续放大，不会反向缩小', () => {
+    const compact = { x: 0, y: 0, width: 1280, height: 800 }
+    const mid = { x: 0, y: 0, width: 1440, height: 900 }
+    const wider = { x: 0, y: 0, width: 1600, height: 900 }
+    const portrait = computeInitialWindowSize(9 / 16, mid)
+    const landscape = computeInitialWindowSize(16 / 9, mid)
+    const portraitCompact = computeInitialWindowSize(9 / 16, compact)
+    const landscapeCompact = computeInitialWindowSize(16 / 9, compact)
+    const portraitRegular = computeInitialWindowSize(9 / 16, HD)
+    const landscapeRegular = computeInitialWindowSize(16 / 9, HD)
+
+    expect(portrait).toEqual({ w: 367, h: 652 + FLOAT_BAR_HEIGHT })
+    expect(landscape).toEqual({ w: 734, h: 413 + FLOAT_BAR_HEIGHT })
+    // 竖屏只看高度，同高更宽不会反而缩小；横屏只看宽度，只宽不高的屏幕也不会缩小
+    expect(computeInitialWindowSize(9 / 16, wider)).toEqual(portrait)
+    expect(computeInitialWindowSize(16 / 9, wider).w).toBeGreaterThan(landscape.w)
+    // 两种方向都必须单调增长，避免再次出现「中间档比小屏还小」
+    expect(portrait.w).toBeGreaterThan(portraitCompact.w)
+    expect(portrait.h).toBeGreaterThan(portraitCompact.h)
+    expect(landscape.w).toBeGreaterThan(landscapeCompact.w)
+    expect(landscape.h).toBeGreaterThan(landscapeCompact.h)
+    expect(portraitRegular.w).toBeGreaterThan(portrait.w)
+    expect(portraitRegular.h).toBeGreaterThan(portrait.h)
+    expect(landscapeRegular.w).toBeGreaterThan(landscape.w)
+    expect(landscapeRegular.h).toBeGreaterThan(landscape.h)
   })
 
   it('下限只抬小屏，大屏仍按工作区比例', () => {
@@ -89,7 +101,7 @@ describe('computeInitialWindowSize', () => {
     expect(Math.abs(uhdRatio - hdRatio)).toBeLessThan(0.02)
   })
 
-  it('横屏占屏宽比在各分辨率下恒定', () => {
+  it('1920 及以上的横屏占屏宽比保持稳定', () => {
     expect(computeInitialWindowSize(16 / 9, HD).w / HD.width).toBeCloseTo(0.45, 2)
     expect(computeInitialWindowSize(16 / 9, { x: 0, y: 0, width: 3840, height: 2160 }).w / 3840).toBeCloseTo(0.45, 2)
   })

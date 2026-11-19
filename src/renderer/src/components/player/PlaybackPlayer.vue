@@ -462,7 +462,7 @@ onUnmounted(() => {
                 :aria-label="downloading ? '取消下载' : '下载'"
                 @click="onDownloadClick"
               >
-                <MediaIcon name="download" :size="16" />
+                <MediaIcon name="download" />
               </button>
             </el-tooltip>
           </div>
@@ -491,7 +491,7 @@ onUnmounted(() => {
                 :aria-label="danmakuMode === 'live' ? '切换为全部弹幕' : '切换为实时弹幕'"
                 @click="toggleDanmakuMode"
               >
-                <MediaIcon name="chat" :size="16" />
+                <MediaIcon name="chat" />
               </button>
 
               <!-- 摆放切换：左侧黑边够宽时出现（窗口态竖屏回放同样适用）。
@@ -504,7 +504,7 @@ onUnmounted(() => {
                 :aria-label="danmakuFloating ? '弹幕移回画面内' : '弹幕移到左侧黑边'"
                 @click="toggleDanmakuPlacement"
               >
-                <MediaIcon name="panelLeft" :size="16" />
+                <MediaIcon name="panelLeft" />
               </button>
             </template>
           </MiniControls>

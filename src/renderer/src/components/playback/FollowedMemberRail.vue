@@ -207,6 +207,8 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
 </template>
 
 <style scoped lang="scss">
+@use '../../assets/css/fluid' as *;
+
 /* 关注主题色：与直播卡的「已关注」金标同源，整条读作「关注」分组 */
 .follow-strip {
   --rail-accent: var(--color-follow);
@@ -218,9 +220,8 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
   display: flex;
   align-items: center;
   gap: 6px;
-  /* 4px 内边距 + 32px 头像块 = 40，与右侧工具条（4 + 32）等高，三者齐平；
-   * 紧凑档三处同步收到 34（见文件末尾），不要单独改其中一个 */
-  padding: 4px;
+  /* 内边距 + 头像块 = 整条高，与右侧工具条（内距 + 圆钮）走同一条曲线，三者齐平 */
+  padding: fluid(3px, 4px);
   border-radius: var(--radius-pill);
   /* 玻璃底由全局 .frosted-surface 提供，与左上 tab 栏 / 右上工具条同一套 token */
 }
@@ -285,8 +286,8 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: fluid(28px, 32px);
+  height: fluid(28px, 32px);
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -405,17 +406,6 @@ onBeforeUnmount(() => resizeObserver?.disconnect())
 }
 
 /* 紧凑档：内距与头像块收到 34，与同排 tab 栏、刷新浮层等高 */
-:root[data-density='compact'] {
-  .follow-strip {
-    padding: 3px;
-  }
-
-  .follow-chip {
-    width: 28px;
-    height: 28px;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .follow-chip,
   .follow-chip__img,

@@ -40,19 +40,27 @@ export function fitAspectInBox(aspect: number, boxW: number, boxH: number): Wind
   return { w: Math.round(w), h: Math.round(h) }
 }
 
-/* 初始尺寸策略：按显示器工作区（DIP，已含系统缩放）比例推导，不写死像素，
-   同一套比例在小屏 / 大屏上观感一致。 */
+/* 初始尺寸策略：以 1280×800 / 1920×1080 两档工作区为锚点做连续插值。
+   小屏直接套用大屏比例会因 1280 的硬下限而出现「1440 反而比 1280 小」的非单调结果，
+   连续插值既保留小屏可读尺寸，也保证窗口随工作区增大而平稳增长。 */
 
-/** 初始视频区宽度 = 工作区宽度 × 此比例（横屏视频的实际约束） */
-const FLOAT_INITIAL_WIDTH_RATIO = 0.45
+/** 紧凑 / 常规工作区的尺寸锚点 */
+const FLOAT_COMPACT_WORK_WIDTH = 1280
+const FLOAT_COMPACT_WORK_HEIGHT = 800
+const FLOAT_REGULAR_WORK_WIDTH = 1920
+const FLOAT_REGULAR_WORK_HEIGHT = 1080
 
-/** 初始视频区高度上限 = 工作区高度 × 此比例（竖屏视频的实际约束） */
-const FLOAT_INITIAL_HEIGHT_RATIO = 0.7
+/** 横屏初始视频区宽度占工作区宽度：1280 档 53%，到 1920 档平滑回落到 45% */
+const FLOAT_COMPACT_WIDTH_RATIO = 0.53
+const FLOAT_REGULAR_WIDTH_RATIO = 0.45
+
+/** 竖屏初始视频区高度占工作区高度：800 档 80%，到 1080 档平滑回落到 70% */
+const FLOAT_COMPACT_HEIGHT_RATIO = 0.8
+const FLOAT_REGULAR_HEIGHT_RATIO = 0.7
 
 /**
- * 视频区宽度下限：比例在 1280 级小屏上算出的窗口太窄（竖屏 ~295、横屏 576），
- * 控制条与弹幕都挤，故给下限；工作区装不下时按可容纳范围回缩，不做硬保证。
- * 只影响小屏，大屏由上面两个比例决定，调这两个值不会改变 1920 及以上的尺寸。
+ * 视频区宽度的兜底下限：极端窄屏或超宽屏下仍要留出控制条与弹幕空间；
+ * 工作区装不下时按可容纳范围回缩，不做硬保证。
  */
 export const FLOAT_INITIAL_MIN_WIDTH_PORTRAIT = 320
 export const FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE = 680
@@ -73,6 +81,38 @@ function initialMinVideoWidth(aspect: number): number {
   return aspect < 1 ? FLOAT_INITIAL_MIN_WIDTH_PORTRAIT : FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE
 }
 
+/** 尺寸越大比例越克制；锚点区间外固定取对应端点的比例 */
+function responsiveRatio(
+  value: number,
+  compactAnchor: number,
+  regularAnchor: number,
+  compactRatio: number,
+  regularRatio: number,
+): number {
+  const progress = Math.min(1, Math.max(0, (value - compactAnchor) / (regularAnchor - compactAnchor)))
+  return compactRatio + (regularRatio - compactRatio) * progress
+}
+
+/** 横屏档位看宽度，竖屏档位看高度：任一维度变大都不会让对应方向的窗口反向缩小 */
+function initialRatios(workArea: Pick<WorkArea, 'width' | 'height'>): { width: number, height: number } {
+  return {
+    width: responsiveRatio(
+      workArea.width,
+      FLOAT_COMPACT_WORK_WIDTH,
+      FLOAT_REGULAR_WORK_WIDTH,
+      FLOAT_COMPACT_WIDTH_RATIO,
+      FLOAT_REGULAR_WIDTH_RATIO,
+    ),
+    height: responsiveRatio(
+      workArea.height,
+      FLOAT_COMPACT_WORK_HEIGHT,
+      FLOAT_REGULAR_WORK_HEIGHT,
+      FLOAT_COMPACT_HEIGHT_RATIO,
+      FLOAT_REGULAR_HEIGHT_RATIO,
+    ),
+  }
+}
+
 /**
  * 计算独立播放窗的尺寸（含标题栏）：视频区在比例框内内接，结果不小于最小尺寸。
  * 建窗与真实比例到达时共用此函数整体重算，不能只保住兜底宽度。
@@ -82,13 +122,14 @@ function initialMinVideoWidth(aspect: number): number {
  */
 export function computeInitialWindowSize(aspect: number, workArea: WorkArea): WindowSize {
   const minVideoW = initialMinVideoWidth(aspect)
+  const ratios = initialRatios(workArea)
   const maxW = Math.min(
-    Math.max(Math.round(workArea.width * FLOAT_INITIAL_WIDTH_RATIO), minVideoW),
+    Math.max(Math.round(workArea.width * ratios.width), minVideoW),
     workArea.width - FLOAT_EDGE_MARGIN * 2,
   )
   const maxH = Math.min(
     Math.max(
-      Math.round(workArea.height * FLOAT_INITIAL_HEIGHT_RATIO) - FLOAT_BAR_HEIGHT,
+      Math.round(workArea.height * ratios.height) - FLOAT_BAR_HEIGHT,
       Math.round(minVideoW / aspect),
     ),
     workArea.height - FLOAT_BAR_HEIGHT - FLOAT_EDGE_MARGIN * 2,

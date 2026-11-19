@@ -1,0 +1,19 @@
+@use 'sass:math';
+
+// 高度轴连续插值：窗口内容高 641px 取下限、900px 取上限，中间按 --vh-step 线性过渡。
+// 用法 fluid(7px, 10px) → clamp(7px, calc(7px + 3 * var(--vh-step)), 10px)。
+// 只接受 px（--vh-step 本身是长度，系数必须是纯数）；两端的值就是原「紧凑档 / 基准」值。
+//
+// 返回未加引号的原文而非 clamp() 表达式：Sass 会把 math function 里嵌套的 calc() 化简掉，
+// 而化简后的形式在部分场景（自定义属性）不合法；拼好字符串最稳。
+// 自定义属性的值不经过 Sass 求值，那里必须写成 `--x: #{fluid(a, b)};`。
+@function fluid($min, $max) {
+  $delta: math.div($max - $min, 1px);
+
+  // 负数（负外边距）也会出现：此时 $max 更小，clamp 的两端要交换，系数取绝对值配减号
+  @if $delta < 0 {
+    @return unquote('clamp(#{$max}, calc(#{$min} - #{math.abs($delta)} * var(--vh-step)), #{$min})');
+  }
+
+  @return unquote('clamp(#{$min}, calc(#{$min} + #{$delta} * var(--vh-step)), #{$max})');
+}

@@ -383,6 +383,8 @@ watch(selectedFilter, () => {
 </template>
 
 <style scoped lang="scss">
+@use '../assets/css/fluid' as *;
+
 /* 页首工具行：三条浮层并排一行，高度与原先各自浮动时一致。
  * 容器本身不接收点击（中间空白处留给内容），只有胶囊可点 */
 .page-toolbar {
@@ -422,11 +424,10 @@ watch(selectedFilter, () => {
   flex-shrink: 0;
 }
 
-/* 紧凑档：筛选器收到 28，否则同排 tab 栏会被居中推低 */
-:root[data-density='compact'] {
-  .page-toolbar :deep(.el-cascader) {
-    --el-component-size: 28px;
-  }
+/* 筛选器高度跟随同排浮层连续收（32 → 28）：它比 tab 栏矮，撑不动整行，
+ * 但台阶化会让这一行的基线在断点处跳一格；--el-component-size 是 EP 输入框高度的上游变量 */
+.page-toolbar :deep(.el-cascader) {
+  --el-component-size: #{fluid(28px, 32px)};
 }
 
 /* 筛选控件：圆角化、弱化生硬边框，与胶囊标签呼应 */

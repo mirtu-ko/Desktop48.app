@@ -1,3 +1,5 @@
+@use 'fluid' as *;
+
 /* ============ 精致浅色主题 ============ */
 :root {
   /* 品牌色：轻盈紫罗兰，整体更柔和、不厚重 */
@@ -30,7 +32,7 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   /* 全屏详情卡片的卡面圆角（比 lg 再大一档，卡感来自圆角与留白） */
-  --radius-card: 20px;
+  --radius-card: #{fluid(16px, 20px)};
   --radius-pill: 999px;
 
   /* ===== 语义主题色 =====
@@ -63,14 +65,23 @@
    * 1900   生日贺卡半透明蒙层 + 弹卡（低于 Element Plus 弹层 2000+，保证复制/保存提示可见）
    * 注：直播 / 回放播放窗已是独立 BrowserWindow，不再参与本窗口的层叠体系 */
 
-  /* ===== 浮层让位：页面内容为悬浮控件预留的空间 ===== */
-  --tabbar-offset-top: 64px; // 左上角 FloatingTabBar 的高度 + 间距
-  /* 页首浮动控件（左上 tab 栏 / 右上工具条 / 回放页整行）的顶距：
-   * 三处共用一个值，否则紧凑档只收其中一个，换页时整行会跳。 */
-  --float-top: 12px;
-  --dock-reserve: 96px; // 底部悬浮 AppDock 预留的滚动留白（Dock 视觉高约 96px，含后仰板的投影）
+  /* ===== 浮层让位：页面内容为悬浮控件预留的空间 =====
+   * 三者都等于某个浮动件的自身高度，因此必须与那几个组件的尺寸同源（都走 fluid），
+   * 否则曲线斜率不一致，栏底到内容顶的间距会随窗口高漂移。 */
+  --tabbar-offset-top: #{fluid(50px, 64px)}; // 左上角 FloatingTabBar 顶距 + 栏高 + 间隙
+  /* 页首浮动控件（左上 tab 栏 / 右上工具条 / 回放页整行）的顶距：四处共用一个值 */
+  --float-top: #{fluid(8px, 12px)};
+  --dock-reserve: #{fluid(80px, 96px)}; // 底部悬浮 AppDock 预留的滚动留白（Dock 高 + 底距，含后仰板投影）
   /* 列表页内容区统一内边距：上留浮动 tab 栏、左右统一值、下留卡片悬停上浮与阴影 */
   --page-pad: var(--tabbar-offset-top) var(--space-page-x) 8px;
+
+  /* ===== 高度轴：垂直留白连续变化，不再按档切换 =====
+   * --vh-step 是一个长度：641px（紧凑档原锚点）为 0，900px（基准窗口）为 1。
+   * 垂直量统一写成 fluid(紧凑值, 基准值)（见 _fluid.scss），展开即
+   * clamp(紧凑值, 紧凑值 + 差 * var(--vh-step), 基准值)——
+   * 没有断点，也就没有「窗口矮 1px 整页跳一格」。
+   * data-density 只留给结构性规则（按钮高度、弹窗高度上限、字号台阶）。 */
+  --vh-step: calc((100vh - 641px) / 259);
 
   /* ===== 密度 token：紧凑档只覆盖这一组，跨组件共用的尺寸放这里 =====
    * 档位由 html[data-density] 提供，断点值见 src/common/density.ts；正文与消息字号不降。 */
@@ -102,10 +113,10 @@
   --album-label: clamp(30px, 2.45vw, 34px);
   --album-inner-gap: clamp(20px, 2.3vw, 32px);
   --album-inset: clamp(9px, 0.86vw, 12px);
-  --card-body-pad: 10px 12px 12px; // 封面下方文字区
-  --dock-item-w: 56px; // Dock 单项宽
-  --dock-icon: 40px; // Dock 图标磁贴边长
-  --dock-gap: 8px; // Dock 项间距
+  --card-body-pad: #{fluid(7px, 10px) fluid(9px, 12px) fluid(9px, 12px)}; // 封面下方文字区
+  --dock-item-w: #{fluid(46px, 56px)}; // Dock 单项宽
+  --dock-icon: #{fluid(32px, 40px)}; // Dock 图标磁贴边长
+  --dock-gap: #{fluid(5px, 8px)}; // Dock 项间距
 
   /* ===== 浅色玻璃表层 token：底部 Dock / 左上 tab 栏 / 右上工具条 / 左下播放条共用 =====
    * 观感由四层叠出来：光带给体积、底色定通透、边给厚度、落影让它浮起来。
@@ -137,30 +148,20 @@
 }
 
 /* ===== 紧凑档：html[data-density='compact'] 由 main.ts 按 src/common/density.ts 的断点写入 =====
- * 只压垂直留白与装饰尺寸，不碰参与内容宽计算的变量（列宽 / 网格间距 / 水平内距）。 */
+ * 垂直留白与装饰尺寸都已改由 --vh-step 连续驱动（fluid()，见 _fluid.scss），
+ * 这里只剩「不能连续变」的结构性规则：EP 按钮高度（构建期常量）、弹窗高度上限、字号台阶。
+ * 一律不碰参与内容宽计算的变量（列宽 / 网格间距 / 水平内距）。 */
 :root[data-density='compact'] {
-  --tabbar-offset-top: 50px;
-  --float-top: 8px;
-  --dock-reserve: 80px;
-  --card-body-pad: 7px 9px 9px;
-  --dock-item-w: 46px;
-  --dock-icon: 32px;
-  --dock-gap: 5px;
-  --radius-card: 16px;
-
   /* EP 默认按钮高度构建期写死 32px，只能运行时覆写；圆钮与 small / large 保持原尺寸 */
   .el-button:not(.is-circle):not(.el-button--small):not(.el-button--large):not(.is-link):not(.is-text) {
     height: 28px;
     padding: 6px 13px;
   }
 
+  /* 字号默认是台阶（连续缩放下会落在非整数字号上），
+   * 例外只有决定浮层高度的那两处（tab 栏、Dock 标签），它们必须与高度契约同曲线 */
   .section-title {
-    margin: 12px 2px 8px;
     font-size: 13px;
-
-    &::before {
-      height: 12px;
-    }
   }
 
   .detail-side-title {
@@ -175,17 +176,6 @@
   /* 履历卡上限仍是 640，不跟着放宽 */
   .detail-card-dialog.election-history-dialog.el-dialog {
     height: min(90vh, 640px);
-  }
-
-  .detail-pane-head {
-    padding: 12px 44px 8px var(--pane-head-pad, 18px);
-  }
-
-  .detail-close {
-    top: 10px;
-    right: 10px;
-    width: 26px;
-    height: 26px;
   }
 }
 
@@ -334,7 +324,7 @@ body,
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 20px 2px 12px;
+  margin: fluid(12px, 20px) 2px fluid(8px, 12px);
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0.3px;
@@ -344,7 +334,7 @@ body,
     content: '';
     flex: none;
     width: 3px;
-    height: 14px;
+    height: fluid(12px, 14px);
     border-radius: var(--radius-pill);
     background: linear-gradient(180deg, color-mix(in srgb, var(--st-accent) 60%, white), var(--st-accent));
     box-shadow: 0 0 8px color-mix(in srgb, var(--st-accent) 35%, transparent);
@@ -987,14 +977,14 @@ body,
 /* 关闭钮：浮在卡面右上角，悬停转 90° 并转成危险色 */
 .detail-close {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: fluid(10px, 12px);
+  right: fluid(10px, 12px);
   z-index: 3;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: fluid(26px, 28px);
+  height: fluid(26px, 28px);
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -1132,7 +1122,7 @@ body,
   align-items: center;
   gap: 8px;
   /* 右侧给关闭钮留位 */
-  padding: 17px 50px 12px var(--pane-head-pad, 22px);
+  padding: fluid(12px, 17px) fluid(44px, 50px) fluid(8px, 12px) var(--pane-head-pad, fluid(18px, 22px));
   border-bottom: 1px solid var(--el-border-color-extra-light);
 }
 
@@ -1461,6 +1451,36 @@ body,
   }
 }
 
+/* ===== 独立播放窗浮层尺寸轴 =====
+ * 播放窗是独立 BrowserWindow，本窗 100vw 就是窗口内容宽，浮层尺寸直接按它插值：
+ * 320 → 900 线性推进（竖屏 9:16 常见 320–430、横屏 16:9 常见 640–900），
+ * 两端之外由 clamp 收住。
+ * 下端是**竖屏小窗**的档位（320–430 宽，1280 / 1440 屏开出来就是这一段）：
+ * 桌面播放窗里最窄的可用窗口，元素按「占窗口宽度的比例」定，32px 的钮在 320 宽里
+ * 已占近 1/10，所以这里比早期固定值整体收紧约 12%。
+ * 只立跨文件共用的量，单点使用的间距仍写 inline clamp。
+ * 挂在 .fw-root（FloatWindowApp）而非 :root：主窗口没有播放浮层，取不到也不会串味 */
+.fw-root {
+  --fp-step: calc((100vw - 320px) / 580);
+  /* 圆钮直径：右上角动作钮 / 旋转组与底部控制条胶囊各一档 */
+  --fp-btn: clamp(28px, calc(28px + 12 * var(--fp-step)), 40px);
+  --fp-capsule-btn: clamp(25px, calc(25px + 9 * var(--fp-step)), 34px);
+  /* 胶囊上下内距：胶囊总高 = 钮径 + 2 * 本值（弹幕避让量也按这条式子算） */
+  --fp-capsule-pad: clamp(2.5px, calc(2.5px + 2.5 * var(--fp-step)), 5px);
+  /* 圆钮内图标边长：MediaIcon 不传 size 即 1em，随按钮 font-size 走 */
+  --fp-icon: clamp(14px, calc(14px + 6 * var(--fp-step)), 20px);
+  /* 浮层文字：主 / 次 */
+  --fp-font: clamp(11px, calc(11px + 2.5 * var(--fp-step)), 13.5px);
+  --fp-font-sm: clamp(10px, calc(10px + 2.5 * var(--fp-step)), 12.5px);
+  /* 浮层内元素间距 */
+  --fp-gap: clamp(3px, calc(3px + 4 * var(--fp-step)), 7px);
+  /* 底部控制条离窗口底边的悬空量：弹幕避让量把它算在内，改这里一处即可 */
+  --fp-control-gap: clamp(8px, calc(8px + 4 * var(--fp-step)), 12px);
+  /* 浮层距窗口边缘的内缩量：互动榜、右上角动作钮、弹幕层共用同一处口径，
+     弹幕层的位置由脚本拼进 calc（use-danmaku-layer 的 DANMAKU_INSET） */
+  --fp-inset: clamp(7px, calc(7px + 5 * var(--fp-step)), 12px);
+}
+
 /* ===== 播放器共用（LivePlayer / PlaybackPlayer） ===== */
 
 /* 原生 video：铺满容器、等比留边 */
@@ -1485,14 +1505,14 @@ body,
   transform-origin: center center;
 }
 
-/* 悬浮操作容器：横排置于画面右上角（直播 / 回放共用） */
+/* 悬浮操作容器：横排置于画面右上角（直播 / 回放共用），贴边量随浮层曲线收放 */
 .player-actions {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: var(--fp-inset);
+  right: var(--fp-inset);
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--fp-gap);
   z-index: 30;
 }
 
@@ -1521,12 +1541,14 @@ body,
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: var(--fp-capsule-btn);
+  height: var(--fp-capsule-btn);
   padding: 0;
   border: none;
   border-radius: 50%;
   font-family: inherit;
+  /* 图标是 1em：这里定字号即定图标边长，按钮放大时图标同比跟上 */
+  font-size: var(--fp-icon);
   font-variant-numeric: tabular-nums;
   color: #fff;
   background: transparent;
@@ -1553,9 +1575,8 @@ body,
  * 的绝对定位父上会解析成 auto，必须定死，面板宽度才不会随内容抖动 */
 .danmaku-list {
   position: absolute;
-  /* 贴窗口顶：不跟画面渲染区顶边的黑边下沉；与 use-danmaku-layer 的 MARGIN 同值，
-     互动榜锚点按该常量注入，差几像素两者就错行 */
-  top: 10px;
+  /* 贴窗口顶：不跟画面渲染区顶边的黑边下沉；与互动榜锚点留同一内缩量，差几像素两者就错行 */
+  top: var(--fp-inset);
   z-index: 10;
   /* 盒子被拉伸到整个可用高度，必须显式声明，否则挡住视频的双击全屏 */
   pointer-events: none;
@@ -1593,8 +1614,8 @@ body,
   --ab-pulse: rgba(255, 255, 255, 0.45);
   --ab-tint: transparent;
 
-  width: 32px;
-  height: 32px;
+  width: var(--fp-btn);
+  height: var(--fp-btn);
   padding: 0;
   flex-shrink: 0;
   display: inline-flex;
@@ -1602,7 +1623,8 @@ body,
   justify-content: center;
   border: none;
   border-radius: 50%;
-  font-size: 12px;
+  /* 图标是 1em：定字号即定图标边长 */
+  font-size: var(--fp-icon);
   font-family: inherit;
   font-variant-numeric: tabular-nums;
   color: #fff;

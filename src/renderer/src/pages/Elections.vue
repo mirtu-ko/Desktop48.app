@@ -244,6 +244,8 @@ function jumpToYear(target: number) {
 </template>
 
 <style scoped lang="scss">
+@use '../assets/css/fluid' as *;
+
 .elections-container {
   padding: var(--page-pad);
 }
@@ -253,18 +255,18 @@ function jumpToYear(target: number) {
   /* 团体色的可读文字版：浅色团色（GNZ48 黄绿、CKG48 琥珀）本色读不出来，压深一半才达标 */
   --gc-ink: color-mix(in srgb, var(--gc, var(--el-text-color-secondary)) 50%, #000);
 
-  /* 领奖台尺寸集中在这里，紧凑档只改这几个值，不重写整块规则 */
-  --podium-pad-top: 24px;
-  --podium-pad-bottom: 26px;
-  --podium-gap: 22px;
-  --podium-avatar: 164px;
-  --spot-avatar: 116px;
-  /* 皇冠预留位：比图标的 36px 略矮，让皇冠压在头像顶沿上 */
+  /* 领奖台尺寸集中在这里，全部随窗口高连续收：首屏最大的一块，收它才腾得出一行名次卡 */
+  --podium-pad-top: #{fluid(16px, 24px)};
+  --podium-pad-bottom: #{fluid(18px, 26px)};
+  --podium-gap: #{fluid(14px, 22px)};
+  --podium-avatar: #{fluid(128px, 164px)};
+  --spot-avatar: #{fluid(94px, 116px)};
+  /* 皇冠预留位：皇冠图标是固定 36px（模板 :size），所以这 30px 不随头像收 */
   --crown-space: 30px;
-  --podium-base-w: 88px;
-  --podium-base-h: 8px;
-  --champion-base-w: 108px;
-  --champion-base-h: 13px;
+  --podium-base-w: #{fluid(72px, 88px)};
+  --podium-base-h: #{fluid(7px, 8px)};
+  --champion-base-w: #{fluid(88px, 108px)};
+  --champion-base-h: #{fluid(10px, 13px)};
 
   display: flex;
   flex-direction: column;
@@ -364,9 +366,9 @@ function jumpToYear(target: number) {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 11px;
+  padding: fluid(2px, 3px) fluid(9px, 11px);
   border-radius: var(--radius-pill);
-  font-size: 12px;
+  font-size: fluid(11px, 12px);
   font-weight: 700;
   letter-spacing: 0.5px;
   color: color-mix(in srgb, var(--medal-gold) 42%, #000);
@@ -455,30 +457,30 @@ function jumpToYear(target: number) {
 
 /* 亚军 / 季军的名次徽章：走共享 .rank-badge 的金银铜款，按领奖台比例放大一号 */
 .spot-no {
-  min-width: 26px;
-  height: 26px;
-  padding: 0 8px;
+  min-width: fluid(22px, 26px);
+  height: fluid(22px, 26px);
+  padding: 0 fluid(7px, 8px);
   bottom: -1px;
-  font-size: 14px;
+  font-size: fluid(12px, 14px);
 }
 
 /* 头像加载失败时用姓氏占位（共享兜底样式见 app.scss 的 .avatar-fallback） */
 .avatar-fallback {
-  font-size: 48px;
+  font-size: fluid(38px, 48px);
 }
 
 .spot-name {
   max-width: 140px;
-  margin: 8px 0 0;
-  font-size: 16px;
+  margin: fluid(6px, 8px) 0 0;
+  font-size: fluid(15px, 16px);
   font-weight: 600;
   line-height: 1.3;
   color: var(--el-text-color-primary);
 }
 
 .is-champion .spot-name {
-  max-width: 200px;
-  font-size: 22px;
+  max-width: fluid(180px, 200px);
+  font-size: fluid(19px, 22px);
   font-weight: 700;
   letter-spacing: 1px;
 }
@@ -511,7 +513,7 @@ function jumpToYear(target: number) {
   display: flex;
   justify-content: center;
   gap: 10px;
-  margin: 26px 0 18px;
+  margin: fluid(16px, 26px) 0 fluid(12px, 18px);
 }
 
 .list-tab {
@@ -521,10 +523,10 @@ function jumpToYear(target: number) {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 16px;
+  padding: fluid(6px, 7px) fluid(13px, 16px);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: var(--radius-pill);
-  font-size: 13px;
+  font-size: fluid(12px, 13px);
   font-weight: 600;
   color: var(--el-text-color-regular);
   background: var(--el-bg-color);
@@ -570,68 +572,10 @@ function jumpToYear(target: number) {
 /* 名次卡网格：与成员页同构（卡片皮肤 / 头像环复用 card-item / avatar-wrap），
  * 头像比成员卡大一档（92 → 112px），经共享的 --avatar-size 注入 */
 .rank-grid {
-  --avatar-size: 112px;
+  --avatar-size: #{fluid(100px, 112px)};
 
   display: grid;
-  gap: 10px 8px;
+  gap: fluid(8px, 10px) 8px;
   grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
-}
-
-/* ===== 紧凑档：领奖台是首屏最大的一块，收它才腾得出一行名次卡 =====
- * 只改领奖台的尺寸变量、字号与竖直间距；列宽 minmax(136) 与水平内距不动。 */
-:root[data-density='compact'] {
-  .podium {
-    --podium-pad-top: 16px;
-    --podium-pad-bottom: 18px;
-    --podium-gap: 14px;
-    --podium-avatar: 128px;
-    --spot-avatar: 94px;
-    --podium-base-w: 72px;
-    --podium-base-h: 7px;
-    --champion-base-w: 88px;
-    --champion-base-h: 10px;
-  }
-
-  .spot-tag {
-    padding: 2px 9px;
-    font-size: 11px;
-  }
-
-  .spot-name {
-    margin-top: 6px;
-    font-size: 15px;
-  }
-
-  .is-champion .spot-name {
-    max-width: 180px;
-    font-size: 19px;
-  }
-
-  .spot-no {
-    min-width: 22px;
-    height: 22px;
-    padding: 0 7px;
-    font-size: 12px;
-  }
-
-  .avatar-fallback {
-    font-size: 38px;
-  }
-
-  .list-tabs {
-    margin: 16px 0 12px;
-  }
-
-  .list-tab {
-    padding: 6px 13px;
-    font-size: 12px;
-  }
-
-  .rank-grid {
-    /* 只收行间距：列间距参与列数计算，不在密度轴上改 */
-    --avatar-size: 100px;
-
-    row-gap: 8px;
-  }
 }
 </style>

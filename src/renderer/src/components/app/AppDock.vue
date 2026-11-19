@@ -156,17 +156,19 @@ onMounted(async () => {
 </template>
 
 <style scoped lang="scss">
+@use '../../assets/css/fluid' as *;
+
 /* 底部 Dock。后仰只做在板这一层：板绕 X 轴转、origin 在底边 → 只有板顶向后倒，
  * 屏幕上是上窄下宽的梯形；图标待在平板层里，天然是正的 */
 .app-dock {
   position: fixed;
   left: 50%;
-  bottom: 16px;
+  bottom: fluid(12px, 16px);
   z-index: 100;
   display: flex;
   align-items: flex-end;
   gap: var(--dock-gap);
-  padding: 8px 30px 10px;
+  padding: fluid(6px, 8px) fluid(20px, 30px) fluid(8px, 10px);
   user-select: none;
   transform: translateX(-50%);
 
@@ -254,9 +256,9 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: fluid(4px, 5px);
   width: var(--dock-item-w);
-  padding: 0 0 4px;
+  padding: 0 0 fluid(3px, 4px);
   border: none;
   background: transparent;
   color: var(--el-text-color-regular);
@@ -292,7 +294,7 @@ onMounted(async () => {
       box-shadow 0.25s ease;
 
     .el-icon {
-      font-size: 21px;
+      font-size: fluid(19px, 21px);
     }
 
     /* 角标：磁贴右上角的任务数胶囊，用该项主题色点亮 */
@@ -316,7 +318,7 @@ onMounted(async () => {
   }
 
   .dock-label {
-    font-size: 11px;
+    font-size: fluid(10px, 11px);
     line-height: 1.2;
     color: var(--el-text-color-secondary);
     transition: color 0.2s ease;
@@ -388,24 +390,6 @@ onMounted(async () => {
   }
 }
 
-/* 紧凑档：整条 80 高收到 65、宽度 564 收到 443，底距跟着 --dock-reserve 收到 80 */
-:root[data-density='compact'] {
-  .app-dock {
-    bottom: 12px;
-    padding: 6px 20px 8px;
-  }
-
-  .dock-item {
-    gap: 4px;
-    padding-bottom: 3px;
-  }
-
-  .dock-icon .el-icon {
-    font-size: 19px;
-  }
-
-  .dock-label {
-    font-size: 10px;
-  }
-}
+/* 整条高度 = 上下内距 + 图标 + 项间距 + 标签行（字号 * 1.2）+ 项下内距，
+ * 全部走 fluid，与 --dock-reserve（底距 + 整条高）同一条曲线，不会出现「字变小了但板还高」 */
 </style>

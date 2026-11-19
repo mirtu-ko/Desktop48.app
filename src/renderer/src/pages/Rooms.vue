@@ -344,6 +344,15 @@ const unreadDividerText = computed(() => {
 })
 
 /**
+ * 换消息范围（只看房主 / 全部消息）等于换了一批消息：进房时截的水位在新列表里通常不存在，
+ * 分割线会退回按时刻比较、落在并非真实边界的位置。清掉重算，等下次进房再截。
+ */
+watch(messageScope, () => {
+  unreadAnchor.value = null
+  unreadJumped.value = false
+})
+
+/**
  * 频道切换（页签）：切到哪个频道就清该频道未读。
  * 点已激活的页签直接返回——重进会覆盖原分割线并强制回底打断上翻；
  * 上翻期间攒的未读由「回到底部即补标」清（onListScroll）。
@@ -1218,8 +1227,16 @@ const newMsgFloatStyle = computed(() => ({
 }))
 
 // ===== 复制（hover 按钮 + 右键菜单）=====
-/** 右键菜单的定位与目标消息；null = 未打开 */
-const menu = ref<{ x: number, y: number, message: PocketRoomMessageView } | null>(null)
+/** 右键菜单的目标：消息（回复 / 复制 / 删除）或左列房间条目（置顶 / 标已读） */
+type RoomMenuTarget
+  = | { kind: 'message', message: PocketRoomMessageView }
+    | { kind: 'room', room: PocketRoom }
+
+/**
+ * 右键菜单的唯一状态：光标位置 + 目标。两类菜单共用一个 ref，
+ * 「同时只开一个」由赋值天然成立，不再靠两套 close 互相调用来维持。
+ */
+const menu = ref<{ x: number, y: number, target: RoomMenuTarget } | null>(null)
 
 /** 复制项的文案与图标：清单本身（有哪些可复制）在归一层，这里只贴 UILabel */
 const COPY_ITEMS: Record<PocketRoomCopyKey, { label: string, icon: Component }> = {
@@ -1242,21 +1259,28 @@ function copyMenuItems(message: PocketRoomMessageView): RoomMenuItem[] {
 }
 
 /**
- * 右键菜单全量项：回复 → 复制 → 删除。
+ * 消息菜单全量项：回复 → 复制 → 删除。
  * 回复 / 删除的 eligibility 在归一层（canReplyMessage / canDeleteMessage）：
  * 别人发的文本类消息可回复，自己发的才可删（服务端也只允许删自己的）。
  */
-const menuItems = computed<RoomMenuItem[]>(() => {
-  const target = menu.value
-  if (!target)
-    return []
+function messageMenuItems(message: PocketRoomMessageView): RoomMenuItem[] {
   const items: RoomMenuItem[] = []
-  if (canReplyMessage(target.message))
+  if (canReplyMessage(message))
     items.push({ key: 'reply', label: '回复', icon: ChatDotRound })
-  items.push(...copyMenuItems(target.message))
-  if (canDeleteMessage(target.message))
+  items.push(...copyMenuItems(message))
+  if (canDeleteMessage(message))
     items.push({ key: 'delete', label: '删除', icon: Delete, danger: true })
   return items
+}
+
+/** 当前该展示哪一组项：两类目标各自成组，模板只读这一处 */
+const menuItems = computed<RoomMenuItem[]>(() => {
+  const current = menu.value
+  if (!current)
+    return []
+  return current.target.kind === 'message'
+    ? messageMenuItems(current.target.message)
+    : roomMenuItems(current.target.room)
 })
 
 /** hover 复制按钮的文案；空串 = 这条没有可复制内容，按钮不渲染（如系统通知、投票） */
@@ -1284,22 +1308,38 @@ function copyPrimary(message: PocketRoomMessageView) {
     void runCopy(first.key, message)
 }
 
-function openMessageMenu(event: MouseEvent, message: PocketRoomMessageView) {
-  // 没有可回复 / 可复制 / 可删除的动作时不弹菜单（系统通知、投票等）
-  if (!canReplyMessage(message) && !canDeleteMessage(message) && !pocketRoomCopyTargets(message).length)
-    return
-  menu.value = { x: event.clientX, y: event.clientY, message }
+/**
+ * 打开菜单（唯一入口）：消息没有可回复 / 可复制 / 可删除的动作时不弹（系统通知、投票等），
+ * 房间条目恒可弹——置顶是常规操作。
+ */
+function openMenu(event: MouseEvent, target: RoomMenuTarget) {
+  if (target.kind === 'message') {
+    const message = target.message
+    if (!canReplyMessage(message) && !canDeleteMessage(message) && !pocketRoomCopyTargets(message).length)
+      return
+  }
+  menu.value = { x: event.clientX, y: event.clientY, target }
 }
 
 function closeMenu() {
   menu.value = null
 }
 
+/** 动作分发：先关菜单再执行，动作里再触发右键时不会新旧状态叠加 */
 function onMenuPick(key: string) {
-  const target = menu.value
+  const current = menu.value
   menu.value = null
-  if (!target)
+  if (!current)
     return
+  const { target } = current
+  if (target.kind === 'room') {
+    if (key === 'pin' || key === 'unpin') {
+      toggleRoomPin(target.room.userId)
+      return
+    }
+    void markRoomRead(target.room.userId, key === 'read-small' ? 'small' : 'room')
+    return
+  }
   if (key === 'reply') {
     startReply(target.message)
     void nextTick(() => draftInput.value?.focus())
@@ -1312,12 +1352,21 @@ function onMenuPick(key: string) {
   void runCopy(key as PocketRoomCopyKey, target.message)
 }
 
+/** 消息右键：模板已 .prevent，这里只走一次入口 */
+function openMessageMenu(event: MouseEvent, message: PocketRoomMessageView) {
+  openMenu(event, { kind: 'message', message })
+}
+
 // ===== 左列房间条目的右键菜单 =====
 // 两件事：置顶 / 取消置顶（展示顺序），以及未读的手动出口。
 // 未读出口的由来：进房清零要求首屏消息加载成功（见 settleBigRoomEnter），频道失效 / 空页时
 // 那条路走不通，角标会一直挂着；右键直接标已读是这类房间当前唯一的手动出口。
 
-const roomMenu = ref<{ x: number, y: number, room: PocketRoom } | null>(null)
+// ===== 左列房间条目的右键菜单 =====
+// 两件事：置顶 / 取消置顶（展示顺序），以及未读的手动出口。
+// 未读出口的由来：进房清零要求首屏消息加载成功（见 settleBigRoomEnter），频道失效 / 空页时
+// 那条路走不通，角标会一直挂着；右键直接标已读是这类房间当前唯一的手动出口。
+// 菜单状态与消息菜单共用上面那一个 menu，动作在 onMenuPick 里按 target.kind 分流。
 
 /**
  * 图钉（MediaIcon 实心壳）：菜单只接受组件，这里把 name 固定住；
@@ -1326,51 +1375,25 @@ const roomMenu = ref<{ x: number, y: number, room: PocketRoom } | null>(null)
 const PinIcon = () => h(MediaIcon, { name: 'pushpinFilled' })
 
 /** 置顶恒有；未读按分部各给一条：大 / 小房间是两个独立频道，进哪个清哪个 */
-const roomMenuItems = computed<RoomMenuItem[]>(() => {
-  const target = roomMenu.value
-  if (!target)
-    return []
-  const pinned = isRoomPinned(target.room.userId)
+function roomMenuItems(room: PocketRoom): RoomMenuItem[] {
+  const pinned = isRoomPinned(room.userId)
   const items: RoomMenuItem[] = [
     pinned
       ? { key: 'unpin', label: '取消置顶', icon: PinIcon }
       : { key: 'pin', label: '置顶', icon: PinIcon },
   ]
-  const unread = unreadChannelOf(target.room.userId)
+  const unread = unreadChannelOf(room.userId)
   if (unread.big > 0)
     items.push({ key: 'read-room', label: '大房间标为已读', icon: Check })
   if (unread.small > 0)
     items.push({ key: 'read-small', label: '小房间标为已读', icon: Check })
   return items
-})
+}
 
 /** 右键必定接管：置顶是常规操作，不再只在有未读时才弹菜单 */
 function onRoomContextMenu(room: PocketRoom, event: MouseEvent) {
-  closeRoomMenu()
   event.preventDefault()
-  closeMenu()
-  roomMenu.value = { x: event.clientX, y: event.clientY, room }
-}
-
-function closeRoomMenu() {
-  roomMenu.value = null
-}
-
-/**
- * 置顶不走推断：按当前状态切换即可，顺序变化本身就是反馈（不弹 toast）。
- * 标已读清不掉时主进程广播会把角标打回来，用户直接看到真实结果。
- */
-async function onRoomMenuPick(key: string) {
-  const target = roomMenu.value
-  roomMenu.value = null
-  if (!target)
-    return
-  if (key === 'pin' || key === 'unpin') {
-    toggleRoomPin(target.room.userId)
-    return
-  }
-  const channel = key === 'read-small' ? 'small' : 'room'
-  await markRoomRead(target.room.userId, channel)
+  openMenu(event, { kind: 'room', room })
 }
 
 // 页面切走（keep-alive 只停用不销毁）：右键菜单挂在 body 上，不关会盖住别的页面
@@ -1389,7 +1412,6 @@ function resetCardState() {
     arrivingTimer = undefined
   }
   closeMenu()
-  closeRoomMenu()
 }
 
 // ===== 引用块 =====
@@ -1700,16 +1722,6 @@ onMounted(() => {
               </el-icon>
             </button>
           </div>
-
-          <!-- 未读出口（Teleport 到 body，定位在光标处）：这类房间进房清不掉，只能手动标已读 -->
-          <RoomMessageMenu
-            v-if="roomMenu"
-            :x="roomMenu.x"
-            :y="roomMenu.y"
-            :items="roomMenuItems"
-            @pick="onRoomMenuPick"
-            @close="closeRoomMenu"
-          />
         </div>
 
         <div v-else-if="!loading" class="side-empty">
@@ -2285,16 +2297,6 @@ onMounted(() => {
                   {{ newCount }} 条新消息
                 </button>
               </Transition>
-
-              <!-- 消息右键菜单（Teleport 到 body 定位在光标处）：复制正文 / 媒体直链 -->
-              <RoomMessageMenu
-                v-if="menu"
-                :x="menu.x"
-                :y="menu.y"
-                :items="menuItems"
-                @pick="onMenuPick"
-                @close="closeMenu"
-              />
             </section>
 
             <aside class="rooms-aside detail-scroll">
@@ -2344,10 +2346,23 @@ onMounted(() => {
         </div>
       </main>
     </template>
+
+    <!-- 右键菜单（Teleport 到 body，定位在光标处）：目标为消息或左列房间条目，
+         动作按 menu.target.kind 分发；两类共用一个状态，同时只会有一个 -->
+    <RoomMessageMenu
+      v-if="menu"
+      :x="menu.x"
+      :y="menu.y"
+      :items="menuItems"
+      @pick="onMenuPick"
+      @close="closeMenu"
+    />
   </div>
 </template>
 
 <style scoped lang="scss">
+@use '../assets/css/fluid' as *;
+
 /* ===== 页内复用骨架（%placeholder，不出本样式块）=====
  * 本页多处重复的造型收在这里：改一处即整页同步。颜色/尺寸等差异留给使用处，
  * 只抽「形状 + 过渡」这一层。若未来其它页面也要同款，再升级为 app.scss 公共类 */
@@ -2379,7 +2394,7 @@ onMounted(() => {
 }
 
 %pill-tab {
-  padding: 4px 12px;
+  padding: fluid(3px, 4px) 12px;
   border: none;
   border-radius: var(--radius-pill);
   font-family: inherit;
@@ -2393,15 +2408,38 @@ onMounted(() => {
     background-color 0.15s ease;
 }
 
+/* 软标签：队伍徽标 / 临时 / 已关闭三个状态标记共用，色相由 --tag-color 给出 */
+%soft-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--tag-color, var(--el-text-color-secondary));
+  background: color-mix(in srgb, var(--tag-color, var(--el-text-color-secondary)) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tag-color, var(--el-text-color-secondary)) 30%, transparent);
+}
+
+/* 分段控件外壳：消息范围页签与频道页签共用，内部仍是 %pill-tab */
+%segmented {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--el-fill-color-light);
+}
+
 /* 双栏骨架：左栏固定宽度，右栏自适应；整页不滚动，两栏各自滚（给 Dock 留底部空间）。
  * box-sizing 必须显式声明：项目没有全局 border-box 重置，.page-root 的 height:100%
  * 若按 content-box 把上下内边距算到外面，整页会高出视口，滚动被甩给 .app-content */
 .rooms-page {
   display: flex;
   box-sizing: border-box;
-  gap: 14px;
+  gap: fluid(10px, 14px);
   /* 本页无左上浮动 tab 栏，顶部内边距不走 --page-pad（那含 64px tab 预留） */
-  padding: 14px 14px var(--dock-reserve);
+  padding: fluid(10px, 14px) 14px var(--dock-reserve);
   overflow: hidden;
 }
 
@@ -2543,7 +2581,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 14px 10px;
+  padding: fluid(10px, 14px) 14px fluid(8px, 10px);
 
   .side-title-icon {
     width: 34px;
@@ -2664,9 +2702,9 @@ onMounted(() => {
 .room-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: fluid(8px, 10px);
   width: 100%;
-  padding: 9px 8px;
+  padding: fluid(7px, 9px) 8px;
   border: none;
   border-radius: 12px;
   background: transparent;
@@ -2691,8 +2729,8 @@ onMounted(() => {
 .room-avatar {
   position: relative;
   flex: none;
-  width: 42px;
-  height: 42px;
+  width: fluid(36px, 42px);
+  height: fluid(36px, 42px);
 
   img {
     width: 100%;
@@ -2931,41 +2969,27 @@ onMounted(() => {
 }
 
 .room-team {
-  flex: none;
-  padding: 0 6px;
-  border-radius: 8px;
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 16px;
-  color: var(--tb-color, var(--brand-primary));
-  background: color-mix(in srgb, var(--tb-color, var(--brand-primary)) 12%, transparent);
+  @extend %soft-tag;
+
+  --tag-color: var(--tb-color, var(--brand-primary));
+
+  /* 队伍色只做淡底不加描边：它是身份标识，不像下面两个是状态提示 */
+  box-shadow: none;
 }
 
-/* 「临时」标记（左列条目与右栏头部共用）：造型与 .room-team 同规格，换房间主题青 + 描边，
+/* 「临时」标记（左列条目与右栏头部共用）：换房间主题青 + 描边，
  * 一眼与「关注房间」区分开——它不会在下次进页面时还在 */
 .room-temp-tag {
-  flex: none;
-  padding: 0 6px;
-  border-radius: 8px;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-  color: var(--color-rooms);
-  background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 34%, transparent);
+  @extend %soft-tag;
+
+  --tag-color: var(--color-rooms);
 }
 
 /* 「已关闭」标记：与临时标签同规格，用中性色表达不可用，不抢直播 / 未读的强调 */
 .room-closed-tag {
-  flex: none;
-  padding: 0 6px;
-  border-radius: 8px;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-  color: var(--el-text-color-secondary);
-  background: color-mix(in srgb, var(--el-text-color-secondary) 12%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--el-text-color-secondary) 28%, transparent);
+  @extend %soft-tag;
+
+  --tag-color: var(--el-text-color-secondary);
 }
 
 /* 条目右缘竖排小标签列：口袋关注星标在上、队伍徽标在下。
@@ -3030,6 +3054,10 @@ onMounted(() => {
 
 /* ===== 右栏：房间消息 ===== */
 .rooms-main {
+  /* 聊天列的水平内距：头部 / 工具条 / 消息区 / 输入条共用，
+   * 分开写会让头像与气泡左边缘在改档后错开 */
+  --chat-pad-x: #{fluid(13px, 16px)};
+
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -3046,8 +3074,8 @@ onMounted(() => {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
+  gap: fluid(8px, 12px);
+  padding: fluid(8px, 14px) var(--chat-pad-x);
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
@@ -3061,7 +3089,7 @@ onMounted(() => {
   justify-content: center;
   gap: 5px;
   min-width: 74px;
-  padding: 4px 10px;
+  padding: fluid(3px, 4px) 10px;
   border: none;
   border-radius: 8px;
   font-family: inherit;
@@ -3095,8 +3123,8 @@ onMounted(() => {
   flex: none;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
-  padding: 10px 16px 0;
+  gap: fluid(8px, 12px);
+  padding: fluid(6px, 10px) var(--chat-pad-x) 0;
 }
 
 /* 只有精华条让位：右侧两个控件定宽不压缩，否则窄栏里按钮会被挤到文字逐字换行
@@ -3167,12 +3195,7 @@ onMounted(() => {
 }
 
 .scope-tabs {
-  display: flex;
-  flex: none;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--radius-pill);
-  background: var(--el-fill-color-light);
+  @extend %segmented;
 }
 
 .scope-tab {
@@ -3212,8 +3235,8 @@ onMounted(() => {
 
 .main-avatar {
   flex: none;
-  width: 44px;
-  height: 44px;
+  width: fluid(38px, 44px);
+  height: fluid(38px, 44px);
 
   img {
     width: 100%;
@@ -3261,7 +3284,7 @@ onMounted(() => {
 }
 
 .main-head-sub {
-  margin: 3px 0 0;
+  margin: fluid(2px, 3px) 0 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
@@ -3285,14 +3308,10 @@ onMounted(() => {
  * 强调色用房间主题青（页面里所有房间语义都用它），不用品牌紫——
  * 这一条正是「我在哪个频道」最需要一眼看清的地方；未读走全局 .unread-badge */
 .room-tabs {
-  display: flex;
-  flex: none;
-  gap: 2px;
+  @extend %segmented;
+
   max-width: 340px;
   margin-left: auto;
-  padding: 3px;
-  border-radius: var(--radius-pill);
-  background: var(--el-fill-color-light);
 }
 
 .room-tab {
@@ -3432,14 +3451,16 @@ onMounted(() => {
   flex-direction: column;
   gap: 12px;
   box-sizing: border-box;
-  width: 264px;
+  /* 信息栏随窗口收：系数 = 基准 264 / 1400，1400 及更宽逐像素等于原值，
+   * 更窄时先让出宽度给聊天区（相册三列等比变窄），下限 200 保证资料卡可读 */
+  width: clamp(200px, 18.86vw, 264px);
   padding: 12px;
   overflow-y: auto;
   border-left: 1px solid var(--el-border-color-lighter);
 }
 
 /* 窗口不够宽时收起右侧信息栏（资料卡 + 相册），把宽度让给聊天区：
- * 固定占用 = 页面左右内距 28 + 列表 300 + 间距 14 + 信息栏 264 ≈ 606px，
+ * 固定占用 = 页面左右内距 28 + 列表 300 + 间距 14 + 信息栏 200–264，约 542–606px，
  * 低于 960px 时聊天区余量不足以舒展气泡，宁可失去信息栏也不压缩消息可读性。
  * 信息是「有更好」，相册与资料在成员页另有入口，隐藏不损失关键路径 */
 @media (max-width: 960px) {
@@ -3457,9 +3478,9 @@ onMounted(() => {
     padding-inline: 6px;
   }
 
-  .main-head,
-  .chat-tools {
-    padding-inline: 12px;
+  /* 聊天列比设置页 / 列表页更挤：右栏资料卡与相册已收起，左列还要保住条目宽度 */
+  .rooms-main {
+    --chat-pad-x: 12px;
   }
 }
 
@@ -3467,7 +3488,7 @@ onMounted(() => {
   flex: 1;
   box-sizing: border-box;
   min-height: 0;
-  padding: 12px 16px;
+  padding: fluid(8px, 12px) var(--chat-pad-x);
 
   /* 消息列圆角表：整列只分「大 / 小」两档 + 指向头像的收角，改这一处即整列同步。
    * --msg-radius-inner 是「大档 − 内距」的同心内角（直播卡在气泡内含 4px 内距），
@@ -3508,15 +3529,15 @@ onMounted(() => {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 5px 2px;
+  gap: fluid(8px, 10px);
+  padding: fluid(4px, 5px) 2px;
   border-radius: var(--radius-sm);
 }
 
 .msg-avatar {
   flex: none;
-  width: 34px;
-  height: 34px;
+  width: fluid(30px, 34px);
+  height: fluid(30px, 34px);
   margin-top: 2px;
   border-radius: 50%;
   object-fit: cover;
@@ -4048,7 +4069,7 @@ onMounted(() => {
 .msg-date-pill {
   width: fit-content;
   padding: 2px 10px;
-  margin: 10px auto 4px;
+  margin: fluid(8px, 10px) auto fluid(3px, 4px);
   border-radius: var(--radius-pill);
   font-size: 11px;
   color: var(--el-text-color-placeholder);
@@ -4060,7 +4081,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 14px 0 6px;
+  margin: fluid(10px, 14px) 0 fluid(5px, 6px);
   font-size: 11px;
   line-height: 1;
   color: var(--brand-primary, var(--el-color-primary));
@@ -4207,7 +4228,7 @@ onMounted(() => {
 
 .main-foot {
   flex: none;
-  padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px));
+  padding: 8px var(--chat-pad-x) calc(8px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--el-border-color-lighter);
   font-size: 11px;
   color: var(--el-text-color-secondary);
@@ -4218,7 +4239,7 @@ onMounted(() => {
  * 用户要能看到「为什么发不了」，而不是面对一个灰掉的输入框猜原因 */
 .chat-composer {
   flex: none;
-  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  padding: fluid(8px, 10px) var(--chat-pad-x) calc(fluid(8px, 10px) + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--el-border-color-lighter);
 }
 
@@ -4305,54 +4326,5 @@ onMounted(() => {
 .composer-send {
   flex: none;
   min-width: 64px;
-}
-
-/* 紧凑档：两张面板的头、房间行、消息行只收垂直分量，水平留白交给上面的宽度档。
- * 同样的高度能多看两三条消息。 */
-:root[data-density='compact'] {
-  .rooms-page {
-    gap: 10px;
-    padding-top: 10px;
-  }
-
-  .side-head {
-    padding-top: 10px;
-    padding-bottom: 8px;
-  }
-
-  .room-item {
-    gap: 8px;
-    padding-block: 7px;
-  }
-
-  .room-avatar {
-    width: 36px;
-    height: 36px;
-  }
-
-  .main-head {
-    gap: 10px;
-    padding-block: 10px;
-  }
-
-  .chat-tools {
-    gap: 8px;
-    padding-top: 8px;
-  }
-
-  .main-avatar {
-    width: 38px;
-    height: 38px;
-  }
-
-  .msg-row {
-    gap: 8px;
-    padding-block: 4px;
-  }
-
-  .msg-avatar {
-    width: 30px;
-    height: 30px;
-  }
 }
 </style>

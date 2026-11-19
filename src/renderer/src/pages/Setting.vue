@@ -1969,29 +1969,31 @@ onActivated(consumeUpdateFocus)
 </template>
 
 <style scoped lang="scss">
+@use '../assets/css/fluid' as *;
+
 .setting-root {
   /* 左 152px 导航 + 24px 间距 + 右侧内容，内容区仍以约 880px 为上限 */
   max-width: 1120px;
   margin: 0 auto;
   /* 底部留出悬浮 Dock 的高度（--dock-reserve），避免最后一张卡片被遮挡 */
-  padding: 20px 24px var(--dock-reserve);
+  padding: fluid(14px, 20px) 24px var(--dock-reserve);
   display: flex;
   align-items: flex-start;
-  gap: 24px;
+  gap: fluid(18px, 24px);
 }
 
 .setting-content {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 14px;
+  gap: fluid(10px, 14px);
   min-width: 0;
 }
 
 /* 左侧分组导航：粘性停靠在滚动容器顶部；激活态竖条与内容区组标签同语言 */
 .setting-nav {
   position: sticky;
-  top: 20px;
+  top: fluid(14px, 20px);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -2016,7 +2018,7 @@ onActivated(consumeUpdateFocus)
 .setting-nav-item {
   position: relative;
   width: 100%;
-  padding: 9px 10px;
+  padding: fluid(8px, 9px) 10px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -2065,7 +2067,7 @@ onActivated(consumeUpdateFocus)
 
 /* 设置卡片：磨砂玻璃基底见全局 .glass-card */
 .setting-card {
-  padding: 18px 20px;
+  padding: fluid(14px, 18px) 20px;
   border-radius: var(--radius-lg);
 }
 
@@ -2075,7 +2077,7 @@ onActivated(consumeUpdateFocus)
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 8px 0 -6px 4px;
+  margin: fluid(6px, 8px) 0 fluid(-4px, -6px) 4px;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -2162,11 +2164,11 @@ onActivated(consumeUpdateFocus)
 
 /* 渐变主题图标磁贴：骨架见全局 .icon-tile（与底部 Dock 的视觉语言一致），此处仅定尺寸 */
 .row-icon {
-  width: 44px;
-  height: 44px;
+  width: fluid(38px, 44px);
+  height: fluid(38px, 44px);
 
   .el-icon {
-    font-size: 21px;
+    font-size: fluid(19px, 21px);
   }
 }
 
@@ -2262,8 +2264,8 @@ onActivated(consumeUpdateFocus)
 
 /* 卡片正文：与标题行之间用虚线分隔 */
 .row-body {
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: fluid(10px, 14px);
+  padding-top: fluid(10px, 14px);
   border-top: 1px dashed var(--el-border-color-lighter);
 }
 
@@ -3159,51 +3161,5 @@ onActivated(consumeUpdateFocus)
   font-size: 11px;
   line-height: 1.6;
   color: var(--el-text-color-placeholder);
-}
-
-/* ===== 紧凑档：设置页是一列 80px 高的信息行，矮屏下先压行高与卡片内距 =====
- * 水平内距（24px）是 1400 窗口下调好的量，不随密度轴变；按钮高度由 app.scss 的
- * 紧凑档统一收到 28px，这里只补信息行自身的垂直节奏。 */
-:root[data-density='compact'] {
-  .setting-root {
-    padding-top: 14px;
-    gap: 18px;
-  }
-
-  .setting-nav {
-    /* 粘性停靠点必须跟随 padding-top，否则导航会浮在卡片上方 */
-    top: 14px;
-
-    .setting-nav-item {
-      padding: 8px 10px;
-    }
-  }
-
-  .setting-content {
-    gap: 10px;
-  }
-
-  .setting-card {
-    padding-block: 14px;
-  }
-
-  .row-icon {
-    width: 38px;
-    height: 38px;
-
-    .el-icon {
-      font-size: 19px;
-    }
-  }
-
-  .row-body {
-    margin-top: 10px;
-    padding-top: 10px;
-  }
-
-  .setting-group-label {
-    margin-top: 6px;
-    margin-bottom: -4px;
-  }
 }
 </style>

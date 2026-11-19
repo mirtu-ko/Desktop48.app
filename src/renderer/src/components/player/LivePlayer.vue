@@ -864,7 +864,7 @@ onUnmounted(() => {
             :aria-label="recording ? '结束录制' : '录制'"
             @click="onRecordClick"
           >
-            <MediaIcon name="videoCamera" :size="16" />
+            <MediaIcon name="videoCamera" />
           </button>
         </el-tooltip>
       </div>
@@ -877,7 +877,7 @@ onUnmounted(() => {
         :style="rankPosition"
       >
         <div class="rank-panel__title">
-          <MediaIcon name="trophy" :size="13" />
+          <MediaIcon name="trophy" />
           <span>互动榜</span>
           <!-- 累计礼物流水（LIVEUPDATE.allMoney）：标题行右端，未收到时不占位 -->
           <span v-if="liveAllMoney > 0" class="rank-panel__gift" :title="`本场累计礼物 ${liveAllMoney.toLocaleString()}`">
@@ -930,7 +930,7 @@ onUnmounted(() => {
             :aria-label="danmakuEnabled ? '关闭弹幕' : '开启弹幕'"
             @click="toggleDanmaku"
           >
-            <MediaIcon name="chat" :size="16" />
+            <MediaIcon name="chat" />
           </button>
 
           <!-- 摆放切换：左侧黑边够宽时出现（窗口态竖屏直播同样适用）。
@@ -943,7 +943,7 @@ onUnmounted(() => {
             :aria-label="danmakuFloating ? '弹幕移回画面内' : '弹幕移到左侧黑边'"
             @click="toggleDanmakuPlacement"
           >
-            <MediaIcon name="panelLeft" :size="16" />
+            <MediaIcon name="panelLeft" />
           </button>
 
           <!-- 榜单开关：有榜单数据才给入口（个人直播的 LIVEUPDATE 才会驱动） -->
@@ -955,7 +955,7 @@ onUnmounted(() => {
             :aria-label="rankVisible ? '收起互动榜' : '展开互动榜'"
             @click="rankVisible = !rankVisible"
           >
-            <MediaIcon name="trophy" :size="16" />
+            <MediaIcon name="trophy" />
           </button>
 
           <span class="live-status">
@@ -1007,12 +1007,15 @@ onUnmounted(() => {
   position: absolute;
   inset: 0;
   z-index: 35;
+  /* 卡内文字 / 头像共用一条曲线：12px 正文 → 15px、21px 头像 → 28px（紧凑档另有更紧的覆写） */
+  --le-text: clamp(12px, calc(12px + 3 * var(--fp-step)), 15px);
+  --le-avatar: clamp(21px, calc(21px + 7 * var(--fp-step)), 28px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 16px;
+  gap: calc(var(--fp-gap) * 2);
+  padding: clamp(13px, calc(13px + 9 * var(--fp-step)), 22px);
   background: #0c0c0c;
   color: #fff;
   text-align: center;
@@ -1020,14 +1023,14 @@ onUnmounted(() => {
 }
 
 .live-end__title {
-  font-size: 18px;
+  font-size: clamp(16px, calc(16px + 4 * var(--fp-step)), 20px);
   font-weight: 700;
   letter-spacing: 1px;
 }
 
 .live-end__name {
   max-width: 100%;
-  font-size: 14px;
+  font-size: clamp(13px, calc(13px + 3 * var(--fp-step)), 16px);
   opacity: 0.85;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1039,14 +1042,14 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 6px;
+  gap: clamp(5px, calc(5px + 3 * var(--fp-step)), 8px);
 }
 
 .live-end__stat {
-  padding: 4px 12px;
+  padding: clamp(3px, calc(3px + 2 * var(--fp-step)), 5px) clamp(10px, calc(10px + 6 * var(--fp-step)), 16px);
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.1);
-  font-size: 13px;
+  font-size: var(--le-text);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1057,21 +1060,21 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 4px;
   width: 100%;
-  max-width: 260px;
+  max-width: clamp(230px, calc(230px + 90 * var(--fp-step)), 320px);
   margin-top: 2px;
 }
 
 .live-end__top {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: calc(var(--fp-gap) * 2);
+  font-size: var(--le-text);
 }
 
 .live-end__avatar {
   flex: none;
-  width: 24px;
-  height: 24px;
+  width: var(--le-avatar);
+  height: var(--le-avatar);
   border-radius: 50%;
   object-fit: cover;
 }
@@ -1106,11 +1109,11 @@ onUnmounted(() => {
 /* 关闭：品牌渐变胶囊；纯动作按钮，无状态语义 */
 .live-end__close {
   margin-top: 4px;
-  padding: 6px 20px;
+  padding: clamp(5px, calc(5px + 3 * var(--fp-step)), 8px) clamp(17px, calc(17px + 9 * var(--fp-step)), 26px);
   border: none;
   border-radius: var(--radius-pill);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--le-text);
   color: #fff;
   background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
   cursor: pointer;
@@ -1122,8 +1125,8 @@ onUnmounted(() => {
 
 /* 加载失败卡复用结束卡外壳，只补一行原因说明 */
 .live-load-failed__hint {
-  max-width: 280px;
-  font-size: 12px;
+  max-width: clamp(240px, calc(240px + 100 * var(--fp-step)), 340px);
+  font-size: var(--le-text);
   line-height: 1.6;
   opacity: 0.55;
 }
@@ -1168,14 +1171,14 @@ onUnmounted(() => {
 .live-status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: clamp(4px, calc(4px + 3 * var(--fp-step)), 7px);
   flex: 0 1 auto;
   min-width: 0;
-  padding: 3px 8px;
+  padding: clamp(2px, calc(2px + 3 * var(--fp-step)), 5px) clamp(7px, calc(7px + 5 * var(--fp-step)), 12px);
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--fp-font);
   line-height: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -1188,7 +1191,7 @@ onUnmounted(() => {
   flex: 0 1 auto;
   min-width: 0;
   margin-left: 1px;
-  font-size: 11px;
+  font-size: var(--fp-font-sm);
   opacity: 0.85;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1210,27 +1213,28 @@ onUnmounted(() => {
 
 .rank-panel {
   position: absolute;
-  /* left / top 由脚本注入（useDanmakuLayer.topLeft）：锚画面左边缘、贴窗口顶，与气泡层同一内缩量 */
+  /* left / top 由脚本注入（useDanmakuLayer.topLeft）：锚画面左边缘、贴窗口顶，与气泡层同一内缩量。
+     宽度 / 内距 / 字号随 --fp-step 放大：面板同比例变宽，行内各件也不挤 */
   z-index: 29;
-  min-width: 132px;
-  max-width: 248px;
+  min-width: clamp(118px, calc(118px + 30 * var(--fp-step)), 148px);
+  max-width: clamp(232px, calc(232px + 56 * var(--fp-step)), 288px);
   max-height: 45%;
   overflow-y: auto;
-  padding: 8px 10px;
-  border-radius: 10px;
+  padding: clamp(7px, calc(7px + 5 * var(--fp-step)), 12px) clamp(8px, calc(8px + 6 * var(--fp-step)), 14px);
+  border-radius: clamp(9px, calc(9px + 4 * var(--fp-step)), 13px);
   /* 实色深底（非磨砂）：悬在视频上的 backdrop-filter 每帧成本高，加深底色压画面 */
   background: rgba(0, 0, 0, 0.62);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--fp-font);
   user-select: none;
 }
 
 .rank-panel__title {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding-bottom: 6px;
-  margin-bottom: 4px;
+  gap: var(--fp-gap);
+  padding-bottom: clamp(5px, calc(5px + 3 * var(--fp-step)), 8px);
+  margin-bottom: clamp(3px, calc(3px + 3 * var(--fp-step)), 6px);
   font-weight: 600;
   color: #f7ba2a;
   border-bottom: 1px solid rgba(255, 255, 255, 0.14);
@@ -1239,7 +1243,7 @@ onUnmounted(() => {
 /* 累计礼物流水（LIVEUPDATE.allMoney）：推到标题行右端，金色与贡献值列同语言 */
 .rank-panel__gift {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--fp-font-sm);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: #f7ba2a;
@@ -1248,14 +1252,15 @@ onUnmounted(() => {
 .rank-panel__row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 0;
+  gap: clamp(5px, calc(5px + 3 * var(--fp-step)), 8px);
+  padding: clamp(1.5px, calc(1.5px + 1.5 * var(--fp-step)), 3px) 0;
   line-height: 1.4;
 }
 
+/* 序号与尾部徽标按 em 定宽：字号已随浮层曲线走，宽跟着字号走即可，不必再写一条曲线 */
 .rank-panel__index {
   flex: none;
-  min-width: 16px;
+  min-width: 1.35em;
   text-align: center;
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
@@ -1267,11 +1272,11 @@ onUnmounted(() => {
   opacity: 1;
 }
 
-/* 头像：20px 圆形；无图 / 加载失败时回退用户名首字母占位 */
+/* 头像：无图 / 加载失败时回退用户名首字母占位（宽度即行高，随面板一同放大） */
 .rank-panel__avatar {
   flex: none;
-  width: 20px;
-  height: 20px;
+  width: clamp(18px, calc(18px + 6 * var(--fp-step)), 24px);
+  height: clamp(18px, calc(18px + 6 * var(--fp-step)), 24px);
   border-radius: 50%;
   object-fit: cover;
 }
@@ -1282,7 +1287,7 @@ onUnmounted(() => {
   justify-content: center;
   background: rgba(255, 255, 255, 0.12);
   color: rgba(255, 255, 255, 0.8);
-  font-size: 11px;
+  font-size: var(--fp-font-sm);
   font-weight: 600;
 }
 
@@ -1299,19 +1304,19 @@ onUnmounted(() => {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
+  gap: var(--fp-gap);
 }
 
 /* 等级徽标：小胶囊；min-width 定宽让各行徽标纵向对齐 */
 .rank-panel__level {
   flex: none;
-  min-width: 32px;
+  min-width: 3.2em;
   padding: 0 4px;
   box-sizing: border-box;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--fp-font-sm);
   font-weight: 600;
-  line-height: 15px;
+  line-height: 1.5;
   text-align: center;
   color: #fff;
   background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
@@ -1320,10 +1325,10 @@ onUnmounted(() => {
 /* 贡献值：金色数字列，定宽右对齐 + tabular-nums */
 .rank-panel__money {
   flex: none;
-  min-width: 34px;
-  font-size: 11px;
+  min-width: 3.1em;
+  font-size: var(--fp-font-sm);
   font-weight: 600;
-  line-height: 15px;
+  line-height: 1.36;
   color: #f7ba2a;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -1332,8 +1337,8 @@ onUnmounted(() => {
 /* 悬浮按钮（录制）与右上角容器样式为全局 .player-actions / .action-btn，见 app.scss */
 
 .live-dot {
-  width: 8px;
-  height: 8px;
+  width: clamp(7px, calc(7px + 3 * var(--fp-step)), 10px);
+  height: clamp(7px, calc(7px + 3 * var(--fp-step)), 10px);
   border-radius: 50%;
   background: #f56c6c;
   animation: live-pulse 1.2s ease-in-out infinite;
