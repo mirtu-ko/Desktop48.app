@@ -4,7 +4,7 @@ import {
   isAllowedBilibiliSocketUrl,
   isAllowedStreamUrl,
   isAllowedUrl,
-} from '../src/main/allowed-hosts'
+} from '../src/main/net/allowed-hosts'
 
 describe('isAllowedUrl', () => {
   it('放行白名单内的精确域名', () => {

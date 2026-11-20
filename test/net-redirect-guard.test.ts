@@ -1,7 +1,7 @@
 import type { ClientRequest } from 'electron'
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
-import { guardRedirects } from '../src/main/net-redirect-guard'
+import { guardRedirects } from '../src/main/net/net-redirect-guard'
 
 function fakeRequest() {
   const emitter = new EventEmitter()

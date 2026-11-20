@@ -1,10 +1,10 @@
-import type { SourceOutcome } from '../src/main/net-diagnose-chain'
+import type { SourceOutcome } from '../src/main/net/net-diagnose-chain'
 import { describe, expect, it } from 'vitest'
-import { resolveSources } from '../src/main/net-diagnose-chain'
+import { resolveSources } from '../src/main/net/net-diagnose-chain'
 
 /**
  * 成员名单的主备链结论：主源挂、备源顶上仍算该行正常，全部挂掉才判不可用。
- * 背景见 src/main/net-diagnose.ts 的 memberListTarget——快照为主、jsonp 接口为备。
+ * 背景见 src/main/net/net-diagnose.ts 的 memberListTarget——快照为主、jsonp 接口为备。
  */
 function source(overrides: Partial<SourceOutcome>): SourceOutcome {
   return { label: '成员名单', url: 'https://h5.48.cn/snapshot', status: 200, ms: 120, ...overrides }

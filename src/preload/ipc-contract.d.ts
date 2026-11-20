@@ -18,7 +18,7 @@ import type { PocketClientProfileId } from '@common/pocket-client-profile'
 import type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { FfmpegProblem, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
-import type { NetDiagnoseItem } from '../main/net-diagnose'
+import type { NetDiagnoseItem } from '../main/net/net-diagnose'
 
 // 网络请求参数（对端：main/ipc/register-system-ipc.ts；body 为序列化后的字符串）
 export interface NetRequestOptions {
@@ -165,7 +165,7 @@ export interface DanmakuBatch {
 
 // ===== 独立播放窗口 =====
 
-/** 独立播放窗类型：live=直播，playback=回放（对端：main/float-window.ts） */
+/** 独立播放窗类型：live=直播，playback=回放（对端：main/window/float-window.ts） */
 export type FloatPlayerKind = 'live' | 'playback'
 
 /**
@@ -505,7 +505,7 @@ interface StaticIpcInvokeMap {
    * （对端：main/ipc/register-system-ipc.ts）。
    */
   imageDataUrl: InvokeSpec<[url: string], string>
-  /** 网络诊断：对核心服务域名逐一发轻量 GET，返回状态码/耗时/失败原因（对端：main/net-diagnose.ts） */
+  /** 网络诊断：对核心服务域名逐一发轻量 GET，返回状态码/耗时/失败原因（对端：main/net/net-diagnose.ts） */
   netDiagnose: InvokeSpec<[], NetDiagnoseItem[]>
   /** 反馈用环境摘要与通道可用性：版本/平台/身份档/登录态，不含账号与内容（对端：main/feedback.ts） */
   feedbackMeta: InvokeSpec<[], FeedbackMetaResponse>
@@ -710,9 +710,9 @@ export type IpcEventMap = {
   /** 相册批量下载逐张进度，仅回推发起窗口 */
   roomAlbumDownloadProgress: [progress: RoomAlbumDownloadProgress]
   windowOnMaximizeChange: [isMaximized: boolean]
-  /** 本窗置顶策略变化（对端：main/float-window.ts）：图钉切换或全局偏好波及本窗时推送 */
+  /** 本窗置顶策略变化（对端：main/window/float-window.ts）：图钉切换或全局偏好波及本窗时推送 */
   windowOnTopmostChange: [preference: FloatTopmost]
-  /** 主进程转发：独立播放窗报告某直播已下架，主窗口据此刷新列表（对端：main/float-window.ts） */
+  /** 主进程转发：独立播放窗报告某直播已下架，主窗口据此刷新列表（对端：main/window/float-window.ts） */
   liveUnavailable: [liveId: string]
   /** B 站弹幕攒批下发（对端：main/bilibili/danmaku-session.ts，仅发给订阅了该房间的窗口） */
   danmakuBatch: [batch: DanmakuBatch]

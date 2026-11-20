@@ -9,7 +9,7 @@ import { debugLog } from '@renderer/utils/debug'
  *
  * ⚠️ **打口袋业务接口（pocketapi.48.cn、h5.48.cn）的请求不以此 UA 发出**：
  * 主进程 netRequest 转发前会把 UA / appInfo / pa 整组换成 App 身份（清单见
- * `main/net-request-headers.ts`）——站点身份在业务接口上直接 403。
+ * `main/net/net-request-headers.ts`）——站点身份在业务接口上直接 403。
  *
  * 固定为常量、不再可配置；主进程为贺卡取头像二进制时复用同一份。
  */
@@ -22,7 +22,7 @@ type NetRequestPayload = Parameters<typeof window.mainAPI.netRequest>[0]
  *
  * 状态码必须一路带到调用方的重试判断里：429 是「该停」而不是「该重试」，
  * 旧实现把非 2xx 当网络故障，会在限流窗口里再连打 3 次。
- * 主进程收到 429 已按 Retry-After 让整域冷却（main/net-rate-limit.ts），这里只管不重试。
+ * 主进程收到 429 已按 Retry-After 让整域冷却（main/net/net-rate-limit.ts），这里只管不重试。
  */
 export class HttpError extends Error {
   readonly status: number
@@ -61,7 +61,7 @@ async function tracedNetRequest(payload: NetRequestPayload): Promise<string> {
  * 发送 POST 请求。
  *
  * 所有网络请求都绕道主进程（★ 跨进程：preload → main/ipc/register-system-ipc.ts 的 'netRequest'），
- * 原因有二：渲染层受同源策略限制，且主进程侧有域名白名单（main/allowed-hosts.ts）。
+ * 原因有二：渲染层受同源策略限制，且主进程侧有域名白名单（main/net/allowed-hosts.ts）。
  *
  * 主进程以 utf-8 字符串回包（可能不是合法 JSON，由 apis.request 统一解析），
  * 故返回 Promise<string> 而非对象。

@@ -282,7 +282,7 @@ async function requestOnce<T>(url: string, data: object, headers: Record<string,
   catch (e: any) {
     if (e instanceof HttpError) {
       // 429 是「该停」而不是「该重试」：服务端限流窗口已生效，再打只会把窗口拖长。
-      // 主进程已按 Retry-After 让整域冷却（main/net-rate-limit.ts）
+      // 主进程已按 Retry-After 让整域冷却（main/net/net-rate-limit.ts）
       if (e.status === 429)
         return { ok: false, message: '请求过于频繁，请稍后再试', retryable: false, cause: e }
       // 5xx / 408 才是瞬时故障；其余 4xx 是请求本身的问题，重试没有意义

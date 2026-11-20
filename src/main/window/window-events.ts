@@ -4,7 +4,7 @@
  * ⚠️ 用 sendIpc 而非 broadcastIpc：最大化状态是每个窗口各自的，广播会串窗。
  */
 import type { BrowserWindow } from 'electron'
-import { sendIpc } from './ipc/send'
+import { sendIpc } from '../ipc/send'
 
 /** 把该窗口的最大化 / 还原变化推给它自己的渲染进程 */
 export function wireWindowMaximizeEvents(win: BrowserWindow): void {

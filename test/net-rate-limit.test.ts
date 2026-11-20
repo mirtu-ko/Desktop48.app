@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
- * 渲染层 netRequest 的出口闸门（main/net-rate-limit.ts）。
+ * 渲染层 netRequest 的出口闸门（main/net/net-rate-limit.ts）。
  *
  * 白名单管「能打谁」，这里管「打多快」。闸门全在模块级状态里，
  * 每个用例重新 import 一份，避免令牌/队列跨用例累积。
  */
 async function loadModule() {
   vi.resetModules()
-  return import('../src/main/net-rate-limit')
+  return import('../src/main/net/net-rate-limit')
 }
 
 beforeEach(() => {

@@ -2,6 +2,7 @@ import http from 'node:http'
 import { debug, error, log } from './logger'
 import { createFlvStreamProcess } from './stream'
 import { createStreamIdleGuard, STREAM_IDLE_TIMEOUT_MS } from './stream-idle-guard'
+import { parseStreamRequestPath } from './stream-request-path'
 
 let _serverPort = 8080
 export const serverPort = () => _serverPort
@@ -73,8 +74,13 @@ const server = http.createServer((req, res) => {
     return
   }
 
-  const requestUrl = new URL(req.url || '/', 'http://localhost')
-  const requestPath = decodeURIComponent(requestUrl.pathname)
+  const requestPath = parseStreamRequestPath(req.url)
+  if (requestPath === null) {
+    res.writeHead(400)
+    res.end('Bad request path')
+    return
+  }
+
   const liveMatch = requestPath.match(liveFlvPathRegex)
 
   if (!liveMatch) {

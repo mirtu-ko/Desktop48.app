@@ -147,9 +147,11 @@ async function handleTask(payload: TaskPayload, kind: TaskKind) {
   const config = taskConfigs[kind]
   const exists = config.list.value.find(item => item.liveId === payload.liveId)
   if (exists) {
-    if (exists.status === 'running') {
-      debugLog('tasks', kind, payload.liveId, '任务已在运行，忽略本次发起')
-      ElMessage({ message: config.runningMessage, type: 'warning' })
+    // starting 也算进行中：启动要经多次 IPC 往返（录制还先拉一次详情），
+    // 这段窗口内的重复点击若走下面的「重启」分支，会拉起第二个写同一文件的 ffmpeg
+    if (exists.status !== 'finished') {
+      debugLog('tasks', kind, payload.liveId, `任务状态为 ${exists.status}，忽略本次发起`)
+      ElMessage({ message: exists.status === 'starting' ? '任务正在启动，请稍候' : config.runningMessage, type: 'warning' })
       return
     }
     // 任务已结束：按最新参数重启（覆盖原文件）

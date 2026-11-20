@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { DENSITY_BREAKPOINT, resolveDensity } from '../src/common/density'
 import { FLOAT_BAR_HEIGHT, FLOAT_BAR_HEIGHT_MIN } from '../src/common/float-window'
-import { computeWindowBounds, WINDOW_MAX_ASPECT } from '../src/main/window-bounds'
+import { computeWindowBounds, WINDOW_MAX_ASPECT } from '../src/main/window/window-bounds'
 import { applyDensity } from '../src/renderer/src/utils/apply-density'
 
 // 密度轴只有一处判据、一个写入口；宽度轴另立断点表，两轴不改写对方的量。

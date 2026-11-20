@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
-import { isAllowedStreamUrl } from './allowed-hosts'
 import { Database } from './database'
 import { resolveFfmpegBinary } from './ffmpeg/ffmpeg-process'
 import { assertLocalServerAvailable, serverHost, serverPort } from './http-server'
 import { debug, error, log } from './logger'
+import { isAllowedStreamUrl } from './net/allowed-hosts'
 
 // 直播播放只在这里维护“会话”和“活跃转流进程”的状态。
 // IPC 负责注册直播地址，HTTP 端点真正触发 FFmpeg 拉流并输出 HTTP-FLV。

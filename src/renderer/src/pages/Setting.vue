@@ -170,7 +170,7 @@ async function handleChooseFfmpegDir() {
     ElMessage.error('设置 FFmpeg 目录失败，请重试')
 }
 
-// 网络诊断：对核心服务域名逐一探测连通性（主进程对端 main/net-diagnose.ts）。
+// 网络诊断：对核心服务域名逐一探测连通性（主进程对端 main/net/net-diagnose.ts）。
 // 用于接口报错（如 HTTP 403）时让用户自助定位：不可达 / 被拒 / 服务端异常一目了然。
 const diagnosing = ref(false)
 const diagnoseResults = ref<NetDiagnoseItem[]>([])
