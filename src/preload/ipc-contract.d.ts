@@ -471,6 +471,11 @@ export interface PocketUnreadBatch {
   total: number
   /** 已判定「房间关闭中」的旧留言频道；渲染层据此标记左列并恢复按日期查看 */
   closedChannels: PocketRoomChannel[]
+  /**
+   * 检测轮最近一次 lastMsgList（各频道最新一条消息，含关闭房间的存档频道）：
+   * 房间页左列预览镜像用，替代页面自有的 60s 预览轮询。可选 = 旧快照回落为空。
+   */
+  previews?: PocketRoomLastMessage[]
 }
 
 // ===== 类型化 IPC 通道映射 =====
@@ -600,6 +605,11 @@ interface StaticIpcInvokeMap {
   pocketUnfollowMember: InvokeSpec<[userId: number], void>
   /** 解析成员的房间频道（口袋 App「房间」留言流用，非直播间弹幕）；未登录返回空频道，过期 reject */
   pocketGetRoomChannel: InvokeSpec<[userId: number], PocketRoomChannel>
+  /**
+   * 批量解析成员房间频道（房间页首灌）：命中主进程持久化缓存直接回，缺失才打 server/jump。
+   * 全部待解析成员失败才 reject；token 失效原样 reject。不做取关清理。
+   */
+  pocketGetRoomChannels: InvokeSpec<[userIds: number[]], Array<{ userId: number, channel: PocketRoomChannel }>>
   /**
    * 拉取当前账号在房间的发言权限（room/info 的 userFunction）：sendText=false = 禁止发言。
    * 未登录返回 null；小房间暗号未通过（status 2001）等失败 reject，调用方按「未知」处理。

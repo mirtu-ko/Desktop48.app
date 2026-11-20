@@ -250,6 +250,25 @@ async function setup(options: SetupOptions = {}) {
           throw new Error('频道解析失败')
         return { serverId: `srv-${userId}`, channelId: `ch-${userId}` }
       }),
+      // 批量频道解析（首灌）：镜像主进程语义——逐个记 channelFetched，全部失败才 throw
+      pocketGetRoomChannels: vi.fn(async (userIds: number[]) => {
+        const results: Array<{ userId: number, channel: { serverId: string, channelId: string } }> = []
+        let firstError: Error | null = null
+        let failed = 0
+        for (const userId of userIds) {
+          calls.channelFetched.push(userId)
+          if (roomMock.channelFail.has(userId)) {
+            failed++
+            firstError ??= new Error('频道解析失败')
+            results.push({ userId, channel: { serverId: '', channelId: '' } })
+            continue
+          }
+          results.push({ userId, channel: { serverId: `srv-${userId}`, channelId: `ch-${userId}` } })
+        }
+        if (userIds.length && failed === userIds.length)
+          throw firstError
+        return results
+      }),
       // 房间发言权限：默认未知（null = 不禁用输入）；roomPermissions 用于构造禁言房间
       pocketGetRoomPermissions: vi.fn(async (channelId: string) => {
         const error = options.roomPermissionErrors?.[channelId]
@@ -372,9 +391,10 @@ async function setup(options: SetupOptions = {}) {
     extra.stop()
   // 未读镜像也是模块级单例：清空后才建新实例，免得上个用例的未读影响本次排序
   const { markRoomRead, unreadCountOf, usePocketUnreadStore } = await import('@renderer/stores/pocket-unread')
-  const { unreadRooms, closedChannels } = usePocketUnreadStore()
+  const { unreadRooms, closedChannels, roomPreviews } = usePocketUnreadStore()
   unreadRooms.value = {}
   closedChannels.value = []
+  roomPreviews.value = new Map()
   // 关注 / 屏蔽名单 store 同样是模块级单例，且 ensureLoaded 只灌一次：显式重灌，
   // 还原成「进程刚起来」的状态（否则上个用例的屏蔽名单会漏到本次）
   const { useBlockedMembersStore, useFollowedMembersStore } = await import('@renderer/stores/member-flags')
@@ -402,6 +422,16 @@ async function setup(options: SetupOptions = {}) {
     /** 模拟主进程关闭频道快照广播（不点房间也能标记） */
     setClosedChannels: (channels: Array<{ serverId: string, channelId: string }>) => {
       closedChannels.value = channels
+    },
+    /** 模拟主进程检测轮的预览广播（pocketUnreadBatch.previews 镜像） */
+    setPreviews: (items: Array<{ channelId: string, msgContent: string, msgTime?: number }>) => {
+      roomPreviews.value = new Map(items.map(item => [item.channelId, {
+        channelId: item.channelId,
+        starName: '',
+        msgContent: item.msgContent,
+        msgTime: item.msgTime ?? 0,
+        unreadCount: null,
+      }]))
     },
     /** 详情卡入口显隐用的那条解析路径（与临时房间共用缓存） */
     resolveRoomChannel: resolveMemberRoomChannel,
@@ -816,11 +846,14 @@ describe('use-pocket-rooms / 房间遍历与过滤', () => {
 
   it('频道为空（接口成功但无 serverId/channelId）按无房间过滤', async () => {
     const { api } = await setup({ pocketIds: [10001, 10002] })
-    const channelMock = vi.mocked(window.mainAPI.pocketGetRoomChannel)
-    channelMock.mockImplementationOnce(async () => ({ serverId: '', channelId: '' }))
+    const channelsMock = vi.mocked(window.mainAPI.pocketGetRoomChannels)
+    channelsMock.mockImplementationOnce(async () => [
+      { userId: 10001, channel: { serverId: '', channelId: '' } },
+      { userId: 10002, channel: { serverId: 'srv-10002', channelId: 'ch-10002' } },
+    ])
     await api.load()
 
-    // 10001 的第一次解析返回空频道（mockImplementationOnce 按调用序命中）
+    // 批量回包里 10001 的频道为空（mockImplementationOnce 按调用序命中）
     expect(api.rooms.value).toHaveLength(1)
     expect(api.hiddenRoomCount.value).toBe(1)
   })
@@ -846,8 +879,7 @@ describe('use-pocket-rooms / 房间遍历与过滤', () => {
 
   it('token 失效：整页报错「登录已过期」', async () => {
     const { api } = await setup({ pocketIds: [10001] })
-    const channelMock = vi.mocked(window.mainAPI.pocketGetRoomChannel)
-    channelMock.mockImplementationOnce(async () => {
+    vi.mocked(window.mainAPI.pocketGetRoomChannels).mockImplementationOnce(async () => {
       throw new Error('登录已过期，请重新登录口袋48账号')
     })
     await api.load()
@@ -913,7 +945,8 @@ describe('use-pocket-rooms / 左列最新消息预览', () => {
   })
 
   // 回归：本页曾只剩「重进页面 / 手动刷新」两条预览更新路径（60s 定时器在抽出共享直播
-  // store 时被一并删掉），表现为未读角标照涨、左列文案不动。定时器现在驱动这个函数。
+  // store 时被一并删掉），表现为未读角标照涨、左列文案不动。60s 预览定时器现已彻底删除：
+  // 日常更新走主进程检测轮的镜像广播（applyMirrorPreviews），本函数由手动刷新（refreshRoomStatus）驱动。
   it('refreshRoomPreviews：刷新非选中房间的预览，且不碰直播刷新态、不重复拉直播', async () => {
     const { api, calls } = await setup({
       pocketIds: [10001, 10002],
@@ -2741,13 +2774,14 @@ describe('use-pocket-rooms / 关闭房间的判定与轮询', () => {
 
 describe('use-pocket-rooms / 关闭频道快照（首屏）', () => {
   it('不点房间：快照到达即写入关闭标记、存档频道与告别语预览', async () => {
-    const { api, setClosedChannels } = await setup({
+    const { api, setClosedChannels, setPreviews } = await setup({
       pocketIds: [10001],
       lastMessages: [{ channelId: 'ch-archive', serverId: 'srv-10001', msgContent: '不说再见👋拜，后会有期！' }],
     })
     await api.load()
     expect(api.isRoomClosedOf(10001)).toBe(false)
 
+    setPreviews([{ channelId: 'ch-archive', msgContent: '不说再见👋拜，后会有期！' }])
     setClosedChannels([{ ...ARCHIVE }])
     await nextTick()
     await vi.advanceTimersByTimeAsync(0)
@@ -2853,7 +2887,7 @@ describe('use-pocket-rooms / 关闭频道快照（首屏）', () => {
   })
 
   it('同一 server 有多个已关闭频道：取快照首个（最新大房间），不被后一条覆盖', async () => {
-    const { api, setClosedChannels } = await setup({
+    const { api, setClosedChannels, setPreviews } = await setup({
       pocketIds: [10001],
       lastMessages: [
         { channelId: 'ch-new', serverId: 'srv-10001', msgContent: '我好啦！' },
@@ -2862,6 +2896,7 @@ describe('use-pocket-rooms / 关闭频道快照（首屏）', () => {
     })
     await api.load()
     // 主进程快照按 lastMsgList 顺序（最新在前）排好；旧频道排在后面
+    setPreviews([{ channelId: 'ch-new', msgContent: '我好啦！' }, { channelId: 'ch-old', msgContent: '[图片消息]' }])
     setClosedChannels([
       { serverId: 'srv-10001', channelId: 'ch-new' },
       { serverId: 'srv-10001', channelId: 'ch-old' },
@@ -2871,5 +2906,57 @@ describe('use-pocket-rooms / 关闭频道快照（首屏）', () => {
 
     expect(api.archiveChannelOf(10001)).toEqual({ serverId: 'srv-10001', channelId: 'ch-new' })
     expect(api.rooms.value[0].preview).toBe('我好啦！')
+  })
+})
+
+describe('use-pocket-rooms / 预览镜像广播（替代 60s 轮询）', () => {
+  it('广播更新非选中房间预览：不再发批量预览请求', async () => {
+    const { api, setPreviews } = await setup({
+      pocketIds: [10001, 10002],
+      lastMessages: [
+        { channelId: 'ch-10001', msgContent: '旧预览', msgTime: 100 },
+        { channelId: 'ch-10002', msgContent: '旧预览', msgTime: 100 },
+      ],
+    })
+    await api.load()
+
+    setPreviews([
+      { channelId: 'ch-10001', msgContent: '旧预览', msgTime: 100 },
+      { channelId: 'ch-10002', msgContent: '广播来的新消息' },
+    ])
+    await nextTick()
+
+    expect(api.rooms.value.find(room => room.userId === 10002)?.preview).toBe('广播来的新消息')
+    // 首灌一次批量请求之后不再有第二次：预览更新全部来自镜像
+    expect(window.mainAPI.pocketGetRoomLastMessages).toHaveBeenCalledTimes(1)
+  })
+
+  it('选中房间（大房间视图）不被镜像回写：预览归 5s 消息轮询', async () => {
+    const { api, setPreviews } = await setup({
+      pocketIds: [10001],
+      roomPages: { 'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, 'first')] } } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+
+    setPreviews([{ channelId: 'ch-10001', msgContent: '滞后的快照' }])
+    await nextTick()
+
+    // 镜像不回写选中房间：预览保持广播前的值（进房 replace 不写预览，仍是首灌后的空串），
+    // 「滞后的快照」不得出现在左列——选中房间的预览归 5s 消息轮询即时维护
+    expect(api.rooms.value[0].preview).toBe('')
+  })
+
+  it('关闭房间：镜像按存档频道回填告别语（closedChannels watch 不再打批量接口）', async () => {
+    const { api, setClosedChannels, setPreviews } = await setup({ pocketIds: [10001] })
+    await api.load()
+
+    setPreviews([{ channelId: 'ch-archive', msgContent: '后会有期' }])
+    setClosedChannels([{ serverId: 'srv-10001', channelId: 'ch-archive' }])
+    await nextTick()
+
+    expect(api.rooms.value[0].preview).toBe('后会有期')
+    // closedChannels watch 不再打批量接口：全程只有 load 首灌那一次批量请求
+    expect(window.mainAPI.pocketGetRoomLastMessages).toHaveBeenCalledTimes(1)
   })
 })

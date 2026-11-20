@@ -187,6 +187,7 @@ const api = {
   pocketFollowMember: (userId: number) => invokeIpc('pocketFollowMember', userId),
   pocketUnfollowMember: (userId: number) => invokeIpc('pocketUnfollowMember', userId),
   pocketGetRoomChannel: (userId: number) => invokeIpc('pocketGetRoomChannel', userId),
+  pocketGetRoomChannels: (userIds: number[]) => invokeIpc('pocketGetRoomChannels', userIds),
   pocketGetRoomPermissions: (channelId: string) => invokeIpc('pocketGetRoomPermissions', channelId),
   pocketGetRoomMessages: (channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all') =>
     invokeIpc('pocketGetRoomMessages', channelId, serverId, nextTime, scope),

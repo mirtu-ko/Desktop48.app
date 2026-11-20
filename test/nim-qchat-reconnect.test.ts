@@ -1,5 +1,5 @@
 import type { WirePacket } from '../src/main/pocket48/nim-common'
-import type { QChatSession, SessionOptions } from '../src/main/pocket48/nim-qchat'
+import type { NimSession, SessionOptions } from '../src/main/pocket48/nim-session'
 import { Buffer } from 'node:buffer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encodeVarint } from '../src/main/pocket48/nim-common'
@@ -36,10 +36,11 @@ function packet(serviceId: number, commandId: number, body: WirePacket['body'] =
 }
 
 /** 假会话：记录请求；simulateClose 走真实的 onClose 分支触发重连 */
-class FakeSession implements QChatSession {
+class FakeSession implements NimSession {
   connected = false
   destroyed = false
   requests: Array<{ serviceId: number, commandId: number }> = []
+  sent: Array<{ serviceId: number, commandId: number, body: Buffer }> = []
 
   constructor(private options: SessionOptions, private events: string[]) {}
 
@@ -53,6 +54,10 @@ class FakeSession implements QChatSession {
     if (serviceId === ADDRESS_REQUEST.serviceId && commandId === ADDRESS_REQUEST.commandId)
       return packet(serviceId, commandId, stringArrayBody(['127.0.0.1:9939']))
     return packet(serviceId, commandId)
+  }
+
+  send(serviceId: number, commandId: number, body: Buffer): void {
+    this.sent.push({ serviceId, commandId, body })
   }
 
   destroy(): void {

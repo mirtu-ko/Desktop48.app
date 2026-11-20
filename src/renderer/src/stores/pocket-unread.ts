@@ -3,10 +3,11 @@
  *
  * 唯一真相在主进程（main/pocket48/pocket-unread.ts）：主进程 60s 轮询检测，
  * 未读变化经 pocketUnreadBatch 全量广播下来，本 store 只做镜像；
+ * 检测轮的 lastMsgList 预览也随同一份广播下来（roomPreviews），房间页左列预览据此更新；
  * markRead 走 invoke 由主进程推进已读水位后广播回来（本地乐观清零只为避免数字闪现，
  * 广播到达后值一致）。页面没开 / 窗口最小化时未读照常积累，与页面自身轮询无关。
  */
-import type { PocketRoomChannel, PocketRoomReadMark, PocketUnreadBatch, PocketUnreadRoomState } from '@preload/ipc-contract'
+import type { PocketRoomChannel, PocketRoomLastMessage, PocketRoomReadMark, PocketUnreadBatch, PocketUnreadRoomState } from '@preload/ipc-contract'
 import { computed, ref } from 'vue'
 
 /** 未读快照镜像：userId（字符串键）→ 单房间状态 */
@@ -20,9 +21,18 @@ const totalUnread = computed(() =>
 /** 已判定「房间关闭中」的旧留言频道（主进程快照镜像）；房间页据此标记左列并恢复按日期查看 */
 const closedChannels = ref<PocketRoomChannel[]>([])
 
+/**
+ * 各频道最新一条消息镜像（channelId 为键）：主进程检测轮（60s）随快照广播，
+ * 房间页左列预览据此更新（替代页面自有轮询）。每次广播整 Map 换新以触发 watch。
+ */
+const roomPreviews = ref<Map<string, PocketRoomLastMessage>>(new Map())
+
 function applyState(state: PocketUnreadBatch): void {
   unreadRooms.value = state.rooms
   closedChannels.value = state.closedChannels ?? []
+  roomPreviews.value = new Map(
+    (state.previews ?? []).filter(item => item.channelId).map(item => [item.channelId, item]),
+  )
 }
 
 let installed = false
@@ -98,7 +108,7 @@ export async function markRoomRead(userId: number, target: 'room' | 'small' = 'r
 
 /** 未读 store：房间未读的全局镜像与已读标记（模块级单例） */
 export function usePocketUnreadStore() {
-  return { unreadRooms, closedChannels, totalUnread, unreadCountOf, unreadChannelOf, latestUnreadTimeOf, markRoomRead }
+  return { unreadRooms, closedChannels, roomPreviews, totalUnread, unreadCountOf, unreadChannelOf, latestUnreadTimeOf, markRoomRead }
 }
 
 export default usePocketUnreadStore
