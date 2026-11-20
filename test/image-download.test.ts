@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { sanitizeFileName } from '../src/common/image-download'
-import { buildAlbumFileName, isSmallImage, pickFileName } from '../src/renderer/src/utils/image-download'
+import { buildAlbumFileName, isSmallImage, pickDownloadFileName, pickFileName } from '../src/renderer/src/utils/image-download'
 
 describe('sanitizeFileName（主进程与渲染层共用的非法字符定义）', () => {
   it('非法字符一律替换，两端空白裁掉（Windows）', () => {
@@ -66,6 +66,35 @@ describe('isSmallImage', () => {
   it('尺寸未知时不误判为小图', () => {
     expect(isSmallImage(0, 0)).toBe(false)
     expect(isSmallImage(undefined, 1200)).toBe(false)
+  })
+})
+
+describe('pickDownloadFileName（单图下载取名）', () => {
+  const timestamp = new Date(2026, 9, 22, 21, 55, 44).getTime()
+
+  it('有昵称与时间时生成与批量下载同构的可读名（无序号）', () => {
+    expect(pickDownloadFileName(
+      'https://source.48.cn/mediasource/opaque-id?x-oss-process=resize',
+      'image/jpeg',
+      { nickname: '粉丝/甲', timestamp },
+    )).toBe('粉丝_甲_20261022-215544.jpg')
+  })
+
+  it('只有昵称时用当前时间补齐', () => {
+    expect(pickDownloadFileName('https://source.48.cn/a.webp', '', { nickname: '用户' }))
+      .toMatch(/^用户_\d{8}-\d{6}\.webp$/)
+  })
+
+  it('没有元数据时沿用 URL 原名，不凭空造时间戳名', () => {
+    expect(pickDownloadFileName('https://source.48.cn/xxx/abc.jpg', 'image/jpeg'))
+      .toBe('abc.jpg')
+    expect(pickDownloadFileName('https://source.48.cn/xxx/abc.jpg', 'image/jpeg', {}))
+      .toBe('abc.jpg')
+  })
+
+  it('元数据无效（空昵称 / 0 时间）时回退 URL 原名', () => {
+    expect(pickDownloadFileName('https://source.48.cn/abc.png', '', { nickname: '  ', timestamp: 0 }))
+      .toBe('abc.png')
   })
 })
 

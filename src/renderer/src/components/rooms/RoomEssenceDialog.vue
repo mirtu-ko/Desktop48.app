@@ -44,6 +44,13 @@ const essenceImageUrls = computed(() =>
     .filter(item => item.imageUrl)
     .map(item => item.imageUrl as string),
 )
+
+/** 与 essenceImageUrls 严格同序：预览左右切换后按 activeIndex 取当前这张的命名元数据 */
+const essenceImageMetas = computed(() =>
+  props.messages
+    .filter(item => item.imageUrl)
+    .map(item => ({ nickname: item.nick, timestamp: item.msgTime })),
+)
 </script>
 
 <template>
@@ -103,6 +110,7 @@ const essenceImageUrls = computed(() =>
                 :image-height="item.imageHeight"
                 :preview-list="essenceImageUrls"
                 :initial-index="essenceImageUrls.indexOf(item.imageUrl)"
+                :name-metas="essenceImageMetas"
                 :max-width="300"
                 :max-height="260"
               />

@@ -4,21 +4,24 @@
  * 走渲染层 fetch：主进程 netRequest 按 utf8 解码会毁掉二进制；依赖图片域的 CORS 头，
  * 若接口改发到不带 CORS 头的域会 reject，由调用方提示。代价：无「另存为」对话框。
  */
-import { pickFileName } from '@common/image-download'
+import type { ImageNameMeta } from '@common/image-download'
+import { pickDownloadFileName } from '@common/image-download'
 
-export { buildAlbumFileName, isSmallImage, pickFileExtension, pickFileName, SMALL_IMAGE_MIN_SIDE } from '@common/image-download'
+export { buildAlbumFileName, isSmallImage, pickDownloadFileName, pickFileExtension, pickFileName, SMALL_IMAGE_MIN_SIDE } from '@common/image-download'
+export type { ImageNameMeta } from '@common/image-download'
 
 interface FetchedImage {
   blob: Blob
   name: string
 }
 
-async function fetchImage(url: string): Promise<FetchedImage> {
+async function fetchImage(url: string, meta?: ImageNameMeta): Promise<FetchedImage> {
   const res = await fetch(url)
   if (!res.ok)
     throw new Error(`HTTP ${res.status}`)
   const blob = await res.blob()
-  return { blob, name: pickFileName(url, blob.type || res.headers.get('content-type') || '') }
+  const contentType = blob.type || res.headers.get('content-type') || ''
+  return { blob, name: pickDownloadFileName(url, contentType, meta) }
 }
 
 /** Chromium 异步读取 blob，同步回收 URL 会让下载静默失败 */
@@ -39,10 +42,11 @@ export function saveBlobImage(blob: Blob, filename: string): void {
 
 /**
  * 下载一张远程图片，返回最终落盘用的文件名（供提示文案）。
+ * 传入 meta（昵称 / 消息时间）时按可读名落盘，否则保留 URL 原名。
  * 失败（网络、CORS、非 2xx）一律 reject，由调用方决定怎么告诉用户。
  */
-export async function downloadImage(url: string): Promise<string> {
-  const image = await fetchImage(url)
+export async function downloadImage(url: string, meta?: ImageNameMeta): Promise<string> {
+  const image = await fetchImage(url, meta)
   saveBlobImage(image.blob, image.name)
   return image.name
 }

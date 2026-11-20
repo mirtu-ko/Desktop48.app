@@ -103,6 +103,11 @@ const filterToggleTitle = computed(() =>
 
 const urls = computed(() => visiblePhotos.value.map(photo => photo.url))
 
+/** 与 urls 严格同序：单图下载按当前张的昵称 / 消息时间命名，与批量下载同风格 */
+const nameMetas = computed(() =>
+  visiblePhotos.value.map(photo => ({ nickname: photo.nickname, timestamp: photo.msgTime })),
+)
+
 /**
  * 图片 id → 预览列表下标（对齐 Rooms.vue 的 messageImageIndex 模式）。
  * 不能按 URL 反查：同一张图被转发两次时 indexOf 恒指第一张；
@@ -264,6 +269,7 @@ async function downloadAll() {
             :reset="reset"
             :urls="urls"
             :active-index="activeIndex"
+            :name-metas="nameMetas"
             from="album"
           />
         </template>

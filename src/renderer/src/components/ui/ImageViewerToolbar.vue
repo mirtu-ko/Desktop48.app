@@ -2,6 +2,7 @@
 // 全屏预览工具条：在 Element Plus 默认那排（缩放 / 原始尺寸 / 旋转）末尾追加「下载」。
 // 必须整排自己画：EP 的默认按钮是 `#toolbar` 插槽的 fallback，一旦提供插槽就全量替换。
 // 尺寸、配色、分隔线由 .el-image-viewer__actions__inner 的宿主样式提供，这里不重复定义。
+import type { ImageNameMeta } from '@renderer/utils/image-download'
 import { Download, RefreshLeft, RefreshRight, ScaleToOriginal, ZoomIn, ZoomOut } from '@element-plus/icons-vue'
 import { debugLog } from '@renderer/utils/debug'
 import { downloadImage } from '@renderer/utils/image-download'
@@ -17,6 +18,11 @@ const props = defineProps<{
   /** 与 viewer 的 urlList 同序，下载时按 activeIndex 取当前这张 */
   urls: string[]
   activeIndex: number
+  /**
+   * 与 urls 同序的命名元数据（昵称 / 消息时间）：有值时按可读名落盘，
+   * 缺失项沿用 URL 原名。必须同序，viewer 左右切换后按 activeIndex 取当前张。
+   */
+  nameMetas?: Array<ImageNameMeta | undefined>
   /** 来源，仅用于埋点区分入口 */
   from: 'room' | 'essence' | 'date' | 'album'
 }>()
@@ -29,7 +35,7 @@ async function onDownload() {
     return
   downloading.value = true
   try {
-    const name = await downloadImage(url)
+    const name = await downloadImage(url, props.nameMetas?.[props.activeIndex])
     trackEvent('image:save', { from: props.from, result: 'ok' })
     ElMessage.success(`已下载到下载目录：${name}`)
   }

@@ -4,6 +4,7 @@
 // 按原始尺寸的宽高占位、工具条插槽。差异收敛为两个 prop：maxWidth（宽度上限）与 lazy（长列表懒加载）。
 // 尺寸/底色/窄窗上限等外观由使用处的 class 提供（如 .msg-image / .essence-image），本组件只持占位宽高。
 // imageWidth/imageHeight 来自房间消息归一层；其它模块的图片源没有该字段，缺省时按 4:3 兜底框占位。
+import type { ImageNameMeta } from '@renderer/utils/image-download'
 import type { CSSProperties } from 'vue'
 import ImageViewerToolbar from '@renderer/components/ui/ImageViewerToolbar.vue'
 import { trackEvent } from '@renderer/utils/umami'
@@ -28,6 +29,11 @@ const props = withDefaults(defineProps<{
   previewList?: string[]
   /** 打开 viewer 时定位到的下标（src 在 previewList 中的位置）；缺省 0 */
   initialIndex?: number
+  /**
+   * 与预览范围（previewList，单图时为 [src]）同序的下载命名元数据；
+   * 缺省或某项缺失时，下载沿用 URL 原名。
+   */
+  nameMetas?: Array<ImageNameMeta | undefined>
   /** 来源，仅用于埋点区分入口；缺省按消息流计 */
   from?: 'room' | 'essence' | 'date' | 'album'
 }>(), {
@@ -87,6 +93,7 @@ const boxStyle = computed<CSSProperties>(() => {
         :reset="reset"
         :urls="viewerUrls"
         :active-index="activeIndex"
+        :name-metas="nameMetas"
         :from="from"
       />
     </template>

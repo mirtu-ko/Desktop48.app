@@ -65,6 +65,13 @@ const fallbackDate = computed(() => {
 })
 const imageUrls = computed(() => messages.value.filter(item => item.imageUrl).map(item => item.imageUrl))
 
+/** 与 imageUrls 严格同序：预览左右切换后按 activeIndex 取当前这张的命名元数据 */
+const imageMetas = computed(() =>
+  messages.value
+    .filter(item => item.imageUrl)
+    .map(item => ({ nickname: item.nick, timestamp: item.msgTime })),
+)
+
 /** 空态主文案：没有可查频道时优先说明原因，避免「请选择日期」把用户引到无效操作上 */
 const emptyText = computed(() => {
   if (loading.value)
@@ -337,6 +344,7 @@ watch(
                 :image-height="item.imageHeight"
                 :preview-list="imageUrls"
                 :initial-index="imageUrls.indexOf(item.imageUrl)"
+                :name-metas="imageMetas"
                 :max-width="260"
                 :max-height="220"
               />
