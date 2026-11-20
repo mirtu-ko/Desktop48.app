@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { centerWindow, computeWindowBounds, fitWindowToWorkArea, WIDE_SCREEN_MAX_SCALE, WINDOW_EDGE_GAP, WINDOW_MAX_ASPECT, WINDOW_PREFERRED } from '../src/main/window-bounds'
+import { centerWindow, computeWindowBounds, fitWindowToWorkArea, WIDE_SCREEN_MAX_SCALE, WINDOW_EDGE_GAP, WINDOW_MAX_ASPECT, WINDOW_PREFERRED } from '../src/main/window/window-bounds'
 
 /** 大屏：期望尺寸原样使用，留白不影响 */
 const BIG = { width: 1920, height: 1160 }

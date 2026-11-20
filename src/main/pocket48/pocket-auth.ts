@@ -271,7 +271,7 @@ function pocketHeaders(token?: string, pa?: string, profileId?: PocketClientProf
  * 1. `main/ipc/register-system-ipc.ts` 的 `netRequest`——渲染层打 pocketapi 的读接口
  *    （直播 / 回放列表、直播详情）由它补头。服务端按客户端身份判定，站点身份（浏览器 UA、
  *    无 appInfo/pa）在境外线路直接 403（2026-10-17 实测），故必须换成 App 身份。
- * 2. `main/net-diagnose.ts` 的身份对照行——同一出口下换身份重探，差异即判定维度。
+ * 2. `main/net/net-diagnose.ts` 的身份对照行——同一出口下换身份重探，差异即判定维度。
  *
  * 读接口不带 token 即可（实测 App 身份 200），故默认不发登录凭证；
  * 这些头只用于发请求，不会随诊断结果或 IPC 回传渲染层。

@@ -129,7 +129,7 @@ const api = {
   recordTaskRemove: (liveId: string) => invokeIpc('recordTaskRemove', liveId),
 
   // ===== 独立播放窗口 =====
-  // 对端：main/ipc/register-float-window-ipc.ts，窗口生命周期在 main/float-window.ts
+  // 对端：main/ipc/register-float-window-ipc.ts，窗口生命周期在 main/window/float-window.ts
   openFloatWindow: (kind: FloatPlayerKind, payload: FloatPlayerPayload) => invokeIpc('openFloatWindow', kind, payload),
   floatPlayerGetPayload: (kind: FloatPlayerKind, liveId: string) => invokeIpc('floatPlayerGetPayload', kind, liveId),
   floatWindowFitAspect: (aspect: number) => invokeIpc('floatWindowFitAspect', aspect),
@@ -187,6 +187,7 @@ const api = {
   pocketFollowMember: (userId: number) => invokeIpc('pocketFollowMember', userId),
   pocketUnfollowMember: (userId: number) => invokeIpc('pocketUnfollowMember', userId),
   pocketGetRoomChannel: (userId: number) => invokeIpc('pocketGetRoomChannel', userId),
+  pocketGetRoomChannels: (userIds: number[]) => invokeIpc('pocketGetRoomChannels', userIds),
   pocketGetRoomPermissions: (channelId: string) => invokeIpc('pocketGetRoomPermissions', channelId),
   pocketGetRoomMessages: (channelId: string, serverId: string, nextTime?: number, scope?: 'member' | 'all') =>
     invokeIpc('pocketGetRoomMessages', channelId, serverId, nextTime, scope),

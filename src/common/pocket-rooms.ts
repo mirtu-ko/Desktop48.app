@@ -12,3 +12,42 @@ export const ROOM_MESSAGE_LIMIT = 50
  * 剔除它，主进程计数同样不把它算成成员的房间新消息（否则角标会多出看不见的未读）。
  */
 export const OFFICIAL_POCKET_USER_ID = '121569667'
+
+/** 关注来源：pocket = 来自口袋账号（拉取同步），local = 仅本地添加，both = 两边都有 */
+export type PocketRoomFollowSource = 'pocket' | 'local' | 'both'
+
+/**
+ * 关注名单唯一口径（主进程未读检测与渲染层房间页共用）：
+ * 口袋关注 ∪ 本地关注，去重后剔除屏蔽（屏蔽与关注正交，屏蔽优先）。
+ * 无效 id（NaN / 非正数）一并过滤。isBlocked 由调用方注入：
+ * 主进程传屏蔽 Set 的 has，渲染层传 store 的 isBlocked（各自负责先加载名单）。
+ */
+export function mergeFollowedIds(
+  pocketIds: number[],
+  localIds: number[],
+  isBlocked: (userId: number) => boolean,
+): { ids: number[], followSourceOf: Map<number, PocketRoomFollowSource> } {
+  const pocketIdSet = new Set<number>()
+  for (const id of pocketIds) {
+    const userId = Number(id)
+    if (Number.isFinite(userId) && userId > 0)
+      pocketIdSet.add(userId)
+  }
+  const localIdSet = new Set<number>()
+  for (const id of localIds) {
+    const userId = Number(id)
+    if (Number.isFinite(userId) && userId > 0)
+      localIdSet.add(userId)
+  }
+  const ids = new Set<number>()
+  const followSourceOf = new Map<number, PocketRoomFollowSource>()
+  for (const userId of [...pocketIdSet, ...localIdSet]) {
+    if (isBlocked(userId))
+      continue
+    ids.add(userId)
+    const inPocket = pocketIdSet.has(userId)
+    const inLocal = localIdSet.has(userId)
+    followSourceOf.set(userId, inPocket && inLocal ? 'both' : inPocket ? 'pocket' : 'local')
+  }
+  return { ids: [...ids], followSourceOf }
+}

@@ -1,6 +1,6 @@
 /**
  * 独立播放窗的渲染端入口：把页面意图转成一次 IPC 调用。
- * 窗口的创建 / 去重 / 聚焦 / 关闭全部由主进程（main/float-window.ts）持有，
+ * 窗口的创建 / 去重 / 聚焦 / 关闭全部由主进程（main/window/float-window.ts）持有，
  * 本 store 不持有可变状态；页面 API（openLive / openPlayback）保持不变。
  *
  * 开播前在这里做一次 FFmpeg 校验（见 use-live-guard）：直播播放依赖主进程 FFmpeg 转流，

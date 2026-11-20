@@ -15,11 +15,14 @@ export interface TaskChannelAdapter {
 
 /**
  * 任务状态。
- * - prepared：已创建、尚未启动成功
+ * - starting：启动请求已发出、尚未确认（startTask 的多次 IPC 往返都在此期间）
  * - running：主进程 ffmpeg 正在跑
  * - finished：已完成 / 被停止 / 出错（三者都终止任务，故共用一个状态）
+ *
+ * starting 与 running 必须分开：只有 starting 可以再次发起（见 stores/tasks 的 handleTask），
+ * 否则这段拉起窗口内的重复点击会启动第二个写同一文件的 ffmpeg。
  */
-export type TaskStatus = 'prepared' | 'running' | 'finished'
+export type TaskStatus = 'starting' | 'running' | 'finished'
 
 /**
  * 一个下载/录制任务的完整状态：**普通对象，没有任何方法**。
@@ -62,7 +65,7 @@ export function createTaskState(payload: TaskPayload): TaskState {
     filename: payload.filename,
     filePath: '',
     saveDirectory: '',
-    status: 'prepared',
+    status: 'starting',
     unsubscribers: [],
   }
 }
@@ -161,25 +164,38 @@ export async function startTask(
   logTag: string,
   onEnd?: TaskEndListener,
 ): Promise<void> {
-  // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts 的 'getConfig'
-  task.saveDirectory = await window.mainAPI.getConfig('downloadDirectory')
-  if (!task.saveDirectory)
-    throw new Error('保存目录为空')
-
-  // ★ 跨进程：路径拼接交给主进程，避免渲染层猜测平台分隔符（对端 main/ipc/register-system-ipc.ts）
-  task.filePath = await window.mainAPI.pathJoin(task.saveDirectory, task.filename)
-
-  // 先注册监听器，避免 ffmpeg 启动后立即发送的事件丢失
-  subscribeProgress(task, channels, logTag)
-  subscribeEndEvents(task, channels, logTag, onEnd)
+  // 同步置 starting（下方全是异步往返）：这段时间若状态还是「可发起」，
+  // 重复触发会再走一遍启动，拉起两个写同一文件的 ffmpeg
+  task.status = 'starting'
 
   try {
+    // ★ 跨进程：preload/index.ts → main/ipc/register-database-ipc.ts 的 'getConfig'
+    task.saveDirectory = await window.mainAPI.getConfig('downloadDirectory')
+    if (!task.saveDirectory)
+      throw new Error('保存目录为空')
+
+    // ★ 跨进程：路径拼接交给主进程，避免渲染层猜测平台分隔符（对端 main/ipc/register-system-ipc.ts）
+    task.filePath = await window.mainAPI.pathJoin(task.saveDirectory, task.filename)
+
+    // 先注册监听器，避免 ffmpeg 启动后立即发送的事件丢失
+    subscribeProgress(task, channels, logTag)
+    subscribeEndEvents(task, channels, logTag, onEnd)
+
     debugLog('tasks', `[${logTag}] task start:`, task.url, task.filename, task.liveId)
     await channels.start(task.url, task.filename, task.liveId)
+
+    // 启动期间被结束：此时主进程才挂好 stop 监听，补发一次（stopTask 不会提前下发）。
+    // as 是因为 TS 仍按上面那句 'starting' 赋值收窄，而状态在 await 期间可能已被 stopTask 改写
+    if ((task.status as TaskStatus) === 'finished') {
+      channels.stop(task.liveId)
+      return
+    }
     task.status = 'running'
   }
   catch (error) {
     cleanupListeners(task)
+    // 启动失败也是终态：留在 starting 会让同 liveId 永远无法再次发起
+    task.status = 'finished'
     console.error(`[${logTag}] task start failed`, error)
     throw error
   }
@@ -211,9 +227,11 @@ export function restoreTask(
 
 /** 停止任务：已是终态则什么都不做 */
 export function stopTask(task: TaskState, channels: TaskChannelAdapter, logTag: string): void {
-  if (task.status !== 'running')
+  if (task.status === 'finished')
     return
-  channels.stop(task.liveId)
+  // 启动中主进程还没挂上 stop 监听，此刻下发会丢；由 startTask 在 start 返回后补发
+  if (task.status === 'running')
+    channels.stop(task.liveId)
   task.status = 'finished'
   cleanupListeners(task)
   debugLog('tasks', `[${logTag}] task stop`)

@@ -12,7 +12,10 @@
  * - 房间频道：im/server/jump（starId=成员 userId）解析出 team server + channel，
  *   即口袋 App「房间」tab 里该成员的留言频道。解析不出频道 = 成员没有房间
  *   （含房间已关闭/被回收：同样解析不出频道，一并过滤，进不了列表）；
- * - 房间预览：im/team/classic/last/message/get 批量拉各频道最后一条消息（一次请求）；
+ *   首灌走批量 IPC（主进程缓存），懒解析/临时房间仍单发；
+ * - 房间预览：日常更新来自主进程检测轮广播（pocketUnreadBatch.previews 镜像，见
+ *   stores/pocket-unread 的 roomPreviews），首灌与手动刷新仍一次性批量拉取
+ *   （im/team/classic/last/message/get，一次请求）；
  * - 房间消息：im/team/message/list/{homeowner,all} HTTP 拉取（msgTime 倒序，nextTime 游标翻历史），
  *   对应「只看房主 / 全部消息」两档范围；homeowner 会混入官方系统账号，已过滤。
  *   实时消息走 QChat 长连接（另一套 NIM 协议，见 main/pocket48/nim-qchat.ts）：
@@ -25,10 +28,11 @@
  * 失败一律静默降级：频道解析/消息拉取失败只影响右侧消息区，左侧列表照常可用；
  * 唯一例外是 token 失效（重新登录才能恢复），直接上抛让整页报错。
  */
+import type { PocketRoomFollowSource } from '@common/pocket-rooms'
 import type { PocketRoomBatch, PocketRoomChannel, PocketRoomLastMessage, PocketRoomPermission, PocketRoomQChatStatus, PocketRoomQuestion, PocketRoomReplyTarget } from '@preload/ipc-contract'
 import type { LiveListItem } from '@renderer/services/api-types'
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
-import { OFFICIAL_POCKET_USER_ID } from '@common/pocket-rooms'
+import { mergeFollowedIds, OFFICIAL_POCKET_USER_ID } from '@common/pocket-rooms'
 import { resolveMemberRoomChannel } from '@renderer/services/room-channel'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useLiveStatusStore } from '@renderer/stores/live-status'
@@ -42,12 +46,8 @@ import { isPlaceholderText, liveShareTitle, normalizePocketRoomMessage, normaliz
 
 import { isRoomClosed } from '@renderer/utils/room-status'
 import { isSmallRoomUnlocked, markSmallRoomUnlocked } from '@renderer/utils/small-room-unlock'
-import Tools from '@renderer/utils/tools'
 import { useIntervalFn } from '@vueuse/core'
 import { computed, getCurrentInstance, onActivated, onDeactivated, onScopeDispose, ref, watch } from 'vue'
-
-/** 关注来源：pocket = 来自口袋账号（拉取同步），local = 仅本地添加，both = 两边都有 */
-export type PocketRoomFollowSource = 'pocket' | 'local' | 'both'
 
 /** 左侧房间条目 */
 export interface PocketRoom {
@@ -56,7 +56,7 @@ export interface PocketRoom {
   avatar: string
   teamName: string
   teamColor: string
-  /** 房间频道（加载时遍历解析，选中/轮询直接用） */
+  /** 房间频道（首灌批量解析，选中/轮询直接用） */
   serverId: string
   channelId: string
   /** 左列预览：频道最新一条消息文案；空串 = 暂无消息 */
@@ -91,14 +91,6 @@ const SEND_COOLDOWN_MS = 1500
 
 /** 上翻连续零新增多少次才认定到头：单次零新增可能是边界/重发同页的假信号 */
 const HISTORY_MISS_LIMIT = 2
-/**
- * 左列预览刷新间隔：一次请求覆盖全部房间，与主进程未读检测（60s）同频，
- * 让「预览文案」和「未读角标」同一节奏到位。只驱动预览，不另建直播轮询
- * （共享 store 已覆盖直播状态）。
- */
-const ROOM_PREVIEW_POLL_MS = 60_000
-/** 房间频道/状态遍历的并发上限：关注几十人时不打爆接口，也不至于让首灌等太久 */
-const ROOM_RESOLVE_CONCURRENCY = 5
 
 /** 右侧消息范围：member = 只看房主发言（homeowner 接口），all = 全部用户发言（all 接口） */
 export type PocketRoomMessageScope = 'member' | 'all'
@@ -106,28 +98,9 @@ export type PocketRoomMessageScope = 'member' | 'all'
 /** 右侧消息视图：room = 大房间留言流（默认），small = 小房间（暗号频道问答流） */
 export type PocketRoomViewMode = 'room' | 'small'
 
-/** token 失效不属于「房间不可用」：上抛让整页报错，引导重新登录 */
-function isAuthExpired(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('登录已过期')
-}
-
 /** 频道已不存在：房主更新/删除小房间后旧频道即此结局（服务端原文，与主进程同一判据） */
 function isChannelMissing(error: unknown): boolean {
   return error instanceof Error && error.message.includes('频道不存在')
-}
-
-/** 有界并发映射：最多 limit 个在途，结果保序；任一任务抛错即整体拒绝 */
-async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = Array.from<R>({ length: items.length })
-  let cursor = 0
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor++
-      results[index] = await task(items[index])
-    }
-  })
-  await Promise.all(workers)
-  return results
 }
 
 export function usePocketRooms() {
@@ -136,7 +109,7 @@ export function usePocketRooms() {
   const { blockedMembers, ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
   const { findMemberByUserId, findOfficialAccount } = useMemberDirectoryStore()
   /** 未读镜像（主进程唯一真相）：左列排序与角标共用同一判据，见 sortRooms */
-  const { unreadRooms, closedChannels } = usePocketUnreadStore()
+  const { unreadRooms, closedChannels, roomPreviews } = usePocketUnreadStore()
   /** 置顶名单（本地展示偏好）：参与 sortRooms，变化即重排 */
   const { pinnedIds, isRoomPinned } = useRoomPinsStore()
   const {
@@ -374,29 +347,7 @@ export function usePocketRooms() {
       loadPocketFollowedIds(),
       refreshFollowedMembers().then(() => followedMembers.value),
     ])
-    const pocketIdSet = new Set<number>()
-    for (const id of pocketIds) {
-      const userId = Tools.normalizeUserId(id)
-      if (Number.isFinite(userId) && userId > 0)
-        pocketIdSet.add(userId)
-    }
-    const localIdSet = new Set<number>()
-    for (const entry of localEntries) {
-      const userId = Tools.normalizeUserId(entry.userId)
-      if (Number.isFinite(userId) && userId > 0)
-        localIdSet.add(userId)
-    }
-    const ids = new Set<number>()
-    const followSourceOf = new Map<number, PocketRoomFollowSource>()
-    for (const userId of [...pocketIdSet, ...localIdSet]) {
-      if (isBlocked(userId))
-        continue
-      ids.add(userId)
-      const inPocket = pocketIdSet.has(userId)
-      const inLocal = localIdSet.has(userId)
-      followSourceOf.set(userId, inPocket && inLocal ? 'both' : inPocket ? 'pocket' : 'local')
-    }
-    return { ids: [...ids], followSourceOf }
+    return mergeFollowedIds(pocketIds, localEntries.map(entry => entry.userId), isBlocked)
   }
 
   /** 共享 store 的全站直播索引；force=true 用于手动刷新并绕过 120s 新鲜缓存。 */
@@ -556,62 +507,56 @@ export function usePocketRooms() {
   }
 
   /**
+   * 主进程检测轮的预览镜像 → 左列文案（替代页面自有的 60s 预览轮询）。
+   * 所有权与 refreshRoomPreviews 完全一致：选中且在大房间视图的未关闭房间归
+   * 5s 消息轮询即时维护，镜像不回写；关闭房间取存档频道（applyRoomPreview 内部判定）。
+   */
+  function applyMirrorPreviews(): void {
+    if (!rooms.value.length)
+      return
+    for (const room of rooms.value) {
+      if (room.userId === selectedUserId.value && viewMode.value === 'room' && !isRoomClosedOf(room.userId))
+        continue
+      applyRoomPreview(room, roomPreviews.value)
+    }
+  }
+
+  watch(roomPreviews, () => applyMirrorPreviews())
+
+  /**
    * 关闭集合变化：已关闭的房间要沉到列表下方，左列还要显示关闭前那条告别语
-   * （load 拿的是 jump 频道的，恒空）。关闭集合很少变，代价是一次批量请求。
+   * （load 拿的是 jump 频道的，恒空）。关闭集合很少变，预览随同一份广播的镜像回填，
+   * 不再另打批量接口。
    */
   watch(
     () => closedChannels.value.map(item => `${item.serverId}:${item.channelId}`).join(','),
     () => {
       if (rooms.value.length)
         sortRooms(rooms.value)
-      void refreshRoomPreviews()
+      applyMirrorPreviews()
     },
   )
 
   /**
-   * 遍历解析全部关注成员的房间频道。
-   * - 解析失败/为空：成员没有房间（含房间已关闭）→ 过滤；
-   * - token 失效：上抛，整页报错。
-   * 返回可用房间与「解析异常」计数——全部异常时（接口故障而非真的都没房间）由调用方整页报错。
+   * 批量解析全部关注成员的房间频道：一次 IPC，主进程走持久化缓存（缺失才打 jump），
+   * 全部失败 / token 失效由主进程上抛 → load 整页报错。
+   * 解析为空（含失败占位）= 成员没有房间（含已关闭）→ 过滤，不进列表。
    *
    * 注：im/team/room/info 的 channelStatus 语义不明（实测正常房间也非 0），
    * 不能作关闭判据；关闭的房间在 jump 阶段就解析不出频道，已在此过滤。
    */
-  async function resolveRooms(entries: PocketRoom[]): Promise<{
-    resolved: Array<{ entry: PocketRoom, channel: PocketRoomChannel }>
-    resolveErrorCount: number
-    firstResolveError: unknown
-  }> {
-    let resolveErrorCount = 0
-    let firstResolveError: unknown = null
-
-    const withChannel = await mapWithConcurrency(entries, ROOM_RESOLVE_CONCURRENCY, async (entry) => {
-      let channel: PocketRoomChannel
-      try {
-        channel = await window.mainAPI.pocketGetRoomChannel(entry.userId)
-      }
-      catch (error) {
-        if (isAuthExpired(error))
-          throw error
-        resolveErrorCount++
-        if (!firstResolveError)
-          firstResolveError = error
-        debugLog('pocket-rooms', `房间频道解析失败（${entry.nickname}），按无房间过滤`, error)
-        return null
-      }
-      if (!channel?.serverId || !channel?.channelId)
-        return null
-      return { entry, channel }
-    })
-
+  async function resolveRooms(entries: PocketRoom[]): Promise<Array<{ entry: PocketRoom, channel: PocketRoomChannel }>> {
+    const results = await window.mainAPI.pocketGetRoomChannels(entries.map(entry => entry.userId))
+    const channelByUser = new Map(results.map(item => [item.userId, item.channel]))
     const resolved: Array<{ entry: PocketRoom, channel: PocketRoomChannel }> = []
-    for (const item of withChannel) {
-      if (!item)
+    for (const entry of entries) {
+      const channel = channelByUser.get(entry.userId)
+      if (!channel?.serverId || !channel?.channelId)
         continue
-      channelCache.set(item.entry.userId, item.channel)
-      resolved.push(item)
+      channelCache.set(entry.userId, channel)
+      resolved.push({ entry, channel })
     }
-    return { resolved, resolveErrorCount, firstResolveError }
+    return resolved
   }
 
   /** 首灌：关注名单 + 成员详情 + 直播匹配 + 房间遍历（过滤无房间）+ 最新消息预览 */
@@ -665,14 +610,11 @@ export function usePocketRooms() {
       if (requestId !== loadRequestId)
         return
 
-      // 遍历解析房间：无房间（含已关闭）的成员直接过滤，不进列表
-      const { resolved, resolveErrorCount, firstResolveError } = await resolveRooms(entries)
+      // 批量解析房间：无房间（含已关闭）的成员直接过滤，不进列表；
+      // 全部解析异常时主进程上抛，走下面的 catch 整页报错
+      const resolved = await resolveRooms(entries)
       if (requestId !== loadRequestId)
         return
-      if (!resolved.length && entries.length && resolveErrorCount === entries.length) {
-        // 全部解析异常 = 接口故障，不是「真的都没房间」：报错重试而不是展示空列表
-        throw firstResolveError instanceof Error ? firstResolveError : new Error('房间频道解析失败')
-      }
       hiddenRoomCount.value = entries.length - resolved.length
 
       // 左列预览：一次批量请求拿全部频道最新一条消息（失败无预览，不阻断）
@@ -718,7 +660,7 @@ export function usePocketRooms() {
    *
    * 预览的所有权按「来源」划分，不按时间戳比较 —— `lastMsgList` 实测拿不到真实 msgTime
    * （恒为 0，见 pa-sign.ts 的降级回包说明），时间守卫在这条链路上无从建立：
-   * - 非选中房间：只由本函数维护，回包文案与本地不同即采纳；
+   * - 非选中房间：日常由主进程预览镜像（applyMirrorPreviews）维护，本函数供手动刷新/重新激活时一次性拉取，回包文案与本地不同即采纳；
    * - 选中房间：由 5s 消息轮询即时维护（见 mergeMessages 的 append 分支），本函数不覆盖
    *   —— 批量接口有延迟，回写会把用户正看着的房间的预览退回上一条。判定条件与
    *   mergeMessages 一致（仅 viewMode === 'room' 时轮询才写大房间预览），否则用户停在
@@ -742,7 +684,8 @@ export function usePocketRooms() {
   /**
    * 刷新直播状态 + 左列最新消息预览，不重建列表（保留选中与消息流）。
    * force=false 供重新进入页面复用 120s 新鲜缓存；手动刷新传 true。
-   * 预览部分复用 refreshRoomPreviews，与定时轮询走同一条口径。
+   * 预览部分复用 refreshRoomPreviews：手动刷新与页面重新激活时的一次性拉取；
+   * 日常更新走主进程镜像广播（applyMirrorPreviews）。
    */
   async function refreshRoomStatus(force = true) {
     if (!pocketAuthState.value.loggedIn || !rooms.value.length)
@@ -1726,30 +1669,9 @@ export function usePocketRooms() {
     }
   }
 
-  /**
-   * 左列预览轮询：补上被抽走的那条 60s 定时器（见 ROOM_PREVIEW_POLL_MS 注解）。
-   * 只调 refreshRoomPreviews —— 不碰 liveRefreshing（否则刷新按钮每轮闪 loading），
-   * 也不重复建直播轮询（共享 store 已覆盖直播状态）。
-   */
-  const {
-    pause: pauseRoomPreviewPoll,
-    resume: resumeRoomPreviewPoll,
-    isActive: roomPreviewPolling,
-  } = useIntervalFn(() => void refreshRoomPreviews(), ROOM_PREVIEW_POLL_MS, { immediate: false })
-
-  /** 与共享直播轮询同一开关条件：页面可见 + 已登录 + 房间已加载 */
-  function syncRoomPreviewPolling(): void {
-    const shouldPoll = pageActive.value && pocketAuthState.value.loggedIn && rooms.value.length > 0
-    if (shouldPoll && !roomPreviewPolling.value)
-      resumeRoomPreviewPoll()
-    else if (!shouldPoll && roomPreviewPolling.value)
-      pauseRoomPreviewPoll()
-  }
-
-  // pageActive 由 onActivated / onDeactivated 维护，两个轮询共用这一份开关条件
+  // pageActive 由 onActivated / onDeactivated 维护，只剩共享直播轮询一个开关
   watch([pageActive, loggedIn, () => rooms.value.length], () => {
     syncLiveStatusPolling()
-    syncRoomPreviewPolling()
   }, { immediate: true })
 
   // onActivated/onDeactivated 仅在组件 setup 中有效：裸 effectScope（单测）直驱时跳过

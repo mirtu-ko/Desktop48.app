@@ -14,7 +14,11 @@ interface RoomState {
 }
 
 /** 假主进程：未读快照回取一次 + 记录 markRead 调用（本用例不推广播，只看乐观值） */
-async function setup(rooms: Record<string, RoomState>, closedChannels?: Array<{ serverId: string, channelId: string }>) {
+async function setup(
+  rooms: Record<string, RoomState>,
+  closedChannels?: Array<{ serverId: string, channelId: string }>,
+  previews?: Array<{ channelId: string, starName: string, msgContent: string, msgTime: number, unreadCount: number | null }>,
+) {
   vi.resetModules()
   const calls: Array<[number, string]> = []
   vi.stubGlobal('window', {
@@ -24,6 +28,7 @@ async function setup(rooms: Record<string, RoomState>, closedChannels?: Array<{ 
         rooms,
         total: 0,
         ...(closedChannels ? { closedChannels } : {}),
+        ...(previews ? { previews } : {}),
       })),
       // markRead 原样带回清零前的水位（分割线锚点），这里给固定值供断言
       pocketMarkRead: vi.fn(async (userId: number, target: string) => {
@@ -110,5 +115,26 @@ describe('pocket-unread store（未读镜像与已读标记）', () => {
 
     const legacy = await setup({ 1: { count: 5, bigCount: 5, smallCount: 0, latestTime: 100 } })
     expect(legacy.store.usePocketUnreadStore().closedChannels.value).toEqual([])
+  })
+})
+
+describe('pocket-unread store（预览镜像）', () => {
+  it('快照里的预览进入镜像（channelId 为键）；旧快照缺字段回落为空', async () => {
+    const withPreviews = await setup(
+      { 1: { count: 5, bigCount: 5, smallCount: 0, latestTime: 100 } },
+      undefined,
+      [{ channelId: 'c1', starName: '成员', msgContent: '正文', msgTime: 0, unreadCount: null }],
+    )
+    expect(withPreviews.store.usePocketUnreadStore().roomPreviews.value.get('c1')?.msgContent).toBe('正文')
+
+    const legacy = await setup({ 1: { count: 5, bigCount: 5, smallCount: 0, latestTime: 100 } })
+    expect(legacy.store.usePocketUnreadStore().roomPreviews.value.size).toBe(0)
+  })
+
+  it('广播整体换新 Map：同键新值可被 watch 观测', async () => {
+    const { store } = await setup({ 1: { count: 5, bigCount: 5, smallCount: 0, latestTime: 100 } })
+    const { roomPreviews } = store.usePocketUnreadStore()
+    roomPreviews.value = new Map([['c1', { channelId: 'c1', starName: '', msgContent: '旧', msgTime: 0, unreadCount: null }]])
+    expect(roomPreviews.value.get('c1')?.msgContent).toBe('旧')
   })
 })

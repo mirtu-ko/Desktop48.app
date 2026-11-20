@@ -23,12 +23,12 @@ export const POCKET_CLIENT_PROFILE_OPTIONS: readonly PocketClientProfileOption[]
   {
     id: 'pocket48',
     label: '口袋48',
-    hint: '登录身份：「口袋48」APP。手机端用「塞纳河48」时选它。',
+    hint: '登录身份：「口袋48」。48大概已不支持同时登录了，随意选吧~',
   },
   {
     id: 'seine48',
     label: '塞纳河48',
-    hint: '登录身份：「塞纳河48」。手机端用「口袋48」时选它, 两端可同时在线。',
+    hint: '登录身份：「塞纳河48」。48大概已不支持同时登录了，随意选吧~',
   },
 ]
 

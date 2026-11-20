@@ -3,15 +3,15 @@ import { Download } from '@element-plus/icons-vue'
 import useTasksStore from '@renderer/stores/tasks'
 import { computed } from 'vue'
 
-/** 右下角常驻下载入口：任务中心卡片的唯一入口，角标显示运行中的任务数 */
+/** 右下角常驻下载入口：任务中心卡片的唯一入口，角标显示进行中的任务数（含正在启动） */
 const emit = defineEmits<{ open: [] }>()
 
 const { downloadTasks, recordTasks } = useTasksStore()
 
 const runningCount = computed(
   () =>
-    downloadTasks.value.filter(task => task.status === 'running').length
-    + recordTasks.value.filter(task => task.status === 'running').length,
+    downloadTasks.value.filter(task => task.status !== 'finished').length
+    + recordTasks.value.filter(task => task.status !== 'finished').length,
 )
 </script>
 

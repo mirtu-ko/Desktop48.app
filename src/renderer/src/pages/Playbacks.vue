@@ -281,7 +281,7 @@ function onPlaybackClick(item: LiveListItemView) {
     // title 接口不保证下发，缺失时用主播名兜底（播放窗标题栏需要非空）
     title: item.title || item.userInfo.nickname,
     startTime: Number.parseInt(item.ctime),
-    // 列表项自带 liveType，建窗时即可判定电台（见 main/float-window.ts 的 openFloatWindow），
+    // 列表项自带 liveType，建窗时即可判定电台（见 main/window/float-window.ts 的 openFloatWindow），
     // 不必等详情接口回来
     liveType: item.liveType ?? 1,
   })

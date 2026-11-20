@@ -10,9 +10,9 @@ import { Buffer } from 'node:buffer'
 import { SITE_USER_AGENT } from '@common/android-device'
 import { ALL_MEMBER_SNAPSHOT_URL, ALL_MEMBER_URL, LIVE_LIST_URL } from '@common/pocket-api-urls'
 import { net } from 'electron'
-import { log } from './logger'
+import { log } from '../logger'
+import { getToken, pocketAppHeaders } from '../pocket48/pocket-auth'
 import { resolveSources } from './net-diagnose-chain'
-import { getToken, pocketAppHeaders } from './pocket48/pocket-auth'
 
 /** 单个探测结果（IPC 契约对端：preload/ipc-contract.d.ts）。 */
 export interface NetDiagnoseItem {

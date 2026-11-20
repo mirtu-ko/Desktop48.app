@@ -53,7 +53,7 @@ describe('站点请求 UA', () => {
 
   it('主进程与各渲染层出口都复用共享常量，不再内联 UA 字面量', () => {
     const consumers = [
-      'src/main/net-diagnose.ts',
+      'src/main/net/net-diagnose.ts',
       'src/main/ipc/register-system-ipc.ts',
       'src/renderer/src/services/request.ts',
     ]

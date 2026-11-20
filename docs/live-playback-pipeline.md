@@ -18,7 +18,7 @@ FFmpeg 为外部可执行程序，只能由主进程 spawn。该约束决定了�
 | 预加载桥 | `src/preload/index.ts` | 将主进程能力暴露为 `window.mainAPI.*`                |
 | 主进程   | `src/main`             | 本地 HTTP 服务、FFmpeg 进程管理、白名单/端口安全闸门 |
 
-主进程侧分工（改动前先看清）：`main/stream.ts` 只导出纯业务函数（`handleCreateLiveStream` / `handleStopLiveStream` / `cleanupStreamSessions` / `createFlvStreamProcess`），不直接调用 `ipcMain.handle`；`main/ipc/register-stream-ipc.ts` 是唯一接线处，经 `ipc/trace.ts` 的 `handleTraced` 包装注册，全部 invoke 通道由 `ipc/index.ts` 的 `registerAllIPC()` 统一挂载；`main/http-server.ts` 是本机回环 HTTP 服务（端口 8080–8090，被占则退避），播放器 GET `/live/:id.flv` 时才真正 spawn FFmpeg；`main/allowed-hosts.ts` 的 `isAllowedStreamUrl` 是白名单，任何交给 FFmpeg 的 URL 都必须先过它。
+主进程侧分工（改动前先看清）：`main/stream.ts` 只导出纯业务函数（`handleCreateLiveStream` / `handleStopLiveStream` / `cleanupStreamSessions` / `createFlvStreamProcess`），不直接调用 `ipcMain.handle`；`main/ipc/register-stream-ipc.ts` 是唯一接线处，经 `ipc/trace.ts` 的 `handleTraced` 包装注册，全部 invoke 通道由 `ipc/index.ts` 的 `registerAllIPC()` 统一挂载；`main/http-server.ts` 是本机回环 HTTP 服务（端口 8080–8090，被占则退避），播放器 GET `/live/:id.flv` 时才真正 spawn FFmpeg；`main/net/allowed-hosts.ts` 的 `isAllowedStreamUrl` 是白名单，任何交给 FFmpeg 的 URL 都必须先过它。
 
 ## 1. 调用链路总览
 
@@ -33,7 +33,7 @@ FFmpeg 为外部可执行程序，只能由主进程 spawn。该约束决定了�
    │  checkLiveReady()（use-live-guard）：FFmpeg 未就绪则提示并跳设置页，不开必然空转的窗口
    ▼ openPlayer('live', payload) → window.mainAPI.openFloatWindow(kind, payload)
    ===== 进程边界 =====
-[main/float-window.ts] openFloatWindow
+[main/window/float-window.ts] openFloatWindow
    ├─ Map<`${kind}:${liveId}`> 去重：已存在 → restore/show/focus 复用
    └─ 否则 new BrowserWindow（frame:false / alwaysOnTop）→ `#/float?kind=..&liveId=..`
    ▼
@@ -76,7 +76,7 @@ mpegts 解析 FLV → MSE → <video> → oncanplay → 加载态解除
 
 | 关注点   | 实现                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 窗口创建 | `main/float-window.ts` 的 `openFloatWindow`，`frame:false` + `alwaysOnTop`；以 `kind:liveId` 去重，重复点击只聚焦不新建；标题栏整条 `-webkit-app-region: drag` 交给系统，无自研拖拽代码                                                                                                                                                                                                                               |
+| 窗口创建 | `main/window/float-window.ts` 的 `openFloatWindow`，`frame:false` + `alwaysOnTop`；以 `kind:liveId` 去重，重复点击只聚焦不新建；标题栏整条 `-webkit-app-region: drag` 交给系统，无自研拖拽代码                                                                                                                                                                                                                        |
 | 页面复用 | 与主窗口共用 `index.html`；`renderer/src/main.ts` 按 hash 是否以 `FLOAT_WINDOW_HASH_PATH` 开头分流                                                                                                                                                                                                                                                                                                                    |
 | 载荷传递 | hash 只带 `kind` + `liveId`，全量载荷由主进程持有、播放窗经 `floatPlayerGetPayload` 回取，窗口 reload 后可自愈                                                                                                                                                                                                                                                                                                        |
 | 缩放     | 系统边框自由缩放；`@aspect` 到达时按工作区整体重算（非只保宽度），保持右上角不动。**首次定形无条件执行**：建窗用 9:16 兜底，此时「实际尺寸 ≠ 请求值」是常态（DPI、WM 取整），据此判定用户缩放过会让首次定形被整个跳过，横屏视频停在竖屏窄窗；定形落定后才尊重用户缩放（判据 `decideAutoFit`）                                                                                                                         |

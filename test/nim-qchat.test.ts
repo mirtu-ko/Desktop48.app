@@ -8,11 +8,11 @@ import {
   decodeQChatStringArray,
   FATAL_AUTH_CODES,
   isFatalAuthError,
-  isRequestResponse,
   normalizeQChatMessage,
   readSubscribeFailures,
   sdkHumanVersion,
 } from '../src/main/pocket48/nim-qchat'
+import { isRequestResponse } from '../src/main/pocket48/nim-session'
 
 /**
  * QChat 协议层纯函数：NIM 登录属性表（2/2，含终端类型）、发送属性表（24/10）、

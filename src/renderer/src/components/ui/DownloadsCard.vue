@@ -19,8 +19,10 @@ const groups = computed(() => [
 const activeKind = ref<TaskKind>('download')
 const activeGroup = computed(() => groups.value.find(group => group.kind === activeKind.value) ?? groups.value[0])
 
-const runningCount = computed(() => groups.value.reduce((sum, group) => sum + group.tasks.filter(task => task.status === 'running').length, 0))
-const finishedCount = computed(() => groups.value.reduce((sum, group) => sum + group.tasks.filter(task => task.status !== 'running').length, 0))
+// starting（正在启动）也是进行中：此时卡片若按「已完成」渲染，用户会看到「移除」入口，
+// 移除后启动完成的任务就成了没有卡片的孤儿 ffmpeg
+const runningCount = computed(() => groups.value.reduce((sum, group) => sum + group.tasks.filter(task => task.status !== 'finished').length, 0))
+const finishedCount = computed(() => groups.value.reduce((sum, group) => sum + group.tasks.filter(task => task.status === 'finished').length, 0))
 
 function onVisibilityChange(value: boolean) {
   if (!value)
@@ -103,7 +105,7 @@ function onVisibilityChange(value: boolean) {
             >
               <span
                 class="task-icon"
-                :class="{ 'is-running': task.status === 'running' }"
+                :class="{ 'is-running': task.status !== 'finished' }"
               >
                 <el-icon><component :is="activeGroup.icon" /></el-icon>
               </span>
@@ -131,7 +133,7 @@ function onVisibilityChange(value: boolean) {
               </div>
 
               <el-tag
-                v-if="task.status === 'running'"
+                v-if="task.status !== 'finished'"
                 type="primary"
                 size="small"
                 round
@@ -140,7 +142,7 @@ function onVisibilityChange(value: boolean) {
                 <el-icon class="is-loading">
                   <Loading />
                 </el-icon>
-                <span>运行中</span>
+                <span>{{ task.status === 'starting' ? '启动中' : '运行中' }}</span>
               </el-tag>
               <el-tag
                 v-else
@@ -155,7 +157,7 @@ function onVisibilityChange(value: boolean) {
 
               <div class="task-actions">
                 <el-button
-                  v-if="task.status === 'running'"
+                  v-if="task.status !== 'finished'"
                   type="danger"
                   size="small"
                   round

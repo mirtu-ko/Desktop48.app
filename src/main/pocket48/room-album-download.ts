@@ -5,10 +5,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { buildAlbumFileName, isSmallImage } from '@common/image-download'
 import { app, dialog, nativeImage, net } from 'electron'
-import { isAllowedUrl } from '../allowed-hosts'
 import { sendIpc } from '../ipc/send'
 import { handleTraced } from '../ipc/trace'
 import { log, warn } from '../logger'
+import { isAllowedUrl } from '../net/allowed-hosts'
 
 /** 单张图片上限与请求超时：防止异常响应无限占内存 / 卡住整批任务 */
 const MAX_IMAGE_BYTES = 40 * 1024 * 1024

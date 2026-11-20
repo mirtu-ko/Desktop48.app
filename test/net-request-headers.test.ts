@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { mergeAppIdentity, needsAppIdentity } from '../src/main/net-request-headers'
+import { mergeAppIdentity, needsAppIdentity } from '../src/main/net/net-request-headers'
 
 /**
  * 主进程 netRequest 的身份收口：哪些域名报 App 身份、覆盖时谁优先。
  *
- * 背景见 src/main/net-request-headers.ts——境外线路下站点身份打 pocketapi 恒 403，
+ * 背景见 src/main/net/net-request-headers.ts——境外线路下站点身份打 pocketapi 恒 403，
  * 只有 App 身份（UA + appInfo + pa）才被服务端认同；纯 CDN / 静态资源则刻意不报。
  */
 describe('netRequest 身份收口', () => {
