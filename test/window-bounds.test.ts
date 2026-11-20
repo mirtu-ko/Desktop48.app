@@ -65,7 +65,7 @@ describe('computeWindowBounds', () => {
     })
   })
 
-  it('宽屏按比例放大，1920 及以下不受影响', () => {
+  it('高度不足基准时沿用旧收敛规则，1920 及以下不受影响', () => {
     // 阈值 2154（1400 / 0.65）：低于它时比例值不如基准大，窗口与旧版逐像素一致
     expect(computeWindowBounds({ width: 1920, height: 1040 })).toEqual(WINDOW_PREFERRED)
     expect(computeWindowBounds({ width: 1680, height: 1050 })).toEqual(WINDOW_PREFERRED)
@@ -79,17 +79,45 @@ describe('computeWindowBounds', () => {
     expect(computeWindowBounds({ width: 2560, height: 1346 }).width).toBe(1664)
   })
 
-  it('4K@100% 上宽高按同一倍率放大，封顶在基准的 1.3 倍', () => {
+  it('4K@100% 上两轴等比放大，封顶在 1.2 倍（1680×1080）', () => {
     const bounds = computeWindowBounds({ width: 3840, height: 2055 })
     expect(bounds).toEqual({
-      width: Math.round(WINDOW_PREFERRED.width * WIDE_SCREEN_MAX_SCALE),
-      height: Math.round(WINDOW_PREFERRED.height * WIDE_SCREEN_MAX_SCALE),
+      width: 1680,
+      height: 1080,
       minWidth: WINDOW_PREFERRED.minWidth,
       minHeight: WINDOW_PREFERRED.minHeight,
     })
     // 宽高共用倍率，所以大屏放大不会把窗口拉扁
     expect(Math.round(bounds.width / bounds.height * 100) / 100)
       .toBe(Math.round(WINDOW_PREFERRED.width / WINDOW_PREFERRED.height * 100) / 100)
+  })
+
+  it('1440 高的大屏由高度轴决定倍率，窗口等比放大', () => {
+    const expected = {
+      width: 1456,
+      height: 936,
+      minWidth: WINDOW_PREFERRED.minWidth,
+      minHeight: WINDOW_PREFERRED.minHeight,
+    }
+    expect(computeWindowBounds({ width: 2560, height: 1440 })).toEqual(expected)
+    expect(computeWindowBounds({ width: 3440, height: 1440 })).toEqual(expected)
+  })
+
+  it('大屏放大区域窗口长宽比恒为基准比例', () => {
+    const areas = [
+      { width: 2560, height: 1440 },
+      { width: 2560, height: 2055 },
+      { width: 2880, height: 1800 },
+      { width: 3440, height: 1440 },
+      { width: 3840, height: 2160 },
+      { width: 5120, height: 2880 },
+    ]
+    for (const area of areas) {
+      const bounds = computeWindowBounds(area)
+      // 宽高共用同一倍率，取整造成的偏差不超过 0.001
+      expect(Math.abs(bounds.width / bounds.height - WINDOW_PREFERRED.width / WINDOW_PREFERRED.height))
+        .toBeLessThan(0.001)
+    }
   })
 
   it('放大倍率封顶后不再随工作区变宽，但区间内单调', () => {

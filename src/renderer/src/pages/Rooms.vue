@@ -1448,6 +1448,13 @@ const messageImageUrls = computed(() =>
     .map(message => message.imageUrl as string),
 )
 
+/** 与 messageImageUrls 严格同序：预览左右切换后按 activeIndex 取当前这张的命名元数据 */
+const messageImageMetas = computed(() =>
+  messages.value
+    .filter(message => message.imageUrl)
+    .map(message => ({ nickname: message.nick, timestamp: message.msgTime })),
+)
+
 /**
  * 消息 id → 在预览列表中的下标。
  * 不能按 URL 反查：同一条图片被转发两次时 indexOf 恒指第一张，点第二张会从第一张开始看。
@@ -2007,6 +2014,7 @@ onMounted(() => {
                             :image-height="message.imageHeight"
                             :preview-list="messageImageUrls"
                             :initial-index="messageImageIndex.get(message.id) ?? 0"
+                            :name-metas="messageImageMetas"
                             lazy
                             @load="onMediaLoad"
                             @error="onMediaLoad"
