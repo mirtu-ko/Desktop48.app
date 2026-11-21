@@ -121,6 +121,35 @@ describe('nim-session / CommonlinkSession 线上字节', () => {
     expect(socketHolder.current!.writes).toHaveLength(0)
   })
 
+  it('登录后每 15s 发一次心跳（1/2 空包，serial 从 2 起）', async () => {
+    vi.useFakeTimers()
+    try {
+      session = makeSession()
+      await login(session)
+      const socket = socketHolder.current!
+      expect(socket.writes).toHaveLength(2) // 握手明文 + 登录
+
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(socket.writes).toHaveLength(3)
+
+      // 心跳与登录包共用同一条 RC4 加密流：先消费登录包再解心跳
+      const clientDecryptor = new Rc4Stream(KEY)
+      decodePacket(clientDecryptor.apply(socket.writes[1]))
+      const heartbeat = decodePacket(clientDecryptor.apply(socket.writes[2]))
+      expect([heartbeat.serviceId, heartbeat.commandId, heartbeat.serial]).toEqual([1, 2, 2])
+      expect(heartbeat.body).toHaveLength(0)
+
+      // 下一拍继续发（间隔未停），serial 递增
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(socket.writes).toHaveLength(4)
+      const next = decodePacket(clientDecryptor.apply(socket.writes[3]))
+      expect([next.serviceId, next.commandId, next.serial]).toEqual([1, 2, 3])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('登录被拒：reject 带 label 与结果码（聊天室沿用后文案为「聊天室 登录失败（417）」）', async () => {
     session = makeSession()
     const socket = socketHolder.current!

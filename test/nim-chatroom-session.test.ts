@@ -152,6 +152,27 @@ describe('nim-chatroom / 会话消费', () => {
     expect(events.filter(item => item === 'message:u3:重连后的消息')).toHaveLength(1)
   })
 
+  it('迟到的旧会话 onClose 被忽略：新会话已建立，旧连接的回调不触发掉线/重连', async () => {
+    const client = createClient()
+    await client.connect()
+    expect(sessions).toHaveLength(1)
+
+    // 旧会话断开 → 退避后重建，当前会话换成新的
+    sessions[0].simulateClose()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(sessions).toHaveLength(2)
+    expect(client.connected).toBe(true)
+    events.length = 0
+
+    // 旧会话的关闭迟到了（例如已被 destroy 才回调）：只认当前会话，必须静默忽略
+    sessions[0].simulateClose()
+    await vi.advanceTimersByTimeAsync(120_000)
+
+    expect(events).toEqual([])
+    expect(sessions).toHaveLength(2)
+    expect(client.connected).toBe(true)
+  })
+
   it('初连失败是终态：connect 拒绝，不内部重试（重连壳只服务已进房）', async () => {
     const client = createClient(true)
     await expect(client.connect()).rejects.toThrow('聊天室 登录失败')
