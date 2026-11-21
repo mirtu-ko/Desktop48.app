@@ -2,6 +2,22 @@
 
 A cross-platform desktop application for Pocket48（口袋48）.
 
+## 📥 Download
+
+Get the latest build from the official download page — it detects your OS and CPU and points at the right package:
+
+**➡️ [48.v2ing.com](https://48.v2ing.com/)**
+
+| Platform              | Package                                                  |
+| --------------------- | -------------------------------------------------------- |
+| macOS (Apple Silicon) | [arm64](https://48.v2ing.com/download/mac-arm64)         |
+| macOS (Intel)         | [x64](https://48.v2ing.com/download/mac-x64)             |
+| Windows (x64)         | [installer](https://48.v2ing.com/download/windows-x64)   |
+| Linux (AppImage)      | [AppImage](https://48.v2ing.com/download/linux-appimage) |
+| Linux (deb)           | [deb](https://48.v2ing.com/download/linux-deb)           |
+
+Installers are served from our own mirror for faster access in mainland China; the same artifacts are also published on [GitHub Releases](https://github.com/mirtu-ko/Desktop48.app/releases) as a fallback.
+
 ## 📌 Attribution
 
 This project is based on the original Vue 2 project [desktop48](https://github.com/Jarvay/desktop48) by [@Jarvay](https://github.com/Jarvay), rebuilt and upgraded to Vue 3.
