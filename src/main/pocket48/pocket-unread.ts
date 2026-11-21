@@ -30,7 +30,8 @@ import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
  * 检测轮里绝不推进——否则未读会退化成「本轮增量」，无人阅读时角标自己消失。
  *
  * 持久化（userData/pocket48-unread.json，原子写 + 坏档回退复用 SafeJSONFileSync）：
- * 频道解析结果（server/jump，开销最大的一段）随水位/未读快照一并落盘，重启不重解析、不丢未读。
+ * 频道解析结果（server/jump，开销最大的一段）随水位/未读快照一并落盘，重启不重解析、不丢未读；
+ * 有效频道也不会永久复用——检测轮按 CHANNEL_RECHECK_TTL 定期复核归属（成员换房自愈）。
  * token 失效 / 网络异常：本轮静默跳过、registry 冻结（未读不丢），恢复后下一轮续跑；
  * 未登录（凭证文件不存在）：清空未读与账号相关水位/计数并广播，重登按首见重新锚定。
  */
@@ -75,6 +76,10 @@ const CHANNEL_FAIL_LIMIT = 3
  * 触发锚只在预览键变化时推进，频道停更后它就冻住了——未读会永久挂在旧计数上。
  */
 const STALE_UNREAD_PROBE_MS = 30 * 60 * 1000
+/** 有效频道的归属复核间隔：换房后零未读的成员只能靠它自愈（stale 补探只覆盖有未读的频道） */
+const CHANNEL_RECHECK_TTL = 60 * 60 * 1000
+/** 每轮最多复核的频道数：与探测名额同型，保证单轮接口预算有界 */
+const CHANNEL_RECHECK_PER_TICK = 2
 
 /** 单个房间的未读快照 */
 interface UnreadRoomState {
@@ -282,7 +287,7 @@ function publish(): void {
   setTrayUnread(trayRooms(state))
 }
 
-/** 需要补解析的成员：无缓存，或空占位（无房间 / 上次解析失败）已过 TTL；正常频道终身复用 */
+/** 需要补解析的成员：无缓存，或空占位（无房间 / 上次解析失败）已过 TTL；有效频道由检测轮按 CHANNEL_RECHECK_TTL 复核归属 */
 function missingChannelIds(userIds: number[]): number[] {
   const data = store()
   const now = Date.now()
@@ -332,7 +337,8 @@ async function resolveMissingChannels(missing: number[]): Promise<{ failed: numb
 
 /**
  * 确保关注成员的房间频道都已解析（server/jump，需登录）。
- * 只解析缺失 / 无房间占位过期的条目，正常频道一次解析终身复用；
+ * 只解析缺失 / 无房间占位过期的条目，有效频道不必每轮重解析（其归属由检测轮按
+ * CHANNEL_RECHECK_TTL 定期复核）；
  * 返回是否有结构变化（调用方据此决定是否落盘）。
  */
 
@@ -721,9 +727,9 @@ function invalidateBigChannel(userId: number): void {
  * 用实时解析结果校正大房间频道缓存。
  *
  * `server/jump` 才是权威，缓存只为省掉每轮重解析。成员换房 / 房间重建后 channelId 会变，
- * 而缓存对非空频道终身复用——旧频道还能读到历史消息，探测不会失败，未读就一直算在它头上
- * （角标挂着旧计数，房间里却是新频道的空页）。两个调用方：渲染层进房解析频道（IPC），
- * 以及检测轮的补探（见 tick）——后者保证用户不点房间也能自愈。
+ * 而缓存对非空频道只在 CHANNEL_RECHECK_TTL 内复用——旧频道还能读到历史消息，探测不会失败，
+ * 未读就一直算在它头上（角标挂着旧计数，房间里却是新频道的空页）。两个调用方：渲染层进房解析频道
+ * （IPC），以及检测轮的定期复核与补探（见 tick）——后者保证用户不点房间也能自愈。
  * 解析回空 = 房间已关闭，同样按失效处理（未读再也读不到对应内容）。
  */
 export function reconcileRoomChannel(
@@ -1063,14 +1069,42 @@ async function tick(): Promise<void> {
     // 补探本就是低频路径（多数轮次 0~1 个频道），一次 jump 换掉永久错挂的角标很划算。
     // 必须排在 probe 之后：probe 会把旧频道重新写成「有未读」，校验晚一步才清得干净。
     await Promise.all(staleChannels.map(async (channelId) => {
-      const ownerId = Number(channelOwner.get(channelId))
-      if (!ownerId)
+      const ownerKey = channelOwner.get(channelId)
+      if (!ownerKey)
         return
+      const before = data.channels[ownerKey]
       try {
-        reconcileRoomChannel(ownerId, await getRoomChannel(ownerId))
+        reconcileRoomChannel(Number(ownerKey), await getRoomChannel(Number(ownerKey)))
       }
       catch (error) {
         debug('[pocket-unread] 补探频道归属校对失败（下一轮再试）', channelId, error)
+      }
+      // 补探已尝试校验归属：无变化 / 失败时 reconcile 不碰 resolvedAt，这里原地推后，
+      // 免得本轮定期复核再为该成员打一次 jump（换房/关闭时 reconcile 已写入新条目，跳过）
+      if (before && data.channels[ownerKey] === before) {
+        before.resolvedAt = Date.now()
+        dirty = true
+      }
+    }))
+
+    // 有效频道定期复核归属：成员换房后旧频道若没有未读，stale 补探永远轮不到它，缓存终生不校正。
+    // 每轮只复核最久未复核的几个，失败保留缓存并把 resolvedAt 顺延到 TTL 之后，不形成重试风暴。
+    const recheckBefore = Date.now() - CHANNEL_RECHECK_TTL
+    const rechecks = Object.entries(data.channels)
+      .filter(([, channel]) => !!channel.channelId && channel.resolvedAt <= recheckBefore)
+      .sort((a, b) => a[1].resolvedAt - b[1].resolvedAt)
+      .slice(0, CHANNEL_RECHECK_PER_TICK)
+    await Promise.all(rechecks.map(async ([userId, channel]) => {
+      try {
+        reconcileRoomChannel(Number(userId), await getRoomChannel(Number(userId)))
+      }
+      catch (error) {
+        debug('[pocket-unread] 频道归属定期复核失败（按 TTL 再试）', userId, error)
+      }
+      // 复核结果无变化时 reconcile 不会碰 resolvedAt：原地推后，避免同一批成员每轮重试
+      if (data.channels[userId] === channel) {
+        channel.resolvedAt = Date.now()
+        dirty = true
       }
     }))
 
@@ -1135,19 +1169,21 @@ export function getState(): PocketUnreadBatch {
  * 批量取成员房间频道（渲染层房间页首灌一次 IPC，替代逐成员 server/jump）：
  * 命中持久化缓存直接回，缺失/空占位过期的并发补解析并落盘。
  * 与检测轮共用 resolveMissingChannels，但**不做取关清理**（子集调用不得删他人缓存）。
- * 全部待解析成员都失败才上抛（接口故障 ≠ 真的都没房间）；token 失效原样上抛。
+ * 待解析全部失败**且**名单内没有任何有效频道才上抛（接口故障 ≠ 真的都没房间）；
+ * token 失效原样上抛。
  */
 export async function getRoomChannelsBatch(userIds: number[]): Promise<Array<{ userId: number, channel: PocketRoomChannel }>> {
   const ids = [...new Set(userIds.filter(id => Number.isFinite(id) && id > 0))]
+  const data = store()
   const missing = missingChannelIds(ids)
   if (missing.length) {
     const { failed, firstError, touched } = await resolveMissingChannels(missing)
     if (touched)
       persist()
-    if (failed === missing.length)
+    // 已缓存的有效频道不受本轮失败影响：名单内连一个有效频道都没有才算接口故障
+    if (failed === missing.length && !ids.some(id => !!data.channels[String(id)]?.channelId))
       throw firstError instanceof Error ? firstError : new Error('房间频道解析失败')
   }
-  const data = store()
   return ids.map((userId) => {
     const entry = data.channels[String(userId)]
     return { userId, channel: { serverId: entry?.serverId ?? '', channelId: entry?.channelId ?? '' } }

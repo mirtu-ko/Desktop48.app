@@ -292,7 +292,7 @@ export function usePocketRooms() {
   /** 暗号输入层是否展示：当前在小房间视图且该频道仍被暗号拦着 */
   const smallLocked = computed(() => viewMode.value === 'small' && smallRequiresAnswer.value)
 
-  /** userId → 频道缓存：加载时遍历解析即写入，选中/切回不重复解析 */
+  /** userId → 频道缓存：首灌批量解析后写入（懒解析 / 临时房间单发补入），选中/切回不重复解析 */
   const channelCache = new Map<number, { serverId: string, channelId: string }>()
   /** 首灌请求序号：丢弃过期回包，避免快速刷新时数据错乱 */
   let loadRequestId = 0
@@ -539,7 +539,8 @@ export function usePocketRooms() {
 
   /**
    * 批量解析全部关注成员的房间频道：一次 IPC，主进程走持久化缓存（缺失才打 jump），
-   * 全部失败 / token 失效由主进程上抛 → load 整页报错。
+   * 待解析成员全部失败**且**名单内没有任何有效频道（或 token 失效）才由主进程上抛
+   * → load 整页报错；个别失败按无房间占位返回，不影响整页。
    * 解析为空（含失败占位）= 成员没有房间（含已关闭）→ 过滤，不进列表。
    *
    * 注：im/team/room/info 的 channelStatus 语义不明（实测正常房间也非 0），
@@ -611,7 +612,7 @@ export function usePocketRooms() {
         return
 
       // 批量解析房间：无房间（含已关闭）的成员直接过滤，不进列表；
-      // 全部解析异常时主进程上抛，走下面的 catch 整页报错
+      // 名单内没有任何有效频道且待解析全部异常时主进程上抛，走下面的 catch 整页报错
       const resolved = await resolveRooms(entries)
       if (requestId !== loadRequestId)
         return
@@ -660,8 +661,10 @@ export function usePocketRooms() {
    *
    * 预览的所有权按「来源」划分，不按时间戳比较 —— `lastMsgList` 实测拿不到真实 msgTime
    * （恒为 0，见 pa-sign.ts 的降级回包说明），时间守卫在这条链路上无从建立：
-   * - 非选中房间：日常由主进程预览镜像（applyMirrorPreviews）维护，本函数供手动刷新/重新激活时一次性拉取，回包文案与本地不同即采纳；
-   * - 选中房间：由 5s 消息轮询即时维护（见 mergeMessages 的 append 分支），本函数不覆盖
+   * - 非选中房间：日常由主进程预览镜像（applyMirrorPreviews）维护，本函数供页面重新激活
+   *   （onActivated → refreshRoomStatus）与显式调用时一次性拉取，回包文案与本地不同即采纳
+   *   （左列刷新按钮走 load() 的首灌路径，同样会整表回填预览）；
+   * - 选中且未关闭的房间：由 5s 消息轮询即时维护（见 mergeMessages 的 append 分支），本函数不覆盖
    *   —— 批量接口有延迟，回写会把用户正看着的房间的预览退回上一条。判定条件与
    *   mergeMessages 一致（仅 viewMode === 'room' 时轮询才写大房间预览），否则用户停在
    *   「小房间」视图时该房预览无人维护，会冻死。
@@ -674,7 +677,8 @@ export function usePocketRooms() {
       return
     const lastMessageMap = await fetchLastMessageMap(rooms.value.map(room => room.serverId))
     for (const room of rooms.value) {
-      // 选中房间的预览由 5s 轮询维护，本函数不覆盖；关闭房间的轮询已停，只能由这里回填
+      // 选中且未关闭房间的预览由 5s 轮询维护，本函数不覆盖；关闭房间的轮询已停，
+      // 由本函数与预览镜像（applyMirrorPreviews）按存档频道回填
       if (room.userId === selectedUserId.value && viewMode.value === 'room' && !isRoomClosedOf(room.userId))
         continue
       applyRoomPreview(room, lastMessageMap)
@@ -1413,7 +1417,7 @@ export function usePocketRooms() {
 
   /**
    * 选中房间：取缓存频道 → 拉最近一页消息 → 启动轮询。
-   * 频道在首灌时已遍历解析并缓存；缓存未命中（关注后有新增）才懒解析。
+   * 频道在首灌时已批量解析并缓存；缓存未命中（关注后有新增）才懒解析。
    * 选中态在 await 期间可能已被切换/清空，回包后必须复核，否则消息会串房。
    * 房间留言流与直播与否无关：未开播的成员同样有房间消息。
    */

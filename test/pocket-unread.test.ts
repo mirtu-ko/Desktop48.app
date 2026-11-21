@@ -2,7 +2,7 @@
  * 房间未读检测（main/pocket48/pocket-unread.ts）核心规则单测：
  * 首见锚定已读水位 / 按消息列表数条数 / 预览身份键只作触发 / 一页封顶 /
  * 每轮探测名额轮转 / markRead 推水位（已读不复活）/ 未登录清空 / 取关清理 / 屏蔽剔除 /
- * 归属自愈 / 小房间归属 / 快照持久化。
+ * 归属自愈 / 小房间归属 / 有效频道归属定期复核 / 快照持久化。
  * electron、pocket-auth、database、ipc/send、logger 全部 mock，状态落盘指向临时目录；
  * 每个用例经 vi.resetModules 重新加载被测模块，模拟「同一份持久化、全新会话」。
  */
@@ -574,6 +574,95 @@ describe('pocket-unread（房间未读检测）', () => {
     expect(broadcasts.length).toBe(quiet)
   })
 
+  it('有效频道按 TTL 复核归属：零未读换房也能自愈，未读从此改挂新频道', async () => {
+    // 持久化 store：成员 1 的有效频道 c1 已过复核间隔（旧实现终身复用，零未读时永远轮不到校正）
+    fs.writeFileSync(path.join(tmpUserData, 'pocket48-unread.json'), JSON.stringify({
+      channels: { 1: { serverId: 's1', channelId: 'c1', resolvedAt: Date.now() - 61 * 60 * 1000 } },
+    }))
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1', 'c1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    // 该 server 下没有暗号频道：room/info 正常回包
+    auth.getRoomChannelOwner.mockResolvedValue({ channelId: 'c1', serverId: 's1', ownerId: 0 })
+    // server/jump 才是权威：成员已换到 c2
+    auth.getRoomChannel.mockResolvedValue({ serverId: 's1', channelId: 'c2' })
+
+    await runTick(auth, mod)
+    await settle()
+
+    // 缓存已校正到新频道；复核成功后 resolvedAt 顺延，不每轮重打 jump
+    await expect(mod.getRoomChannelsBatch([1])).resolves.toEqual([
+      { userId: 1, channel: { serverId: 's1', channelId: 'c2' } },
+    ])
+    expect(auth.getRoomChannel).toHaveBeenCalledTimes(1)
+
+    // 新频道来新消息：首见锚定（换房前的历史不算未读）
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k2', 'c2'))
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getState()).toMatchObject({ rooms: {}, total: 0 })
+
+    // 再来的消息计入未读：已挂在新频道下（按成员聚合）并随广播下发
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k3', 'c2'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m3', 'm2', 'm1'))
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getState().rooms['1']).toMatchObject({ count: 2, bigCount: 2 })
+    expect(broadcasts.at(-1)).toMatchObject({ rooms: { 1: { count: 2, bigCount: 2 } } })
+  })
+
+  it('归属复核失败：旧有效频道与未读保留，且不会每轮重试', async () => {
+    fs.writeFileSync(path.join(tmpUserData, 'pocket48-unread.json'), JSON.stringify({
+      channels: { 1: { serverId: 's1', channelId: 'c1', resolvedAt: Date.now() - 61 * 60 * 1000 } },
+    }))
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1', 'c1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    auth.getRoomChannelOwner.mockResolvedValue({ channelId: 'c1', serverId: 's1', ownerId: 0 })
+    // 接口抖动：复核失败保留旧缓存，只把 resolvedAt 顺延到 TTL 之后
+    auth.getRoomChannel.mockRejectedValue(new Error('接口异常（HTTP 500）'))
+
+    await runTick(auth, mod)
+    await settle()
+    expect(auth.getRoomChannel).toHaveBeenCalledTimes(1)
+    // 旧的有效频道原样保留（不因复核失败被置空占位）
+    await expect(mod.getRoomChannelsBatch([1])).resolves.toEqual([
+      { userId: 1, channel: { serverId: 's1', channelId: 'c1' } },
+    ])
+
+    // 下一轮有新消息：未读照常累积在旧频道上，且复核不会每轮重试
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k2', 'c1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m3', 'm2', 'm1'))
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getState().rooms['1']).toMatchObject({ count: 2 })
+    expect(auth.getRoomChannel).toHaveBeenCalledTimes(1)
+  })
+
+  it('补探已校验的频道不在同轮复核重复 jump：未变化时顺延 resolvedAt', async () => {
+    // 两条通道同时命中：有未读且久未探测（stale 30min 闸门）＋ resolvedAt 早于 1h（复核闸门）
+    fs.writeFileSync(path.join(tmpUserData, 'pocket48-unread.json'), JSON.stringify({
+      channels: { 1: { serverId: 's1', channelId: 'c1', resolvedAt: Date.now() - 61 * 60 * 1000 } },
+      seenKeys: { c1: 'k1' },
+      unreadChannels: { c1: { count: 2, latestTime: 999_000 } },
+    }))
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1', 'c1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1', 'm2', 'm3'))
+    // 权威解析与缓存一致：补探 reconcile 走「无变化」提前返回，不推进 resolvedAt
+    auth.getRoomChannel.mockResolvedValue({ serverId: 's1', channelId: 'c1' })
+
+    await runTick(auth, mod)
+    await settle()
+    // 补探一次即可；复核因 resolvedAt 已顺延而不再重复 jump
+    expect(auth.getRoomChannel).toHaveBeenCalledTimes(1)
+
+    // 再跑一轮：补探闸门（30min）与复核闸门（1h）均不再命中
+    await runTick(auth, mod)
+    await settle()
+    expect(auth.getRoomChannel).toHaveBeenCalledTimes(1)
+  })
+
   it('房间已关闭（解析回空频道）：频道缓存与未读一并清掉，不留点不掉的红点', async () => {
     const { mod, auth } = await freshModule()
     stubOnline(auth, lastOf('k1'))
@@ -1042,6 +1131,25 @@ describe('pocket-unread / 批量频道解析（getRoomChannelsBatch）', () => {
     const { mod, auth } = await freshModule()
     auth.getRoomChannel.mockRejectedValue(new Error('频道解析失败'))
     await expect(mod.getRoomChannelsBatch([1, 2])).rejects.toThrow('频道解析失败')
+  })
+
+  it('名单里还有有效频道就不上抛：过期空占位解析失败只回空频道，整页不报错', async () => {
+    // 成员 1 有效缓存；成员 2 是过期空占位（无房间占位按 TTL 重试）——待解析全部失败
+    fs.writeFileSync(path.join(tmpUserData, 'pocket48-unread.json'), JSON.stringify({
+      channels: {
+        1: { serverId: 's1', channelId: 'c1', resolvedAt: Date.now() },
+        2: { serverId: '', channelId: '', resolvedAt: Date.now() - 31 * 60 * 1000 },
+      },
+    }))
+    const { mod, auth } = await freshModule()
+    auth.getRoomChannel.mockRejectedValue(new Error('接口异常（HTTP 500）'))
+
+    await expect(mod.getRoomChannelsBatch([1, 2])).resolves.toEqual([
+      { userId: 1, channel: { serverId: 's1', channelId: 'c1' } },
+      { userId: 2, channel: { serverId: '', channelId: '' } },
+    ])
+    // 已缓存的有效频道不会被重解析
+    expect(auth.getRoomChannel).toHaveBeenCalledTimes(1)
   })
 
   it('token 失效原样上抛（整页报「登录已过期」引导重登）', async () => {
