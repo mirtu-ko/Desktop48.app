@@ -63,6 +63,22 @@ linux:
     - deb
   maintainer: mirtu-ko
   category: Utility
+  # depends 是覆盖式配置，必须完整保留 electron-builder 的默认清单，否则 deb 装完起不来。
+  # 末尾的 ffmpeg 是关键：自下载的 linux 构建是 glibc 静态链接，域名解析要 dlopen
+  # libnss_dns.so.2，静态程序没有动态加载器 —— 普通发行版上报 EAI_SYSTEM，
+  # ChromeOS Crostini 容器里直接 SIGSEGV。改由包管理器提供与容器 ABI 匹配的动态版，
+  # 用户安装时自动带上、无需任何操作（识别逻辑见 main/ffmpeg/ffmpeg-process.ts 的 findSystemFfmpeg）。
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+    - ffmpeg
 appImage:
   artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: false

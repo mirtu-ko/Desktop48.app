@@ -15,7 +15,7 @@ import { useSettingsNav } from './use-settings-nav'
  * 都经它），校验只需在那里接一次。只校验 FFmpeg——看直播不落盘，不涉及下载目录。
  *
  * ★ 跨进程：getFfmpegStatus 对端 main/ipc/register-system-ipc.ts，
- * 判定口径在 main/ffmpeg/ffmpeg-process.ts 的 inspectFfmpegDir。
+ * 判定口径在 main/ffmpeg/ffmpeg-process.ts 的 resolveFfmpegEnvironment。
  */
 
 /** 单飞：连点多张卡片时复用同一次判定，避免堆叠多条相同提示 */

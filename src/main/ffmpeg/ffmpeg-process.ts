@@ -39,6 +39,9 @@ export function hasFfmpegSlot(): boolean {
 /** FFmpeg 不可用的原因分类：渲染层据此外化不同的修复引导，不要用错误文案反向判断 */
 export type FfmpegProblem = 'unset' | 'missing-dir' | 'missing-binary'
 
+/** 生效来源：显式目录（用户配置或一键下载） / 系统安装（Linux 包管理器） */
+export type FfmpegSource = 'directory' | 'system'
+
 /**
  * FFmpeg 就绪状态：主进程是唯一判定方。
  * 渲染层（启动门禁 / 设置页 / 下载前校验）只消费该结构，不再各自 existsSync 一遍，
@@ -52,6 +55,8 @@ export interface FfmpegStatus {
   directory: string
   /** 校验通过时的可执行文件完整路径；未通过时为空串 */
   binaryPath: string
+  /** 本次判定对应的来源 */
+  source: FfmpegSource
 }
 
 /** 平台相关的可执行文件名拼装，唯一取值点（状态判定 / 二进制解析 / 下载落盘共用） */
@@ -63,13 +68,84 @@ export function ffmpegBinaryPath(ffmpegDir: string): string {
 export function inspectFfmpegDir(ffmpegDir: string): FfmpegStatus {
   const directory = ffmpegDir?.trim() ?? ''
   if (!directory)
-    return { ok: false, problem: 'unset', directory: '', binaryPath: '' }
+    return { ok: false, problem: 'unset', directory: '', binaryPath: '', source: 'directory' }
   if (!fs.existsSync(directory))
-    return { ok: false, problem: 'missing-dir', directory, binaryPath: '' }
+    return { ok: false, problem: 'missing-dir', directory, binaryPath: '', source: 'directory' }
   const binaryPath = ffmpegBinaryPath(directory)
   if (!fs.existsSync(binaryPath))
-    return { ok: false, problem: 'missing-binary', directory, binaryPath: '' }
-  return { ok: true, problem: null, directory, binaryPath }
+    return { ok: false, problem: 'missing-binary', directory, binaryPath: '', source: 'directory' }
+  return { ok: true, problem: null, directory, binaryPath, source: 'directory' }
+}
+
+/**
+ * 系统 ffmpeg 的兜底搜索位置：PATH 之外再试两个常见安装点。
+ * 从 .desktop 启动时拿到的 PATH 可能不含 /usr/local/bin，只靠 PATH 会漏。
+ */
+const SYSTEM_FFMPEG_FALLBACK_DIRS = ['/usr/local/bin', '/usr/bin']
+
+/** 存在 + 普通文件 + 有执行位；断链或权限不足一律视为不可用 */
+function isExecutableFile(candidate: string): boolean {
+  try {
+    fs.accessSync(candidate, fs.constants.X_OK)
+    return fs.statSync(candidate).isFile()
+  }
+  catch {
+    return false
+  }
+}
+
+export interface SystemFfmpegProbeOptions {
+  /** 被测平台，默认 process.platform */
+  platform?: NodeJS.Platform
+  /** 搜索路径串，默认 process.env.PATH */
+  pathValue?: string
+  /** 可执行判定，默认查 X_OK（单测注入） */
+  isExecutable?: (candidate: string) => boolean
+}
+
+/**
+ * 探测 Linux 包管理器安装的 ffmpeg（deb 的 depends 保证它存在）。
+ *
+ * 只在 linux 上探测：macOS / Windows 的下载产物没有下文的静态 glibc 缺陷，
+ * 多一条来源只会让「用的是哪个 ffmpeg」变得不可预测。
+ *
+ * 为什么需要它：下载产物是 glibc 静态链接，域名解析要 dlopen libnss_dns.so.2，
+ * 而静态程序没有动态加载器 —— 普通发行版上 getaddrinfo 返回 EAI_SYSTEM，
+ * ChromeOS Crostini 容器里直接 SIGSEGV（详见 docs/live-playback-pipeline.md）。
+ * 系统版是动态链接，与容器 ABI 一致，不存在这条路径。
+ */
+export function findSystemFfmpeg(options: SystemFfmpegProbeOptions = {}): string | null {
+  if ((options.platform ?? process.platform) !== 'linux')
+    return null
+  const isExecutable = options.isExecutable ?? isExecutableFile
+  const pathValue = options.pathValue ?? process.env.PATH ?? ''
+  const dirs = [...new Set([...pathValue.split(path.delimiter), ...SYSTEM_FFMPEG_FALLBACK_DIRS].filter(Boolean))]
+  for (const dir of dirs) {
+    const candidate = path.join(dir, 'ffmpeg')
+    if (isExecutable(candidate))
+      return candidate
+  }
+  return null
+}
+
+/**
+ * 实际生效的 FFmpeg 环境：显式目录可用就用它；否则 linux 回落到系统 ffmpeg；
+ * 两者都没有时原样返回显式目录的判定，让渲染层展示具体原因（不掩盖用户配错的路径）。
+ *
+ * 优先级刻意如此：用户显式指定 > 系统安装。下载目录不参与这里 —— 它下载后会被写进
+ * ffmpegDirectory，本身就是一个「显式目录」，不另开来源，避免判定口径分裂。
+ */
+export function resolveFfmpegEnvironment(
+  configuredDir: string,
+  probe: () => string | null = findSystemFfmpeg,
+): FfmpegStatus {
+  const status = inspectFfmpegDir(configuredDir)
+  if (status.ok)
+    return status
+  const systemBinary = probe()
+  if (!systemBinary)
+    return status
+  return { ok: true, problem: null, directory: path.dirname(systemBinary), binaryPath: systemBinary, source: 'system' }
 }
 
 /** 各类不可用原因对应的失败信息：与 inspectFfmpegDir 同一口径 */
@@ -80,8 +156,8 @@ const RESOLVE_ERROR_MESSAGE: Record<FfmpegProblem, string> = {
 }
 
 /** 校验 ffmpeg 二进制并返回完整路径（Windows 下补 .exe）；不可用时抛错，供任务/拉流链路快速失败 */
-export function resolveFfmpegBinary(ffmpegDir: string): string {
-  const status = inspectFfmpegDir(ffmpegDir)
+export function resolveFfmpegBinary(configuredDir: string, probe: () => string | null = findSystemFfmpeg): string {
+  const status = resolveFfmpegEnvironment(configuredDir, probe)
   if (!status.ok)
     throw new Error(RESOLVE_ERROR_MESSAGE[status.problem ?? 'missing-binary'])
   return status.binaryPath

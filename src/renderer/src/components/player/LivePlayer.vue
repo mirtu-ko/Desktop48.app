@@ -418,6 +418,20 @@ function armStallWatchdog() {
   }, STALL_TIMEOUT_MS)
 }
 
+// ── 加载态文案 ──────────────────────────────────────────────────
+/**
+ * 首播 / 断流重连 / 起播慢三档，模板不拼字符串。
+ * 判据用 retryCount 而非 isRecoveringStream：后者在 attempt 成功后即复位，
+ * 覆盖不到「已重建、等 canplay」那段，用户会在画面回来前又看到「正在加载直播」。
+ */
+const loadingView = computed(() => {
+  if (retry.retryCount.value > 0)
+    return { label: '正在重新连接', hint: '直播画面中断，正在恢复…' }
+  if (stallRecovering.value)
+    return { label: '加载较慢', hint: '正在重新连接直播源…' }
+  return { label: '正在加载直播', hint: '连接直播源中，请稍候' }
+})
+
 /** 失败卡上的手动重试：清状态后完整重建一次，看门狗随之重新计时 */
 async function retryAfterStall() {
   clearLoadFailure()
@@ -829,8 +843,8 @@ onUnmounted(() => {
         v-if="mediaLoading && !liveEnded && !loadFailed"
         :masked="isRadio"
         :background="coverImage"
-        :label="stallRecovering ? '加载较慢' : '正在加载直播'"
-        :hint="stallRecovering ? '正在重新连接直播源…' : '连接直播源中，请稍候'"
+        :label="loadingView.label"
+        :hint="loadingView.hint"
       />
 
       <!-- 加载失败（流异常 / 详情失败 / 网络断开）：复用结束卡外壳，文案按来源派生 -->

@@ -10,7 +10,7 @@ vi.mock('element-plus', () => ({ ElMessage: messageMock }))
 const fakeRouter = { push: pushMock } as any
 
 /** 就绪状态的基准值：各用例只覆盖自己关心的字段 */
-const READY: FfmpegStatus = { ok: true, problem: null, directory: '/opt/ffmpeg', binaryPath: '/opt/ffmpeg/ffmpeg' }
+const READY: FfmpegStatus = { ok: true, problem: null, directory: '/opt/ffmpeg', binaryPath: '/opt/ffmpeg/ffmpeg', source: 'directory' }
 
 function stubConfig(
   getConfig: (_key: string) => Promise<string>,
@@ -58,6 +58,7 @@ describe('useDownloadGuard（下载/录制前的环境校验）', () => {
       problem: 'unset',
       directory: '',
       binaryPath: '',
+      source: 'directory',
     }))
 
     await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(false)
@@ -75,6 +76,7 @@ describe('useDownloadGuard（下载/录制前的环境校验）', () => {
       problem: 'missing-dir',
       directory: '/Users/z/ffmpeg',
       binaryPath: '',
+      source: 'directory',
     }))
 
     await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(false)
@@ -92,6 +94,7 @@ describe('useDownloadGuard（下载/录制前的环境校验）', () => {
       problem: 'missing-binary',
       directory: '/Users/z/ffmpeg',
       binaryPath: '',
+      source: 'directory',
     }))
 
     await expect(useDownloadGuard(fakeRouter).checkDownloadDirectory()).resolves.toBe(false)
@@ -108,6 +111,7 @@ describe('useDownloadGuard（下载/录制前的环境校验）', () => {
       problem: 'missing-dir',
       directory: '/Users/z/ffmpeg',
       binaryPath: '',
+      source: 'directory',
     }))
 
     await expect(useDownloadGuard().checkDownloadDirectory()).resolves.toBe(false)

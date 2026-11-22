@@ -17,7 +17,7 @@ import { app, clipboard, ClipboardItem, dialog, net, shell } from 'electron'
 import { isPathInAllowedRoots } from '../allowed-path'
 import { Database } from '../database'
 import { collectFeedbackMeta, isFeedbackEndpointReady, submitFeedback } from '../feedback'
-import { inspectFfmpegDir } from '../ffmpeg/ffmpeg-process'
+import { inspectFfmpegDir, resolveFfmpegEnvironment } from '../ffmpeg/ffmpeg-process'
 import { decodePngDataUrl, ensurePngExtension, safePngFileName } from '../image-file'
 import { log } from '../logger'
 import { isAllowedUrl } from '../net/allowed-hosts'
@@ -300,10 +300,13 @@ export function registerSystemIPC(): void {
     })
   })
 
-  // ffmpeg 环境：不传 dir 时校验当前生效配置，传 dir 时校验指定目录
-  // （初始化页/设置页在「选择目录」「一键下载」之后的即时校验）。
-  // 判定口径统一在 inspectFfmpegDir，此处只负责取配置。
-  handleTraced('getFfmpegStatus', (_event: IpcMainInvokeEvent, dir?: string) => inspectFfmpegDir(dir ?? Database.instance().getConfig('ffmpegDirectory')))
+  // ffmpeg 环境：不传 dir 时取当前生效环境（显式目录 → linux 系统 ffmpeg 回落），
+  // 传 dir 时严格校验该目录（初始化页/设置页在「选择目录」「一键下载」之后的即时校验）。
+  // 判定口径统一在 ffmpeg-process.ts，此处只负责取配置。
+  handleTraced('getFfmpegStatus', (_event: IpcMainInvokeEvent, dir?: string) =>
+    dir
+      ? inspectFfmpegDir(dir)
+      : resolveFfmpegEnvironment(Database.instance().getConfig('ffmpegDirectory')))
 
   // 网络诊断：对核心服务域名逐一轻量探测（设置页「网络诊断」），目标清单在 net-diagnose.ts
   handleTraced('netDiagnose', async () => diagnoseTargets())

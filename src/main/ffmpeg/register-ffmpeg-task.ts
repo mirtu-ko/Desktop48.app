@@ -53,8 +53,7 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
     if (!fs.existsSync(saveDir))
       throw new Error('保存目录不存在')
     const ffmpegDir = Database.instance().getConfig('ffmpegDirectory')
-    if (!fs.existsSync(ffmpegDir))
-      throw new Error('ffmpeg 目录不存在')
+    // 解析含 linux 系统 ffmpeg 回落，原因分类与文案由 resolveFfmpegBinary 统一给出
     const ffmpegPath = resolveFfmpegBinary(ffmpegDir)
     // 全局并发熔断：达到上限直接拒绝（错误经 IPC 抛回渲染端，use-tasks 会用 ElMessage 展示）
     if (!hasFfmpegSlot()) {

@@ -16,7 +16,7 @@ import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
 import type { MemberTeamPromotion } from '@common/member-team-promotion'
 import type { PocketClientProfileId } from '@common/pocket-client-profile'
 import type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctItem, StarInfoItem } from '../main/data'
-import type { FfmpegProblem, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
+import type { FfmpegProblem, FfmpegSource, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
 import type { NetDiagnoseItem } from '../main/net/net-diagnose'
 
@@ -494,7 +494,7 @@ export type TaskChannelPrefix = 'downloadTask' | 'recordTask'
 // 类型随契约一起暴露：preload 的事件订阅签名与渲染端 stores/tasks.ts 都要用它
 export type { TaskSnapshot }
 // FFmpeg 环境状态与原因枚举随契约暴露：渲染层的启动门禁/设置页/下载前校验共用同一判定结果
-export type { FfmpegProblem, FfmpegStatus }
+export type { FfmpegProblem, FfmpegSource, FfmpegStatus }
 
 interface StaticIpcInvokeMap {
   netRequest: InvokeSpec<[options: NetRequestOptions], NetResponse>

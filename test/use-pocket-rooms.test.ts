@@ -365,6 +365,7 @@ async function setup(options: SetupOptions = {}) {
         problem: null,
         directory: '/opt/ffmpeg',
         binaryPath: '/opt/ffmpeg/ffmpeg',
+        source: 'directory',
       })),
     },
   })

@@ -78,7 +78,7 @@ onMounted(() => {
  * 后者会让目录被删除/移动后的用户一路进入应用，直到发起下载或播放才撞上报错。
  *
  * ★ 跨进程：getFfmpegStatus / setConfig 经 preload/index.ts 转到主进程，
- * 判定口径见 main/ffmpeg/ffmpeg-process.ts 的 inspectFfmpegDir。
+ * 判定口径见 main/ffmpeg/ffmpeg-process.ts 的 resolveFfmpegEnvironment。
  */
 async function init() {
   phase.value = 'checking'

@@ -116,6 +116,12 @@ mpegts 解析 FLV → MSE → <video> → oncanplay → 加载态解除
 
 `handleCreateLiveStream` 本身不启动 FFmpeg：它只做闸门校验并登记 `{ liveId → rtmpUrl }`，返回本地地址；播放器 GET 本地地址时 `http-server` 才取出地址并 spawn。收益：播放窗创建后立即关闭不会遗留 FFmpeg 进程；同一直播（`existingSession.inputUrl === rtmpUrl`）复用会话，不重复登记。
 
+### 4.1 linux 上的 FFmpeg 来源（配置目录 → 系统安装）
+
+`resolveFfmpegEnvironment` 的优先级是「显式目录（用户配置或一键下载）→ linux 系统 ffmpeg」，两者都没有时才原样返回显式目录的失败判定。系统来源由 `findSystemFfmpeg` 探测（PATH + `/usr/local/bin`、`/usr/bin`），存在性之外还要求可执行位。
+
+这条回落不是可选项，而是修 bug：ffmpeg-static 的 linux 产物是 **glibc 静态链接**，域名解析要 `dlopen` `libnss_dns.so.2`，而静态程序没有动态加载器 —— 普通发行版上 `getaddrinfo` 返回 `EAI_SYSTEM`，ChromeOS Crostini 容器里直接 SIGSEGV，主进程只看到 `close code=null`。注意 `-version` 不解析域名，所以「冒烟校验跑通」证明不了可用。deb 侧的 `depends: ffmpeg`（`electron-builder.yml`）保证系统来源存在，用户安装时自动带上；命令行走 `apt install ffmpeg` 的也是同一条来源。
+
 ## 5. 关闭时的资源回收
 
 回收路径双向，渲染进程与主进程各自独立兜底：
@@ -210,7 +216,7 @@ danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveE
 
 ### 7.6 开播前的 FFmpeg 校验只做一次
 
-`stores/float-players.ts` 的 `openLive` 是四个开播入口（直播列表 / 公演页 / 房间资料卡 / 房间分享卡）的唯一汇聚点，`use-live-guard` 的 `checkLiveReady()` 接在这里，新增入口无需接线；`openPlayback` 不做该校验——回放走 mpegts 直连，不经过 FFmpeg 转封装。判定口径与启动门禁、下载守卫共用 `window.mainAPI.getFfmpegStatus`（`inspectFfmpegDir`），不要另起一套。
+`stores/float-players.ts` 的 `openLive` 是四个开播入口（直播列表 / 公演页 / 房间资料卡 / 房间分享卡）的唯一汇聚点，`use-live-guard` 的 `checkLiveReady()` 接在这里，新增入口无需接线；`openPlayback` 不做该校验——回放走 mpegts 直连，不经过 FFmpeg 转封装。判定口径与启动门禁、下载守卫共用 `window.mainAPI.getFfmpegStatus`（`resolveFfmpegEnvironment`：显式目录 → linux 系统 ffmpeg 回落，见 4.1），不要另起一套。
 
 ### 7.7 静默故障与加载失败态
 

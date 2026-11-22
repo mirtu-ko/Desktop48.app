@@ -50,6 +50,7 @@ const {
   checking: ffmpegChecking,
   downloading: ffmpegDownloading,
   busy: ffmpegBusy,
+  isSystem: ffmpegIsSystem,
   directory: ffmpegDirectory,
   copy: ffmpegCopy,
   downloadPercent: ffmpegDownloadPercent,
@@ -1149,7 +1150,7 @@ onActivated(consumeUpdateFocus)
               </el-button>
               <el-button
                 type="primary"
-                :disabled="ffmpegBusy"
+                :disabled="ffmpegBusy || ffmpegIsSystem"
                 :loading="ffmpegDownloading"
                 @click="handleDownloadFfmpeg"
               >
@@ -1167,7 +1168,7 @@ onActivated(consumeUpdateFocus)
               <span class="state-dot" />
               <span class="state-label">{{ ffmpegStateLabel }}</span>
               <span
-                v-if="ffmpegStatus && !ffmpegStatus.ok"
+                v-if="ffmpegStatus && (!ffmpegStatus.ok || ffmpegIsSystem)"
                 class="state-hint"
               >{{ ffmpegCopy.hint }}</span>
             </div>
