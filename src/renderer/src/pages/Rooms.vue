@@ -1622,7 +1622,7 @@ onMounted(() => {
               size="small"
               circle
               :loading="loading || liveRefreshing"
-              @click="load()"
+              @click="load(true)"
             >
               <el-icon v-if="!loading && !liveRefreshing">
                 <Refresh />

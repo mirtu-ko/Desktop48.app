@@ -1,8 +1,10 @@
 import type { FloatPlayerKind, FloatPlayerPayload, PocketRoomBatch, PocketRoomPermission, PocketRoomQChatMessage } from '@preload/ipc-contract'
 import type { PocketRoomMessageView } from '../src/renderer/src/utils/pocket-room-message'
+import type { RoomSnapshotRow } from '../src/renderer/src/utils/room-list-snapshot'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick } from 'vue'
 import { normalizePocketRoomMessage } from '../src/renderer/src/utils/pocket-room-message'
+import { ROOM_LIST_SNAPSHOT_KEY, serializeRoomListSnapshot } from '../src/renderer/src/utils/room-list-snapshot'
 
 /**
  * use-pocket-rooms 编排层：关注名单合并、房间遍历（过滤无房间）、
@@ -396,6 +398,12 @@ async function setup(options: SetupOptions = {}) {
   unreadRooms.value = {}
   closedChannels.value = []
   roomPreviews.value = new Map()
+  // 共享直播状态同为模块级单例：首灌现在复用 120s 新鲜缓存（不再强行刷新），
+  // 不复位的话上个用例的直播列表会让本次直接命中缓存、不打接口
+  const { liveItems, loaded: liveLoaded, lastFetchedAt } = (await import('@renderer/stores/live-status')).useLiveStatusStore()
+  liveItems.value = []
+  liveLoaded.value = false
+  lastFetchedAt.value = 0
   // 关注 / 屏蔽名单 store 同样是模块级单例，且 ensureLoaded 只灌一次：显式重灌，
   // 还原成「进程刚起来」的状态（否则上个用例的屏蔽名单会漏到本次）
   const { useBlockedMembersStore, useFollowedMembersStore } = await import('@renderer/stores/member-flags')
@@ -463,8 +471,26 @@ async function setup(options: SetupOptions = {}) {
   }
 }
 
+/**
+ * 内存 localStorage：node 环境没有，首屏快照需要一个。
+ * 每个用例开头清空，还原成「刚装上应用」的状态（否则上个用例写的快照会漏到本次水合）。
+ */
+const storage = new Map<string, string>()
+const storageStub = {
+  getItem: (key: string) => storage.get(key) ?? null,
+  setItem: (key: string, value: string) => {
+    storage.set(key, value)
+  },
+  removeItem: (key: string) => {
+    storage.delete(key)
+  },
+  clear: () => storage.clear(),
+}
+
 beforeEach(() => {
   vi.useFakeTimers()
+  storage.clear()
+  vi.stubGlobal('localStorage', storageStub)
 })
 
 afterEach(async () => {
@@ -2959,5 +2985,140 @@ describe('use-pocket-rooms / 预览镜像广播（替代 60s 轮询）', () => {
     expect(api.rooms.value[0].preview).toBe('后会有期')
     // closedChannels watch 不再打批量接口：全程只有 load 首灌那一次批量请求
     expect(window.mainAPI.pocketGetRoomLastMessages).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('use-pocket-rooms / 首屏快照', () => {
+  /** 快照行：只覆盖左列静态字段，口径与 utils/room-list-snapshot 一致 */
+  function snapshotRow(userId: number, overrides: Partial<RoomSnapshotRow> = {}): RoomSnapshotRow {
+    return {
+      userId,
+      nickname: `快照·${userId}`,
+      avatar: '',
+      teamName: '',
+      teamColor: '',
+      followSource: 'pocket',
+      serverId: `srv-${userId}`,
+      channelId: `ch-${userId}`,
+      preview: '',
+      ...overrides,
+    }
+  }
+
+  function seedSnapshot(rows: RoomSnapshotRow[], ownerId = '999'): void {
+    storage.set(ROOM_LIST_SNAPSHOT_KEY, serializeRoomListSnapshot(ownerId, rows))
+  }
+
+  /** 卡住关注名单回包：用来观察「名单还没回来」那一刻的左列 */
+  function holdFollows(ids: number[]) {
+    let release!: () => void
+    vi.mocked(window.mainAPI.pocketGetFollowedIds).mockImplementationOnce(
+      () => new Promise<number[]>((resolve) => {
+        release = () => resolve(ids)
+      }),
+    )
+    return {
+      release: () => release(),
+    }
+  }
+
+  it('首帧水合：名单回来之前先摆上一轮的列表，随后被权威结果覆盖', async () => {
+    seedSnapshot([snapshotRow(10002), snapshotRow(10001), snapshotRow(10005)])
+    const { api } = await setup({ pocketIds: [10001, 10002] })
+
+    // 直播与关注名单一起卡住：观察「什么都还没回来」那一刻的左列
+    let releaseLive!: () => void
+    apisMock.lives = () => new Promise((resolve) => {
+      releaseLive = () => resolve({ next: '0', liveList: [] })
+    })
+    const follows = holdFollows([10001, 10002])
+    const inflight = api.load()
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 顺序照抄快照：直播还没回来（全体无开播标记），按当前判据重排会把在播条目压下去
+    expect(api.rooms.value.map(room => room.nickname))
+      .toEqual(['快照·10002', '快照·10001', '快照·10005'])
+
+    releaseLive()
+    follows.release()
+    await inflight
+
+    // 权威结果：取关的 10005 摘掉，昵称换成此刻名录里的口径
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001, 10002])
+    expect(api.rooms.value[0].nickname).toBe('口袋用户 10001')
+  })
+
+  it('屏蔽优先：快照里的被屏蔽成员不水合', async () => {
+    seedSnapshot([snapshotRow(10001), snapshotRow(10002)])
+    const { api } = await setup({
+      pocketIds: [10001, 10002],
+      blockedFlags: [{ userId: 10002, realName: '乙', teamColor: '' }],
+    })
+
+    const follows = holdFollows([10001, 10002])
+    const inflight = api.load()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+
+    follows.release()
+    await inflight
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+  })
+
+  it('换号：快照 owner 与当前口袋账号不符则不水合', async () => {
+    seedSnapshot([snapshotRow(10001)], '888')
+    const { api } = await setup({ pocketIds: [10001] })
+
+    const follows = holdFollows([10001])
+    const inflight = api.load()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(api.rooms.value).toEqual([])
+
+    follows.release()
+    await inflight
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+  })
+
+  it('预览后补：列表在批量预览回包之前就已就位', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    let releasePreview!: () => void
+    vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(
+      () => new Promise((resolve) => {
+        releasePreview = () => resolve([
+          { channelId: 'ch-10001', starName: '甲', msgContent: '回包里的预览', msgTime: 0, unreadCount: null },
+        ])
+      }),
+    )
+
+    const inflight = api.load()
+    await vi.advanceTimersByTimeAsync(0)
+
+    // 列表已可用，预览还空着（它只是一行灰字，不压首屏）
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+    expect(api.rooms.value[0].preview).toBe('')
+
+    releasePreview()
+    await inflight
+    expect(api.rooms.value[0].preview).toBe('回包里的预览')
+  })
+
+  it('首灌成功后写快照（临时房间不落盘），退出登录即清空', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    await api.openTemporaryRoom(10002)
+    await api.load()
+
+    // 列表里有临时条目，快照里没有：它不属于关注名单，下次启动不该冒出来
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary]))
+      .toEqual([[10002, true], [10001, false]])
+    const raw = storage.get(ROOM_LIST_SNAPSHOT_KEY) ?? ''
+    expect((JSON.parse(raw) as { rooms: RoomSnapshotRow[] }).rooms.map(item => item.userId)).toEqual([10001])
+
+    authMock.setLoggedIn(false)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(storage.has(ROOM_LIST_SNAPSHOT_KEY)).toBe(false)
   })
 })
