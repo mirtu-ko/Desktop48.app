@@ -349,6 +349,8 @@ useEventListener(window, 'keydown', onKeydown)
         </button>
       </div>
 
+      <!-- 密度切换：大卡在左。图标按「格子的多少与大小」取，别按名字取 ——
+           EP 的 Menu 是四块大方块（大卡），Grid 是一片密集小格（紧凑） -->
       <div class="segmented segmented--icon">
         <button
           class="segmented__item"
@@ -358,7 +360,7 @@ useEventListener(window, 'keydown', onKeydown)
           @click="setCompact(false)"
         >
           <el-icon :size="14">
-            <Grid />
+            <Menu />
           </el-icon>
         </button>
         <button
@@ -369,7 +371,7 @@ useEventListener(window, 'keydown', onKeydown)
           @click="setCompact(true)"
         >
           <el-icon :size="14">
-            <Menu />
+            <Grid />
           </el-icon>
         </button>
       </div>
@@ -444,7 +446,9 @@ useEventListener(window, 'keydown', onKeydown)
               </span>
             </h2>
 
-            <!-- 卡片列表：TransitionGroup 负责排序 / 密度 / 搜索变化时的 FLIP 位移与错峰入场 -->
+            <!-- 卡片列表：TransitionGroup 只负责排序 / 密度 / 搜索变化时的 FLIP 位移。
+                 入场动画交给 CSS animation（见样式里的 .member-list > *）—— 见那里的注释：
+                 transition 只在元素新增时跑一次，keep-alive 切回本页不会重播 -->
             <TransitionGroup name="card" tag="div" class="member-list" :class="{ 'is-compact': compact }">
               <!-- key 见 memberCardKey：兼任记录走档案主键，官网独有的补充成员走 sid 兜底 -->
               <MemberCard
@@ -776,17 +780,25 @@ useEventListener(window, 'keydown', onKeydown)
 }
 
 /* ===== 列表过渡：卡片平滑归位（TransitionGroup 打在子组件根节点上，父级 scope 照样命中） ===== */
-.card-enter-active {
-  transition:
-    opacity 0.32s ease,
-    transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
-  /* 错峰入场：--i 由卡片内联注入，封顶 16 免得长列表要等太久 */
-  transition-delay: calc(var(--i, 0) * 14ms);
+
+/**
+ * 入场：CSS animation 而不是 TransitionGroup 的 enter 过渡。
+ * animation 在元素重新插入文档时重新开始，而本页被 keep-alive 缓存 —— 切到别的页再切回来时
+ * 卡片整体脱离文档后重插，动画会重跑一遍，于是「每次进来都一个一个落位」（总选页的 rank-in 同理）；
+ * transition 只在元素新增时触发一次，切页回来是同批元素复用 DOM，不会重播。
+ * 节奏与总选页名次卡一致：--i 由卡片内联注入（封顶 20），步长 22ms，最晚约 0.44s 起跳。
+ */
+.member-list > * {
+  /* backwards 而非 both：both 会让收尾值常驻，压掉 hover / FLIP 对 transform 的接管 */
+  animation: member-in 0.34s ease backwards;
+  animation-delay: calc(var(--i, 0) * 22ms);
 }
 
-.card-enter-from {
-  opacity: 0;
-  transform: translateY(10px) scale(0.96);
+@keyframes member-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
 }
 
 /* FLIP：位置变化的卡片滑到新位置，而不是瞬移 */
@@ -803,7 +815,10 @@ useEventListener(window, 'keydown', onKeydown)
 
 /* 系统「减少动态效果」下关掉本页的装饰性动画（卡片自身的见 MemberCard.vue） */
 @media (prefers-reduced-motion: reduce) {
-  .card-enter-active,
+  .member-list > * {
+    animation: none;
+  }
+
   .card-move,
   .segmented__item {
     transition: none;
