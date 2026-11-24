@@ -1,6 +1,6 @@
 import type { Density } from '../src/common/density'
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { DENSITY_BREAKPOINT, resolveDensity } from '../src/common/density'
@@ -86,8 +86,10 @@ interface Ctx {
 }
 
 function sourceFiles(): string[] {
+  // readdirSync 返回宿主分隔符；登记表与断言统一用 POSIX 相对路径，避免 Windows 下整体失配
   return readdirSync(SRC_ROOT, { recursive: true })
     .map(String)
+    .map(file => file.split(sep).join('/'))
     .filter(file => file.endsWith('.vue') || file.endsWith('.scss'))
     .sort()
 }

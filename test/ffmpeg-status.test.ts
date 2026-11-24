@@ -81,24 +81,29 @@ describe('findSystemFfmpeg（linux 系统 ffmpeg 探测）', () => {
   })
 
   it('按 PATH 顺序取第一个可执行的 ffmpeg', () => {
+    // 被测实现用宿主的 path.delimiter / path.join；测试按同一规则构造期望值
+    const second = path.join('/opt/b', 'ffmpeg')
+    const third = path.join('/opt/c', 'ffmpeg')
     const found = findSystemFfmpeg({
       platform: 'linux',
-      pathValue: '/opt/a:/opt/b:/opt/c',
-      isExecutable: p => p === '/opt/b/ffmpeg' || p === '/opt/c/ffmpeg',
+      pathValue: ['/opt/a', '/opt/b', '/opt/c'].join(path.delimiter),
+      isExecutable: p => p === second || p === third,
     })
-    expect(found).toBe('/opt/b/ffmpeg')
+    expect(found).toBe(second)
   })
 
   it('未匹配 PATH 时回落到常见安装目录（从桌面启动的 PATH 可能缺 /usr/local/bin）', () => {
+    const expected = path.join('/usr/bin', 'ffmpeg')
     const found = findSystemFfmpeg({
       platform: 'linux',
       pathValue: '/opt/none',
-      isExecutable: p => p === '/usr/bin/ffmpeg',
+      isExecutable: p => p === expected,
     })
-    expect(found).toBe('/usr/bin/ffmpeg')
+    expect(found).toBe(expected)
   })
 
-  it('真实文件：没有执行位不算可用，补上执行位后命中', () => {
+  // Windows 的 chmod 不提供执行位语义（Node 只认读/写位），这条只适用于 POSIX 宿主
+  it.skipIf(process.platform === 'win32')('真实文件：没有执行位不算可用，补上执行位后命中', () => {
     const binary = path.join(workDir, 'ffmpeg')
     fs.writeFileSync(binary, '')
     fs.chmodSync(binary, 0o644)
