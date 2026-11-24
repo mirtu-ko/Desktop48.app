@@ -11,11 +11,12 @@
  */
 import type { PocketDanmakuStatus, PocketRawChatMessage } from '@preload/ipc-contract'
 import type { WebContents } from 'electron'
+import type { ChatroomSender, ChatroomSendResult } from './nim-chatroom'
 import { sendIpc } from '../ipc/send'
 import { debug, error } from '../logger'
-import { nimIdentityFor } from './client-profile'
+import { nimIdentityFor, pocketDeviceId, profileFor } from './client-profile'
 import { NimChatroomClient } from './nim-chatroom'
-import { currentClientProfile, getImCredentials, IM_APP_KEY } from './pocket-auth'
+import { currentClientProfile, getImCredentials, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
 
 interface PocketDanmakuSession {
   chatroomId: string
@@ -121,6 +122,51 @@ export async function handlePocketDanmakuStart(chatroomId: string, liveId: strin
     client.destroy()
   })
   return true
+}
+
+/**
+ * 拼发送弹幕用的发送者特征：账号资料（user/info/reload 快照，含等级 / 徽章）
+ * + 当前档位的客户端事实（fromApp / 版本 / 机型）。
+ * 放在发送时取而非建会话时取：资料接口是 HTTP，不能拖慢进房；
+ * `getRoomSenderProfile` 自己会缓存，连续发送不会重复请求。
+ */
+async function buildChatroomSender(): Promise<ChatroomSender> {
+  const profile = profileFor(currentClientProfile())
+  const info = profile.appInfo(pocketDeviceId())
+  const sender = await getRoomSenderProfile()
+  return {
+    user: {
+      userId: sender.userId,
+      nickName: sender.nickname,
+      avatar: sender.avatar,
+      level: sender.level,
+      roleId: sender.roleId,
+      vip: sender.vip,
+      pfUrl: sender.pfUrl,
+      teamLogo: sender.teamLogo,
+      badge: sender.badge,
+    },
+    appName: String(info.appName ?? ''),
+    appVersion: String(info.appVersion ?? ''),
+    deviceModel: String(info.deviceName ?? ''),
+    osVersion: String(info.osVersion ?? ''),
+  }
+}
+
+/**
+ * 在**已存在**的聊天室会话上发送一条弹幕。
+ * 找不到会话即拒绝：发送不负责建连（会话由播放器打开时的 pocketDanmakuStart 建立），
+ * 否则关闭弹幕 / 未登录时点发送会偷偷拉起一条没人订阅的连接。
+ */
+export async function handlePocketDanmakuSend(chatroomId: string, liveId: string, content: string): Promise<ChatroomSendResult> {
+  const roomKey = String(chatroomId || '').trim()
+  if (!/^\d{1,32}$/.test(roomKey))
+    throw new Error('聊天室信息无效，无法发送弹幕')
+  const session = sessions.get(roomKey)
+  if (!session)
+    throw new Error('互动消息未连接，请稍后再试')
+  const sender = await buildChatroomSender()
+  return session.client.sendMessage({ text: content, liveId, sender })
 }
 
 /** 退订某聊天室；最后一个订阅者离开时断开连接 */

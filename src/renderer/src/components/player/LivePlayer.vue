@@ -2,6 +2,7 @@
 import type { LiveResultView } from '@renderer/services/live-result'
 import type { LoadFailureKind } from '@renderer/utils/live-stream'
 import type { PocketDisableNotice, PocketRankUser } from '@renderer/utils/pocket-chat-message'
+import { POCKET_DANMAKU_MAX_LENGTH } from '@common/live-danmaku'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { useDanmakuLayer } from '@renderer/composables/use-danmaku-layer'
 import { useLiveDanmaku } from '@renderer/composables/use-live-danmaku'
@@ -29,7 +30,7 @@ import { formatViewNum } from '@renderer/utils/view-num'
 import { useDocumentVisibility, useIntervalFn, useOnline } from '@vueuse/core'
 
 import { ElMessage } from 'element-plus'
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import DanmakuBubbles from './DanmakuBubbles.vue'
 import MiniControls from './MiniControls.vue'
 import PlayerLoading from './PlayerLoading.vue'
@@ -139,6 +140,14 @@ const danmakuEnabled = ref(true)
 // 摆放偏好是全局单例，读一次即可（两个播放器并发调用共用同一次 IPC）
 void ensureDanmakuPlacement()
 
+// ── 弹幕输入（仅个人直播的已登录用户）────────────────────────────
+// 官方 App 的发送入口是独立输入弹窗；浮窗空间小，这里收成「胶囊按钮 + 底部输入条」，
+// 展开时才占位（同时把气泡层抬起，见下方 extraBottom）
+const composing = ref(false)
+const draft = ref('')
+const sending = ref(false)
+const inputRef = ref<HTMLInputElement | null>(null)
+
 const {
   fontSize: danmakuFontSize,
   position: danmakuPosition,
@@ -154,6 +163,8 @@ const {
   placement: () => danmakuPlacement.value,
   // 公演 B 站弹幕可能很长；限制在窗口宽度的 33%，避免单条横跨整块画面
   maxWidth: () => (props.source === 'open' ? '33vw' : undefined),
+  // 输入条展开时气泡层整条抬起：避让量在 --dm-compose-clearance 里（输入条高度 + 间距）
+  extraBottom: () => (composing.value && danmakuEnabled.value ? 'var(--dm-compose-clearance)' : undefined),
 })
 
 /** 摆放只在「左侧黑边够宽」时开放：按钮只在此时出现，状态由 is-on 表示（不用 disabled） */
@@ -215,6 +226,9 @@ const showDanmaku = computed(() => hasDanmakuRoom.value && danmakuEnabled.value)
 /** 弹幕开关：翻转并上报使用率（只记用户主动切换，不记初始状态） */
 function toggleDanmaku() {
   danmakuEnabled.value = !danmakuEnabled.value
+  // 关闭弹幕即停口袋会话，输入条没有可发通道，一并收起
+  if (!danmakuEnabled.value)
+    composing.value = false
   trackEvent('danmaku:toggle', { enabled: danmakuEnabled.value ? 'on' : 'off' })
 }
 
@@ -278,7 +292,7 @@ async function handleDisableSpeak(notice: PocketDisableNotice) {
   }
 }
 
-const { danmakuItems, stop: stopDanmaku } = useLiveDanmaku({
+const { danmakuItems, stop: stopDanmaku, sendBarrage, pocketStatus } = useLiveDanmaku({
   roomId: () => danmakuRoomId.value,
   liveId: () => props.liveId,
   pocketRoomId: () => pocketChatroomId.value,
@@ -301,6 +315,61 @@ const { danmakuItems, stop: stopDanmaku } = useLiveDanmaku({
   onLiveEnd: closeLiveEnded,
   onLiveRestream: handleLiveRestream,
 })
+
+// ── 弹幕发送 ────────────────────────────────────────────────────
+// 发送走播放器已建立的同一条聊天室会话（13/6），因此入口只在「个人直播 + 已登录 +
+// 已拿到聊天室 ID」时出现；公演用的是 B 站弹幕，没有可写通道。
+const canSendDanmaku = computed(() => props.source === 'user'
+  && pocketAuthState.value.loggedIn
+  && !!pocketChatroomId.value
+  && !liveEnded.value
+  && !loadFailed.value)
+/** 输入条展开态：弹幕关掉后口袋会话也会停，此时不留一个发不出去的输入框 */
+const danmakuComposeOpen = computed(() => canSendDanmaku.value && danmakuEnabled.value && composing.value)
+
+/** 展开/收起输入条；展开后立刻聚焦，少一次点击 */
+function toggleDanmakuCompose() {
+  composing.value = !composing.value
+  if (composing.value)
+    void nextTick(() => inputRef.value?.focus())
+}
+
+/**
+ * 回车发送：输入法组词中的回车只用于选词，不能当发送。
+ * 不用模板的 .prevent：组词态下 preventDefault 会让部分输入法无法上屏候选词。
+ */
+function onComposeEnter(event: KeyboardEvent) {
+  if (event.isComposing)
+    return
+  event.preventDefault()
+  void submitDanmaku()
+}
+
+/**
+ * 发送：成功后清空输入但不收起（便于连发）。气泡在发送成功时即上屏（见 sendBarrage），
+ * 不等 13/7 回推。失败提示交主进程的文案（未连接 / 超长 / 服务端拒绝各有明确说法）。
+ */
+async function submitDanmaku() {
+  const content = draft.value.trim()
+  if (!content || sending.value)
+    return
+  if (pocketStatus.value !== 'connected') {
+    ElMessage.warning('互动消息尚未连接，请稍后再试')
+    return
+  }
+  sending.value = true
+  try {
+    await sendBarrage(content)
+    draft.value = ''
+    trackEvent('danmaku:send', { source: 'float' })
+  }
+  catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : String(error))
+  }
+  finally {
+    sending.value = false
+  }
+}
 
 // ── 游客在线人数轮询 ────────────────────────────────────────────
 // 未登录拿不到 LIVEUPDATE，人数否则会一直停在进房首帧；90s 补拉一次详情、只取 onlineNum。
@@ -557,6 +626,8 @@ async function enterLiveEnded() {
   if (liveEnded.value)
     return
   liveEnded.value = true
+  // 结束态没有可发的聊天室：收起输入条，别让输入框悬在复盘卡上
+  composing.value = false
   debugLog('live', `①直播:进入结束态（liveId=${props.liveId}），停流并拉复盘`)
   // 先收摊再拉复盘：计时 / 重试 / 弹幕会话全部停掉，停流触发的错误事件被 liveEnded 拦下
   elapsedTimer.pause()
@@ -805,6 +876,28 @@ onUnmounted(() => {
         <DanmakuBubbles :items="danmakuItems" :compact="compact" :plain="danmakuFloating" />
       </div>
 
+      <!-- 弹幕输入条：展开时压在控制条上方，气泡层随之抬起（useDanmakuLayer 的 extraBottom）。
+           回车发送、Esc 收起；正文长度上限与主进程校验同源 -->
+      <div v-if="danmakuComposeOpen" class="danmaku-compose">
+        <input
+          ref="inputRef"
+          v-model="draft"
+          class="danmaku-compose__input"
+          type="text"
+          :maxlength="POCKET_DANMAKU_MAX_LENGTH"
+          :placeholder="pocketStatus === 'connected' ? '发条弹幕，和大家聊聊' : '互动消息连接中…'"
+          @keydown.enter="onComposeEnter"
+          @keydown.esc="composing = false"
+        >
+        <button
+          class="danmaku-compose__send"
+          :disabled="!draft.trim() || sending"
+          @click="submitDanmaku"
+        >
+          {{ sending ? '发送中' : '发送' }}
+        </button>
+      </div>
+
       <!-- 下播结束态：复盘卡片盖住画面（官方 LiveCloseFragment 同构）——停流后仍停留，
            用户点关闭才关窗；复盘没拉到（未登录/接口失败）时退化为简版卡（标题+时长+关闭） -->
       <div v-if="liveEnded" class="live-end" :class="{ 'is-compact': compact }">
@@ -935,7 +1028,22 @@ onUnmounted(() => {
         @toggle-fullscreen="toggleFullscreen"
       >
         <template #leading>
-          <!-- 弹幕开关排在最左：与录播窗口的弹幕入口同位，跨两种播放器位置一致 -->
+          <!-- 发送弹幕排在最左：直播里它是最高频的主动操作，放最外侧先够到；
+               展开态与弹幕开关同一条高亮规则。弹幕关掉时一并隐藏：口袋会话已停，
+               留着只会是个点不动的入口 -->
+          <button
+            v-if="canSendDanmaku && danmakuEnabled"
+            class="player-capsule__btn danmaku-send-toggle"
+            :class="{ 'is-on': danmakuComposeOpen }"
+            :title="danmakuComposeOpen ? '收起弹幕输入' : '发送弹幕'"
+            :aria-label="danmakuComposeOpen ? '收起弹幕输入' : '发送弹幕'"
+            @click="toggleDanmakuCompose"
+          >
+            <MediaIcon name="send" />
+          </button>
+
+          <!-- 弹幕开关：录播窗口没有发送入口，它是最左一枚；直播里让位给发送钮，
+               两者同属「互动」语义，仍相邻常驻 -->
           <button
             v-if="hasDanmakuRoom"
             class="player-capsule__btn danmaku-toggle"
@@ -992,6 +1100,10 @@ onUnmounted(() => {
 @use '../../assets/css/fluid' as *;
 
 .live-player {
+  /* 输入条与胶囊的间距；输入条自身高度 = 胶囊高（上下内距同用 --fp-capsule-pad）。
+     气泡层的 extraBottom 直接读 --dm-compose-clearance，改尺寸只改这三条 */
+  --dm-compose-gap: #{fp(6px, 8px)};
+  --dm-compose-clearance: calc(var(--fp-capsule-btn) + 2 * var(--fp-capsule-pad) + var(--dm-compose-gap));
   width: 100%;
   height: 100%;
   display: flex;
@@ -1220,6 +1332,66 @@ onUnmounted(() => {
 
 .danmaku-float-toggle.is-on {
   color: var(--brand-secondary);
+}
+
+/* 发送开关与输入条：开关开启态同弹幕语言；输入条压在控制条上方，
+   宽度与控制条同口径（左右留白 + 520px 封顶），窄窗下不越出窗口 */
+.danmaku-send-toggle.is-on {
+  color: var(--brand-secondary);
+}
+
+.danmaku-compose {
+  position: absolute;
+  /* 层级在控制条（20）之上、悬浮按钮（30）之下：输入条只与胶囊上下相邻，不参与争抢 */
+  z-index: 22;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--fp-control-gap) + var(--fp-capsule-btn) + 2 * var(--fp-capsule-pad) + var(--dm-compose-gap));
+  width: min(calc(100% - 2 * #{fp(12px, 18px)}), 520px);
+  display: flex;
+  align-items: center;
+  gap: var(--fp-capsule-pad);
+  /* 上下内距与胶囊同源：输入条总高恒等于胶囊高，气泡层的避让量才不用跟着分辨率改 */
+  padding: var(--fp-capsule-pad) var(--fp-capsule-pad) var(--fp-capsule-pad) #{fp(7px, 12px)};
+  border-radius: var(--radius-pill);
+  background: var(--player-glass-bg);
+  box-shadow: inset 0 0 0 1px var(--player-glass-ring);
+}
+
+.danmaku-compose__input {
+  flex: 1;
+  min-width: 0;
+  /* 用背景色而非默认控件外观：窗口无边框，原生 input 的浅色底在视频上过亮 */
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-family: inherit;
+  font-size: var(--fp-font);
+  line-height: 1.2;
+  outline: none;
+}
+
+.danmaku-compose__input::placeholder {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.danmaku-compose__send {
+  flex-shrink: 0;
+  height: var(--fp-capsule-btn);
+  padding: 0 #{fp(9px, 14px)};
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--brand-secondary);
+  color: #fff;
+  font-family: inherit;
+  font-size: var(--fp-font-sm);
+  cursor: pointer;
+}
+
+.danmaku-compose__send:disabled {
+  /* 置灰只降不透明度、不改底色：深色胶囊里换底色会显得按钮消失 */
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* 榜单开关与面板：开关同弹幕语言；面板挂操作按钮（.player-actions 高约 36px）下方 */

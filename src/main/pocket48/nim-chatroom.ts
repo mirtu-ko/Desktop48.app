@@ -1,5 +1,5 @@
 /**
- * 网易云信聊天室 TCP 协议客户端（只收弹幕的最小实现）。
+ * 网易云信聊天室 TCP 协议客户端（弹幕收发的最小实现）。
  *
  * 按云信移动端 TCP 协议直连（云信应用只允许移动端登录，Web SDK 会被服务端拒）：
  * LBS 取地址 → RSA 握手交换 RC4 密钥
@@ -16,6 +16,8 @@
  * - 登录（13_2）：[0x02] + 房间属性表 + 认证属性表（SDK 版本/包名等移动端身份，
  *   token 放属性 1000）；握手应答后需再以 RC4 发一次登录包
  * - 心跳（1_2，15s）；消息（13_7）；属性 38='1' 的消息需回执（13_35）
+ * - 发弹幕（13_6）：属性表 1=消息 ID、2=100（自定义）、3=附件、4=业务扩展 JSON、
+ *   10/11=反垃圾；见 buildChatroomMessageBody
  *
  * 帧 / 属性表 / RC4 / 握手等共用原语见 nim-common.ts（圈组 QChat 客户端共用）；
  * TCP/握手/心跳骨架见 nim-session.ts。
@@ -24,6 +26,8 @@ import type { PocketRawChatMessage } from '@preload/ipc-contract'
 import type { NimClientIdentity } from './client-profile'
 import type { NimSession, SessionFactory, SessionOptions, TcpAddress } from './nim-session'
 import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
+import { POCKET_DANMAKU_MAX_LENGTH } from '@common/live-danmaku'
 import { debug } from '../logger'
 import { pocketDeviceId } from './client-profile'
 import { decodeProperties, encodeProperties, makePacket, text } from './nim-common'
@@ -34,8 +38,13 @@ const LBS_URL = 'https://lbs.netease.im/lbs/chat.jsp'
 // 服务号 / 指令号（本客户端只用到这几个）
 const SERVICE_CHATROOM = 13
 const CMD_CHATROOM_LOGIN = 2
+/** 发送消息（上行）：帧体是属性表，官方 SDK `ChatRoomMessageSender` 同构 */
+const CMD_CHATROOM_SEND = 6
 const CMD_CHATROOM_MESSAGE = 7
 const CMD_CHATROOM_ACK = 35
+
+/** 云信消息类型：0=文本，100=自定义（口袋的业务扩展都挂在这一类上） */
+const MSG_TYPE_CUSTOM = 100
 
 /** 消息去重容量：环形丢弃最老的 uuid，防长直播内存增长 */
 const SEEN_MESSAGE_LIMIT = 2048
@@ -75,6 +84,100 @@ export function buildChatroomLoginBody(input: {
     1000: input.token,
   })
   return Buffer.concat([Buffer.from([2]), roomProperties, authProperties])
+}
+
+// ===== 弹幕发送包构造 =====
+
+/**
+ * 发送弹幕时的发送者特征：对应官方 `AppIMMessage` 的 `user` 与 `config` 两块展示字段。
+ * 由调用方按「当前账号资料 + 当前档位」拼好传入（客户端不自己去取 HTTP 资料），
+ * 保证与聊天室登录身份、HTTP 请求头来自同一次档位判定。
+ */
+export interface ChatroomSender {
+  user: {
+    userId: string
+    nickName: string
+    avatar: string
+    level: number
+    roleId: number
+    vip: boolean
+    pfUrl: string
+    teamLogo: string
+    badge: string[]
+  }
+  /** 客户端名（官方 `fromApp` / `config.appName`）：pocket48 / seine48 */
+  appName: string
+  appVersion: string
+  /** 机型（官方 `config.model`） */
+  deviceModel: string
+  /** 系统版本（官方 `config.release`） */
+  osVersion: string
+}
+
+export interface ChatroomSendInput {
+  /** 客户端消息 ID（自己生成，服务端沿用后作为消息标识） */
+  uuid: string
+  /** 聊天室 ID */
+  roomId: string
+  /** 直播 ID：进业务扩展的 `sourceId`，接收端据此过滤跨场串扰 */
+  liveId: string
+  text: string
+  sender: ChatroomSender
+}
+
+/**
+ * 构造 13/6（聊天室发消息）帧体属性表，字段与官方 `createNimChatRoomMsg` 逐项对齐：
+ * - 1 = 消息 ID、2 = 100（自定义）、3 = 附件（自定义消息无附件，官方恒写空串）
+ * - 4 = remoteExtension（`AppIMMessage` 的 JSON，业务类型 / 正文 / 发送者都在这里）
+ * - 10 + 11 = 反垃圾开关与待检测正文（官方 `NIMAntiSpamOption` 同构）
+ *
+ * 正文只进扩展的 `text`，不进属性 3：接收端（含本客户端）都按扩展取正文，
+ * 放进附件反而会被当成另一种消息形态。
+ */
+export function buildChatroomMessageBody(input: ChatroomSendInput): Buffer {
+  const { uuid, roomId, liveId, text: content, sender } = input
+  const extension = {
+    messageType: 'BARRAGE_NORMAL',
+    module: 'live',
+    text: content,
+    roomId,
+    sourceId: liveId,
+    fromApp: sender.appName,
+    config: {
+      model: sender.deviceModel,
+      release: sender.osVersion,
+      appName: sender.appName,
+      versionName: sender.appVersion,
+    },
+    user: {
+      userId: sender.user.userId,
+      nickName: sender.user.nickName,
+      // 头像两种读取口径都带上：本客户端与部分官方版本读 userAvatar，另一些读 avatar
+      userAvatar: sender.user.avatar,
+      avatar: sender.user.avatar,
+      level: sender.user.level,
+      roleId: sender.user.roleId,
+      vip: sender.user.vip,
+      pfUrl: sender.user.pfUrl,
+      teamLogo: sender.user.teamLogo,
+      badge: sender.user.badge,
+    },
+  }
+  return encodeProperties({
+    1: uuid,
+    2: MSG_TYPE_CUSTOM,
+    // 零长 Buffer 而非空串：encodeProperties 会跳过空串，缺键与官方的「有键、值为空」不一致
+    3: Buffer.alloc(0),
+    4: JSON.stringify(extension),
+    10: 1,
+    11: JSON.stringify({ type: '1', data: content }),
+  })
+}
+
+/** 发送结果：服务端回执的消息 ID 与时刻（缺省回落本地生成值） */
+export interface ChatroomSendResult {
+  uuid: string
+  time: number
 }
 
 // ===== 客户端 =====
@@ -131,6 +234,48 @@ export class NimChatroomClient {
     }
     this.session?.destroy()
     this.session = null
+  }
+
+  /**
+   * 发送一条弹幕（13/6），等服务端回执后返回消息 ID 与时刻。
+   * 只在**已建立**的会话上发送：未连接直接拒绝，不在这里新建连接
+   * （会话生命周期归 pocket-danmaku，发送方不能擅自拉起第二条 TCP）。
+   */
+  async sendMessage(input: { text: string, liveId: string, sender: ChatroomSender }): Promise<ChatroomSendResult> {
+    const content = String(input.text || '').trim()
+    if (!content)
+      throw new Error('请输入弹幕内容')
+    if (content.length > POCKET_DANMAKU_MAX_LENGTH)
+      throw new Error(`弹幕不能超过 ${POCKET_DANMAKU_MAX_LENGTH} 个字`)
+    const liveId = String(input.liveId || '').trim()
+    if (!liveId)
+      throw new Error('直播信息未就绪，无法发送弹幕')
+    const session = this.session
+    if (!this.connected || !session?.connected)
+      throw new Error('互动消息未连接，请稍后再试')
+
+    const uuid = randomUUID()
+    const body = buildChatroomMessageBody({
+      uuid,
+      roomId: this.options.roomId,
+      liveId,
+      text: content,
+      sender: input.sender,
+    })
+    const response = await session.request(SERVICE_CHATROOM, CMD_CHATROOM_SEND, body, '发送弹幕失败')
+    // 回执是属性表；解析失败不影响「已发出」这个结论，按本地值兜底
+    let ackUuid = ''
+    let ackTime = 0
+    try {
+      const properties = decodeProperties(response.body)
+      ackUuid = text(properties.get(1))
+      ackTime = Number(text(properties.get(20)) || 0)
+    }
+    catch {
+      // 空回执：服务端只回结果码，消息仍可能已投递
+    }
+    debug(`[nim-chatroom] 弹幕已发送：房间=${this.options.roomId} uuid=${ackUuid || uuid}`)
+    return { uuid: ackUuid || uuid, time: ackTime || Date.now() }
   }
 
   private reportError(error: Error): void {

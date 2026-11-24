@@ -430,6 +430,15 @@ export interface PocketRawChatMessage {
 
 export type PocketDanmakuStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
+/**
+ * 弹幕发送回执（主进程解析 13/6 响应的属性表）。
+ * uuid 是服务端沿用的消息 ID；time 为服务端时刻，缺失时回落本地时刻。
+ */
+export interface PocketDanmakuSendResult {
+  uuid: string
+  time: number
+}
+
 /** 口袋聊天室事件批次（对端：main/pocket48/pocket-danmaku.ts，仅发给订阅了该聊天室的窗口） */
 export interface PocketDanmakuBatch {
   /** 渲染层传入的聊天室 ID，多会话订阅时据此过滤 */
@@ -627,6 +636,11 @@ interface StaticIpcInvokeMap {
   pocketDanmakuStart: InvokeSpec<[chatroomId: string, liveId: string], boolean>
   /** 退订聊天室弹幕；最后一个订阅者离开时主进程断开连接 */
   pocketDanmakuStop: InvokeSpec<[chatroomId: string], void>
+  /**
+   * 在已建立的聊天室会话上发送弹幕（云信聊天室 13/6，自定义消息 + BARRAGE_NORMAL）。
+   * 会话不存在 / 未连接 / 内容为空或超长均 reject，不隐式建连。
+   */
+  pocketDanmakuSend: InvokeSpec<[chatroomId: string, liveId: string, text: string], PocketDanmakuSendResult>
   /** 房间未读全量快照（启动时回取一次；后续变化走 pocketUnreadBatch 事件） */
   pocketUnreadState: InvokeSpec<[], PocketUnreadBatch>
   /** 作废失效的小房间归属（房主更新后旧频道被删）；下一轮检测重新枚举该 server */

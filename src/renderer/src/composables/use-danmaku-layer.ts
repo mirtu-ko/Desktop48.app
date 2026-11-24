@@ -103,6 +103,11 @@ export function useDanmakuLayer(options: {
   placement?: () => DanmakuPlacement
   /** 额外宽度上限（CSS 长度）；不传则沿用布局自身的 width */
   maxWidth?: () => string | undefined
+  /**
+   * 额外底部避让量（CSS 长度）：弹幕输入条展开时压在胶囊上方，
+   * 气泡层要同步抬起，否则最底部几条会被输入条盖住。
+   */
+  extraBottom?: () => string | undefined
 }) {
   const { videoRect, compact } = options
 
@@ -115,9 +120,11 @@ export function useDanmakuLayer(options: {
   const fontSize = computed(() => layout.value.fontSize)
   const position = computed(() => {
     const maxWidth = options.maxWidth?.()
+    const extraBottom = options.extraBottom?.()
     return {
       left: layout.value.left,
-      bottom: layout.value.bottom,
+      // 与布局同源的避让量叠加：调用方只负责给出「多了多高」，控制条那段不重复算
+      bottom: extraBottom ? `calc(${layout.value.bottom} + ${extraBottom})` : layout.value.bottom,
       width: layout.value.width,
       ...(maxWidth ? { maxWidth } : {}),
     }

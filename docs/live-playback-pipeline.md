@@ -242,6 +242,16 @@ danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveE
 
 弹幕连不上只提示一次，不影响直播播放：B 站握手失败经 toast 提示后关闭弹幕层；口袋源断连由协议客户端自动重连，未登录则不建立会话。
 
+### 8.1 发送弹幕（个人直播）
+
+只有个人直播可写：公演用的是 B 站只读弹幕，没有上行通道。入口在已登录且已取到 `chatroomId` 时出现（胶囊「发送」按钮 → 底部输入条），发送复用**当前观看已建立**的聊天室会话，不新建连接——同一账号的另一条连接会顶掉自己。
+
+链路：`LivePlayer.submitDanmaku` → `use-live-danmaku.sendBarrage` → `services/pocket-chatroom.sendPocketBarrage` → IPC `pocketDanmakuSend` → `pocket-danmaku.handlePocketDanmakuSend` → `nim-chatroom.sendMessage`（service 13 / command 6，等回包取消息 ID 与时刻）。
+
+报文与官方 `com.netease.nimlib.chatroom.h.a` 同构，属性表六项：`1`=消息 UUID、`2`=100（自定义）、`3`=附件（自定义消息为空）、`4`=remoteExtension、`10`+`11`=反垃圾开关与待检正文。`remoteExtension` 是 `AppIMMessage` 的 JSON，正文只放 `text`；`messageType=BARRAGE_NORMAL`、`module=live`、`sourceId` 必须是直播 ID（接收端按它与当前场次比对，传聊天室 ID 会被整条丢弃）。
+
+发送成功后本地先上屏，并在 10 秒窗口内按正文认领服务端回推的同一条消息（是否回推由服务端决定）。空内容、超过 `POCKET_DANMAKU_MAX_LENGTH`（`common/live-danmaku.ts`，与输入框 `maxlength` 同源）、会话未连接、未登录均在本地拒绝；禁言等业务拒绝以服务端错误码体现。
+
 ## 9. 对照：历史公演（回放）链路
 
 `openHistoryStream` → `openPlayback(payload)` → `PlaybackPlayer`：`usePlaybackEngine` 按后缀选 hls.js 或原生 `<video>` 直接加载（维护 loading / buffering / error 三态），`usePlaybackDanmaku` 按当前播放时间推进弹幕游标。该链路不涉及 FFmpeg 与本地 HTTP 服务，因为 VOD 地址（http 协议的 m3u8/mp4）浏览器可直接播放。

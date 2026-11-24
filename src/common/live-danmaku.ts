@@ -19,3 +19,9 @@ export interface LiveDanmaku {
   /** 本条弹幕用到的表情；没有表情时缺省 */
   emots?: DanmakuEmoteMap
 }
+
+/**
+ * 口袋直播弹幕的发送长度上限：主进程校验与输入框 maxlength 同源，
+ * 避免两处各写一个数字后输入框允许、发送被拒。
+ */
+export const POCKET_DANMAKU_MAX_LENGTH = 100

@@ -199,6 +199,8 @@ const api = {
   pocketGetServerChannels: (serverId: string) => invokeIpc('pocketGetServerChannels', serverId),
   pocketDanmakuStart: (chatroomId: string, liveId: string) => invokeIpc('pocketDanmakuStart', chatroomId, liveId),
   pocketDanmakuStop: (chatroomId: string) => invokeIpc('pocketDanmakuStop', chatroomId),
+  pocketDanmakuSend: (chatroomId: string, liveId: string, text: string) =>
+    invokeIpc('pocketDanmakuSend', chatroomId, liveId, text),
   // pocketDanmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   pocketDanmakuBatch: (callback: (_batch: PocketDanmakuBatch) => void) =>
     onIpc('pocketDanmakuBatch', callback),
