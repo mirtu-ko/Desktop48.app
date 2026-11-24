@@ -15,26 +15,25 @@
  *
  * **消费方一律从这里 import**：测试里的 `vi.mock('.../pocket-auth')` 依赖这个路径，
  * 把调用方改成直接引用新文件会让 mock 静默失效。新模块导出后请在这里补一行 re-export。
+ *
+ * 只导出业务侧真正用得到的能力：凭证单例 `credentials`、请求原语 `postPocket`、
+ * 会话复位钩子 `onSessionReset` 与 `throwAuthExpired` 属于模块间协作细节，
+ * 由各业务模块直接引用 pocket-auth-core，不经这里外泄（避免从外部改到共享状态）。
  */
 
 // ===== 底座：凭证状态 / 身份头 / 请求 / 登录态 =====
 export {
-  credentials,
   currentClientProfile,
   ensureAuthLoaded,
   expireStoredAuth,
   getAuthState,
   getToken,
   logout,
-  onSessionReset,
   pocketAppHeaders,
-  postPocket,
   setAuthExpiredNotifier,
-  throwAuthExpired,
 } from './pocket-auth-core'
 export type {
   PocketAuthState,
-  PocketEnvelope,
   PocketSmsResult,
   PocketUserInfo,
 } from './pocket-auth-core'

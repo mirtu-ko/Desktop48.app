@@ -83,7 +83,9 @@ class ConfigStore {
    */
   public getConfig<K extends ConfigKey>(key: K): AppConfig[K] {
     assertConfigKey(key)
-    return this.config[key] || CONFIG_DEFAULTS[key]
+    // 可选链是防御而非必需：init() 由 app.ts 在注册 IPC 之前调用，
+    // 但「读配置」不该因为漏调 init 而抛 TypeError 而不是回落默认值
+    return this.config?.[key] || CONFIG_DEFAULTS[key]
   }
 
   /**
@@ -94,11 +96,6 @@ class ConfigStore {
     const normalized = parseConfigValue(key, value)
     this.config[key] = normalized
     this.storage.write(this.config)
-  }
-
-  /** 配置文件路径（日志与诊断用） */
-  public get filePath(): string {
-    return this.configPath
   }
 }
 

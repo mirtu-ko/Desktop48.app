@@ -98,14 +98,14 @@ export function ensureAuthLoaded(): Promise<void> {
 
 // ===== 接口常量：统一在 common/pocket-api-urls.ts（与渲染层同源），见文件头 import =====
 
-export const REQUEST_TIMEOUT_MS = 20 * 1000
+const REQUEST_TIMEOUT_MS = 20 * 1000
 
 /**
  * `pa` 请求头兜底静态值：正常由官方 Android APK 抽出的 wasm 现算（见 pa-sign.ts），
  * 仅 wasm 加载/生成失败时使用（2021 年签名，实测服务端不拦请求）。
  * 主 App HTTP 头也统一为 Android 档（与 pa 同源）；v2 登录端点已对齐 7.1.44 APK。
  */
-export const POCKET_PA = 'MTYzNjAxNzMxNTAwMCw3NjkyNzVkNTliZWU0MmQ0OGVjOWIyYTMwY2FkOWQzOSw3NzFhY2QwY2JiZDhkZDUzZDdjZGY3YTcxNGYzNmVlOCwyMDIxMDYwOTAx'
+const POCKET_PA = 'MTYzNjAxNzMxNTAwMCw3NjkyNzVkNTliZWU0MmQ0OGVjOWIyYTMwY2FkOWQzOSw3NzFhY2QwY2JiZDhkZDUzZDdjZGY3YTcxNGYzNmVlOCwyMDIxMDYwOTAx'
 
 /** token 失效的服务端状态码（与 pocket48_api 社区实现一致） */
 export const TOKEN_INVALID_STATUSES = new Set([401003, 401004, 401005])
@@ -193,7 +193,7 @@ export interface PocketEnvelope<T = unknown> {
 }
 
 /** 日志用：接口地址只保留 pathname，避免把 query 里的参数带进日志 */
-export function logPath(url: string): string {
+function logPath(url: string): string {
   try {
     return new URL(url).pathname
   }
@@ -203,7 +203,7 @@ export function logPath(url: string): string {
 }
 
 /** 日志用：非 JSON 回包截断，防止日志被整页 HTML / 超长正文淹没 */
-export function clipForLog(text: string, max = 500): string {
+function clipForLog(text: string, max = 500): string {
   return text.length > max ? `${text.slice(0, max)}…（共 ${text.length} 字符）` : text
 }
 
@@ -238,7 +238,7 @@ export function currentClientProfile(): PocketClientProfileId {
  * 登录链路在凭证写入前就用用户选定的档发请求，故显式传入 profileId；
  * 其余接口省略该参数，走凭证里的当前档位。
  */
-export function pocketHeaders(token?: string, pa?: string, profileId?: PocketClientProfileId): Record<string, string> {
+function pocketHeaders(token?: string, pa?: string, profileId?: PocketClientProfileId): Record<string, string> {
   const headers = clientHeaders(profileFor(profileId ?? currentClientProfile()))
   headers.pa = pa ?? POCKET_PA
   if (token)
@@ -357,7 +357,7 @@ export function maskMobile(mobile: string, area?: string): string {
 }
 
 /** 凭证快照 → 对渲染层暴露的登录态（不含 token 本体） */
-export function toAuthState(stored: StoredAuth | null): PocketAuthState {
+function toAuthState(stored: StoredAuth | null): PocketAuthState {
   return {
     loggedIn: !!credentials.getToken(),
     nickname: stored?.nickname || '',
