@@ -63,6 +63,9 @@ linux:
     - deb
   maintainer: mirtu-ko
   category: Utility
+deb:
+  # depends 属于 DebOptions，须写在 deb 节点下：electron-builder 26.18.1 起
+  # linux.depends 会被 schema 判为未知属性，导致配置校验失败。
   # depends 是覆盖式配置，必须完整保留 electron-builder 的默认清单，否则 deb 装完起不来。
   # 末尾的 ffmpeg 是关键：自下载的 linux 构建是 glibc 静态链接，域名解析要 dlopen
   # libnss_dns.so.2，静态程序没有动态加载器 —— 普通发行版上报 EAI_SYSTEM，
