@@ -4,7 +4,7 @@ export default antfu({
   formatters: {
     css: true,
     html: true,
-    markdown: true,
+    markdown: false,
   },
   vue: true,
   // resources/pocket48/ 是官方 App 抽取的 wasm 签名模块与其生成胶水（见 main/pocket48/pa-sign.ts），

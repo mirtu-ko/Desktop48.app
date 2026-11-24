@@ -107,16 +107,38 @@ function createMemberFlagStore(kind: MemberFlagKind) {
     }
   }
 
-  async function remove(userId: number | string) {
+  async function remove(userId: number | string): Promise<boolean> {
     const id = Tools.normalizeUserId(userId)
     if (!Number.isFinite(id))
-      return
+      return false
     try {
       await window.mainAPI.removeMemberFlag(kind, id)
       members.value = members.value.filter(member => Number(member.userId) !== id)
+      return true
     }
     catch (error) {
       console.error(message.updateError, error)
+      return false
+    }
+  }
+
+  /**
+   * 幂等添加，不弹全局提示：调用方要按「已关注 / 未关注」自行给出文案
+   * （关注按钮两态各自提示），失败只记日志并返回 false。
+   */
+  async function add(target: MemberFlagTarget): Promise<boolean> {
+    const userId = Tools.normalizeUserId(target.userId)
+    if (!Number.isFinite(userId))
+      return false
+    try {
+      await window.mainAPI.addMemberFlag(kind, userId)
+      if (!has(userId))
+        members.value = [...members.value, createEntry(target, userId)]
+      return true
+    }
+    catch (error) {
+      console.error(message.updateError, error)
+      return false
     }
   }
 
@@ -133,7 +155,7 @@ function createMemberFlagStore(kind: MemberFlagKind) {
     }
   }
 
-  return { members, refresh, ensureLoaded, has, toggle, remove, clear }
+  return { members, refresh, ensureLoaded, has, toggle, add, remove, clear }
 }
 
 const blocked = createMemberFlagStore('blocked')
@@ -160,6 +182,9 @@ export function useFollowedMembersStore() {
     ensureFollowedLoaded: followed.ensureLoaded,
     isFollowed: followed.has,
     toggleFollow: followed.toggle,
+    /** 显式添加（不弹提示、返回是否成功）：房间页「本地关注」用，避免状态不同步时 toggle 反而删掉 */
+    followMember: followed.add,
+    /** 显式移除（不弹提示）：返回是否落库成功，调用方据此决定是否收起房间 */
     unfollowMember: followed.remove,
     /**
      * 口袋关注合并入本地名单（只增不删，策略 A）。

@@ -19,6 +19,7 @@ import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
+import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promotion'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { useRoomPinsStore } from '@renderer/stores/room-pins'
@@ -32,7 +33,7 @@ import { trackEvent } from '@renderer/utils/umami'
 import { useDebounceFn, useDocumentVisibility, useEventListener, useIntersectionObserver, useResizeObserver } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, h, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onDeactivated, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const {
@@ -72,6 +73,8 @@ const {
   unlockSmall,
   openTemporaryRoom,
   closeTemporaryRoom,
+  applyRoomFollowSource,
+  notePocketFollow,
 
   loadMoreHistory,
   openSharedLive,
@@ -112,6 +115,8 @@ function openDateDialog() {
 }
 
 const { findMemberByUserId } = useMemberDirectoryStore()
+/** 本地关注名单：资料卡「本地关注」开关的写入口（见 toggleLocalFollow） */
+const { followMember, unfollowMember } = useFollowedMembersStore()
 
 /** 房间展示队伍：整列一次派生，模板只读 displayTeam；服务端原值仍留在 room 上 */
 const { displayTeamOf } = useMemberTeamPromotionStore()
@@ -202,18 +207,37 @@ function isPocketFollowed(source: PocketRoom['followSource']): boolean {
   return source === 'pocket' || source === 'both'
 }
 
-/** 口袋关注 / 取关：只动账号侧关注，不改本地名单；结果就地更新当前房间来源 */
-const pocketFollowBusy = ref(false)
+/** 是否在本机名单里（local / both 都算） */
+function isLocallyFollowed(source: PocketRoom['followSource']): boolean {
+  return source === 'local' || source === 'both'
+}
 
+const selectedPocketFollowed = computed(() => isPocketFollowed(selectedRoom.value?.followSource))
+const selectedLocalFollowed = computed(() => isLocallyFollowed(selectedRoom.value?.followSource))
+
+/**
+ * 资料卡的两个关注开关。
+ *
+ * 口袋关注写账号（friends/id）并顺带补本机 flag；本地关注只写本机名单。
+ * 两者不是对等的两份名单：账号关注按策略 A 只增不删地并进本机（见
+ * stores/member-flags 的 mergeFromPocket），所以账号已关注时本地必然收录——
+ * 本地开关这时锁定为开，只有「仅本地关注」的成员才能本地取关。
+ * 两个来源都不再关注时，房间随条目移出左列（正看着则右侧收起）。
+ */
+const pocketFollowBusy = ref(false)
+const localFollowBusy = ref(false)
+
+/** 口袋关注开关：写账号并顺带补本机 flag；取消只动账号、保留本机记录（二次确认） */
 async function togglePocketFollow() {
   const room = selectedRoom.value
-  if (!room || pocketFollowBusy.value)
+  if (!room || pocketFollowBusy.value || localFollowBusy.value)
     return
-  const willFollow = !isPocketFollowed(room.followSource)
-  // 取关是账号级破坏性操作：二次确认，避免手滑把口袋侧关注摘掉
+  const willFollow = !selectedPocketFollowed.value
+  // 本地状态在 await 前截下：回包期间可能已切房
+  const keepLocal = selectedLocalFollowed.value
   if (!willFollow) {
     const ok = await ElMessageBox.confirm(
-      `确定在口袋账号取消关注「${room.nickname}」吗？`,
+      `确定在口袋账号取消关注「${room.nickname}」吗？该操作会同步到你的口袋账号。`,
       '取消口袋关注',
       {
         type: 'warning',
@@ -228,14 +252,25 @@ async function togglePocketFollow() {
   }
   pocketFollowBusy.value = true
   try {
-    if (willFollow)
+    if (willFollow) {
       await window.mainAPI.pocketFollowMember(room.userId)
-    else
-      await window.mainAPI.pocketUnfollowMember(room.userId)
-    room.followSource = willFollow
-      ? (room.followSource === 'local' ? 'both' : 'pocket')
-      : (room.followSource === 'both' ? 'local' : undefined)
-    ElMessage({ message: willFollow ? '已在口袋账号关注该成员' : '已在口袋账号取消关注该成员', type: 'success' })
+      // 先更新口袋镜像再写本地：本地 store 的变化会触发来源 watch，此时镜像须已是最新
+      notePocketFollow(room.userId, true)
+      const localOk = await followMember({ userId: room.userId, realName: room.nickname, teamColor: room.teamColor })
+      applyRoomFollowSource(room.userId, localOk ? 'both' : 'pocket')
+      ElMessage({
+        message: localOk ? '已关注（口袋账号 + 本机）' : '已关注口袋账号，本机记录同步失败',
+        type: localOk ? 'success' : 'warning',
+      })
+      return
+    }
+    await window.mainAPI.pocketUnfollowMember(room.userId)
+    notePocketFollow(room.userId, false)
+    applyRoomFollowSource(room.userId, keepLocal ? 'local' : undefined)
+    ElMessage({
+      message: keepLocal ? '已取消口袋关注，本地关注保留' : '已取消关注，房间已移出列表',
+      type: 'success',
+    })
   }
   catch (error) {
     ElMessage.error(willFollow ? '口袋关注失败，请稍后重试' : '口袋取关失败，请稍后重试')
@@ -243,6 +278,40 @@ async function togglePocketFollow() {
   }
   finally {
     pocketFollowBusy.value = false
+  }
+}
+
+/**
+ * 本地关注开关：只动本机名单。口袋已关注时锁定（见上），这里再守一道，
+ * 免得按钮态与服务端不同步时把同步会补回来的记录删掉。
+ */
+async function toggleLocalFollow() {
+  const room = selectedRoom.value
+  if (!room || localFollowBusy.value || pocketFollowBusy.value || selectedPocketFollowed.value)
+    return
+  const willFollow = !selectedLocalFollowed.value
+  localFollowBusy.value = true
+  try {
+    if (willFollow) {
+      const ok = await followMember({ userId: room.userId, realName: room.nickname, teamColor: room.teamColor })
+      if (!ok) {
+        ElMessage.error('本地关注失败，请稍后重试')
+        return
+      }
+      applyRoomFollowSource(room.userId, 'local')
+      ElMessage({ message: '已在本机关注该成员', type: 'success' })
+      return
+    }
+    const ok = await unfollowMember(room.userId)
+    if (!ok) {
+      ElMessage.error('本地取关失败，请稍后重试')
+      return
+    }
+    applyRoomFollowSource(room.userId, undefined)
+    ElMessage({ message: '已移出本机，房间不再显示', type: 'success' })
+  }
+  finally {
+    localFollowBusy.value = false
   }
 }
 
@@ -1551,11 +1620,6 @@ watch([chatStatus, chatStatusText], () => {
   else
     statusText.value = ''
 }, { immediate: true })
-
-onMounted(() => {
-  debugLog('rooms-page', 'Rooms 页面挂载，开始获取频道列表', { loggedIn: loggedIn.value })
-  void load()
-})
 </script>
 
 <template>
@@ -1688,6 +1752,13 @@ onMounted(() => {
                   >
                     <MediaIcon class="room-pin-ico" name="pushpinFilled" :size="13" />
                   </el-tooltip>
+                  <!-- 只在本地名单里（账号未关注 / 已取关）：账号关注会被同步并进本地名单，
+                       所以这个标记只在「本地独自撑着一个房间」时出现，不会几乎每行都挂 -->
+                  <span
+                    v-if="room.followSource === 'local'"
+                    class="room-local-tag"
+                    title="本地关注（仅本机，直播 / 回放优先展示）"
+                  >本地</span>
                   <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
                   <span v-if="room.temporary" class="room-temp-tag">临时</span>
                   <span v-if="isRoomClosedOf(room.userId)" class="room-closed-tag">已关闭</span>
@@ -2315,9 +2386,13 @@ onMounted(() => {
                 :team-name="selectedRoom.teamName"
                 :team-color="selectedRoom.teamColor"
                 :live="selectedRoom.live"
-                :pocket-followed="isPocketFollowed(selectedRoom.followSource)"
+                :pocket-followed="selectedPocketFollowed"
+                :local-followed="selectedLocalFollowed"
                 :pocket-follow-busy="pocketFollowBusy"
-                @toggle-follow="togglePocketFollow"
+                :local-follow-busy="localFollowBusy"
+                :pocket-unavailable="!!pocketFollowError"
+                @toggle-pocket-follow="togglePocketFollow"
+                @toggle-local-follow="toggleLocalFollow"
               />
               <RoomAlbum :messages="messages" />
             </aside>
@@ -2416,7 +2491,7 @@ onMounted(() => {
     background-color 0.15s ease;
 }
 
-/* 软标签：队伍徽标 / 临时 / 已关闭三个状态标记共用，色相由 --tag-color 给出 */
+/* 软标签：队伍徽标 / 本地 / 临时 / 已关闭四个状态标记共用，色相由 --tag-color 给出 */
 %soft-tag {
   flex: none;
   padding: 0 6px;
@@ -2983,6 +3058,14 @@ onMounted(() => {
 
   /* 队伍色只做淡底不加描边：它是身份标识，不像下面两个是状态提示 */
   box-shadow: none;
+}
+
+/* 「本地」关注标记：只在仅本地关注的房间出现——账号关注会被同步并进本地名单（both），
+ * 用中性色与「临时 / 已关闭」同规格，表达「这个房间只靠本机记录留着」 */
+.room-local-tag {
+  @extend %soft-tag;
+
+  --tag-color: var(--el-text-color-secondary);
 }
 
 /* 「临时」标记（左列条目与右栏头部共用）：换房间主题青 + 描边，

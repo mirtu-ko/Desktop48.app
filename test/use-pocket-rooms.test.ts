@@ -4,7 +4,7 @@ import type { RoomSnapshotRow } from '../src/renderer/src/utils/room-list-snapsh
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick } from 'vue'
 import { normalizePocketRoomMessage } from '../src/renderer/src/utils/pocket-room-message'
-import { ROOM_LIST_SNAPSHOT_KEY, serializeRoomListSnapshot } from '../src/renderer/src/utils/room-list-snapshot'
+import { parseRoomListSnapshot, ROOM_LIST_SNAPSHOT_KEY, serializeRoomListSnapshot } from '../src/renderer/src/utils/room-list-snapshot'
 
 /**
  * use-pocket-rooms 编排层：关注名单合并、房间遍历（过滤无房间）、
@@ -652,6 +652,71 @@ describe('use-pocket-rooms / 屏蔽优先', () => {
     expect(await api.openTemporaryRoom(10002)).toEqual({ ok: true })
 
     expect(api.rooms.value.map(room => [room.userId, !!room.temporary])).toEqual([[10002, true]])
+  })
+})
+
+describe('use-pocket-rooms / 取关移出左列', () => {
+  // 左列的唯一来源是「口袋关注 ∪ 本地关注」：取关把两边都摘掉后，这条记录不该再留在列表里
+  it('applyRoomFollowSource(undefined)：摘掉条目、收起正看着的右侧，并重写快照', async () => {
+    const { api } = await setup({
+      pocketIds: [10001, 10002],
+      directory: {
+        10001: { realName: '甲', avatar: '', teamName: '', teamColor: '' },
+        10002: { realName: '乙', avatar: '', teamName: '', teamColor: '' },
+      },
+      roomPages: {
+        'ch-10001': { 0: { nextTime: 0, messages: [roomMsg('a', 100, '甲的留言')] } },
+        'ch-10002': { 0: { nextTime: 0, messages: [roomMsg('b', 200, '乙的留言')] } },
+      },
+    })
+    await api.load()
+    await api.selectRoom(10002)
+    expect(api.chatStatus.value).toBe('ready')
+
+    api.applyRoomFollowSource(10002, undefined)
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+    expect(api.selectedUserId.value).toBeNull()
+    expect(api.messages.value).toEqual([])
+    expect(api.chatStatus.value).toBe('idle')
+    // 快照同步重写：下次冷启动首帧不该再把已取关的房间水合回来
+    const snapshot = parseRoomListSnapshot(storage.get(ROOM_LIST_SNAPSHOT_KEY), '999')
+    expect(snapshot.map(row => row.userId)).toEqual([10001])
+  })
+})
+
+describe('use-pocket-rooms / 关注来源就地重算', () => {
+  const flags = () => [
+    { userId: 10001, realName: '甲', teamColor: '' },
+    { userId: 10002, realName: '乙', teamColor: '' },
+  ]
+
+  it('本地取关但账号仍关注：房间保留，来源降为 pocket', async () => {
+    const { api } = await setup({ pocketIds: [10001, 10002], localFlags: flags() })
+    await api.load()
+    expect(api.rooms.value.map(room => [room.userId, room.followSource]))
+      .toEqual([[10001, 'both'], [10002, 'both']])
+
+    const { useFollowedMembersStore } = await import('@renderer/stores/member-flags')
+    const store = useFollowedMembersStore()
+    store.followedMembers.value = store.followedMembers.value.filter(member => Number(member.userId) !== 10002)
+    await nextTick()
+
+    expect(api.rooms.value.map(room => [room.userId, room.followSource]))
+      .toEqual([[10001, 'both'], [10002, 'pocket']])
+  })
+
+  it('账号先取关（镜像更新）再本地取关：房间移出左列', async () => {
+    const { api } = await setup({ pocketIds: [10001, 10002], localFlags: flags() })
+    await api.load()
+
+    const { useFollowedMembersStore } = await import('@renderer/stores/member-flags')
+    const store = useFollowedMembersStore()
+    api.notePocketFollow(10002, false)
+    store.followedMembers.value = store.followedMembers.value.filter(member => Number(member.userId) !== 10002)
+    await nextTick()
+
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
   })
 })
 
@@ -1922,6 +1987,26 @@ describe('use-pocket-rooms / 临时房间（成员详情卡入口）', () => {
 
     await api.load()
     expect(api.rooms.value.map(room => room.userId)).toEqual([10001])
+  })
+
+  // 临时条目点关注后转正：不再带「临时」标记，也不该在下次首灌时被当成重复条目撤掉
+  it('临时房间点关注后转正：去掉临时标记，首灌不重复', async () => {
+    const options = tempFixture()
+    const { api } = await setup(options)
+    await api.load()
+    await api.openTemporaryRoom(10002)
+
+    api.applyRoomFollowSource(10002, 'local')
+
+    expect(api.temporaryRoom.value).toBeNull()
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary, room.followSource]))
+      .toEqual([[10002, false, 'local'], [10001, false, 'pocket']])
+
+    // 本地 flag 已落库：再首灌时它按普通关注房间重建，不会在临时条目之外多出一条
+    options.localFlags = [{ userId: 10002, realName: '乙', teamColor: '' }]
+    await api.load()
+    expect(api.rooms.value.map(room => [room.userId, !!room.temporary]))
+      .toEqual([[10001, false], [10002, false]])
   })
 
   it('临时房间的成员随后被关注：临时条目就地撤掉，只留关注条目且选中不断', async () => {

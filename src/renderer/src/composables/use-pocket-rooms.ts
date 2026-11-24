@@ -139,6 +139,11 @@ export function usePocketRooms() {
   const loadError = ref('')
   /** 口袋关注拉取失败原因（降级为本地名单时给一行提示）；空串 = 无 */
   const pocketFollowError = ref('')
+  /**
+   * 本页最近一次拿到的口袋关注 ID（权威名单）。本地关注名单变化时用它区分
+   * local / both / pocket，无需再打一次账号接口；load() 整体替换，账号关注操作增量维护。
+   */
+  const pocketFollowIds = ref<Set<number>>(new Set())
   /** 被过滤掉的房间数（无房间 / 已关闭）；左列给一行说明，避免「关注了却看不到」的困惑 */
   const hiddenRoomCount = ref(0)
   /** 是否已登录（登录态镜像；未登录时页面展示登录引导） */
@@ -344,7 +349,7 @@ export function usePocketRooms() {
    * 减去屏蔽名单是「屏蔽优先」在房间页的落点：关注与屏蔽正交（见 composables/use-member-actions），
    * 账号关注照旧存在，但被屏蔽的成员不进左列——也就不必为它解析房间频道。
    */
-  async function loadFollowedIds(): Promise<{ ids: number[], followSourceOf: Map<number, PocketRoomFollowSource> }> {
+  async function loadFollowedIds(): Promise<{ ids: number[], pocketIds: number[], followSourceOf: Map<number, PocketRoomFollowSource> }> {
     // 屏蔽名单必须先就位：isBlocked 在未加载的空名单上恒为 false，漏加载等于放行被屏蔽成员
     await ensureBlockedLoaded()
     // 首灌走 refresh 而非 ensureLoaded：store 是模块级单例，ensureLoaded 命中后
@@ -353,7 +358,10 @@ export function usePocketRooms() {
       loadPocketFollowedIds(),
       refreshFollowedMembers().then(() => followedMembers.value),
     ])
-    return mergeFollowedIds(pocketIds, localEntries.map(entry => entry.userId), isBlocked)
+    return {
+      ...mergeFollowedIds(pocketIds, localEntries.map(entry => entry.userId), isBlocked),
+      pocketIds,
+    }
   }
 
   /** 共享 store 的全站直播索引；force=true 用于手动刷新并绕过 120s 新鲜缓存。 */
@@ -470,6 +478,38 @@ export function usePocketRooms() {
       clearChat()
       void syncQChatChannel()
     }
+  })
+
+  /**
+   * 本地关注名单变化 → 就地重算左列来源（与屏蔽摘除同一条实时链路）。
+   *
+   * 成员页 / 设置页可能在房间页挂在 keep-alive 后台时改过本地 flag，只靠 load() 过滤
+   * 的话用户切回来之前看到的仍是旧来源。口袋侧用本页镜像判定，不额外打账号接口。
+   * 新关注的成员若还没有房间条目，不在这里解析频道——那是 load() 的职责，页面重新
+   * 激活时会补上。首灌期间跳过：load 已用最新名单重建列表，watch 拿旧列表重算反而会打架。
+   */
+  watch(followedMembers, () => {
+    if (loading.value || !rooms.value.length)
+      return
+    const localIds = new Set(followedMembers.value.map(entry => Number(entry.userId)))
+    let changed = false
+    for (const room of rooms.value) {
+      if (room.temporary)
+        continue
+      const inPocket = pocketFollowIds.value.has(room.userId)
+      const inLocal = localIds.has(room.userId)
+      const source: PocketRoomFollowSource | undefined
+        = inPocket && inLocal ? 'both' : inPocket ? 'pocket' : inLocal ? 'local' : undefined
+      if (source === room.followSource)
+        continue
+      changed = true
+      if (source)
+        room.followSource = source
+      else
+        dropRoom(room.userId)
+    }
+    if (changed)
+      saveSnapshotRooms()
   })
 
   /** lastMsgList → channelId → 消息 */
@@ -670,9 +710,10 @@ export function usePocketRooms() {
         debugLog('pocket-rooms', '直播状态拉取失败（无开播标记降级）', error)
         return liveByUserId.value
       })
-      const { ids, followSourceOf } = await loadFollowedIds()
+      const { ids, pocketIds, followSourceOf } = await loadFollowedIds()
       if (requestId !== loadRequestId)
         return
+      pocketFollowIds.value = new Set(pocketIds)
       const liveMap = await livePromise
       if (requestId !== loadRequestId)
         return
@@ -1600,6 +1641,74 @@ export function usePocketRooms() {
   }
 
   /**
+   * 取关后把房间移出左列：这一列的唯一来源就是关注名单（口袋 ∪ 本地），两边都不再关注时
+   * 它不该继续留在列表里。正看着它就把右侧一并收起，与屏蔽摘除同一条处理；
+   * 临时房间不在关注名单内，原样保留。
+   *
+   * 快照同步重写：否则下次冷启动的首帧会把已取关的房间再从本地快照水合出来。
+   */
+  function dropRoom(userId: number): void {
+    const room = rooms.value.find(item => item.userId === userId)
+    if (!room || room.temporary)
+      return
+    rooms.value = rooms.value.filter(item => item.userId !== userId)
+    sortedUnreadIds = collectUnreadIds(rooms.value)
+    if (selectedUserId.value === userId) {
+      selectedUserId.value = null
+      clearChat()
+      void syncQChatChannel()
+    }
+    saveSnapshotRooms()
+  }
+
+  /**
+   * 临时房间「转正」：用户从资料卡给它加了关注（口袋或本地），它从此属于关注名单，
+   * 不该再带「临时」标记或关闭钮。temporaryRoom 一并清掉，否则下次首灌的
+   * insertTemporaryRoom 会把它当重复条目撤掉。
+   */
+  function promoteTemporaryRoom(userId: number): void {
+    const temp = temporaryRoom.value
+    if (!temp || temp.userId !== userId)
+      return
+    temporaryRoom.value = null
+    const room = rooms.value.find(item => item.userId === userId)
+    if (room)
+      room.temporary = false
+  }
+
+  /**
+   * 关注来源变化的唯一落点（资料卡两个关注开关共用）：写回房间来源；从「不关注」
+   * 变成「关注」时顺手把临时条目转正，两边都不再关注时移出左列。快照一并重写，
+   * 免得首帧水合出旧的关注标记。
+   */
+  function applyRoomFollowSource(userId: number, source: PocketRoomFollowSource | undefined): void {
+    const room = rooms.value.find(item => item.userId === userId)
+    if (!room)
+      return
+    if (source)
+      promoteTemporaryRoom(userId)
+    room.followSource = source
+    if (!source) {
+      dropRoom(userId)
+      return
+    }
+    saveSnapshotRooms()
+  }
+
+  /**
+   * 账号关注操作成功后增量维护口袋侧镜像，供上面的本地名单 watch 重算来源。
+   * 必须在账号请求成功之后调用：失败时保持旧态，下一轮 load() 会重新拉取权威名单。
+   */
+  function notePocketFollow(userId: number, followed: boolean): void {
+    const next = new Set(pocketFollowIds.value)
+    if (followed)
+      next.add(userId)
+    else
+      next.delete(userId)
+    pocketFollowIds.value = next
+  }
+
+  /**
    * 临时打开某成员的大房间（成员详情卡入口 → 路由 query 的唯一入口）。
    *
    * 与关注房间的区别只在「条目从哪来」：不改关注名单、不落盘。频道经
@@ -1777,8 +1886,10 @@ export function usePocketRooms() {
   if (getCurrentInstance()) {
     onActivated(() => {
       pageActive.value = true
-      if (pocketAuthState.value.loggedIn && rooms.value.length)
-        void refreshRoomStatus(false)
+      // 关注名单可能在 keep-alive 后台被成员页 / 设置页改过：重新首灌会清掉陈旧的
+      // pocketFollowError，并按两份名单重建左列。load 已包含直播与预览刷新，
+      // 不再单独调 refreshRoomStatus（否则切回一次打两轮请求）。
+      void load()
       if (activeChannel)
         void pollRoomMessages()
       resumeMessagePoll()
@@ -1872,6 +1983,10 @@ export function usePocketRooms() {
     unlockSmall,
     openTemporaryRoom,
     closeTemporaryRoom,
+    /** 关注开关改完来源后统一落库（见 applyRoomFollowSource） */
+    applyRoomFollowSource,
+    /** 口袋账号关注成功后维护镜像（见 notePocketFollow） */
+    notePocketFollow,
 
     loadMoreHistory,
     openSharedLive,

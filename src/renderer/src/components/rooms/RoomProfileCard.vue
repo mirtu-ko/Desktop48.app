@@ -23,12 +23,33 @@ const props = defineProps<{
   live: LiveListItem | null
   /** 口袋账号侧是否已关注（未登录 / 本地独有时为 false） */
   pocketFollowed?: boolean
+  /** 本机名单里是否已收录（local / both；账号关注的成员同步后也是 true） */
+  localFollowed?: boolean
   /** 口袋关注 / 取关请求进行中 */
   pocketFollowBusy?: boolean
+  /** 本地关注 / 取关请求进行中 */
+  localFollowBusy?: boolean
+  /** 口袋关注名单未同步：账号侧状态不可信，主开关禁用并说明原因 */
+  pocketUnavailable?: boolean
 }>()
 
-/** 口袋关注 / 取关：状态与数据编排留在房间页，卡片只负责展示与触发 */
-const emit = defineEmits<{ toggleFollow: [] }>()
+/** 关注开关：状态与数据编排留在房间页，卡片只负责展示与触发 */
+const emit = defineEmits<{ togglePocketFollow: [], toggleLocalFollow: [] }>()
+
+/**
+ * 层级而不是并列：口袋关注是主操作，本机名单只作为状态呈现；
+ * 「仅在本机关注 / 移出本机」这类次级操作放在状态行里，按状态决定是否出现。
+ */
+const localOnly = computed(() => props.pocketFollowed !== true && props.localFollowed === true)
+/** 任一请求在途：两个入口互斥，避免并发改出来回跳的状态 */
+const followBusy = computed(() => props.pocketFollowBusy === true || props.localFollowBusy === true)
+const pocketDisabled = computed(() => props.pocketUnavailable === true || props.localFollowBusy === true)
+
+const pocketTitle = computed(() => {
+  if (props.pocketUnavailable)
+    return '口袋关注未同步，稍后刷新再试'
+  return props.pocketFollowed ? '取消口袋关注（会同步到账号）' : '在口袋账号关注该成员'
+})
 
 const { findMemberByUserId } = useMemberDirectoryStore()
 
@@ -192,30 +213,66 @@ function enterLive() {
       </div>
     </dl>
 
-    <!-- 口袋关注状态：品牌小徽标注状态，右侧胶囊按钮切换（状态编排留在房间页） -->
+    <!-- 关注：一枚主开关（口袋账号）+ 一行随状态变化的本机说明。
+         本机不是第二个开关——它只回答「房间为什么还在」，并在需要时给出「移出本机」 -->
     <div class="profile-follow">
-      <span
-        class="follow-chip"
-        :class="{ 'is-on': pocketFollowed }"
-        title="口袋账号侧的关注状态，可在设置页拉取同步"
-      >
-        <el-icon :size="11" class="follow-chip-ico">
-          <StarFilled v-if="pocketFollowed" />
-          <Star v-else />
-        </el-icon>
-        口袋关注
-      </span>
-      <el-button
-        size="small"
-        round
-        class="follow-btn"
-        :class="pocketFollowed ? 'is-remove' : 'is-add'"
-        :loading="pocketFollowBusy"
-        :title="pocketFollowed ? '在口袋账号取消关注该成员' : '在口袋账号关注该成员'"
-        @click="emit('toggleFollow')"
-      >
-        {{ pocketFollowed ? '取关' : '+ 关注' }}
-      </el-button>
+      <div class="follow-row">
+        <span class="follow-label" :title="pocketTitle">
+          <el-icon :size="12" class="follow-label-ico" :class="{ 'is-on': pocketFollowed }">
+            <StarFilled v-if="pocketFollowed" />
+            <Star v-else />
+          </el-icon>
+          口袋关注
+        </span>
+        <el-button
+          size="small"
+          round
+          class="follow-btn"
+          :class="pocketFollowed ? 'is-remove' : 'is-add'"
+          :loading="pocketFollowBusy"
+          :disabled="pocketDisabled"
+          :title="pocketTitle"
+          :aria-label="pocketTitle"
+          @click="emit('togglePocketFollow')"
+        >
+          {{ pocketFollowed ? '取关' : '关注' }}
+        </el-button>
+      </div>
+
+      <p class="follow-note">
+        <template v-if="pocketUnavailable">
+          关注状态未同步，稍后刷新再试
+        </template>
+        <template v-else-if="pocketFollowed">
+          <span class="follow-state">已关注</span>
+          <span class="follow-dot">·</span>
+          {{ localFollowed ? '本机名单随账号同步' : '本机尚未收录，同步后出现' }}
+        </template>
+        <template v-else-if="localOnly">
+          <span class="follow-state">仅在本机关注</span>
+          <span class="follow-dot">·</span>
+          <button
+            type="button"
+            class="follow-text-btn"
+            :disabled="followBusy"
+            @click="emit('toggleLocalFollow')"
+          >
+            {{ localFollowBusy ? '移出中…' : '移出本机' }}
+          </button>
+        </template>
+        <template v-else>
+          关注后会同步到口袋账号
+          <span class="follow-dot">·</span>
+          <button
+            type="button"
+            class="follow-text-btn"
+            :disabled="followBusy"
+            @click="emit('toggleLocalFollow')"
+          >
+            {{ localFollowBusy ? '记录中…' : '仅在本机关注' }}
+          </button>
+        </template>
+      </p>
     </div>
   </section>
 
@@ -408,41 +465,44 @@ function enterLive() {
   }
 }
 
-/* 口袋关注行：左侧状态徽标（未关注中性 / 已关注品牌渐变），右侧胶囊按钮 */
+/* 关注区：一枚主开关 + 一行状态说明。本机不是第二个开关，只在状态行里出现 */
 .profile-follow {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   margin-top: 12px;
 }
 
-.follow-chip {
+.follow-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.follow-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 9px;
-  border-radius: 999px;
+  min-width: 0;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  line-height: 18px;
   color: var(--el-text-color-secondary);
-  background: color-mix(in srgb, var(--el-text-color-secondary) 10%, transparent);
   cursor: default;
-  transition: all 0.18s ease;
+}
+
+.follow-label-ico {
+  flex: none;
+  color: var(--el-text-color-placeholder);
 
   &.is-on {
-    color: #fff;
-    background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
-    box-shadow: 0 4px 10px -4px color-mix(in srgb, var(--brand-primary) 55%, transparent);
+    color: var(--brand-primary);
   }
 }
 
-.follow-chip-ico {
-  color: currentColor;
-}
-
-/* 关注 / 取关按钮：未关注为品牌渐变胶囊，已关注为中性胶囊（悬停转危险色提示取关） */
+/* 主开关按动作着色：未关注 = 品牌渐变（告诉我可以关注）；
+ * 已关注 = 中性胶囊，hover 转危险色（下一步是取关） */
 .follow-btn {
   height: 24px;
   padding: 0 12px;
@@ -468,6 +528,44 @@ function enterLive() {
       color: var(--el-color-danger);
       background: color-mix(in srgb, var(--el-color-danger) 10%, transparent);
     }
+  }
+}
+
+/* 状态说明：一句随状态变化的话，承担原本那段长解释的全部工作 */
+.follow-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--el-text-color-placeholder);
+}
+
+.follow-state {
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+}
+
+.follow-dot {
+  margin: 0 2px;
+}
+
+/* 次级操作（仅在本机关注 / 移出本机）：文字按钮，不与主开关抢视觉 */
+.follow-text-btn {
+  padding: 0;
+  border: none;
+  font: inherit;
+  color: var(--el-text-color-secondary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--el-color-danger);
+  }
+
+  &:disabled {
+    color: var(--el-text-color-placeholder);
+    cursor: default;
   }
 }
 /* 直播状态卡：可点进入直播；cover 统一 16:9 弱化占位 */
