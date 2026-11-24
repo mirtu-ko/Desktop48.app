@@ -29,7 +29,6 @@ describe('registerDatabaseIPC 通道注册', () => {
       'addMemberFlag',
       'addMemberFlags',
       'getAllMembers',
-      'getConfig',
       'getMemberFlags',
       'getMemberInfo',
       'getMemberTeamPromotions',
@@ -38,7 +37,6 @@ describe('registerDatabaseIPC 通道注册', () => {
       'removeMemberFlag',
       'removeMemberTeamPromotion',
       'saveMemberData',
-      'setConfig',
       'setMemberFlags',
       'setMemberTeamPromotion',
     ])

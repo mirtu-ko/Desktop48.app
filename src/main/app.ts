@@ -8,6 +8,7 @@ import trayIco from '../../resources/tray.ico?asset'
 import trayTemplate from '../../resources/trayTemplate.png?asset'
 import trayUnread from '../../resources/trayUnread.png?asset'
 import { cleanupDanmakuSessions } from './bilibili/danmaku-session'
+import { ConfigStore } from './config-store'
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
 import { registerAllIPC } from './ipc'
@@ -40,8 +41,14 @@ function defaultDownloadDirectory(): string {
   }
 }
 
-// 数据库初始化与全部 IPC 通道注册（database.ts 模块本身无副作用，单例在此显式拉起）
-Database.instance().init({ downloadDirectory: defaultDownloadDirectory() })
+// 存储初始化与全部 IPC 通道注册（两个存储模块本身都无副作用，单例在此显式拉起）
+// 配置（app-config.json）与成员库（database.json）分开存放：改设置不再重写整库。
+const database = Database.instance()
+database.init()
+// 升级迁移：旧版本把配置存在 database.json 的 config 字段里，先写新文件，成功后再清旧字段。
+// ConfigStore.init 在 app-config.json 已存在时忽略 legacy，重复启动不会用旧值覆盖新值。
+ConfigStore.instance().init({ downloadDirectory: defaultDownloadDirectory() }, database.takeLegacyConfig())
+database.dropLegacyConfig()
 registerAllIPC()
 
 log('[app.ts] 主进程路径:', process.execPath)
@@ -94,7 +101,7 @@ function shouldHideToTray(): boolean {
   if (process.platform === 'darwin')
     return true
   return process.platform === 'win32'
-    && Database.instance().getConfig('trayOnClose') === 'on'
+    && ConfigStore.instance().getConfig('trayOnClose') === 'on'
 }
 
 /** 显示 / 聚焦主窗口；主窗口不存在（已销毁）时重建。托盘点击、菜单与 activate/second-instance 共用 */
@@ -286,7 +293,7 @@ app.on('window-all-closed', () => {
   if (process.platform === 'darwin')
     return
   const keepAlive = process.platform === 'win32'
-    && Database.instance().getConfig('trayOnClose') === 'on'
+    && ConfigStore.instance().getConfig('trayOnClose') === 'on'
     && isTrayActive()
   if (!keepAlive)
     app.quit()

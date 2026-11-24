@@ -1,4 +1,4 @@
-import type { AppConfig, ConfigKey } from '@common/app-config'
+import type { AppConfig } from '@common/app-config'
 import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
 import type { MemberTeamPromotion, MemberTeamPromotionRecord } from '@common/member-team-promotion'
 import type {
@@ -17,7 +17,6 @@ import type {
 import type { MemberTreeGroupNode } from './domain/member-tree'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { assertConfigKey, CONFIG_DEFAULTS, isConfigKey, isConfigValueAllowed, parseConfigValue } from '@common/app-config'
 import { assertMemberFlagKind } from '@common/member-flags'
 import { assertMemberTeamPromotion, normalizeMemberTeamPromotions } from '@common/member-team-promotion'
 import { app } from 'electron'
@@ -75,6 +74,11 @@ export interface DatabaseShape {
    * 同一账号的同一成员只保留最后一条。
    */
   memberTeamPromotions?: MemberTeamPromotionRecord[]
+  /**
+   * @deprecated 旧版本把应用配置存在这里。现由 app-config.json（main/config-store.ts）持有，
+   * 该字段只为升级迁移保留：init() 后经 takeLegacyConfig() 交给 ConfigStore，
+   * 迁移成功再由 dropLegacyConfig() 清除。
+   */
   config?: AppConfig
   /** 兼容旧库残留字段（init() 清理）：迁移来源 / 已废弃的持久化树 / 已停止拉取的精简名单 */
   hiddenMemberIds?: number[]
@@ -83,9 +87,10 @@ export interface DatabaseShape {
 }
 
 /**
- * JSON 数据库门面：负责原子读写、config CRUD 与成员标记名单查询。
+ * 成员数据 JSON 数据库门面：负责原子读写与成员标记名单查询。
  *
  * 职责边界：
+ * - 应用配置在 `config-store.ts`（app-config.json），本类不再读写配置
  * - 建树逻辑在 `domain/member-tree.ts`（纯函数）
  * - 屏蔽 / 关注名单的匹配与过滤在 `domain/member-flags.ts`（纯函数），本类只管落库
  * - IPC 注册在 `ipc/register-database-ipc.ts`
@@ -115,10 +120,12 @@ class Database {
   }
 
   /**
-   * init 支持注入运行时默认值：某些默认路径来自 Electron 的系统标准目录，
-   * 不能放进共享 CONFIG_DEFAULTS（纯 Node 测试无法提供 app.getPath）。
+   * 初始化成员库：读盘、迁移/清理旧字段、建树，内容有变化才落盘。
+   *
+   * 配置不在这里处理：旧库里的 `config` 字段原样保留，由 app.ts 交给
+   * ConfigStore 迁移（takeLegacyConfig），迁移成功后 dropLegacyConfig() 清理。
    */
-  public init(runtimeDefaults: Partial<AppConfig> = {}) {
+  public init() {
     if (!existsSync(dirname(this.dbPath))) {
       mkdirSync(dirname(this.dbPath), { recursive: true })
     }
@@ -149,23 +156,6 @@ class Database {
     // 清理已废弃的存储字段：allmembersSimple 是 allmembers 的字段子集，已停止拉取与落库
     delete this.db.allmembersSimple
 
-    // 补齐未设置的配置并写盘：「未设置」= 缺失 / 空串 / 非字符串
-    const stored = this.db.config as Partial<Record<ConfigKey, unknown>> | undefined
-    // 装配期用宽类型承接动态键：联合键无法让 TS 证明「键-值」配对，
-    // 枚举取值已在下面逐键校验，装配完再一次性收窄回 AppConfig
-    const config: Record<ConfigKey, string> = { ...CONFIG_DEFAULTS }
-    for (const [key, value] of Object.entries(runtimeDefaults)) {
-      if (isConfigKey(key) && typeof value === 'string' && value)
-        config[key] = value
-    }
-    for (const key of Object.keys(CONFIG_DEFAULTS) as ConfigKey[]) {
-      const value = stored?.[key]
-      // 枚举型键的旧值可能是已废弃的取值：一并当作未设置，回落默认值
-      if (typeof value === 'string' && value !== '' && isConfigValueAllowed(key, value))
-        config[key] = value
-    }
-    this.db.config = config as AppConfig
-
     // 建树（纯内存派生，不写回原始数据）
     this.rebuildMemberTree()
 
@@ -173,6 +163,26 @@ class Database {
     if (JSON.stringify(this.db) !== beforeInit)
       this.storage.write(this.db)
     log('[database.ts]数据库路径', this.dbPath)
+  }
+
+  /**
+   * 旧库里的配置（升级迁移用）：只读，不改内存也不落盘。
+   * 由 app.ts 交给 ConfigStore.init()，校验后写入 app-config.json。
+   */
+  public takeLegacyConfig(): Partial<AppConfig> | undefined {
+    return this.db.config
+  }
+
+  /**
+   * 迁移完成后的清理：删掉 database.json 里的 config 字段并落盘一次。
+   * 只在旧字段确实存在时写（新库无此字段，启动不会多一次 1 MB 级 fsync）。
+   * 调用前必须确保 ConfigStore 已成功写出 app-config.json，否则配置会丢。
+   */
+  public dropLegacyConfig(): void {
+    if (this.db.config === undefined)
+      return
+    delete this.db.config
+    this.storage.write(this.db)
   }
 
   /** 保存 API 同步来的成员相关原始数据（10 个分节全量落库）；清洗/派生只发生在内存里（建树），落盘的只有原始内容 */
@@ -351,27 +361,6 @@ class Database {
 
   public hasMembers() {
     return Array.isArray(this.membersDB) && this.membersDB.length > 0
-  }
-
-  /**
-   * 读取配置：纯读操作，不写盘。init() 已补齐未设置的键，故恒返回生效值，
-   * 调用方无需再传 defaultValue。末尾回退只作防御（空串同样算未设置）。
-   */
-  public getConfig<K extends ConfigKey>(key: K): AppConfig[K] {
-    assertConfigKey(key)
-    return this.db.config?.[key] || CONFIG_DEFAULTS[key]
-  }
-
-  /**
-   * 写入配置：运行时校验 + 收窄一次（IPC 传来的裸字符串由 parseConfigValue 兜住），
-   * 校验通过后才落盘，避免脏值进库。
-   */
-  public setConfig<K extends ConfigKey>(key: K, value: AppConfig[K]) {
-    const normalized = parseConfigValue(key, value)
-    const config = this.db.config ?? { ...CONFIG_DEFAULTS }
-    config[key] = normalized
-    this.db.config = config
-    this.storage.write(this.db)
   }
 
   /** 重建内存派生的成员树 */

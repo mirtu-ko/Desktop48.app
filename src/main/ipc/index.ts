@@ -7,6 +7,7 @@
  */
 import { registerFfmpegDownloadIPC } from '../ffmpeg/ffmpeg-download'
 import { registerRoomAlbumDownloadIPC } from '../pocket48/room-album-download'
+import { registerConfigIPC } from './register-config-ipc'
 import { registerDanmakuIPC } from './register-danmaku-ipc'
 import { registerDatabaseIPC } from './register-database-ipc'
 import { registerFloatWindowIPC } from './register-float-window-ipc'
@@ -18,6 +19,7 @@ import { registerUpdaterIPC } from './register-updater-ipc'
 import { registerWindowIPC } from './register-window-ipc'
 
 export function registerAllIPC(): void {
+  registerConfigIPC()
   registerDatabaseIPC()
   registerWindowIPC()
   registerSystemIPC()

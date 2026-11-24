@@ -15,7 +15,7 @@ import path from 'node:path'
 import { SITE_USER_AGENT } from '@common/android-device'
 import { app, clipboard, ClipboardItem, dialog, net, shell } from 'electron'
 import { isPathInAllowedRoots } from '../allowed-path'
-import { Database } from '../database'
+import { ConfigStore } from '../config-store'
 import { collectFeedbackMeta, isFeedbackEndpointReady, submitFeedback } from '../feedback'
 import { inspectFfmpegDir, resolveFfmpegEnvironment } from '../ffmpeg/ffmpeg-process'
 import { decodePngDataUrl, ensurePngExtension, safePngFileName } from '../image-file'
@@ -225,7 +225,7 @@ export function registerSystemIPC(): void {
       app.getPath('userData'),
     ]
     for (const key of ['downloadDirectory', 'ffmpegDirectory'] as const) {
-      const dir = Database.instance().getConfig(key)
+      const dir = ConfigStore.instance().getConfig(key)
       if (dir)
         allowedRoots.push(dir)
     }
@@ -306,7 +306,7 @@ export function registerSystemIPC(): void {
   handleTraced('getFfmpegStatus', (_event: IpcMainInvokeEvent, dir?: string) =>
     dir
       ? inspectFfmpegDir(dir)
-      : resolveFfmpegEnvironment(Database.instance().getConfig('ffmpegDirectory')))
+      : resolveFfmpegEnvironment(ConfigStore.instance().getConfig('ffmpegDirectory')))
 
   // 网络诊断：对核心服务域名逐一轻量探测（设置页「网络诊断」），目标清单在 net-diagnose.ts
   handleTraced('netDiagnose', async () => diagnoseTargets())

@@ -59,7 +59,7 @@ const api = {
   removeMemberTeamPromotion: (userId: number) => invokeIpc('removeMemberTeamPromotion', userId),
 
   // ===== 应用配置 =====
-  // 对端：main/ipc/register-database-ipc.ts
+  // 对端：main/ipc/register-config-ipc.ts（配置独立存 userData/app-config.json）
   // getConfig 的线上返回值是 string（InvokeSpec 只能表达一种线格式），
   // 键值关联的收窄在契约层完成：此处断言为 AppConfig[K]，渲染层拿到的即是该键的精确类型。
   getConfig: <K extends ConfigKey>(key: K) => invokeIpc('getConfig', key) as Promise<AppConfig[K]>,

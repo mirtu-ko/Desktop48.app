@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { Database } from './database'
+import { ConfigStore } from './config-store'
 import { resolveFfmpegBinary } from './ffmpeg/ffmpeg-process'
 import { assertLocalServerAvailable, serverHost, serverPort } from './http-server'
 import { debug, error, log } from './logger'
@@ -31,7 +31,7 @@ function getStreamRoute(liveId: string) {
  * 这条链路的错误会经 IPC 抛到渲染层直接展示，必须是用户能照着做的说法。
  */
 function getFfmpegPath() {
-  const ffmpegDir = Database.instance().getConfig('ffmpegDirectory')
+  const ffmpegDir = ConfigStore.instance().getConfig('ffmpegDirectory')
   try {
     return resolveFfmpegBinary(ffmpegDir)
   }
