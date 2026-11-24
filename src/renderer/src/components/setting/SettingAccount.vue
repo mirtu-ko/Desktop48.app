@@ -10,6 +10,10 @@ import { computed, ref } from 'vue'
  *
  * 全部逻辑在 use-pocket-account（登录态展示 / 短信与 Token 登录 / 退出 / 登录有效性验证）；
  * 本组件负责模板，并把「签到」「拉取关注」两个动作交回父页——它们涉及其他域的状态。
+ *
+ * ⚠️ composable 返回的是普通对象，其内部 ref 在模板里**不会**自动解包。所以这里一律
+ * 解构到 setup 顶层：顶层 ref 由模板自动解包，`loginTab` / `smsForm` 等直接用，
+ * 不会出现 `account.xxx.value` 漏写导致的「渲染成 [object Object] / 布尔位恒真」问题。
  */
 const props = defineProps<{
   account: ReturnType<typeof usePocketAccount>
@@ -23,17 +27,42 @@ const emit = defineEmits<{
 }>()
 
 const auth = pocketAuthState
-const account = props.account
 
-/** 两个弹窗的开关在 composable 里，模板要的是可写代理 */
-const loginDialogVisible = computed({
-  get: () => account.loginDialogVisible.value,
-  set: (value: boolean) => { account.loginDialogVisible.value = value },
-})
-const verifyDialogVisible = computed({
-  get: () => account.verifyDialogVisible.value,
-  set: (value: boolean) => { account.verifyDialogVisible.value = value },
-})
+const {
+  avatarUrl,
+  rowTitle,
+  profileLabel,
+  currentProfileHint,
+  loginDialogVisible,
+  loginTab,
+  loginProfile,
+  loginProfileHint,
+  profileLogos,
+  profileOptions,
+  areaOptions,
+  smsForm,
+  tokenForm,
+  smsSendable,
+  smsLoginable,
+  tokenLoginable,
+  captchaPending,
+  openLoginDialog,
+  sendCode,
+  submitSmsLogin,
+  submitTokenLogin,
+  confirmLogout,
+  verifying,
+  verifyDialogVisible,
+  verifyResult,
+  verifyFailed,
+  verifyFailedMessage,
+  savedDays,
+  verifyLogin,
+  reloginFromVerify,
+} = props.account
+
+/** 验证成功时的资料快照：模板据此收窄非空，避免满屏非空断言 */
+const verifiedInfo = computed(() => (verifyResult.value?.valid ? verifyResult.value : null))
 
 /** 短信登录手机号输入框：弹窗打开后自动聚焦，省一次点击 */
 const smsMobileRef = ref<InputInstance>()
@@ -63,14 +92,14 @@ function hideLogo(event: Event) {
     <div class="setting-row">
       <span
         class="row-icon icon-tile auth-avatar"
-        :class="{ 'is-clickable': auth.loggedIn, 'is-verifying': account.verifying.value, 'has-avatar': !!account.avatarUrl.value }"
+        :class="{ 'is-clickable': auth.loggedIn, 'is-verifying': verifying, 'has-avatar': !!avatarUrl }"
         :style="{ '--tile-color': 'var(--brand-primary)' }"
-        :title="auth.loggedIn ? (account.verifying.value ? '正在验证登录…' : '点击查看登录状态与账号资料') : ''"
-        @click="auth.loggedIn ? account.verifyLogin() : undefined"
+        :title="auth.loggedIn ? (verifying ? '正在验证登录…' : '点击查看登录状态与账号资料') : ''"
+        @click="auth.loggedIn ? verifyLogin() : undefined"
       >
         <img
-          v-if="auth.loggedIn && account.avatarUrl.value"
-          :src="account.avatarUrl.value"
+          v-if="auth.loggedIn && avatarUrl"
+          :src="avatarUrl"
           alt="账号头像"
         >
         <el-icon v-else>
@@ -79,11 +108,11 @@ function hideLogo(event: Event) {
       </span>
       <div class="row-text row-text--fluid">
         <div class="row-title">
-          {{ account.rowTitle.value }}<span
-            v-if="account.profileLabel.value"
+          {{ rowTitle }}<span
+            v-if="profileLabel"
             class="row-profile-badge"
-            :title="account.currentProfileHint.value"
-          >{{ account.profileLabel.value }}</span>
+            :title="currentProfileHint"
+          >{{ profileLabel }}</span>
         </div>
         <div class="row-desc">
           <template v-if="auth.loggedIn">
@@ -115,7 +144,7 @@ function hideLogo(event: Event) {
           <el-button
             type="danger"
             plain
-            @click="account.confirmLogout"
+            @click="confirmLogout"
           >
             退出登录
           </el-button>
@@ -123,7 +152,7 @@ function hideLogo(event: Event) {
         <el-button
           v-else
           type="primary"
-          @click="account.openLoginDialog"
+          @click="openLoginDialog"
         >
           登录
         </el-button>
@@ -158,18 +187,18 @@ function hideLogo(event: Event) {
     <div class="login-profile">
       <div class="login-profile-row">
         <el-radio-group
-          v-model="account.loginProfile.value"
+          v-model="loginProfile"
           size="small"
         >
           <el-radio-button
-            v-for="option in account.profileOptions"
+            v-for="option in profileOptions"
             :key="option.id"
             :value="option.id"
           >
             <span class="profile-option">
               <img
                 class="profile-option-logo"
-                :src="account.profileLogos[option.id]"
+                :src="profileLogos[option.id]"
                 alt=""
                 @error="hideLogo"
               >
@@ -179,11 +208,11 @@ function hideLogo(event: Event) {
         </el-radio-group>
       </div>
       <div class="login-profile-hint">
-        {{ account.loginProfileHint.value }}
+        {{ loginProfileHint }}
       </div>
     </div>
     <el-tabs
-      v-model="account.loginTab.value"
+      v-model="loginTab"
       class="login-tabs"
     >
       <el-tab-pane
@@ -193,12 +222,12 @@ function hideLogo(event: Event) {
         <div class="login-form">
           <div class="login-mobile-row">
             <el-select
-              v-model="account.smsForm.area"
+              v-model="smsForm.area"
               class="login-area"
-              :disabled="account.smsForm.loggingIn || account.smsForm.areaLocked"
+              :disabled="smsForm.loggingIn || smsForm.areaLocked"
             >
               <el-option
-                v-for="area in account.areaOptions"
+                v-for="area in areaOptions"
                 :key="area.value"
                 :label="area.label"
                 :value="area.value"
@@ -206,27 +235,27 @@ function hideLogo(event: Event) {
             </el-select>
             <el-input
               ref="smsMobileRef"
-              v-model="account.smsForm.mobile"
+              v-model="smsForm.mobile"
               class="login-mobile"
               placeholder="手机号"
-              :maxlength="account.smsForm.area === '86' ? 11 : 15"
-              :disabled="account.smsForm.loggingIn"
+              :maxlength="smsForm.area === '86' ? 11 : 15"
+              :disabled="smsForm.loggingIn"
             />
           </div>
           <div
-            v-if="account.smsForm.captcha"
+            v-if="smsForm.captcha"
             class="login-captcha"
           >
             <div class="captcha-question">
               <el-icon><WarningFilled /></el-icon>
-              {{ account.smsForm.captcha.question }}
+              {{ smsForm.captcha.question }}
             </div>
             <el-radio-group
-              v-model="account.smsForm.captcha.answer"
+              v-model="smsForm.captcha.answer"
               class="captcha-options"
             >
               <el-radio
-                v-for="option in account.smsForm.captcha.options"
+                v-for="option in smsForm.captcha.options"
                 :key="option"
                 :value="option"
               >
@@ -236,27 +265,27 @@ function hideLogo(event: Event) {
           </div>
           <div class="login-code-row">
             <el-input
-              v-model="account.smsForm.code"
+              v-model="smsForm.code"
               placeholder="验证码"
               maxlength="8"
-              :disabled="account.smsForm.loggingIn"
-              @keyup.enter="account.smsLoginable.value && account.submitSmsLogin()"
+              :disabled="smsForm.loggingIn"
+              @keyup.enter="smsLoginable && submitSmsLogin()"
             />
             <el-button
               class="login-code-btn"
-              :disabled="!account.smsSendable.value || account.smsForm.countdown > 0 || account.captchaPending.value"
-              :loading="account.smsForm.sending"
-              @click="account.sendCode"
+              :disabled="!smsSendable || smsForm.countdown > 0 || captchaPending"
+              :loading="smsForm.sending"
+              @click="sendCode"
             >
-              {{ account.smsForm.countdown > 0 ? `${account.smsForm.countdown}s` : (account.smsForm.captcha ? '重新发送' : '发送验证码') }}
+              {{ smsForm.countdown > 0 ? `${smsForm.countdown}s` : (smsForm.captcha ? '重新发送' : '发送验证码') }}
             </el-button>
           </div>
           <el-button
             type="primary"
             class="login-submit"
-            :disabled="!account.smsLoginable.value"
-            :loading="account.smsForm.loggingIn"
-            @click="account.submitSmsLogin"
+            :disabled="!smsLoginable"
+            :loading="smsForm.loggingIn"
+            @click="submitSmsLogin"
           >
             登录
           </el-button>
@@ -268,23 +297,23 @@ function hideLogo(event: Event) {
       >
         <div class="login-form">
           <el-input
-            v-model="account.tokenForm.token"
+            v-model="tokenForm.token"
             type="textarea"
             :rows="6"
             placeholder="粘贴口袋48 token（抓包或从其他工具获取）"
             class="login-token-input"
           />
           <el-input
-            v-model="account.tokenForm.mobile"
+            v-model="tokenForm.mobile"
             placeholder="手机号（选填，用于下次登录预填）"
             maxlength="15"
           />
           <el-button
             type="primary"
             class="login-submit"
-            :disabled="!account.tokenLoginable.value"
-            :loading="account.tokenForm.loggingIn"
-            @click="account.submitTokenLogin"
+            :disabled="!tokenLoginable"
+            :loading="tokenForm.loggingIn"
+            @click="submitTokenLogin"
           >
             登录
           </el-button>
@@ -303,56 +332,56 @@ function hideLogo(event: Event) {
 
   <el-dialog
     v-model="verifyDialogVisible"
-    :title="account.verifyFailed.value ? '登录状态异常' : '登录状态'"
+    :title="verifyFailed ? '登录状态异常' : '登录状态'"
     width="min(520px, calc(100vw - 32px))"
     align-center
     append-to-body
     class="setting-dialog verify-dialog"
   >
-    <div v-if="account.verifying.value" class="verify-loading">
+    <div v-if="verifying" class="verify-loading">
       <span class="verify-spinner" />
       <span>正在向口袋48服务端校验登录状态…</span>
     </div>
 
-    <div v-else-if="account.verifyFailed.value" class="verify-fail">
+    <div v-else-if="verifyFailed" class="verify-fail">
       <el-icon class="verify-fail-icon">
         <WarningFilled />
       </el-icon>
       <p class="verify-fail-message">
-        {{ account.verifyFailedMessage.value }}
+        {{ verifyFailedMessage }}
       </p>
       <p class="verify-fail-hint">
         可立即重新登录；若是网络不通，恢复后重试即可。
       </p>
     </div>
 
-    <div v-else-if="account.verifyResult.value?.valid" class="verify-card">
+    <div v-else-if="verifiedInfo" class="verify-card">
       <div class="verify-head">
-        <span class="verify-avatar" :class="{ 'has-avatar': !!account.avatarUrl.value }">
-          <img v-if="account.avatarUrl.value" :src="account.avatarUrl.value" alt="账号头像">
+        <span class="verify-avatar" :class="{ 'has-avatar': !!avatarUrl }">
+          <img v-if="avatarUrl" :src="avatarUrl" alt="账号头像">
           <el-icon v-else>
             <User />
           </el-icon>
         </span>
         <div class="verify-idblock">
           <div class="verify-nick">
-            {{ account.verifyResult.value!.nickname || auth.nickname || '口袋48用户' }}
-            <span v-if="account.verifyResult.value!.level" class="verify-level">Lv.{{ account.verifyResult.value!.level }}</span>
+            {{ verifiedInfo!.nickname || auth.nickname || '口袋48用户' }}
+            <span v-if="verifiedInfo!.level" class="verify-level">Lv.{{ verifiedInfo!.level }}</span>
           </div>
           <div class="verify-uid">
-            ID {{ account.verifyResult.value!.userId || '—' }}
+            ID {{ verifiedInfo!.userId || '—' }}
           </div>
         </div>
       </div>
 
-      <p v-if="account.verifyResult.value!.signature" class="verify-signature">
-        「{{ account.verifyResult.value!.signature }}」
+      <p v-if="verifiedInfo!.signature" class="verify-signature">
+        「{{ verifiedInfo!.signature }}」
       </p>
 
       <div class="verify-stats">
         <div class="verify-stat">
           <div class="stat-value">
-            {{ account.verifyResult.value!.moneyOk ? formatCount(String(account.verifyResult.value!.moneyTotal)) : '—' }}
+            {{ verifiedInfo!.moneyOk ? formatCount(String(verifiedInfo!.moneyTotal)) : '—' }}
           </div>
           <div class="stat-label">
             鸡腿
@@ -360,23 +389,23 @@ function hideLogo(event: Event) {
         </div>
         <div class="verify-stat">
           <div class="stat-value">
-            {{ account.verifyResult.value!.support ? formatCount(account.verifyResult.value!.support) : '—' }}
+            {{ verifiedInfo!.support ? formatCount(verifiedInfo!.support) : '—' }}
           </div>
           <div class="stat-label">
             鸡翅
           </div>
         </div>
-        <div v-if="account.verifyResult.value!.fans" class="verify-stat">
+        <div v-if="verifiedInfo!.fans" class="verify-stat">
           <div class="stat-value">
-            {{ formatCount(account.verifyResult.value!.fans) }}
+            {{ formatCount(verifiedInfo!.fans) }}
           </div>
           <div class="stat-label">
             粉丝
           </div>
         </div>
-        <div v-if="account.verifyResult.value!.likes" class="verify-stat">
+        <div v-if="verifiedInfo!.likes" class="verify-stat">
           <div class="stat-value">
-            {{ formatCount(account.verifyResult.value!.likes) }}
+            {{ formatCount(verifiedInfo!.likes) }}
           </div>
           <div class="stat-label">
             获赞
@@ -388,22 +417,22 @@ function hideLogo(event: Event) {
         <div class="verify-link">
           <span class="verify-link-name">互动消息</span>
           <span class="verify-link-desc">直播弹幕 / 房间功能 / 签到</span>
-          <span class="verify-link-state" :class="account.verifyResult.value!.imOk ? 'is-ok' : 'is-bad'">
-            {{ account.verifyResult.value!.imOk ? '可用' : '不可用' }}
+          <span class="verify-link-state" :class="verifiedInfo!.imOk ? 'is-ok' : 'is-bad'">
+            {{ verifiedInfo!.imOk ? '可用' : '不可用' }}
           </span>
         </div>
       </div>
 
       <div class="verify-local">
-        登录凭证：{{ auth.plainFallback ? '明文保存（保存时系统无加密能力）' : '本机安全加密保存' }}<template v-if="account.savedDays.value > 0">
-          ，已保存 {{ account.savedDays.value }} 天
+        登录凭证：{{ auth.plainFallback ? '明文保存（保存时系统无加密能力）' : '本机安全加密保存' }}<template v-if="savedDays > 0">
+          ，已保存 {{ savedDays }} 天
         </template>
       </div>
     </div>
 
     <template #footer>
       <el-button
-        v-if="account.verifyResult.value?.valid"
+        v-if="verifiedInfo"
         :loading="followSyncing"
         @click="emit('syncFollow')"
       >
@@ -413,9 +442,9 @@ function hideLogo(event: Event) {
         关闭
       </el-button>
       <el-button
-        v-if="account.verifyFailed.value"
+        v-if="verifyFailed"
         type="primary"
-        @click="account.reloginFromVerify"
+        @click="reloginFromVerify"
       >
         重新登录
       </el-button>

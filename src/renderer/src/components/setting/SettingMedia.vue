@@ -13,28 +13,47 @@ import { computed } from 'vue'
  * 状态来源都不在本组件：下载目录来自 use-app-config，FFmpeg 环境与修复动作来自
  * use-ffmpeg-setup（与启动门禁同一判定口径），置顶偏好是 stores/float-topmost 的模块级单例。
  * 本组件只做模板接线与操作结果的用户提示。
+ *
+ * ⚠️ 两个 composable 的返回值都是普通对象，内部 ref 在模板里不会自动解包，
+ * 因此解构到 setup 顶层（顶层 ref 由模板自动解包）。
  */
 const props = defineProps<{
   appConfig: ReturnType<typeof useAppConfig>
   ffmpeg: ReturnType<typeof useFfmpegSetup>
 }>()
 
+const { downloadDirectory, setDownloadDirectory, openDownloadDirectory } = props.appConfig
+const {
+  status,
+  checking,
+  downloading,
+  busy,
+  isSystem,
+  directory,
+  copy,
+  downloadPercent,
+  downloadLabel,
+  download,
+  choose,
+  openDirectory,
+} = props.ffmpeg
+
 /** FFmpeg 行状态徽章：可用 / 未配置 / 目录不存在 / 缺少 ffmpeg */
 const ffmpegStateLabel = computed(() => {
-  if (!props.ffmpeg.status.value)
-    return props.ffmpeg.checking.value ? '检测中…' : '状态未知'
-  return props.ffmpeg.copy.value.label
+  if (!status.value)
+    return checking.value ? '检测中…' : '状态未知'
+  return copy.value.label
 })
 
 const ffmpegStateClass = computed(() => {
-  if (!props.ffmpeg.status.value)
+  if (!status.value)
     return 'is-checking'
-  return props.ffmpeg.status.value.ok ? 'is-ready' : 'is-broken'
+  return status.value.ok ? 'is-ready' : 'is-broken'
 })
 
 /** 一键下载 FFmpeg：成功即已写入配置，无需再点保存 */
 async function downloadFfmpeg() {
-  if (await props.ffmpeg.download()) {
+  if (await download()) {
     ElMessage({ message: 'FFmpeg 已就绪', type: 'success' })
     return
   }
@@ -43,7 +62,7 @@ async function downloadFfmpeg() {
 
 /** 手动选择目录：校验通过才落盘，校验失败说明错在哪（目录不存在 / 目录内缺 ffmpeg） */
 async function chooseFfmpegDir() {
-  const result = await props.ffmpeg.choose()
+  const result = await choose()
   if (result.outcome === 'ok') {
     ElMessage({ message: '设置成功', type: 'success' })
     return
@@ -84,22 +103,22 @@ function onPickFloatTopmost(value: string | number | boolean | undefined) {
         </div>
       </div>
       <el-input
-        :model-value="appConfig.downloadDirectory.value"
+        :model-value="downloadDirectory"
         class="row-control"
         readonly
         placeholder="点击输入框选择目录"
-        @click="appConfig.setDownloadDirectory"
+        @click="setDownloadDirectory"
       />
       <div class="row-actions">
         <el-button
-          :disabled="!appConfig.downloadDirectory.value"
-          @click="appConfig.openDownloadDirectory"
+          :disabled="!downloadDirectory"
+          @click="openDownloadDirectory"
         >
           打开目录
         </el-button>
         <el-button
           type="primary"
-          @click="appConfig.setDownloadDirectory"
+          @click="setDownloadDirectory"
         >
           选择
         </el-button>
@@ -124,7 +143,7 @@ function onPickFloatTopmost(value: string | number | boolean | undefined) {
         </div>
       </div>
       <el-input
-        :model-value="ffmpeg.directory.value"
+        :model-value="directory"
         class="row-control"
         readonly
         placeholder="未配置，可一键下载或手动选择"
@@ -132,24 +151,24 @@ function onPickFloatTopmost(value: string | number | boolean | undefined) {
       />
       <div class="row-actions">
         <el-button
-          :disabled="!ffmpeg.directory.value"
-          @click="ffmpeg.openDirectory"
+          :disabled="!directory"
+          @click="openDirectory"
         >
           打开目录
         </el-button>
         <el-button
-          :disabled="ffmpeg.busy.value"
+          :disabled="busy"
           @click="chooseFfmpegDir"
         >
           选择
         </el-button>
         <el-button
           type="primary"
-          :disabled="ffmpeg.busy.value || ffmpeg.isSystem.value"
-          :loading="ffmpeg.downloading.value"
+          :disabled="busy || isSystem"
+          :loading="downloading"
           @click="downloadFfmpeg"
         >
-          {{ ffmpeg.downloading.value ? '下载中' : '下载' }}
+          {{ downloading ? '下载中' : '下载' }}
         </el-button>
       </div>
     </div>
@@ -162,25 +181,25 @@ function onPickFloatTopmost(value: string | number | boolean | undefined) {
         <span class="state-dot" />
         <span class="state-label">{{ ffmpegStateLabel }}</span>
         <span
-          v-if="ffmpeg.status.value && (!ffmpeg.status.value.ok || ffmpeg.isSystem.value)"
+          v-if="status && (!status.ok || isSystem)"
           class="state-hint"
-        >{{ ffmpeg.copy.value.hint }}</span>
+        >{{ copy.hint }}</span>
       </div>
       <el-progress
-        v-if="ffmpeg.downloading.value && ffmpeg.downloadPercent.value !== null"
+        v-if="downloading && downloadPercent !== null"
         class="ffmpeg-progress"
-        :percentage="ffmpeg.downloadPercent.value ?? 0"
+        :percentage="downloadPercent ?? 0"
         :stroke-width="8"
         :show-text="false"
       />
       <p
-        v-if="ffmpeg.downloading.value"
+        v-if="downloading"
         class="ffmpeg-progress-label"
       >
-        {{ ffmpeg.downloadLabel.value }}
+        {{ downloadLabel }}
       </p>
       <p
-        v-else-if="ffmpeg.status.value && !ffmpeg.status.value.ok"
+        v-else-if="status && !status.ok"
         class="ffmpeg-fix-hint"
       >
         下一步：点击「下载」自动获取，或点击「选择」指定本机已有的 FFmpeg 目录。

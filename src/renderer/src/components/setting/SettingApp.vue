@@ -13,17 +13,19 @@ import { computed, ref } from 'vue'
  * 自动更新状态来自 use-updater（主进程持真相），本组件只把状态映射成文案与按钮；
  * 诊断结果与反馈表单只在本组内使用，状态留在这里，生命周期与设置页一致（页面被 KeepAlive 缓存）。
  * 两个弹窗外壳用 el-dialog + append-to-body，搬家不改变浮层层级。
+ *
+ * 与其它分组一致：composable 结果解构到 setup 顶层，模板里直接用 ref 名（自动解包）。
  */
 const props = defineProps<{ updater: ReturnType<typeof useUpdater> }>()
 
-/** 模板里用 updater 指代 props.updater（setup 绑定优先，避免 props 在模板中不可见） */
-const updater = props.updater
+// composable 返回值是普通对象，内部 ref 在模板里不会自动解包，因此解构到 setup 顶层
+const { state, checking, version, check, download, install } = props.updater
 
 // ===== 版本行 =====
 
 /** 更新行的描述文案：一行说清当前处于什么状态、下一步该做什么 */
 const updaterDesc = computed(() => {
-  const s = props.updater.state.value
+  const s = state.value
   switch (s.phase) {
     case 'checking':
       return '正在检查更新，请稍候…'
@@ -45,15 +47,15 @@ const updaterDesc = computed(() => {
 })
 
 /** available 态的描述切强调样式，与其余状态的中性文案区分 */
-const updaterDescClass = computed(() => props.updater.state.value.phase === 'available' ? 'is-update' : '')
+const updaterDescClass = computed(() => state.value.phase === 'available' ? 'is-update' : '')
 
 /** 新版本信息：仅 available 态非空 */
 const availableUpdate = computed(() =>
-  props.updater.state.value.phase === 'available' ? props.updater.state.value : null,
+  state.value.phase === 'available' ? state.value : null,
 )
 /** 下载中信息：仅 downloading 态非空，提示块内的进度展示取自此状态 */
 const downloadingUpdate = computed(() =>
-  props.updater.state.value.phase === 'downloading' ? props.updater.state.value : null,
+  state.value.phase === 'downloading' ? state.value : null,
 )
 
 /** 提示块标题：available / downloading 各一句；版本号在脚本侧拼接，模板不做类型收窄 */
@@ -67,8 +69,8 @@ const updateVersionLine = computed(() => {
   const next = availableUpdate.value
   if (!next)
     return ''
-  return props.updater.version.value
-    ? `当前 v${props.updater.version.value} → 最新 v${next.version}`
+  return version.value
+    ? `当前 v${version.value} → 最新 v${next.version}`
     : `最新版本 v${next.version}`
 })
 
@@ -103,8 +105,8 @@ const manualUpdateNotice = computed(() => availableUpdate.value?.manualUpdate ??
 
 /** 下载进度百分比（提示块内的进度条与百分比文字共用） */
 const updaterPercent = computed(() =>
-  props.updater.state.value.phase === 'downloading'
-    ? Math.min(100, props.updater.state.value.percent)
+  state.value.phase === 'downloading'
+    ? Math.min(100, state.value.percent)
     : 0,
 )
 
@@ -123,19 +125,19 @@ const MANUAL_RELEASE_PAGE_URL = 'https://48.v2ing.com/'
 
 /** 主操作按钮：状态决定文案与语义；自动更新 available 态是「更新版本」，macOS 是「去下载」 */
 const updaterAction = computed<{ label: string, disabled: boolean, loading: boolean, handler: () => void }>(() => {
-  const s = props.updater.state.value
+  const s = state.value
   if (s.phase === 'downloading')
     return { label: '下载中', disabled: true, loading: true, handler: () => {} }
   if (s.phase === 'ready')
-    return { label: '立即重启', disabled: false, loading: false, handler: props.updater.install }
+    return { label: '立即重启', disabled: false, loading: false, handler: install }
   if (s.phase === 'available' && s.manualUpdate)
     return { label: '去下载', disabled: false, loading: false, handler: () => openReleasePage(availableUpdate.value?.url ?? MANUAL_RELEASE_PAGE_URL) }
   if (s.phase === 'available')
-    return { label: '更新版本', disabled: false, loading: false, handler: props.updater.download }
+    return { label: '更新版本', disabled: false, loading: false, handler: download }
   // 免安装版等不支持自动更新的环境给出手工出路，别让用户对着禁用按钮无计可施
   if (s.phase === 'unsupported' && s.url)
     return { label: '去下载', disabled: false, loading: false, handler: () => openReleasePage(s.url!) }
-  return { label: '检查更新', disabled: props.updater.checking.value || s.phase === 'unsupported', loading: props.updater.checking.value, handler: props.updater.check }
+  return { label: '检查更新', disabled: checking.value || s.phase === 'unsupported', loading: checking.value, handler: check }
 })
 
 // ===== 网络诊断 =====
@@ -200,7 +202,7 @@ async function handleCopyDiagnose() {
     return `${item.label}（${item.url}）: ${status} · ${item.ms}ms · ${verdict.label}${note ? ` · ${note}` : ''}${item.error ? ` · ${item.error}` : ''}${item.detail ? ` · ${item.detail}` : ''}`
   })
   const text = [
-    `应用版本: ${props.updater.version.value}`,
+    `应用版本: ${version.value}`,
     `诊断时间: ${new Date().toLocaleString()}`,
     ...lines,
   ].join('\n')
@@ -290,7 +292,7 @@ defineExpose({ loadFeedbackMeta })
       <div class="row-text row-text--fluid">
         <div class="row-title">
           版本
-          <span v-if="updater.version.value" class="row-version">v{{ updater.version.value }}</span>
+          <span v-if="version" class="row-version">v{{ version }}</span>
           <span v-if="availableUpdate" class="row-update-badge">有新版本</span>
         </div>
         <div class="row-desc" :class="updaterDescClass">
@@ -299,9 +301,9 @@ defineExpose({ loadFeedbackMeta })
       </div>
       <div class="row-actions">
         <el-button
-          v-if="updater.state.value.phase === 'available' || updater.state.value.phase === 'ready'"
-          :disabled="updater.checking.value"
-          @click="updater.check"
+          v-if="state.phase === 'available' || state.phase === 'ready'"
+          :disabled="checking"
+          @click="check"
         >
           重新检查
         </el-button>
