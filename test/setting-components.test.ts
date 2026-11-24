@@ -99,6 +99,13 @@ describe('设置页共享样式：必须从非 scoped 块引入', () => {
     expect(owners[0].attrs).not.toContain('scoped')
   })
 
+  it('组间留白挂在结构关系上，而不是「第一个子元素」这类位置假设', () => {
+    const scss = read('components/setting/setting-shared.scss')
+    // 分组由 5 个组件各自渲染：谁先谁后、前面有没有别的节点都不该影响首组贴顶
+    expect(scss).toContain('.setting-card + .setting-group-label')
+    expect(scss).not.toMatch(/:first-child/)
+  })
+
   it('图标磁贴尺寸不限定在 .setting-row 下（关于组用 <summary> 承载图标）', () => {
     const scss = read('components/setting/setting-shared.scss')
     expect(scss).not.toMatch(/\.setting-row\s+\.row-icon/)

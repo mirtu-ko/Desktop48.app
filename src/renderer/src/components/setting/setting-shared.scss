@@ -19,12 +19,13 @@
   }
 
   /* 分组标签置于卡片之外，不切开玻璃卡面；左侧色条复用声明区的视觉语言。
-     负下边距抵消 flex gap，让标签贴近所属卡片、组间留白更大 */
+     负下边距抵消 flex gap，让标签贴近所属卡片、组间留白更大。
+     上边距由「前一张卡片」给出（见下方相邻选择器），首组自然为 0 */
   .setting-group-label {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 8px 0 -6px 4px;
+    margin: 0 0 -6px 4px;
     font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -40,9 +41,11 @@
     }
   }
 
-  /* 内容区首组标题贴顶：拆成组件后仍是 .setting-content 的直接子节点 */
-  .setting-content > .setting-group-label:first-child {
-    margin-top: 0;
+  /* 组间留白挂在「卡片 → 下一组标签」这一结构关系上，而不是「第一个子元素」这种位置假设：
+     分组由 5 个组件各自渲染，谁先谁后、前面有没有别的节点都不该影响首组是否贴顶。
+     首组标签前面没有卡片，上边距自然为 0，无需特例。 */
+  .setting-card + .setting-group-label {
+    margin-top: 8px;
   }
 
   /* 标题行：图标 / 标题描述 / 中间控件 / 操作按钮同一行 */
