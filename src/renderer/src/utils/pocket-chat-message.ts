@@ -15,6 +15,8 @@
 /** 归一后的聊天室消息 */
 export interface PocketChatMessage {
   kind: 'barrage' | 'gift' | 'system' | 'rank'
+  /** 云信消息 ID（聊天室帧属性 1）；发送回执认领自发回推时按它精确比对 */
+  uuid?: string
   /** 展示文本：弹幕为消息内容，礼物为「赠送 N × 「礼物名」🎁」；昵称一律放 nick */
   text: string
   /** 发送者昵称；系统消息为空串 */
@@ -260,7 +262,7 @@ function extractBarrageText(msg: Record<string, unknown>, extension: Record<stri
  * @param msg SDK 消息对象（未知形状，按字段探测）
  * @param liveId 直播 ID：扩展带 sourceId/liveId 时用于过滤跨直播间串扰；缺省不校验
  */
-export function normalizePocketChatMessage(
+function normalizePocketMessage(
   msg: Record<string, unknown>,
   liveId?: string,
 ): PocketChatMessage | null {
@@ -359,4 +361,52 @@ export function normalizePocketChatMessage(
     level: user.level || undefined,
     avatar: user.avatar || undefined,
   }
+}
+
+/**
+ * 归一入口：补上消息 ID（`uuid`）。
+ * 各分支只关心业务字段、与 ID 无关，故统一在这里贴一次；
+ * 发送端认领自己那条回推时要靠它（见 isSelfEcho）。
+ */
+export function normalizePocketChatMessage(
+  msg: Record<string, unknown>,
+  liveId?: string,
+): PocketChatMessage | null {
+  const normalized = normalizePocketMessage(msg, liveId)
+  // 入参可能是 null / 非对象（上游直接透传 SDK 消息），取 ID 前先挡一道
+  const uuid = msg && typeof msg === 'object' ? strLoose(msg.uuid) : ''
+  return normalized && uuid ? { ...normalized, uuid } : normalized
+}
+
+/** 本地乐观上屏的一条自发弹幕：认领依据是发送回执 + 发送者身份 */
+export interface SelfEchoClaim {
+  /** 发送回执里的消息 ID（主进程按「服务端沿用值 → 本地生成值」兜底，不会为空） */
+  uuid: string
+  /** 本人口袋 userId；取不到为空串 */
+  userId: string
+  /** 发出的正文（服务端可能改写，仅作次级判据） */
+  text: string
+}
+
+/**
+ * 判断一条到达的聊天室消息是不是「自己刚发的那条」的回推。
+ *
+ * 只比正文会误吞别人的消息：直播间里「666」「哈哈哈哈」撞车极常见，
+ * 撞上就会把对方那条静默丢弃、并把气泡记在自己名下。
+ * 因此按强度依次比对：
+ * 1. 消息 ID 相同（服务端回推沿用发送时的 ID）—— 唯一确定，正文被改写也认；
+ * 2. ID 对不上时退回「正文相同 **且** 双方 userId 都有值并相等」—— 确认是同一账号再认领；
+ * 3. 其余（缺 ID 或缺 userId）一律不认领：宁可自己那条回显两次，也不吞别人的消息。
+ */
+export function isSelfEcho(
+  // 回推报文可能整段缺身份字段，故这里放宽为可选
+  message: { text: string, userId?: string, uuid?: string },
+  claim: SelfEchoClaim,
+): boolean {
+  const messageUuid = strLoose(message.uuid)
+  if (claim.uuid && messageUuid && claim.uuid === messageUuid)
+    return true
+  if (message.text !== claim.text)
+    return false
+  return !!claim.userId && claim.userId === strLoose(message.userId)
 }

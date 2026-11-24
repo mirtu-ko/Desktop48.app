@@ -1,16 +1,17 @@
 import type { PocketChatStatus } from '@renderer/services/pocket-chatroom'
-import type { PocketDisableNotice, PocketRankUser } from '@renderer/utils/pocket-chat-message'
+import type { PocketChatMessage, PocketDisableNotice, PocketRankUser, SelfEchoClaim } from '@renderer/utils/pocket-chat-message'
 import { useLiveDanmakuOverlay } from '@renderer/composables/use-danmaku-overlay'
 import { connectPocketChatroom, disconnectPocketChatroom, sendPocketBarrage } from '@renderer/services/pocket-chatroom'
 import { ensurePocketAuthState, pocketAuthState } from '@renderer/stores/pocket-auth'
 import { debugLog } from '@renderer/utils/debug'
+import { isSelfEcho } from '@renderer/utils/pocket-chat-message'
 import { useIntervalFn } from '@vueuse/core'
 import { ElMessage } from 'element-plus'
 import { onScopeDispose, ref, watch } from 'vue'
 
 /** 气泡回收节拍：展示时长是秒级，250ms 足够跟手 */
 const OVERLAY_TICK_MS = 250
-/** 自发弹幕的回推去重窗口：服务端若把自己发的消息回推，按正文在此时长内认领 */
+/** 自发弹幕的回推去重窗口：服务端若把自己发的消息回推，在此时长内认领（判据见 isSelfEcho） */
 const SELF_ECHO_TTL_MS = 10_000
 
 /**
@@ -67,24 +68,26 @@ export function useLiveDanmaku(options: {
   let pocketWarned = false
 
   /**
-   * 刚发出、已乐观上屏的弹幕正文。云信的聊天室上行只保证「服务端收下」，
-   * 是否把自己发的消息回推给发送端不由本端决定：回推到达时按正文认领并丢弃，
+   * 刚发出、已乐观上屏的弹幕。云信的聊天室上行只保证「服务端收下」，
+   * 是否把自己发的消息回推给发送端不由本端决定：回推到达时认领并丢弃，
    * 免得同一条弹幕上屏两次；不回推时本地那条就是唯一展示。
    */
-  const pendingSelfEcho: Array<{ text: string, expireAt: number }> = []
+  const pendingSelfEcho: Array<SelfEchoClaim & { expireAt: number }> = []
 
-  /** 命中去重窗口内的自发正文即返回 true（并消费掉这条记录） */
-  function consumeSelfEcho(content: string): boolean {
+  /** 命中去重窗口内的自发回推即返回 true（并消费掉这条记录） */
+  function consumeSelfEcho(message: PocketChatMessage): boolean {
     const now = Date.now()
-    for (let i = pendingSelfEcho.length - 1; i >= 0; i--) {
-      if (pendingSelfEcho[i].expireAt <= now) {
+    for (let i = 0; i < pendingSelfEcho.length; i++) {
+      const claim = pendingSelfEcho[i]
+      if (claim.expireAt <= now) {
         pendingSelfEcho.splice(i, 1)
+        i--
         continue
       }
-      if (pendingSelfEcho[i].text === content) {
-        pendingSelfEcho.splice(i, 1)
-        return true
-      }
+      if (!isSelfEcho(message, claim))
+        continue
+      pendingSelfEcho.splice(i, 1)
+      return true
     }
     return false
   }
@@ -152,7 +155,7 @@ export function useLiveDanmaku(options: {
         if (import.meta.env.DEV)
           debugLog('live', `口袋弹幕: 投放 #${pocketReceivedCount} [${message.kind}] Lv${message.level ?? '?'} ${message.nick}: ${message.text}`)
         // 自发弹幕的回推：发送成功时已乐观上屏，这里认领后丢弃，避免重复
-        if (message.kind === 'barrage' && consumeSelfEcho(message.text))
+        if (message.kind === 'barrage' && consumeSelfEcho(message))
           return
         // 所有互动消息统一「作者前缀 + 动作正文」款式；礼物/系统的作者名按类型着色，等级随作者名显示
         push(message.text, message.nick, nowSeconds(), {
@@ -172,10 +175,16 @@ export function useLiveDanmaku(options: {
     if (!roomId)
       throw new Error('互动消息未连接，请稍后再试')
     const text = content.trim()
-    await sendPocketBarrage(roomId, options.liveId?.() || '', text)
+    const result = await sendPocketBarrage(roomId, options.liveId?.() || '', text)
     // 服务端收下即先上屏：聊天室上行不保证把自己发的消息回推，
-    // 只等 13/7 会让「已发送」变成屏幕上什么都没发生
-    pendingSelfEcho.push({ text, expireAt: Date.now() + SELF_ECHO_TTL_MS })
+    // 只等 13/7 会让「已发送」变成屏幕上什么都没发生。
+    // 认领依据记全（消息 ID + 本人口袋 userId）：正文相同不构成「这条是我发的」
+    pendingSelfEcho.push({
+      uuid: result.uuid,
+      userId: pocketAuthState.value.userId,
+      text,
+      expireAt: Date.now() + SELF_ECHO_TTL_MS,
+    })
     push(text, pocketAuthState.value.nickname || '我', nowSeconds())
   }
 
