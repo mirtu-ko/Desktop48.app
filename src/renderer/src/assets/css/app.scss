@@ -965,6 +965,24 @@ body,
   }
 }
 
+/* ===== 设置页弹窗（登录 / 登录状态 / 反馈 / 网络诊断）=====
+ * 四个弹窗共用一套更宽松的外壳：内边距与圆角比 EP 默认大一档，内容不贴边；
+ * 窗口矮时整体封顶 88vh，正文自己滚，标题与页脚按钮始终可见。 */
+.setting-dialog.el-dialog {
+  --el-dialog-padding-primary: 22px;
+  --el-dialog-border-radius: 16px;
+
+  display: flex;
+  flex-direction: column;
+  max-height: 88vh;
+}
+
+.setting-dialog .el-dialog__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 /* 卡面：左右怎么分栏由调用方定（成员卡是上立绘下操作条，专辑卡是左专辑栏右曲目） */
 .detail-card {
   --accent: var(--brand-primary);

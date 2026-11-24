@@ -11,14 +11,14 @@
  * 上报服务地址（POST JSON）：产品主页 Worker 的反馈路由（见 desktop48-site 仓库的 /api/feedback）。
  *
  * 保持为常量而非配置项：地址变动属于发版动作，不应由用户在设置里改写。
- * 置空串可关闭提交入口（设置页按钮禁用、复制环境信息仍可用），用于端点未就绪或临时下线。
+ * 置空串可关闭提交入口（设置页按钮禁用），用于端点未就绪或临时下线。
  *
  * 显式标注 string：否则字面量类型会让「是否为空」的判断被 TS 判成恒真比较。
  */
 export const FEEDBACK_ENDPOINT: string = 'https://48.v2ing.com/api/feedback'
 
 /** 反馈正文长度上限（按字符计，超出拒绝而不是静默截断，用户能看到自己写了多少） */
-export const FEEDBACK_CONTENT_MAX = 2000
+export const FEEDBACK_CONTENT_MAX = 200
 
 /** 联系方式长度上限（邮箱 / 社交账号等，可选填） */
 export const FEEDBACK_CONTACT_MAX = 100
@@ -86,7 +86,7 @@ export function validateFeedbackInput(input: FeedbackInput): FeedbackValidation 
   return { ok: true, value: contact ? { content, contact } : { content } }
 }
 
-/** 环境摘要的纯文本形式（设置页「复制环境信息」用，便于粘贴到任意渠道） */
+/** 环境摘要的纯文本形式（便于粘贴到任意渠道；当前仅由单测护栏校验隐私口径） */
 export function formatFeedbackMeta(meta: FeedbackMeta, capturedAt = new Date()): string {
   return [
     `应用版本: v${meta.appVersion}`,

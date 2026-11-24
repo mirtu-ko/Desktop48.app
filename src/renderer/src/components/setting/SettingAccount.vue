@@ -133,8 +133,9 @@ function hideLogo(event: Event) {
 
   <el-dialog
     v-model="loginDialogVisible"
-    width="min(480px, calc(100vw - 32px))"
+    width="min(600px, calc(100vw - 32px))"
     align-center
+    class="setting-dialog"
     :close-on-click-modal="false"
     append-to-body
     @opened="focusSmsMobile"
@@ -269,7 +270,7 @@ function hideLogo(event: Event) {
           <el-input
             v-model="account.tokenForm.token"
             type="textarea"
-            :rows="4"
+            :rows="6"
             placeholder="粘贴口袋48 token（抓包或从其他工具获取）"
             class="login-token-input"
           />
@@ -295,7 +296,7 @@ function hideLogo(event: Event) {
         <Lock />
       </el-icon>
       <p>
-        凭证仅保存在本机（safeStorage 加密），不会上传。token 由服务端掌控有效期，失效后需重新登录。
+        凭证仅保存在本机（safeStorage 加密），不会上传。凭证由服务端掌控有效性，失效需重新登录。
       </p>
     </div>
   </el-dialog>
@@ -303,10 +304,10 @@ function hideLogo(event: Event) {
   <el-dialog
     v-model="verifyDialogVisible"
     :title="account.verifyFailed.value ? '登录状态异常' : '登录状态'"
-    width="min(460px, calc(100vw - 32px))"
+    width="min(520px, calc(100vw - 32px))"
     align-center
     append-to-body
-    class="verify-dialog"
+    class="setting-dialog verify-dialog"
   >
     <div v-if="account.verifying.value" class="verify-loading">
       <span class="verify-spinner" />

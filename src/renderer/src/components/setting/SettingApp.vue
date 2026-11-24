@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { useUpdater } from '@renderer/composables/use-updater'
 
-import { FEEDBACK_CONTACT_MAX, FEEDBACK_CONTENT_MAX, formatFeedbackMeta } from '@common/feedback'
+import { FEEDBACK_CONTACT_MAX, FEEDBACK_CONTENT_MAX } from '@common/feedback'
 import { ChatDotRound, Connection, Download, Refresh, Top } from '@element-plus/icons-vue'
 import { previewReleaseNotes } from '@renderer/utils/update-notes'
 import { ElMessage } from 'element-plus'
@@ -224,6 +224,19 @@ const feedbackReady = computed(() => feedbackState.value?.endpointReady ?? false
 /** 剩余可写字数：负数不展示（超长由主进程校验兜底并回报具体原因） */
 const feedbackRemaining = computed(() => FEEDBACK_CONTENT_MAX - feedbackContent.value.length)
 
+/** 反馈回复页：反馈提交后的答复都在这里公开可查，不需要登录 */
+const FEEDBACK_REPLY_URL = 'https://48.v2ing.com/feedback'
+
+/**
+ * 打开回复页。
+ *
+ * 经 `window.open` 触发主进程的 `setWindowOpenHandler`，转交系统浏览器
+ * （与 openReleasePage 同一路径；主进程只放行 http/https）。
+ */
+function openFeedbackReplies() {
+  window.open(FEEDBACK_REPLY_URL, '_blank', 'noopener')
+}
+
 async function loadFeedbackMeta() {
   try {
     feedbackState.value = await window.mainAPI.feedbackMeta()
@@ -231,15 +244,6 @@ async function loadFeedbackMeta() {
   catch (error) {
     console.error('[feedback] 环境摘要读取失败:', error)
   }
-}
-
-/** 复制环境摘要：不依赖上报通道，端点未配置时仍可用于其它反馈渠道 */
-async function handleCopyFeedbackMeta() {
-  const state = feedbackState.value
-  if (!state)
-    return
-  await navigator.clipboard.writeText(formatFeedbackMeta(state.meta))
-  ElMessage({ message: '环境信息已复制', type: 'success' })
 }
 
 async function handleSubmitFeedback() {
@@ -424,43 +428,51 @@ defineExpose({ loadFeedbackMeta })
   <el-dialog
     v-model="feedbackDialogVisible"
     title="问题反馈"
-    width="min(520px, calc(100vw - 32px))"
+    width="min(680px, calc(100vw - 32px))"
     align-center
+    class="setting-dialog"
     append-to-body
     :close-on-click-modal="false"
     :close-on-press-escape="!feedbackSubmitting"
   >
+    <template #header>
+      <div class="dialog-head">
+        <span class="dialog-head-icon icon-tile" :style="{ '--tile-color': 'var(--color-setting)' }">
+          <el-icon :size="18"><ChatDotRound /></el-icon>
+        </span>
+        <span class="dialog-head-title">问题反馈</span>
+      </div>
+    </template>
     <div class="feedback-form">
       <p class="feedback-intro">
-        提交时会附带应用版本、运行平台与客户端身份档，便于定位问题。请勿填写账号密码或他人隐私信息。
+        提交时会附带应用版本、运行平台，便于定位问题。请勿填写账号密码或他人隐私信息。
       </p>
-      <el-input
-        v-model="feedbackContent"
-        type="textarea"
-        :rows="6"
-        :maxlength="FEEDBACK_CONTENT_MAX"
-        resize="none"
-        placeholder="发生了什么？例如：进入某成员房间后消息不再刷新，重启应用可恢复"
-      />
-      <div class="feedback-hint">
-        还可输入 {{ feedbackRemaining }} 字
+      <div class="feedback-content-field">
+        <el-input
+          v-model="feedbackContent"
+          type="textarea"
+          :rows="8"
+          :maxlength="FEEDBACK_CONTENT_MAX"
+          resize="none"
+          placeholder="说点什么吧，比心~"
+        />
+        <div class="feedback-hint">
+          还可输入 {{ feedbackRemaining }} 字
+        </div>
       </div>
       <el-input
         v-model="feedbackContact"
         :maxlength="FEEDBACK_CONTACT_MAX"
-        placeholder="联系方式（可选，便于回复你）"
+        placeholder="联系方式（可选）"
       />
       <p v-if="!feedbackReady" class="feedback-warn">
-        上报服务尚未配置，暂无法提交；可先复制环境信息通过其它渠道反馈。
+        上报服务尚未配置，暂无法提交；请通过其它渠道联系开发者。
       </p>
     </div>
     <template #footer>
       <div class="feedback-dialog-footer">
-        <el-button
-          :disabled="!feedbackState"
-          @click="handleCopyFeedbackMeta"
-        >
-          复制环境信息
+        <el-button @click="openFeedbackReplies">
+          查看回复
         </el-button>
         <div class="feedback-dialog-actions">
           <el-button
@@ -485,10 +497,19 @@ defineExpose({ loadFeedbackMeta })
   <el-dialog
     v-model="diagnoseDialogVisible"
     title="网络诊断结果"
-    width="min(640px, calc(100vw - 32px))"
+    width="min(820px, calc(100vw - 32px))"
     align-center
+    class="setting-dialog"
     append-to-body
   >
+    <template #header>
+      <div class="dialog-head">
+        <span class="dialog-head-icon icon-tile" :style="{ '--tile-color': 'var(--color-shows)' }">
+          <el-icon :size="18"><Connection /></el-icon>
+        </span>
+        <span class="dialog-head-title">网络诊断结果</span>
+      </div>
+    </template>
     <div v-if="diagnosing" class="verify-loading">
       <span class="verify-spinner" />
       <span>正在检测核心服务域名与口袋客户端身份…</span>
@@ -622,11 +643,41 @@ defineExpose({ loadFeedbackMeta })
   word-break: break-all;
 }
 
+/* 弹窗头部：图标磁贴 + 标题（骨架同设置卡片的 row-icon，尺寸缩小以适配弹窗头；两个弹窗共用） */
+.dialog-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  /* 留出右上角关闭按钮的位置，长标题不会被压住 */
+  padding-right: 24px;
+}
+
+.dialog-head-icon {
+  width: 30px;
+  height: 30px;
+}
+
+.dialog-head-title {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--el-text-color-primary);
+}
+
 /* 问题反馈弹窗：说明、输入区、字数提示与页脚 */
 .feedback-form {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* 正文输入框：字数提示提到右下角，文本框底部留出内边距以免遮住末行文字 */
+.feedback-content-field {
+  position: relative;
+}
+
+.feedback-content-field :deep(.el-textarea__inner) {
+  padding-bottom: 28px;
 }
 
 .feedback-intro {
@@ -637,12 +688,15 @@ defineExpose({ loadFeedbackMeta })
 }
 
 .feedback-hint {
-  /* 紧贴文本框底部：负外边距抵消 flex gap，避免字数提示看起来另起一块 */
-  margin-top: -4px;
+  /* 绝对定位到文本框右下角：不占布局，文字浮在输入区留白处 */
+  position: absolute;
+  right: 10px;
+  bottom: 6px;
   font-size: 12px;
   line-height: 1.6;
   color: var(--el-text-color-secondary);
-  text-align: right;
+  /* 不拦截点击：浮层下方的区域仍可直接聚焦输入框 */
+  pointer-events: none;
 }
 
 .feedback-warn {
@@ -652,7 +706,7 @@ defineExpose({ loadFeedbackMeta })
   color: var(--el-color-warning);
 }
 
-/* 页脚：复制环境信息靠左，取消与提交靠右 */
+/* 页脚：查看回复靠左，取消与提交靠右 */
 .feedback-dialog-footer {
   display: flex;
   align-items: center;
