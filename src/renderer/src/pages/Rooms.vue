@@ -4,11 +4,11 @@
 
 import type { PocketRoom } from '@renderer/composables/use-pocket-rooms'
 import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
-import type { InputInstance } from 'element-plus'
 import type { Component, ComponentPublicInstance, VNode } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
-import { ArrowRight, Calendar, ChatDotRound, Check, Close, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import { ArrowRight, Calendar, ChatDotRound, Check, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
+import RoomComposer from '@renderer/components/rooms/RoomComposer.vue'
 import RoomDateDialog from '@renderer/components/rooms/RoomDateDialog.vue'
 import RoomEssenceDialog from '@renderer/components/rooms/RoomEssenceDialog.vue'
 import RoomListItem from '@renderer/components/rooms/RoomListItem.vue'
@@ -1036,7 +1036,6 @@ watch(messages, (list) => {
 // ===== 发言输入条（确认连接后在消息区底部常驻）=====
 /** 输入草稿；发送成功即清空 */
 const draft = ref('')
-const draftInput = ref<InputInstance | null>(null)
 
 /** 输入条可见条件：已登录 + 选中房间 + 消息就绪 + 不在小房间暗号锁定态。
  * 连接状态不影响可见性——未连接也要把输入条摆出来，点它才引导连接。
@@ -1120,6 +1119,11 @@ const sendButtonLabel = computed(() => {
   return '发送'
 })
 
+const composerEl = ref<InstanceType<typeof RoomComposer> | null>(null)
+/** 量高度用：输入条已抽成组件，取它的根元素（.chat-composer） */
+const composerRef = computed(() => (composerEl.value?.$el as HTMLElement | undefined) ?? null)
+const composerHeight = ref(0)
+
 /** 发送钮 hover：说明倒数与禁用原因，这些状态不写在按钮文字里 */
 const sendButtonHint = computed(() => {
   if (speakBlock.value === 'unfollowed')
@@ -1180,7 +1184,7 @@ async function requestQChatConnection(): Promise<boolean> {
     ElMessage.error(result.message || '连接房间失败')
     return false
   }
-  draftInput.value?.focus()
+  composerEl.value?.focus()
   return true
 }
 
@@ -1286,8 +1290,6 @@ async function confirmDeleteOwn(message: PocketRoomMessageView) {
 }
 
 // 输入条高度联动「新消息浮标」：浮标贴在输入条上方，不挡住发送钮。
-const composerRef = ref<HTMLElement | null>(null)
-const composerHeight = ref(0)
 useResizeObserver(
   composerRef,
   (entries) => {
@@ -1417,7 +1419,7 @@ function onMenuPick(key: string) {
   }
   if (key === 'reply') {
     startReply(target.message)
-    void nextTick(() => draftInput.value?.focus())
+    void nextTick(() => composerEl.value?.focus())
     return
   }
   if (key === 'delete') {
@@ -2197,70 +2199,26 @@ watch([chatStatus, chatStatusText], () => {
 
               <!-- 发言输入条：房间就绪后常驻消息区底部。默认不连接云信（只看不挤手机），
                    点输入框先确认「会挤掉其他登录端」，确认后才建连；回复态在输入行上方显示引用摘要 -->
-              <div v-if="composerVisible" ref="composerRef" class="chat-composer">
-                <div v-if="replyTarget" class="composer-reply">
-                  <span class="composer-reply-name">回复 {{ replyTarget.senderName }}</span>
-                  <span class="composer-reply-text">{{ replyTarget.text || '消息' }}</span>
-                  <button
-                    type="button"
-                    class="composer-reply-close"
-                    title="取消回复"
-                    aria-label="取消回复"
-                    @click="cancelReply"
-                  >
-                    <el-icon :size="12">
-                      <Close />
-                    </el-icon>
-                  </button>
-                </div>
-                <div class="composer-row">
-                  <el-button
-                    v-if="qchatOptIn"
-                    class="composer-disconnect"
-                    text
-                    size="small"
-                    type="danger"
-                    title="断开连接（回到只看模式，不再顶手机）"
-                    :disabled="sendBusy"
-                    @click="onDisconnectClick"
-                  >
-                    断开连接
-                  </el-button>
-                  <el-input
-                    ref="draftInput"
-                    v-model="draft"
-                    class="composer-input"
-                    :class="{ 'is-blocked': !!speakBlock }"
-                    :placeholder="composerPlaceholder"
-                    :readonly="!canSend"
-                    maxlength="500"
-                    clearable
-                    @click="onComposerClick"
-                    @keyup.enter="onDraftEnter"
-                  >
-                    <!-- 禁言状态合并进输入框：即使草稿仍占着 placeholder，左侧标记也能持续说明原因 -->
-                    <template #prefix>
-                      <span v-if="composerMuted" class="composer-muted-mark">
-                        <el-icon :size="12">
-                          <Lock />
-                        </el-icon>
-                        全员禁言
-                      </span>
-                    </template>
-                  </el-input>
-                  <el-button
-                    class="composer-send"
-                    type="primary"
-                    round
-                    :loading="sendBusy"
-                    :disabled="!composerUsable"
-                    :title="sendButtonHint"
-                    @click="onSendClick('button')"
-                  >
-                    {{ sendButtonLabel }}
-                  </el-button>
-                </div>
-              </div>
+              <RoomComposer
+                v-if="composerVisible"
+                ref="composerEl"
+                v-model:draft="draft"
+                :reply-target="replyTarget"
+                :qchat-opt-in="qchatOptIn"
+                :send-busy="sendBusy"
+                :blocked="!!speakBlock"
+                :muted="composerMuted"
+                :placeholder="composerPlaceholder"
+                :can-send="canSend"
+                :usable="composerUsable"
+                :send-hint="sendButtonHint"
+                :send-label="sendButtonLabel"
+                @cancel-reply="cancelReply"
+                @disconnect="onDisconnectClick"
+                @composer-click="onComposerClick"
+                @draft-enter="onDraftEnter"
+                @send="onSendClick('button')"
+              />
 
               <footer v-if="statusText" class="main-foot">
                 {{ statusText }}
@@ -3862,99 +3820,6 @@ watch([chatStatus, chatStatusText], () => {
   color: var(--el-text-color-secondary);
 }
 
-/* 发言输入条：房间就绪后常驻消息区底部（与 .main-foot 互斥出现：后者只在加载/错误态）。
- * 禁用态不置灰整条——占位文案即连接状态（正在连接 / 重连中 / 未连接原因），
- * 用户要能看到「为什么发不了」，而不是面对一个灰掉的输入框猜原因 */
-.chat-composer {
-  flex: none;
-  padding: fluid(8px, 10px) var(--chat-pad-x) calc(fluid(8px, 10px) + env(safe-area-inset-bottom, 0px));
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-
-/* 回复态摘要：被回复者昵称 + 内容一行省略，取消钮靠右 */
-.composer-reply {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
-  padding: 4px 8px;
-  border-radius: var(--radius-xs);
-  font-size: 12px;
-  background: var(--el-fill-color-lighter);
-}
-
-.composer-reply-name {
-  flex: none;
-  font-weight: 600;
-  /* 房间语义色（与页签 / 图标同一支），不用品牌紫 */
-  color: var(--color-rooms);
-}
-
-.composer-reply-text {
-  overflow: hidden;
-  min-width: 0;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--el-text-color-secondary);
-}
-
-.composer-reply-close {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  margin-left: auto;
-  padding: 2px;
-  border: none;
-  border-radius: var(--radius-xs);
-  color: var(--el-text-color-secondary);
-  background: transparent;
-  cursor: pointer;
-  transition:
-    color 0.15s ease,
-    background-color 0.15s ease;
-
-  &:hover {
-    color: var(--el-text-color-primary);
-    background: var(--el-fill-color);
-  }
-}
-
-/* 阻断态与输入框合并：锁定标记常驻在输入框内，警告色只落在这一处 */
-.composer-input.is-blocked :deep(.el-input__wrapper) {
-  background: var(--el-color-warning-light-9);
-  box-shadow: 0 0 0 1px var(--el-color-warning-light-5) inset;
-}
-
-.composer-input.is-blocked :deep(.el-input__inner),
-.composer-input.is-blocked :deep(.el-input__inner::placeholder) {
-  color: var(--el-color-warning-dark-2);
-}
-
-.composer-muted-mark {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  margin-right: 6px;
-  padding-right: 8px;
-  border-right: 1px solid var(--el-color-warning-light-5);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  color: var(--el-color-warning-dark-2);
-}
-
-.composer-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* 发送钮定宽：文案在「发送 / 发送中 / 冷却倒数」之间切换，宽度跳变会抖 */
-.composer-send {
-  flex: none;
-  min-width: 64px;
-}
 /* 天气标签：右栏头部（.main-head-name 旁）与本页左列条目共用同一外观。
    条目已抽到 components/rooms/RoomListItem.vue，scoped 样式跨不过去，
    那边有一份同样的定义；改形状时两处要一起改（与 %soft-tag 同步）。 */
