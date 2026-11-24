@@ -3,7 +3,7 @@ import type { TaskSnapshot } from './task-registry'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ipcMain } from 'electron'
-import { Database } from '../database'
+import { ConfigStore } from '../config-store'
 import { broadcastIpc } from '../ipc/send'
 import { handleTraced } from '../ipc/trace'
 import { log, warn } from '../logger'
@@ -49,12 +49,11 @@ export function registerFfmpegTask(config: FfmpegTaskConfig): void {
     if (path.basename(filename) !== filename || !filename || filename === '.' || filename === '..')
       throw new Error(`任务文件名不合法: ${filename}`)
     // 保存目录与 ffmpeg 二进制校验
-    const saveDir = Database.instance().getConfig('downloadDirectory')
+    const saveDir = ConfigStore.instance().getConfig('downloadDirectory')
     if (!fs.existsSync(saveDir))
       throw new Error('保存目录不存在')
-    const ffmpegDir = Database.instance().getConfig('ffmpegDirectory')
-    if (!fs.existsSync(ffmpegDir))
-      throw new Error('ffmpeg 目录不存在')
+    const ffmpegDir = ConfigStore.instance().getConfig('ffmpegDirectory')
+    // 解析含 linux 系统 ffmpeg 回落，原因分类与文案由 resolveFfmpegBinary 统一给出
     const ffmpegPath = resolveFfmpegBinary(ffmpegDir)
     // 全局并发熔断：达到上限直接拒绝（错误经 IPC 抛回渲染端，use-tasks 会用 ElMessage 展示）
     if (!hasFfmpegSlot()) {

@@ -139,6 +139,43 @@ describe('mergeFromPocket（口袋关注合并，只增不删）', () => {
   })
 })
 
+describe('显式关注 / 取关（房间页本地关注开关用）', () => {
+  it('followMember：落库并就地入册，重复调用不重复入册', async () => {
+    const { store, calls } = await setup({ loggedIn: true })
+
+    expect(await store.followMember({ userId: 10001, realName: '甲', teamColor: '' })).toBe(true)
+    expect(calls.addMemberFlag).toEqual([['followed', 10001]])
+    expect(store.followedMembers.value.map(member => member.userId)).toEqual([10001])
+
+    await store.followMember({ userId: 10001, realName: '甲', teamColor: '' })
+    expect(store.followedMembers.value.map(member => member.userId)).toEqual([10001])
+  })
+
+  it('unfollowMember：落库移除并返回成功', async () => {
+    const { store, calls } = await setup({
+      loggedIn: true,
+      flags: [{ userId: 10001, realName: '甲', teamColor: '' }],
+    })
+    await store.refreshFollowedMembers()
+
+    expect(await store.unfollowMember(10001)).toBe(true)
+    expect(calls.removeMemberFlag).toEqual([['followed', 10001]])
+    expect(store.isFollowed(10001)).toBe(false)
+  })
+
+  it('落库失败返回 false 且名单不变：调用方据此不收起房间', async () => {
+    const { store } = await setup({
+      loggedIn: true,
+      flags: [{ userId: 10001, realName: '甲', teamColor: '' }],
+    })
+    await store.refreshFollowedMembers()
+    vi.mocked(window.mainAPI.removeMemberFlag).mockRejectedValueOnce(new Error('disk full'))
+
+    expect(await store.unfollowMember(10001)).toBe(false)
+    expect(store.isFollowed(10001)).toBe(true)
+  })
+})
+
 describe('toggleFollowMember 双写口袋关注', () => {
   it('新关注：本地落库 + pocketFollowMember', async () => {
     const { actions, calls } = await setup({ loggedIn: true })

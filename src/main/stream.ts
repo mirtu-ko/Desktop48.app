@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { Database } from './database'
+import { ConfigStore } from './config-store'
 import { resolveFfmpegBinary } from './ffmpeg/ffmpeg-process'
 import { assertLocalServerAvailable, serverHost, serverPort } from './http-server'
 import { debug, error, log } from './logger'
@@ -26,18 +26,19 @@ function getStreamRoute(liveId: string) {
 }
 
 /**
- * 播放和录制都复用用户配置的 FFmpeg，可避免在项目里额外捆绑二进制。
- * 判定与文案来自 resolveFfmpegBinary（inspectFfmpegDir），此处只补一句修复引导：
+ * 播放和录制都复用用户配置的 FFmpeg（linux 上配置不可用时回落到系统安装的 ffmpeg），
+ * 可避免在项目里额外捆绑二进制。判定与文案来自 resolveFfmpegBinary，此处只补一句修复引导：
  * 这条链路的错误会经 IPC 抛到渲染层直接展示，必须是用户能照着做的说法。
  */
 function getFfmpegPath() {
-  const ffmpegDir = Database.instance().getConfig('ffmpegDirectory')
+  const ffmpegDir = ConfigStore.instance().getConfig('ffmpegDirectory')
   try {
     return resolveFfmpegBinary(ffmpegDir)
   }
   catch (err) {
     const reason = err instanceof Error ? err.message : 'FFmpeg 不可用'
-    throw new Error(`${reason}，请在「设置」中下载或重新选择 FFmpeg 目录`)
+    const systemHint = process.platform === 'linux' ? '，或安装系统 ffmpeg（apt install ffmpeg）' : ''
+    throw new Error(`${reason}，请在「设置」中下载或重新选择 FFmpeg 目录${systemHint}`)
   }
 }
 

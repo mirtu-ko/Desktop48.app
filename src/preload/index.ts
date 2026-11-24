@@ -59,8 +59,10 @@ const api = {
   removeMemberTeamPromotion: (userId: number) => invokeIpc('removeMemberTeamPromotion', userId),
 
   // ===== 应用配置 =====
-  // 对端：main/ipc/register-database-ipc.ts
-  getConfig: <K extends ConfigKey>(key: K) => invokeIpc('getConfig', key),
+  // 对端：main/ipc/register-config-ipc.ts（配置独立存 userData/app-config.json）
+  // getConfig 的线上返回值是 string（InvokeSpec 只能表达一种线格式），
+  // 键值关联的收窄在契约层完成：此处断言为 AppConfig[K]，渲染层拿到的即是该键的精确类型。
+  getConfig: <K extends ConfigKey>(key: K) => invokeIpc('getConfig', key) as Promise<AppConfig[K]>,
   setConfig: <K extends ConfigKey>(key: K, value: AppConfig[K]) => invokeIpc('setConfig', key, value),
 
   // ===== 文件系统与目录 =====
@@ -197,6 +199,8 @@ const api = {
   pocketGetServerChannels: (serverId: string) => invokeIpc('pocketGetServerChannels', serverId),
   pocketDanmakuStart: (chatroomId: string, liveId: string) => invokeIpc('pocketDanmakuStart', chatroomId, liveId),
   pocketDanmakuStop: (chatroomId: string) => invokeIpc('pocketDanmakuStop', chatroomId),
+  pocketDanmakuSend: (chatroomId: string, liveId: string, text: string) =>
+    invokeIpc('pocketDanmakuSend', chatroomId, liveId, text),
   // pocketDanmakuBatch 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   pocketDanmakuBatch: (callback: (_batch: PocketDanmakuBatch) => void) =>
     onIpc('pocketDanmakuBatch', callback),

@@ -13,6 +13,7 @@
  *
  * 失败一律静默降级：连接不上只回调 status，不影响直播播放（与 B 站弹幕同一策略）。
  */
+import type { PocketDanmakuSendResult } from '@preload/ipc-contract'
 import type { PocketChatMessage } from '@renderer/utils/pocket-chat-message'
 import { debugLog } from '@renderer/utils/debug'
 import { normalizePocketChatMessage } from '@renderer/utils/pocket-chat-message'
@@ -55,6 +56,12 @@ interface ChatroomEntry {
   starting: boolean
   unsubscribe: (() => void) | null
   dead: boolean
+  /**
+   * 最近一次连接状态：新订阅者加入时先按它回填一次。
+   * 复用已建会话不会再触发状态推送，只靠事件会让后加入的消费者（如后打开的播放窗）
+   * 一直以为「未连接」，发送入口永远置灰。
+   */
+  status: PocketChatStatus
 }
 
 /** 按聊天室 ID 在册的会话；渲染进程内每个聊天室最多一条连接 */
@@ -73,6 +80,7 @@ function removeSubscriber(entry: ChatroomEntry, subscriber: ChatroomSubscriber):
 
 /** 起会话失败（未登录/凭据失效）：广播终态给所有订阅者并摘掉在册记录，之后可重连 */
 function failEntry(entry: ChatroomEntry, message: string): void {
+  entry.status = 'disconnected'
   for (const subscriber of [...entry.subscribers])
     subscriber.onStatus?.('disconnected', message)
   if (entries.get(entry.chatroomId) === entry)
@@ -154,6 +162,7 @@ export function connectPocketChatroom(options: PocketChatSessionOptions): Pocket
       starting: false,
       unsubscribe: null,
       dead: false,
+      status: 'connecting',
     }
     entries.set(options.chatroomId, entry)
   }
@@ -163,6 +172,8 @@ export function connectPocketChatroom(options: PocketChatSessionOptions): Pocket
     onStatus: options.onStatus,
   }
   entry.subscribers.add(subscriber)
+  // 回填已知状态（新会话为 connecting；复用已连通会话则直接是 connected）
+  subscriber.onStatus?.(entry.status)
 
   // 每房一条批次订阅：先订阅再起会话，免得起会话初期到达的状态/消息被丢掉
   if (!entry.unsubscribe) {
@@ -171,8 +182,9 @@ export function connectPocketChatroom(options: PocketChatSessionOptions): Pocket
       if (batch.chatroomId !== current.chatroomId)
         return
       if (batch.kind === 'status') {
+        current.status = batch.status ?? 'connecting'
         for (const subscriber of [...current.subscribers])
-          subscriber.onStatus?.(batch.status ?? 'connecting', batch.message)
+          subscriber.onStatus?.(current.status, batch.message)
         return
       }
       for (const raw of batch.items ?? [])
@@ -191,6 +203,15 @@ export function connectPocketChatroom(options: PocketChatSessionOptions): Pocket
   return {
     destroy: () => removeSubscriber(entry!, subscriber),
   }
+}
+
+/**
+ * 在指定的聊天室发送一条弹幕。
+ * 不自建会话：主进程按 chatroomId 找已建立的连接，找不到直接 reject
+ * （未连接时调用方应先提示，而不是等一次注定失败的往返）。
+ */
+export function sendPocketBarrage(chatroomId: string, liveId: string, text: string): Promise<PocketDanmakuSendResult> {
+  return window.mainAPI.pocketDanmakuSend(chatroomId, liveId, text)
 }
 
 /** 退订本渲染进程某聊天室的全部订阅者（最后一个离开时停主进程会话）；无在册会话时 no-op */

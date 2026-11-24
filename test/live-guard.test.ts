@@ -11,11 +11,11 @@ vi.mock('element-plus', () => ({ ElMessage: messageMock }))
 const fakeRouter = { push: pushMock } as any
 
 /** 就绪状态的基准值：各用例只覆盖自己关心的字段 */
-const READY: FfmpegStatus = { ok: true, problem: null, directory: '/opt/ffmpeg', binaryPath: '/opt/ffmpeg/ffmpeg' }
+const READY: FfmpegStatus = { ok: true, problem: null, directory: '/opt/ffmpeg', binaryPath: '/opt/ffmpeg/ffmpeg', source: 'directory' }
 
 /** 不可用状态：problem 由用例指定 */
 function broken(problem: FfmpegStatus['problem'], directory = ''): FfmpegStatus {
-  return { ok: false, problem, directory, binaryPath: '' }
+  return { ok: false, problem, directory, binaryPath: '', source: 'directory' }
 }
 
 function stubFfmpeg(getFfmpegStatus: (_dir?: string) => Promise<FfmpegStatus>) {

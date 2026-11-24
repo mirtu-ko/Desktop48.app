@@ -14,7 +14,7 @@ import { is } from '@electron-toolkit/utils'
 import { BrowserWindow, screen, shell } from 'electron'
 import iconWin from '../../../resources/icon-win.ico?asset'
 import icon from '../../../resources/icon.png?asset'
-import { Database } from '../database'
+import { ConfigStore } from '../config-store'
 import { sendIpc } from '../ipc/send'
 import { log } from '../logger'
 import { wireWindowMaximizeEvents } from './window-events'
@@ -67,7 +67,7 @@ function findByWindow(win: BrowserWindow): FloatWindowRecord | undefined {
 
 /** 当前全局置顶偏好（新窗的初值）；旧库 / 手改配置里的未知取值按「仅播放时」处理 */
 function topmostPreference(): FloatTopmost {
-  const value = Database.instance().getConfig('floatTopmost')
+  const value = ConfigStore.instance().getConfig('floatTopmost')
   return isFloatTopmost(value) ? value : 'playing'
 }
 

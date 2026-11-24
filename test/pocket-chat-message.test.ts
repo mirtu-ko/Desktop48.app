@@ -1,6 +1,6 @@
 import type { PocketChatMessage } from '../src/renderer/src/utils/pocket-chat-message'
 import { describe, expect, it } from 'vitest'
-import { normalizePocketChatMessage, parseMessageExtension } from '../src/renderer/src/utils/pocket-chat-message'
+import { isSelfEcho, normalizePocketChatMessage, parseMessageExtension } from '../src/renderer/src/utils/pocket-chat-message'
 
 /** 口袋文本弹幕的典型形状：业务扩展整体挂在 custom（JSON 字符串）里 */
 function makeTextMessage(extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -264,5 +264,50 @@ describe('pocket-chat-message 兜底字段', () => {
   it('扩展 text 缺失时回退 msg.text', () => {
     const msg = { type: 'text', text: '兜底文本', custom: JSON.stringify({ messageType: 'BARRAGE_NORMAL' }) }
     expect(normalizePocketChatMessage(msg)?.text).toBe('兜底文本')
+  })
+})
+
+describe('pocket-chat-message 消息 ID', () => {
+  it('归一结果带上云信消息 ID（认领自发回推要用）', () => {
+    const msg = makeTextMessage({ uuid: 'msg-1' })
+    expect(normalizePocketChatMessage(msg)?.uuid).toBe('msg-1')
+  })
+
+  it('报文缺 ID 时不写空串，保持字段缺省', () => {
+    expect(normalizePocketChatMessage(makeTextMessage())?.uuid).toBeUndefined()
+  })
+})
+
+describe('pocket-chat-message.isSelfEcho', () => {
+  const claim = { uuid: 'sent-1', userId: '711741', text: '666' }
+
+  it('消息 ID 相同即认领，正文被服务端改写也认', () => {
+    expect(isSelfEcho({ uuid: 'sent-1', userId: '711741', text: '666 ' }, claim)).toBe(true)
+  })
+
+  it('消息 ID 对不上时，他人发的同文消息不认领（关键：不能吞别人的弹幕）', () => {
+    expect(isSelfEcho({ uuid: 'other-9', userId: '999', text: '666' }, claim)).toBe(false)
+  })
+
+  it('双方都没有 ID 时，按 userId + 正文认领自己的回推', () => {
+    expect(isSelfEcho({ userId: '711741', text: '666' }, claim)).toBe(true)
+  })
+
+  it('正文相同但 userId 不同：不认领', () => {
+    expect(isSelfEcho({ userId: '999', text: '666' }, claim)).toBe(false)
+  })
+
+  it('正文相同但回推缺 userId：不认领（宁可重复，也不误吞）', () => {
+    expect(isSelfEcho({ text: '666' }, claim)).toBe(false)
+  })
+
+  it('正文不同且 ID 不同：不认领', () => {
+    expect(isSelfEcho({ uuid: 'other-9', userId: '711741', text: '777' }, claim)).toBe(false)
+  })
+
+  it('本端拿不到 userId 时，只靠 ID 认领', () => {
+    const noId = { uuid: 'sent-1', userId: '', text: '666' }
+    expect(isSelfEcho({ uuid: 'sent-1', userId: '', text: '666' }, noId)).toBe(true)
+    expect(isSelfEcho({ uuid: 'other-9', userId: '', text: '666' }, noId)).toBe(false)
   })
 })

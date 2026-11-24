@@ -116,6 +116,12 @@ mpegts 解析 FLV → MSE → <video> → oncanplay → 加载态解除
 
 `handleCreateLiveStream` 本身不启动 FFmpeg：它只做闸门校验并登记 `{ liveId → rtmpUrl }`，返回本地地址；播放器 GET 本地地址时 `http-server` 才取出地址并 spawn。收益：播放窗创建后立即关闭不会遗留 FFmpeg 进程；同一直播（`existingSession.inputUrl === rtmpUrl`）复用会话，不重复登记。
 
+### 4.1 linux 上的 FFmpeg 来源（配置目录 → 系统安装）
+
+`resolveFfmpegEnvironment` 的优先级是「显式目录（用户配置或一键下载）→ linux 系统 ffmpeg」，两者都没有时才原样返回显式目录的失败判定。系统来源由 `findSystemFfmpeg` 探测（PATH + `/usr/local/bin`、`/usr/bin`），存在性之外还要求可执行位。
+
+这条回落不是可选项，而是修 bug：ffmpeg-static 的 linux 产物是 **glibc 静态链接**，域名解析要 `dlopen` `libnss_dns.so.2`，而静态程序没有动态加载器 —— 普通发行版上 `getaddrinfo` 返回 `EAI_SYSTEM`，ChromeOS Crostini 容器里直接 SIGSEGV，主进程只看到 `close code=null`。注意 `-version` 不解析域名，所以「冒烟校验跑通」证明不了可用。deb 侧的 `depends: ffmpeg`（`electron-builder.yml`）保证系统来源存在，用户安装时自动带上；命令行走 `apt install ffmpeg` 的也是同一条来源。
+
 ## 5. 关闭时的资源回收
 
 回收路径双向，渲染进程与主进程各自独立兜底：
@@ -210,7 +216,7 @@ danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveE
 
 ### 7.6 开播前的 FFmpeg 校验只做一次
 
-`stores/float-players.ts` 的 `openLive` 是四个开播入口（直播列表 / 公演页 / 房间资料卡 / 房间分享卡）的唯一汇聚点，`use-live-guard` 的 `checkLiveReady()` 接在这里，新增入口无需接线；`openPlayback` 不做该校验——回放走 mpegts 直连，不经过 FFmpeg 转封装。判定口径与启动门禁、下载守卫共用 `window.mainAPI.getFfmpegStatus`（`inspectFfmpegDir`），不要另起一套。
+`stores/float-players.ts` 的 `openLive` 是四个开播入口（直播列表 / 公演页 / 房间资料卡 / 房间分享卡）的唯一汇聚点，`use-live-guard` 的 `checkLiveReady()` 接在这里，新增入口无需接线；`openPlayback` 不做该校验——回放走 mpegts 直连，不经过 FFmpeg 转封装。判定口径与启动门禁、下载守卫共用 `window.mainAPI.getFfmpegStatus`（`resolveFfmpegEnvironment`：显式目录 → linux 系统 ffmpeg 回落，见 4.1），不要另起一套。
 
 ### 7.7 静默故障与加载失败态
 
@@ -235,6 +241,16 @@ danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveE
 **B 站房间号三级解析**（`utils/bilibili-room.ts`，从严到宽，全部落空则无弹幕）：① `teamList[0].groupId` 查团体房间表（`common/bilibili-rooms.ts`）；② 标题/副标题文本匹配，先团体名（SNH48…）再队伍名（TEAM X…，接口的 teamName 不含团体名）；③ 在线兜底：主进程拉五个官方直播间信息（`bilibiliRoomInfos` IPC，缓存 5 分钟），只取在播中的房间，与公演名书名号段互配命中——teamList 为空的公演（新生公演、生日会等）靠这层发现。
 
 弹幕连不上只提示一次，不影响直播播放：B 站握手失败经 toast 提示后关闭弹幕层；口袋源断连由协议客户端自动重连，未登录则不建立会话。
+
+### 8.1 发送弹幕（个人直播）
+
+只有个人直播可写：公演用的是 B 站只读弹幕，没有上行通道。入口在已登录且已取到 `chatroomId` 时出现（胶囊「发送」按钮 → 底部输入条），发送复用**当前观看已建立**的聊天室会话，不新建连接——同一账号的另一条连接会顶掉自己。
+
+链路：`LivePlayer.submitDanmaku` → `use-live-danmaku.sendBarrage` → `services/pocket-chatroom.sendPocketBarrage` → IPC `pocketDanmakuSend` → `pocket-danmaku.handlePocketDanmakuSend` → `nim-chatroom.sendMessage`（service 13 / command 6，等回包取消息 ID 与时刻）。
+
+报文与官方 `com.netease.nimlib.chatroom.h.a` 同构，属性表六项：`1`=消息 UUID、`2`=100（自定义）、`3`=附件（自定义消息为空）、`4`=remoteExtension、`10`+`11`=反垃圾开关与待检正文。`remoteExtension` 是 `AppIMMessage` 的 JSON，正文只放 `text`；`messageType=BARRAGE_NORMAL`、`module=live`、`sourceId` 必须是直播 ID（接收端按它与当前场次比对，传聊天室 ID 会被整条丢弃）。
+
+发送成功后本地先上屏，并在 10 秒窗口内按正文认领服务端回推的同一条消息（是否回推由服务端决定）。空内容、超过 `POCKET_DANMAKU_MAX_LENGTH`（`common/live-danmaku.ts`，与输入框 `maxlength` 同源）、会话未连接、未登录均在本地拒绝；禁言等业务拒绝以服务端错误码体现。
 
 ## 9. 对照：历史公演（回放）链路
 

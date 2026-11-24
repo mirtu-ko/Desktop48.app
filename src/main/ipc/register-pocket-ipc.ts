@@ -5,7 +5,12 @@
 import type { PocketClientProfileId, PocketRoomReplyTarget } from '@preload/ipc-contract'
 import type { IpcMainInvokeEvent } from 'electron'
 import * as pocketAuth from '../pocket48/pocket-auth'
-import { handlePocketDanmakuStart, handlePocketDanmakuStop, resetPocketDanmakuSessions } from '../pocket48/pocket-danmaku'
+import {
+  handlePocketDanmakuSend,
+  handlePocketDanmakuStart,
+  handlePocketDanmakuStop,
+  resetPocketDanmakuSessions,
+} from '../pocket48/pocket-danmaku'
 import {
   handleRoomQChatEnter,
   handleRoomQChatLeave,
@@ -110,6 +115,9 @@ export function registerPocketIPC(): void {
     handlePocketDanmakuStart(chatroomId, liveId, event.sender))
   handleTraced('pocketDanmakuStop', (event, chatroomId: string) =>
     handlePocketDanmakuStop(chatroomId, event.sender))
+  // 发弹幕：复用进房时建立的会话（13/6），不新建连接；未连接时 reject 由渲染层提示
+  handleTraced('pocketDanmakuSend', (_event, chatroomId: string, liveId: string, text: string) =>
+    handlePocketDanmakuSend(chatroomId, liveId, text))
   // 房间未读（主进程 60s 轮询检测，见 main/pocket48/pocket-unread.ts）：
   // 快照回取 + 小房间频道查询 + 标记已读（target 区分大/小房间）
   handleTraced('pocketUnreadState', () => pocketUnread.getState())

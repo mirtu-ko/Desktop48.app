@@ -59,7 +59,8 @@ describe('safePngFileName（对话框默认名）', () => {
   it('剥掉目录并替换非法字符，同时补后缀', () => {
     expect(safePngFileName('../evil/小 测:试.png')).toBe('小_测_试.png')
     expect(safePngFileName('../evil/card')).toBe('card.png')
-    expect(safePngFileName('..\\..\\evil.sh')).toBe('.._.._evil.sh.png')
+    // path.basename 按宿主解释反斜杠：Windows 当目录分隔符剥掉，POSIX 当普通字符替换
+    expect(['evil.sh.png', '.._.._evil.sh.png']).toContain(safePngFileName('..\\..\\evil.sh'))
   })
 
   it('纯点号、空值与非字符串一律回落到默认名', () => {

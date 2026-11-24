@@ -9,7 +9,7 @@ import { computed } from 'vue'
 /** 成员卡片：成员库网格里的单个成员。compact 走 prop，父级 CSS 穿透不进来。 */
 const props = defineProps<{
   member: MemberDetail
-  /** 网格内序号：驱动入场错峰（--i），封顶 16 */
+  /** 网格内序号：驱动入场错峰（--i），封顶 20 */
   index: number
   /** 紧凑档：头像与文案同步收小（网格列宽由父级决定） */
   compact?: boolean
@@ -28,9 +28,9 @@ const emit = defineEmits<{
 /** 官网独有的补充成员没有口袋 userId：屏蔽与关注都不可用，快捷操作整块不渲染 */
 const actionable = computed(() => typeof props.member.userId === 'number')
 
-/** 卡片内联变量：--avatar-accent 供头像光环 / 皇冠取色，--i 是入场错峰的序号 */
+/** 卡片内联变量：--avatar-accent 供头像光环 / 皇冠取色，--i 是入场错峰的序号（封顶 20，与总选名次卡同节奏） */
 const cardStyle = computed(() => {
-  const style: Record<string, string | number> = { '--i': Math.min(props.index, 16) }
+  const style: Record<string, string | number> = { '--i': Math.min(props.index, 20) }
   const color = Tools.toHex(props.member.ringColor || props.member.teamColor)
   if (color)
     style['--avatar-accent'] = color

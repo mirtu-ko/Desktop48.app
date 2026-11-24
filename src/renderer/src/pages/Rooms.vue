@@ -4,13 +4,15 @@
 
 import type { PocketRoom } from '@renderer/composables/use-pocket-rooms'
 import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
-import type { InputInstance } from 'element-plus'
 import type { Component, ComponentPublicInstance, VNode } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
-import { ArrowRight, Calendar, ChatDotRound, Check, Close, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
+import { ArrowRight, Calendar, ChatDotRound, Check, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
+import RoomComposer from '@renderer/components/rooms/RoomComposer.vue'
 import RoomDateDialog from '@renderer/components/rooms/RoomDateDialog.vue'
 import RoomEssenceDialog from '@renderer/components/rooms/RoomEssenceDialog.vue'
+import RoomListItem from '@renderer/components/rooms/RoomListItem.vue'
+import RoomLiveCard from '@renderer/components/rooms/RoomLiveCard.vue'
 import RoomMessageMenu from '@renderer/components/rooms/RoomMessageMenu.vue'
 import RoomProfileCard from '@renderer/components/rooms/RoomProfileCard.vue'
 
@@ -19,6 +21,7 @@ import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
+import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promotion'
 import { markRoomRead, unreadChannelOf, unreadCountOf } from '@renderer/stores/pocket-unread'
 import { useRoomPinsStore } from '@renderer/stores/room-pins'
@@ -32,7 +35,7 @@ import { trackEvent } from '@renderer/utils/umami'
 import { useDebounceFn, useDocumentVisibility, useEventListener, useIntersectionObserver, useResizeObserver } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, h, nextTick, onDeactivated, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onDeactivated, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const {
@@ -72,6 +75,8 @@ const {
   unlockSmall,
   openTemporaryRoom,
   closeTemporaryRoom,
+  applyRoomFollowSource,
+  notePocketFollow,
 
   loadMoreHistory,
   openSharedLive,
@@ -112,6 +117,8 @@ function openDateDialog() {
 }
 
 const { findMemberByUserId } = useMemberDirectoryStore()
+/** 本地关注名单：资料卡「本地关注」开关的写入口（见 toggleLocalFollow） */
+const { followMember, unfollowMember } = useFollowedMembersStore()
 
 /** 房间展示队伍：整列一次派生，模板只读 displayTeam；服务端原值仍留在 room 上 */
 const { displayTeamOf } = useMemberTeamPromotionStore()
@@ -121,6 +128,11 @@ const displayRooms = computed(() => rooms.value.map(room => ({
   ...room,
   pinned: isRoomPinned(room.userId),
   displayTeam: displayTeamOf(room.userId, room.teamName, room.teamColor),
+  // 以下四项是入口组件要的展示结果，在这里一次算好：组件不该为了未读/关闭态去读各 store
+  unreadText: unreadCountOf(room.userId) ? roomUnreadText(room.userId) : '',
+  hint: roomItemHint(room),
+  closed: isRoomClosedOf(room.userId),
+  pocketFollowed: isPocketFollowed(room.followSource),
 })))
 /** 当前列表里的置顶条数：置顶过但已取消关注 / 房间关掉的成员不算，免得数与所见不一致 */
 const pinnedRoomCount = computed(() => displayRooms.value.filter(room => room.pinned).length)
@@ -202,18 +214,37 @@ function isPocketFollowed(source: PocketRoom['followSource']): boolean {
   return source === 'pocket' || source === 'both'
 }
 
-/** 口袋关注 / 取关：只动账号侧关注，不改本地名单；结果就地更新当前房间来源 */
-const pocketFollowBusy = ref(false)
+/** 是否在本机名单里（local / both 都算） */
+function isLocallyFollowed(source: PocketRoom['followSource']): boolean {
+  return source === 'local' || source === 'both'
+}
 
+const selectedPocketFollowed = computed(() => isPocketFollowed(selectedRoom.value?.followSource))
+const selectedLocalFollowed = computed(() => isLocallyFollowed(selectedRoom.value?.followSource))
+
+/**
+ * 资料卡的两个关注开关。
+ *
+ * 口袋关注写账号（friends/id）并顺带补本机 flag；本地关注只写本机名单。
+ * 两者不是对等的两份名单：账号关注按策略 A 只增不删地并进本机（见
+ * stores/member-flags 的 mergeFromPocket），所以账号已关注时本地必然收录——
+ * 本地开关这时锁定为开，只有「仅本地关注」的成员才能本地取关。
+ * 两个来源都不再关注时，房间随条目移出左列（正看着则右侧收起）。
+ */
+const pocketFollowBusy = ref(false)
+const localFollowBusy = ref(false)
+
+/** 口袋关注开关：写账号并顺带补本机 flag；取消只动账号、保留本机记录（二次确认） */
 async function togglePocketFollow() {
   const room = selectedRoom.value
-  if (!room || pocketFollowBusy.value)
+  if (!room || pocketFollowBusy.value || localFollowBusy.value)
     return
-  const willFollow = !isPocketFollowed(room.followSource)
-  // 取关是账号级破坏性操作：二次确认，避免手滑把口袋侧关注摘掉
+  const willFollow = !selectedPocketFollowed.value
+  // 本地状态在 await 前截下：回包期间可能已切房
+  const keepLocal = selectedLocalFollowed.value
   if (!willFollow) {
     const ok = await ElMessageBox.confirm(
-      `确定在口袋账号取消关注「${room.nickname}」吗？`,
+      `确定在口袋账号取消关注「${room.nickname}」吗？该操作会同步到你的口袋账号。`,
       '取消口袋关注',
       {
         type: 'warning',
@@ -228,14 +259,25 @@ async function togglePocketFollow() {
   }
   pocketFollowBusy.value = true
   try {
-    if (willFollow)
+    if (willFollow) {
       await window.mainAPI.pocketFollowMember(room.userId)
-    else
-      await window.mainAPI.pocketUnfollowMember(room.userId)
-    room.followSource = willFollow
-      ? (room.followSource === 'local' ? 'both' : 'pocket')
-      : (room.followSource === 'both' ? 'local' : undefined)
-    ElMessage({ message: willFollow ? '已在口袋账号关注该成员' : '已在口袋账号取消关注该成员', type: 'success' })
+      // 先更新口袋镜像再写本地：本地 store 的变化会触发来源 watch，此时镜像须已是最新
+      notePocketFollow(room.userId, true)
+      const localOk = await followMember({ userId: room.userId, realName: room.nickname, teamColor: room.teamColor })
+      applyRoomFollowSource(room.userId, localOk ? 'both' : 'pocket')
+      ElMessage({
+        message: localOk ? '已关注（口袋账号 + 本机）' : '已关注口袋账号，本机记录同步失败',
+        type: localOk ? 'success' : 'warning',
+      })
+      return
+    }
+    await window.mainAPI.pocketUnfollowMember(room.userId)
+    notePocketFollow(room.userId, false)
+    applyRoomFollowSource(room.userId, keepLocal ? 'local' : undefined)
+    ElMessage({
+      message: keepLocal ? '已取消口袋关注，本地关注保留' : '已取消关注，房间已移出列表',
+      type: 'success',
+    })
   }
   catch (error) {
     ElMessage.error(willFollow ? '口袋关注失败，请稍后重试' : '口袋取关失败，请稍后重试')
@@ -243,6 +285,40 @@ async function togglePocketFollow() {
   }
   finally {
     pocketFollowBusy.value = false
+  }
+}
+
+/**
+ * 本地关注开关：只动本机名单。口袋已关注时锁定（见上），这里再守一道，
+ * 免得按钮态与服务端不同步时把同步会补回来的记录删掉。
+ */
+async function toggleLocalFollow() {
+  const room = selectedRoom.value
+  if (!room || localFollowBusy.value || pocketFollowBusy.value || selectedPocketFollowed.value)
+    return
+  const willFollow = !selectedLocalFollowed.value
+  localFollowBusy.value = true
+  try {
+    if (willFollow) {
+      const ok = await followMember({ userId: room.userId, realName: room.nickname, teamColor: room.teamColor })
+      if (!ok) {
+        ElMessage.error('本地关注失败，请稍后重试')
+        return
+      }
+      applyRoomFollowSource(room.userId, 'local')
+      ElMessage({ message: '已在本机关注该成员', type: 'success' })
+      return
+    }
+    const ok = await unfollowMember(room.userId)
+    if (!ok) {
+      ElMessage.error('本地取关失败，请稍后重试')
+      return
+    }
+    applyRoomFollowSource(room.userId, undefined)
+    ElMessage({ message: '已移出本机，房间不再显示', type: 'success' })
+  }
+  finally {
+    localFollowBusy.value = false
   }
 }
 
@@ -961,7 +1037,6 @@ watch(messages, (list) => {
 // ===== 发言输入条（确认连接后在消息区底部常驻）=====
 /** 输入草稿；发送成功即清空 */
 const draft = ref('')
-const draftInput = ref<InputInstance | null>(null)
 
 /** 输入条可见条件：已登录 + 选中房间 + 消息就绪 + 不在小房间暗号锁定态。
  * 连接状态不影响可见性——未连接也要把输入条摆出来，点它才引导连接。
@@ -1045,6 +1120,11 @@ const sendButtonLabel = computed(() => {
   return '发送'
 })
 
+const composerEl = ref<InstanceType<typeof RoomComposer> | null>(null)
+/** 量高度用：输入条已抽成组件，取它的根元素（.chat-composer） */
+const composerRef = computed(() => (composerEl.value?.$el as HTMLElement | undefined) ?? null)
+const composerHeight = ref(0)
+
 /** 发送钮 hover：说明倒数与禁用原因，这些状态不写在按钮文字里 */
 const sendButtonHint = computed(() => {
   if (speakBlock.value === 'unfollowed')
@@ -1105,7 +1185,7 @@ async function requestQChatConnection(): Promise<boolean> {
     ElMessage.error(result.message || '连接房间失败')
     return false
   }
-  draftInput.value?.focus()
+  composerEl.value?.focus()
   return true
 }
 
@@ -1211,8 +1291,6 @@ async function confirmDeleteOwn(message: PocketRoomMessageView) {
 }
 
 // 输入条高度联动「新消息浮标」：浮标贴在输入条上方，不挡住发送钮。
-const composerRef = ref<HTMLElement | null>(null)
-const composerHeight = ref(0)
 useResizeObserver(
   composerRef,
   (entries) => {
@@ -1342,7 +1420,7 @@ function onMenuPick(key: string) {
   }
   if (key === 'reply') {
     startReply(target.message)
-    void nextTick(() => draftInput.value?.focus())
+    void nextTick(() => composerEl.value?.focus())
     return
   }
   if (key === 'delete') {
@@ -1523,7 +1601,7 @@ const dividerMap = computed(() => {
  * 在播与否优先于 liveType：分享消息本身不带可靠回放标记（yaya_msg 同款），
  * 以当前直播列表判定——liveId 不在播即回放；列表未拉到（null）时按 liveType 兜底展示。
  */
-function liveCardBadge(message: PocketRoomMessageView) {
+function liveCardBadge(message: PocketRoomMessageView): { text: string, type: 'live' | 'screen' | 'radio' | 'playback' } {
   if (message.liveIsPlayback || isSharedLiveOnAir(message.liveId) === false)
     return { text: '回放', type: 'playback' }
   if (message.liveType === 1)
@@ -1551,11 +1629,6 @@ watch([chatStatus, chatStatusText], () => {
   else
     statusText.value = ''
 }, { immediate: true })
-
-onMounted(() => {
-  debugLog('rooms-page', 'Rooms 页面挂载，开始获取频道列表', { loggedIn: loggedIn.value })
-  void load()
-})
 </script>
 
 <template>
@@ -1622,7 +1695,7 @@ onMounted(() => {
               size="small"
               circle
               :loading="loading || liveRefreshing"
-              @click="load()"
+              @click="load(true)"
             >
               <el-icon v-if="!loading && !liveRefreshing">
                 <Refresh />
@@ -1644,91 +1717,16 @@ onMounted(() => {
 
         <div v-else-if="rooms.length" class="room-list detail-scroll">
           <!-- 关闭钮是条目的兄弟节点而非子节点：条目本体是 <button>，嵌套交互元素会破坏语义 -->
-          <div
+          <RoomListItem
             v-for="room in displayRooms"
             :key="room.userId"
-            class="room-wrap"
-            :class="{ 'is-temp': room.temporary }"
+            :room="room"
+            :active="selectedRoom?.userId === room.userId"
+            @select="enterRoom(room.userId)"
             @dblclick="onRoomWrapDblClick(room, $event)"
             @contextmenu="onRoomContextMenu(room, $event)"
-          >
-            <button
-              type="button"
-              class="room-item"
-              :class="{ 'is-active': selectedRoom?.userId === room.userId, 'is-live': !!room.live }"
-              :title="roomItemHint(room)"
-              @click="enterRoom(room.userId)"
-            >
-              <span class="room-avatar">
-                <img v-if="room.avatar" :src="room.avatar" :alt="room.nickname" referrerpolicy="no-referrer">
-                <span v-else class="room-avatar-fallback">{{ room.nickname.slice(0, 1) }}</span>
-                <!-- 开播状态：头像外沿呼吸光环（见 .room-live-badge），不占头像角落 -->
-                <span v-if="room.live" class="room-live-badge" aria-label="直播中" />
-                <!-- 开播状态：头像下沿白色跃动光柱（见 .room-eq），压在玫红晕染上 -->
-                <span v-if="room.live" class="room-eq" aria-hidden="true">
-                  <i />
-                  <i />
-                  <i />
-                </span>
-                <!-- 未读数字角标（主进程未读检测 → stores/pocket-unread 镜像）：右上角保持未读红点；开播呼吸光环只绕头像外周，不抢这个角 -->
-                <span
-                  v-if="unreadCountOf(room.userId)"
-                  class="unread-badge room-unread"
-                >{{ roomUnreadText(room.userId) }}</span>
-              </span>
-              <span class="room-meta">
-                <span class="room-name-row">
-                  <span class="room-name ellipsis">{{ room.nickname }}</span>
-                  <!-- 置顶标记紧跟名字：名字不撑满整行（见 .room-name），标记才贴得住，
-                       名字起始位置也不因置顶而变 -->
-                  <el-tooltip
-                    v-if="room.pinned"
-                    content="已置顶（右键可取消）"
-                    placement="top"
-                  >
-                    <MediaIcon class="room-pin-ico" name="pushpinFilled" :size="13" />
-                  </el-tooltip>
-                  <!-- 临时房间：本次会话临时打开的，不属于关注房间 -->
-                  <span v-if="room.temporary" class="room-temp-tag">临时</span>
-                  <span v-if="isRoomClosedOf(room.userId)" class="room-closed-tag">已关闭</span>
-                </span>
-
-                <span v-if="room.preview" class="room-preview ellipsis">{{ room.preview }}</span>
-              </span>
-              <!-- 右缘竖排小标签：星星在上（口袋关注），队伍徽标在下 -->
-              <span
-                v-if="room.teamName || isPocketFollowed(room.followSource)"
-                class="room-side-tags"
-              >
-                <el-tooltip
-                  v-if="isPocketFollowed(room.followSource)"
-                  content="口袋账号关注（可在设置页拉取同步）"
-                  placement="top"
-                >
-                  <el-icon class="room-follow-ico"><StarFilled /></el-icon>
-                </el-tooltip>
-                <span
-                  v-if="room.displayTeam.teamName"
-                  class="room-team"
-                  :style="Tools.colorVarStyle('--tb-color', room.displayTeam.teamColor)"
-                >{{ Tools.shortTeamName(room.displayTeam.teamName) }}</span>
-              </span>
-            </button>
-
-            <!-- 关闭临时房间（悬浮显示；正看着时常驻，否则鼠标移开就找不到出口） -->
-            <button
-              v-if="room.temporary"
-              type="button"
-              class="room-temp-close"
-              :aria-label="`关闭「${room.nickname}」的临时房间`"
-              title="关闭临时房间"
-              @click="closeTempRoom"
-            >
-              <el-icon :size="12">
-                <Close />
-              </el-icon>
-            </button>
-          </div>
+            @close-temp="closeTempRoom"
+          />
         </div>
 
         <div v-else-if="!loading" class="side-empty">
@@ -2041,63 +2039,16 @@ onMounted(() => {
                           <!-- 直播/回放分享卡：竖排小卡（与 LiveItem 同构）——16:9 封面 + 类型角标叠封面 +
                          标题 + 开播时间与动作提示，可点开独立播放窗（liveId 缺失时只读）。
                          回放卡由 liveIsPlayback 区分（角标 + 动作文案），点击走回放播放窗 -->
-                          <button
+                          <RoomLiveCard
                             v-else-if="message.kind === 'live'"
-                            type="button"
-                            class="msg-live"
-                            :class="{ 'is-clickable': !!message.liveId }"
-                            :disabled="!message.liveId"
-                            :title="liveCardHint(message)"
-                            :aria-label="`${liveCardBadge(message).text}：${liveShareTitle(message.text) || '快来看看吧'}`"
-                            @click="openSharedLive(message)"
-                          >
-                            <span class="msg-live-cover">
-                              <el-image
-                                v-if="message.liveCover"
-                                class="msg-live-cover-img"
-                                :src="message.liveCover"
-                                fit="cover"
-                                lazy
-                              >
-                                <template #error>
-                                  <span class="msg-live-cover-ph">
-                                    <el-icon :size="22">
-                                      <VideoCamera />
-                                    </el-icon>
-                                  </span>
-                                </template>
-                              </el-image>
-                              <span v-else class="msg-live-cover-ph">
-                                <el-icon :size="22">
-                                  <VideoCamera />
-                                </el-icon>
-                              </span>
-                              <!-- 封面蒙层与播放入口：强化分享卡的视频语义，同时保持角标在最上层 -->
-                              <span class="msg-live-cover-mask" aria-hidden="true">
-                                <span class="msg-live-play">
-                                  <el-icon :size="24">
-                                    <VideoCamera />
-                                  </el-icon>
-                                </span>
-                              </span>
-                              <span
-                                class="msg-live-badge"
-                                :class="`msg-live-badge--${liveCardBadge(message).type}`"
-                              >{{ liveCardBadge(message).text }}</span>
-                            </span>
-                            <span class="msg-live-text">
-                              <span class="msg-live-title">{{ liveShareTitle(message.text) || '快来看看吧' }}</span>
-                              <span class="msg-live-meta">
-                                <span v-if="message.liveStartTime">{{ shortTime(message.liveStartTime) }}</span>
-                                <span v-if="message.liveId" class="msg-live-action">
-                                  {{ liveCardBadge(message).type === 'playback' ? '观看回放' : '进入直播' }}
-                                  <el-icon :size="12">
-                                    <ArrowRight />
-                                  </el-icon>
-                                </span>
-                              </span>
-                            </span>
-                          </button>
+                            :cover="message.liveCover"
+                            :clickable="!!message.liveId"
+                            :badge="liveCardBadge(message)"
+                            :hint="liveCardHint(message)"
+                            :title="liveShareTitle(message.text)"
+                            :start-time-text="message.liveStartTime ? shortTime(message.liveStartTime) : ''"
+                            @open="openSharedLive(message)"
+                          />
                           <template v-else>
                             <!-- 正文：超长的先收起（由 measureLongText 量出高度登记），末行渐隐提示还有内容 -->
                             <div
@@ -2202,70 +2153,26 @@ onMounted(() => {
 
               <!-- 发言输入条：房间就绪后常驻消息区底部。默认不连接云信（只看不挤手机），
                    点输入框先确认「会挤掉其他登录端」，确认后才建连；回复态在输入行上方显示引用摘要 -->
-              <div v-if="composerVisible" ref="composerRef" class="chat-composer">
-                <div v-if="replyTarget" class="composer-reply">
-                  <span class="composer-reply-name">回复 {{ replyTarget.senderName }}</span>
-                  <span class="composer-reply-text">{{ replyTarget.text || '消息' }}</span>
-                  <button
-                    type="button"
-                    class="composer-reply-close"
-                    title="取消回复"
-                    aria-label="取消回复"
-                    @click="cancelReply"
-                  >
-                    <el-icon :size="12">
-                      <Close />
-                    </el-icon>
-                  </button>
-                </div>
-                <div class="composer-row">
-                  <el-button
-                    v-if="qchatOptIn"
-                    class="composer-disconnect"
-                    text
-                    size="small"
-                    type="danger"
-                    title="断开连接（回到只看模式，不再顶手机）"
-                    :disabled="sendBusy"
-                    @click="onDisconnectClick"
-                  >
-                    断开连接
-                  </el-button>
-                  <el-input
-                    ref="draftInput"
-                    v-model="draft"
-                    class="composer-input"
-                    :class="{ 'is-blocked': !!speakBlock }"
-                    :placeholder="composerPlaceholder"
-                    :readonly="!canSend"
-                    maxlength="500"
-                    clearable
-                    @click="onComposerClick"
-                    @keyup.enter="onDraftEnter"
-                  >
-                    <!-- 禁言状态合并进输入框：即使草稿仍占着 placeholder，左侧标记也能持续说明原因 -->
-                    <template #prefix>
-                      <span v-if="composerMuted" class="composer-muted-mark">
-                        <el-icon :size="12">
-                          <Lock />
-                        </el-icon>
-                        全员禁言
-                      </span>
-                    </template>
-                  </el-input>
-                  <el-button
-                    class="composer-send"
-                    type="primary"
-                    round
-                    :loading="sendBusy"
-                    :disabled="!composerUsable"
-                    :title="sendButtonHint"
-                    @click="onSendClick('button')"
-                  >
-                    {{ sendButtonLabel }}
-                  </el-button>
-                </div>
-              </div>
+              <RoomComposer
+                v-if="composerVisible"
+                ref="composerEl"
+                v-model:draft="draft"
+                :reply-target="replyTarget"
+                :qchat-opt-in="qchatOptIn"
+                :send-busy="sendBusy"
+                :blocked="!!speakBlock"
+                :muted="composerMuted"
+                :placeholder="composerPlaceholder"
+                :can-send="canSend"
+                :usable="composerUsable"
+                :send-hint="sendButtonHint"
+                :send-label="sendButtonLabel"
+                @cancel-reply="cancelReply"
+                @disconnect="onDisconnectClick"
+                @composer-click="onComposerClick"
+                @draft-enter="onDraftEnter"
+                @send="onSendClick('button')"
+              />
 
               <footer v-if="statusText" class="main-foot">
                 {{ statusText }}
@@ -2315,9 +2222,13 @@ onMounted(() => {
                 :team-name="selectedRoom.teamName"
                 :team-color="selectedRoom.teamColor"
                 :live="selectedRoom.live"
-                :pocket-followed="isPocketFollowed(selectedRoom.followSource)"
+                :pocket-followed="selectedPocketFollowed"
+                :local-followed="selectedLocalFollowed"
                 :pocket-follow-busy="pocketFollowBusy"
-                @toggle-follow="togglePocketFollow"
+                :local-follow-busy="localFollowBusy"
+                :pocket-unavailable="!!pocketFollowError"
+                @toggle-pocket-follow="togglePocketFollow"
+                @toggle-local-follow="toggleLocalFollow"
               />
               <RoomAlbum :messages="messages" />
             </aside>
@@ -2416,7 +2327,7 @@ onMounted(() => {
     background-color 0.15s ease;
 }
 
-/* 软标签：队伍徽标 / 临时 / 已关闭三个状态标记共用，色相由 --tag-color 给出 */
+/* 软标签：队伍徽标 / 本地 / 临时 / 已关闭四个状态标记共用，色相由 --tag-color 给出 */
 %soft-tag {
   flex: none;
   padding: 0 6px;
@@ -2658,384 +2569,9 @@ onMounted(() => {
 }
 
 /* 条目外层：关闭钮的定位基准（关闭钮不能嵌在 <button> 条目里） */
-.room-wrap {
-  position: relative;
-
-  /* 临时条目右侧留出关闭钮的位置，昵称与预览不会压到按钮底下 */
-  &.is-temp .room-meta {
-    padding-right: 18px;
-  }
-}
-
-/* 关闭临时房间：压在条目右上，悬浮显示、正看着时常驻。
- * 用 visibility 而非只靠 opacity：不可见时同时屏蔽命中，不留点得到的隐形按钮 */
-.room-temp-close {
-  position: absolute;
-  top: 7px;
-  right: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  color: var(--el-text-color-secondary);
-  background: var(--el-bg-color);
-  box-shadow: var(--shadow-sm);
-  cursor: pointer;
-  opacity: 0;
-  visibility: hidden;
-  transition:
-    opacity 0.18s ease,
-    visibility 0s linear 0.18s,
-    color 0.15s ease,
-    background-color 0.15s ease;
-
-  .room-wrap:hover &,
-  .room-wrap:focus-within &,
-  .room-item.is-active ~ & {
-    opacity: 1;
-    visibility: visible;
-    transition-delay: 0s;
-  }
-
-  &:hover {
-    color: #fff;
-    background: var(--el-color-danger);
-  }
-}
-
-.room-item {
-  display: flex;
-  align-items: center;
-  gap: fluid(8px, 10px);
-  width: 100%;
-  padding: fluid(7px, 9px) 8px;
-  border: none;
-  border-radius: 12px;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.18s ease;
-
-  &:hover {
-    background: var(--el-fill-color-light);
-  }
-
-  &.is-active {
-    background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
-
-    .room-name {
-      color: var(--color-rooms);
-      font-weight: 600;
-    }
-  }
-}
-
-.room-avatar {
-  position: relative;
-  flex: none;
-  width: fluid(36px, 42px);
-  height: fluid(36px, 42px);
-
-  img {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    object-fit: cover;
-    background: var(--el-fill-color-light);
-  }
-}
-
-.room-avatar-fallback {
-  @extend %brand-avatar;
-
-  width: 100%;
-  height: 100%;
-  font-size: 16px;
-}
-
-/* 开播状态：头像外沿一圈呼吸光环，不占头像角落，未读角标照旧贴右上角。
- * 只动 opacity / transform（合成器线程）：环本体呼吸，::after 外扩柔光脉冲。
- * transform / opacity 动画自身即提层，不再常驻 will-change —— 多成员同时开播时
- * 每条都预留合成层没有收益，窗口隐藏时也无法回收 */
-.room-live-badge {
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  border: 2px solid var(--color-lives);
-  pointer-events: none;
-  animation: room-live-breathe 2.4s ease-in-out infinite;
-
-  &::after {
-    content: '';
-    position: absolute;
-    inset: -2px;
-    border-radius: 50%;
-    box-shadow: 0 0 6px 2px color-mix(in srgb, var(--color-lives) 45%, transparent);
-    animation: room-live-pulse 2.4s ease-in-out infinite;
-  }
-}
-
-@keyframes room-live-breathe {
-  0%,
-  100% {
-    opacity: 0.8;
-  }
-
-  50% {
-    opacity: 1;
-  }
-}
-
-@keyframes room-live-pulse {
-  0%,
-  100% {
-    transform: scale(0.9);
-    opacity: 0.9;
-  }
-
-  50% {
-    transform: scale(1.25);
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .room-live-badge {
-    animation: none;
-
-    &::after {
-      display: none;
-    }
-  }
-}
-
-/* 开播状态：头像下半部分的玫红晕染，上浅下深。
- * 只覆盖约下 50%，人像上半部保持原样；底部浓度足以托住白色光柱。
- * 静态渐变（不提层、不参与动画），随头像圆形裁切，边缘不会越界 */
-.room-item.is-live .room-avatar::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background:
-    radial-gradient(85% 55% at 50% 96%, color-mix(in srgb, var(--color-lives) 30%, transparent) 0%, transparent 78%),
-    linear-gradient(
-      to bottom,
-      transparent 48%,
-      color-mix(in srgb, var(--color-lives) 12%, transparent) 62%,
-      color-mix(in srgb, var(--color-lives) 38%, transparent) 82%,
-      color-mix(in srgb, var(--color-lives) 66%, transparent) 100%
-    );
-  pointer-events: none;
-}
-
-/* 开播状态：压在晕染上的三根白色跃动光柱。
- * 柱身顶端渐隐、外圈一点柔光，读作「光」而不是硬白实体块；
- * 起伏全靠 scaleY（transform 合成，不触发重排），三条各自不同周期，
- * 不与外圈光环的 2.4s 同步，避免整体机械齐动 */
-.room-eq {
-  position: absolute;
-  bottom: 3px;
-  left: 50%;
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 14px;
-  transform: translateX(-50%);
-  pointer-events: none;
-  /* 晕染是头像 ::after（树序更靠后），光柱需显式提层压在其上 */
-  z-index: 1;
-
-  i {
-    display: block;
-    width: 3px;
-    /* 固定满高度，起伏全靠 scaleY */
-    height: 14px;
-    border-radius: 2px;
-    background: linear-gradient(
-      to top,
-      rgba(255, 255, 255, 0.98) 0%,
-      rgba(255, 255, 255, 0.82) 60%,
-      rgba(255, 255, 255, 0) 100%
-    );
-    box-shadow: 0 0 3px 0 rgba(255, 255, 255, 0.38);
-    transform-origin: bottom;
-    animation: room-eq-bounce 1.1s ease-in-out infinite;
-
-    &:nth-child(1) {
-      animation-duration: 1.02s;
-      animation-delay: -0.14s;
-    }
-
-    &:nth-child(2) {
-      animation-duration: 1.34s;
-      animation-delay: -0.67s;
-    }
-
-    &:nth-child(3) {
-      animation-duration: 1.16s;
-      animation-delay: -0.39s;
-    }
-  }
-}
-
-/* 非对称起伏 + 三根条各自不同周期 */
-@keyframes room-eq-bounce {
-  0%,
-  100% {
-    transform: scaleY(0.3);
-  }
-
-  18% {
-    transform: scaleY(0.9);
-  }
-
-  38% {
-    transform: scaleY(0.48);
-  }
-
-  62% {
-    transform: scaleY(1);
-  }
-
-  82% {
-    transform: scaleY(0.55);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .room-eq i {
-    animation: none;
-    /* 静态不等高，不动也仍是电平指示的样子 */
-    transform: scaleY(0.5);
-
-    &:nth-child(2) {
-      transform: scaleY(0.8);
-    }
-
-    &:nth-child(3) {
-      transform: scaleY(0.62);
-    }
-  }
-}
-
-/* 页面不可见（窗口最小化 / 被遮挡）时暂停整页直播特效：
- * animation-play-state 在合成器线程生效，主线程零成本，恢复可见后无缝续播 */
-.rooms-page.is-paused {
-  .room-live-badge,
-  .room-live-badge::after,
-  .room-eq i {
-    animation-play-state: paused;
-  }
-}
 
 /* 未读数字角标：贴在头像右上角；开播时头像外圈是呼吸光环（.room-live-badge），
  * 红点叠在光环一角仍清晰可读。外观走全局 .unread-badge，这里只给落点与外描边 */
-.room-unread {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  box-shadow: 0 0 0 2px var(--el-bg-color);
-}
-
-.room-meta {
-  flex: 1;
-  min-width: 0;
-}
-
-.room-name-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-/* 名字不撑满整行：置顶图钉要贴得住名字，撑满会把标记推到行尾。
- * 过长时照常收缩截断（min-width: 0 + ellipsis），不挤掉右侧标记 */
-.room-name {
-  flex: 0 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  color: var(--el-text-color-primary);
-}
-
-/* 名字行里的状态标签仍靠右：名字不再撑满后，靠 auto 外边距占住这段空隙 */
-.room-name-row .room-temp-tag,
-.room-name-row .room-closed-tag {
-  margin-left: auto;
-}
-
-/* 置顶标记：图钉（实心壳，手写 SVG 见 MediaIcon），紧跟名字。
- * 13px 是下限——11px 时针脚缩到不足一个物理像素，糊成小圆点 */
-.room-pin-ico {
-  flex: none;
-  color: var(--color-rooms);
-}
-
-.room-team {
-  @extend %soft-tag;
-
-  --tag-color: var(--tb-color, var(--brand-primary));
-
-  /* 队伍色只做淡底不加描边：它是身份标识，不像下面两个是状态提示 */
-  box-shadow: none;
-}
-
-/* 「临时」标记（左列条目与右栏头部共用）：换房间主题青 + 描边，
- * 一眼与「关注房间」区分开——它不会在下次进页面时还在 */
-.room-temp-tag {
-  @extend %soft-tag;
-
-  --tag-color: var(--color-rooms);
-}
-
-/* 「已关闭」标记：与临时标签同规格，用中性色表达不可用，不抢直播 / 未读的强调 */
-.room-closed-tag {
-  @extend %soft-tag;
-
-  --tag-color: var(--el-text-color-secondary);
-}
-
-/* 条目右缘竖排小标签列：口袋关注星标在上、队伍徽标在下。
- * 固定列宽：队伍徽标宽窄不一时，各行星星仍横向对齐（过长的队名截断省略） */
-.room-side-tags {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  align-items: center;
-  /* 星标 11 + 队伍徽标 16 + 间隔 = 29，低于头像 42，两条都在也不撑高行 */
-  gap: 2px;
-  width: 38px;
-  margin-left: 6px;
-}
-
-.room-side-tags .room-team {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 口袋关注星标：11px 品牌色（语义：已关注），详情看 tooltip 与资料卡 */
-.room-follow-ico {
-  flex: none;
-  font-size: 11px;
-  color: var(--brand-primary);
-  opacity: 0.8;
-}
-
-/* 左列预览：频道最新一条消息（批量接口一次拉全，选中房间轮询到时本地即时补） */
-.room-preview {
-  display: block;
-  margin-top: 2px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--el-text-color-placeholder);
-}
 
 .side-empty,
 .side-loading {
@@ -3482,10 +3018,6 @@ onMounted(() => {
     padding-inline: 10px;
   }
 
-  .room-item {
-    padding-inline: 6px;
-  }
-
   /* 聊天列比设置页 / 列表页更挤：右栏资料卡与相册已收起，左列还要保住条目宽度 */
   .rooms-main {
     --chat-pad-x: 12px;
@@ -3856,171 +3388,6 @@ onMounted(() => {
   background: var(--el-fill-color-light);
 }
 
-.msg-live {
-  display: flex;
-  flex-direction: column;
-  width: 272px;
-  min-width: 0;
-  padding: 0;
-  border: none;
-  font: inherit;
-  text-align: left;
-  color: inherit;
-  background: none;
-  /* 与气泡内壁同心：外角取同心内角，收角一侧与气泡收角对齐 */
-  border-radius: var(--radius-xs) var(--msg-radius-inner) var(--msg-radius-inner) var(--msg-radius-inner);
-
-  &.is-clickable {
-    cursor: pointer;
-
-    &:hover {
-      .msg-live-cover-img {
-        transform: scale(1.04);
-      }
-
-      .msg-live-action {
-        color: var(--color-lives);
-      }
-
-      .msg-live-play {
-        transform: translateY(-1px) scale(1.08);
-        background: color-mix(in srgb, var(--color-lives) 82%, #000);
-        box-shadow: 0 8px 24px color-mix(in srgb, var(--color-lives) 42%, transparent);
-      }
-    }
-  }
-}
-
-.msg-live-cover {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 3 / 4;
-  overflow: hidden;
-  /* 与卡片同角（卡片 padding 为 0，内角不再递减），左上咬合气泡收角 */
-  border-radius: var(--radius-xs) var(--msg-radius-inner) var(--msg-radius-inner) var(--msg-radius-inner);
-  background: var(--el-fill-color);
-}
-
-.msg-live-cover-img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  transition: transform 0.3s ease;
-}
-
-/* 直播封面蒙层：底部稍深，保证中央播放入口与页面底色之间总有足够对比 */
-.msg-live-cover-mask {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 18%), rgba(0, 0, 0, 46%));
-}
-
-.msg-live-play {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 46px;
-  height: 46px;
-  border: 1px solid rgba(255, 255, 255, 50%);
-  border-radius: 50%;
-  color: #fff;
-  background: rgba(0, 0, 0, 42%);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 28%);
-  backdrop-filter: blur(8px);
-  transition:
-    transform 0.2s ease,
-    background-color 0.2s ease,
-    box-shadow 0.2s ease;
-}
-
-/* 封面兜底：解析不到封面或加载失败时回退类型图标（直播色渐变块，与 LiveItem error 槽同思路） */
-.msg-live-cover-ph {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  color: #fff;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--color-lives) 70%, #fff), var(--color-lives));
-}
-
-/* 类型角标叠封面左上角（LiveItem 同位）；配色对齐 LiveItem（直播玫红 / 电台绿 / 录屏琥珀），回放中性灰 */
-.msg-live-badge {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  z-index: 2;
-  padding: 1px 7px;
-  border-radius: var(--msg-radius-sm);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 17px;
-  color: #fff;
-
-  &.msg-live-badge--live {
-    background: var(--color-lives);
-  }
-
-  &.msg-live-badge--radio {
-    background: var(--color-downloads);
-  }
-
-  &.msg-live-badge--screen {
-    background: var(--color-shows);
-  }
-
-  &.msg-live-badge--playback {
-    background: var(--el-color-info);
-  }
-}
-
-.msg-live-text {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  width: 100%;
-  min-width: 0;
-  padding: 10px 6px 5px;
-}
-
-.msg-live-title {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  font-size: 13px;
-  line-height: 1.5;
-  word-break: break-word;
-  color: var(--el-text-color-primary);
-}
-
-.msg-live-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-  line-height: 1.4;
-  font-variant-numeric: tabular-nums;
-  color: var(--el-text-color-placeholder);
-}
-
-/* 动作提示：可点时才渲染，文案按回放/直播区分（观看回放 / 进入直播） */
-.msg-live-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  margin-left: auto;
-  color: var(--el-text-color-secondary);
-  transition: color 0.18s ease;
-}
-
 /* 媒体气泡：去掉外层聊天底框，媒体贴边展示（自带圆角/底色） */
 .msg-bubble--media {
   padding: 0;
@@ -4242,97 +3609,34 @@ onMounted(() => {
   color: var(--el-text-color-secondary);
 }
 
-/* 发言输入条：房间就绪后常驻消息区底部（与 .main-foot 互斥出现：后者只在加载/错误态）。
- * 禁用态不置灰整条——占位文案即连接状态（正在连接 / 重连中 / 未连接原因），
- * 用户要能看到「为什么发不了」，而不是面对一个灰掉的输入框猜原因 */
-.chat-composer {
-  flex: none;
-  padding: fluid(8px, 10px) var(--chat-pad-x) calc(fluid(8px, 10px) + env(safe-area-inset-bottom, 0px));
-  border-top: 1px solid var(--el-border-color-lighter);
+/* 天气标签：右栏头部（.main-head-name 旁）与本页左列条目共用同一外观。
+   条目已抽到 components/rooms/RoomListItem.vue，scoped 样式跨不过去，
+   那边有一份同样的定义；改形状时两处要一起改（与 %soft-tag 同步）。 */
+.room-team {
+  @extend %soft-tag;
+
+  --tag-color: var(--tb-color, var(--brand-primary));
+
+  /* 队伍色只做淡底不加描边：它是身份标识，不像下面两个是状态提示 */
+  box-shadow: none;
 }
 
-/* 回复态摘要：被回复者昵称 + 内容一行省略，取消钮靠右 */
-.composer-reply {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
-  padding: 4px 8px;
-  border-radius: var(--radius-xs);
-  font-size: 12px;
-  background: var(--el-fill-color-lighter);
+.room-temp-tag {
+  @extend %soft-tag;
+
+  --tag-color: var(--color-rooms);
 }
+</style>
 
-.composer-reply-name {
-  flex: none;
-  font-weight: 600;
-  /* 房间语义色（与页签 / 图标同一支），不用品牌紫 */
-  color: var(--color-rooms);
-}
-
-.composer-reply-text {
-  overflow: hidden;
-  min-width: 0;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--el-text-color-secondary);
-}
-
-.composer-reply-close {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  margin-left: auto;
-  padding: 2px;
-  border: none;
-  border-radius: var(--radius-xs);
-  color: var(--el-text-color-secondary);
-  background: transparent;
-  cursor: pointer;
-  transition:
-    color 0.15s ease,
-    background-color 0.15s ease;
-
-  &:hover {
-    color: var(--el-text-color-primary);
-    background: var(--el-fill-color);
+<style lang="scss">
+/* 非 scoped：窗口隐藏时暂停左列条目的动效。
+   条目已抽成 components/rooms/RoomListItem.vue，scoped 规则跨不过组件边界，
+   而这里表达的是「整页暂停」这种页面级状态，故单独用非 scoped 块承载。 */
+.rooms-page.is-paused {
+  .room-live-badge,
+  .room-live-badge::after,
+  .room-eq i {
+    animation-play-state: paused;
   }
-}
-
-/* 阻断态与输入框合并：锁定标记常驻在输入框内，警告色只落在这一处 */
-.composer-input.is-blocked :deep(.el-input__wrapper) {
-  background: var(--el-color-warning-light-9);
-  box-shadow: 0 0 0 1px var(--el-color-warning-light-5) inset;
-}
-
-.composer-input.is-blocked :deep(.el-input__inner),
-.composer-input.is-blocked :deep(.el-input__inner::placeholder) {
-  color: var(--el-color-warning-dark-2);
-}
-
-.composer-muted-mark {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  margin-right: 6px;
-  padding-right: 8px;
-  border-right: 1px solid var(--el-color-warning-light-5);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  color: var(--el-color-warning-dark-2);
-}
-
-.composer-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* 发送钮定宽：文案在「发送 / 发送中 / 冷却倒数」之间切换，宽度跳变会抖 */
-.composer-send {
-  flex: none;
-  min-width: 64px;
 }
 </style>

@@ -1,6 +1,6 @@
 import type { Density } from '../src/common/density'
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { DENSITY_BREAKPOINT, resolveDensity } from '../src/common/density'
@@ -19,6 +19,7 @@ const WIDTH_QUERY = /@(?:media|container)\s*\(\s*max-width:\s*(\d+px)/g
 /** 宽度轴断点登记表：各处语义不同，新增或改值都要显式更新这里 */
 const WIDTH_BREAKPOINTS = [
   'assets/css/app.scss:740px',
+  'components/rooms/RoomListItem.vue:960px',
   'pages/Lives.vue:680px',
   'pages/Lives.vue:760px',
   'pages/Rooms.vue:960px',
@@ -86,8 +87,10 @@ interface Ctx {
 }
 
 function sourceFiles(): string[] {
+  // readdirSync 返回宿主分隔符；登记表与断言统一用 POSIX 相对路径，避免 Windows 下整体失配
   return readdirSync(SRC_ROOT, { recursive: true })
     .map(String)
+    .map(file => file.split(sep).join('/'))
     .filter(file => file.endsWith('.vue') || file.endsWith('.scss'))
     .sort()
 }

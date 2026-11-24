@@ -182,7 +182,8 @@ describe('authCredentialStore / 保存与状态', () => {
 
 describe('safeStorage 弃用迁移', () => {
   it('主进程不再调用同步 API，且异步 API 三个入口都在', () => {
-    const source = readFileSync(new URL('../src/main/pocket48/pocket-auth.ts', import.meta.url), 'utf8')
+    // 组装安全存储的代码在 pocket-auth-core；pocket-auth 只是 barrel，没有实现
+    const source = readFileSync(new URL('../src/main/pocket48/pocket-auth-core.ts', import.meta.url), 'utf8')
     expect(/\bsafeStorage\.(?:isEncryptionAvailable|encryptString|decryptString)\s*\(/.test(source)).toBe(false)
     for (const name of ['isAsyncEncryptionAvailable', 'encryptStringAsync', 'decryptStringAsync'])
       expect(source).toContain(`safeStorage.${name}`)

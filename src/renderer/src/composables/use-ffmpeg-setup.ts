@@ -1,4 +1,4 @@
-import type { FfmpegProblem, FfmpegStatus } from '@preload/ipc-contract'
+import type { FfmpegProblem, FfmpegSource, FfmpegStatus } from '@preload/ipc-contract'
 import { computed, ref } from 'vue'
 import { openDirectoryWithFeedback } from './use-app-config'
 
@@ -13,7 +13,7 @@ import { openDirectoryWithFeedback } from './use-app-config'
  * - 用户可见文案全部由 describeFfmpegProblem 产出，同一状态在启动页与设置页说法一致。
  *
  * ★ 跨进程：getFfmpegStatus / setConfig 对端是 main/ipc/register-system-ipc.ts、
- * main/ipc/register-database-ipc.ts；判定口径在 main/ffmpeg/ffmpeg-process.ts 的 inspectFfmpegDir；
+ * main/ipc/register-database-ipc.ts；判定口径在 main/ffmpeg/ffmpeg-process.ts 的 resolveFfmpegEnvironment；
  * downloadFfmpeg 与下载进度事件对端是 main/ffmpeg/ffmpeg-download.ts。
  */
 
@@ -32,8 +32,9 @@ export interface FfmpegProblemCopy {
 /**
  * 状态 → 文案（纯函数，可单测）。三类不可用的修复动作不同，必须分开描述：
  * 未配置要引导配置；目录不存在多因目录被移动/删除；缺二进制多因手选错了目录。
+ * 就绪且来源是系统安装（linux）时单独说明，否则用户看到 /usr/bin 会以为配错了。
  */
-export function describeFfmpegProblem(problem: FfmpegProblem | null, directory = ''): FfmpegProblemCopy {
+export function describeFfmpegProblem(problem: FfmpegProblem | null, directory = '', source: FfmpegSource = 'directory'): FfmpegProblemCopy {
   switch (problem) {
     case 'missing-dir':
       return {
@@ -57,6 +58,8 @@ export function describeFfmpegProblem(problem: FfmpegProblem | null, directory =
         action: '下载或选择 FFmpeg 目录',
       }
     default:
+      if (source === 'system')
+        return { label: '系统 FFmpeg', title: '使用系统安装的 FFmpeg', hint: `已检测到系统 ffmpeg：${directory}，无需下载。`, action: '' }
       return { label: 'FFmpeg 检测ok 👌', title: 'FFmpeg 环境就绪', hint: '', action: '' }
   }
 }
@@ -86,7 +89,10 @@ export function useFfmpegSetup() {
   const isReady = computed(() => status.value?.ok === true)
   const problem = computed<FfmpegProblem | null>(() => (status.value && !status.value.ok ? status.value.problem : null))
   const directory = computed(() => status.value?.directory ?? '')
-  const copy = computed(() => describeFfmpegProblem(problem.value, directory.value))
+  const source = computed<FfmpegSource>(() => status.value?.source ?? 'directory')
+  const copy = computed(() => describeFfmpegProblem(problem.value, directory.value, source.value))
+  /** 已由系统包提供时不该再走下载：linux 的下载产物正是解析不了域名的那份静态构建 */
+  const isSystem = computed(() => status.value?.ok === true && source.value === 'system')
 
   /** 已知 total 时显示真实进度；未知 total 时进度条走轻量流动动画 */
   const downloadPercent = computed(() => {
@@ -193,6 +199,7 @@ export function useFfmpegSetup() {
     downloading,
     busy,
     isReady,
+    isSystem,
     problem,
     directory,
     copy,

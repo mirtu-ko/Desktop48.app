@@ -5,7 +5,7 @@
 import type { FloatTopmost } from '@common/app-config'
 import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 import { activeWindow } from '../app'
-import { Database } from '../database'
+import { ConfigStore } from '../config-store'
 import { applyFloatTopmostPreference, fitFloatWindowAspect, getFloatWindowPayload, getFloatWindowTopmost, openFloatWindow, setFloatWindowPlaying, setFloatWindowTopmost } from '../window/float-window'
 import { sendIpc } from './send'
 import { handleTraced } from './trace'
@@ -32,7 +32,7 @@ export function registerFloatWindowIPC(): void {
     setFloatWindowTopmost(event.sender, topmost)
   })
   handleTraced('floatWindowSetTopmostPreference', (_event, topmost: FloatTopmost) => {
-    Database.instance().setConfig('floatTopmost', topmost)
+    ConfigStore.instance().setConfig('floatTopmost', topmost)
     applyFloatTopmostPreference(topmost)
   })
   // 播放窗 → 主进程 → 主窗口：跨渲染进程的 live-unavailable 中转

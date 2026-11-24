@@ -1,0 +1,166 @@
+/**
+ * 设置页的共享视觉基元：卡片、分组标题、标题行骨架与行内徽标。
+ *
+ * 这些类被全部 5 个分组组件共用（`.setting-row` 的横向布局决定了整页观感），
+ * 放在页面 scoped 样式里拆到子组件后会失效，因此由页面以 `@use` 引入、成为全局类。
+ * 分组专属样式仍留在各自组件的 `<style scoped>` 里。
+ *
+ * 这里不用 fluid() 断点函数：它是页面级排版微调，这几条基元取固定值即可，
+ * 也让本文件不依赖 assets/css/fluid 的加载路径（@use 解析相对于使用方，路径容易踩空）。
+ */
+
+/* 全部规则挂在 .setting-root 之下：既是全局样式（不受 scoped 影响），
+   又只对设置页生效，不会波及其它页面。 */
+.setting-root {
+  /* 设置卡片：磨砂玻璃基底见全局 .glass-card */
+  .setting-card {
+    padding: 18px 20px;
+    border-radius: var(--radius-lg);
+  }
+
+  /* 分组标签置于卡片之外，不切开玻璃卡面；左侧色条复用声明区的视觉语言。
+     负下边距抵消 flex gap，让标签贴近所属卡片、组间留白更大。
+     上边距由「前一张卡片」给出（见下方相邻选择器），首组自然为 0 */
+  .setting-group-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 -6px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--el-text-color-secondary);
+
+    &::before {
+      content: '';
+      flex: none;
+      width: 3px;
+      height: 12px;
+      border-radius: 2px;
+      background: linear-gradient(180deg, var(--brand-primary-light), var(--brand-primary));
+    }
+  }
+
+  /* 组间留白挂在「卡片 → 下一组标签」这一结构关系上，而不是「第一个子元素」这种位置假设：
+     分组由 5 个组件各自渲染，谁先谁后、前面有没有别的节点都不该影响首组是否贴顶。
+     首组标签前面没有卡片，上边距自然为 0，无需特例。 */
+  .setting-card + .setting-group-label {
+    margin-top: 8px;
+  }
+
+  /* 标题行：图标 / 标题描述 / 中间控件 / 操作按钮同一行 */
+  .setting-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  /* 渐变主题图标磁贴：骨架见全局 .icon-tile（与底部 Dock 的视觉语言一致），此处仅定尺寸。
+     不挂在 .setting-row 下：关于组的折叠头用的是 <summary>，图标同样需要这套尺寸 */
+  .row-icon {
+    width: 44px;
+    height: 44px;
+
+    .el-icon {
+      font-size: 21px;
+    }
+  }
+
+  .setting-row .row-text {
+    flex-shrink: 0;
+    width: 180px;
+
+    .row-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--el-text-color-primary);
+    }
+
+    /* 登录身份徽标（如「口袋48身份」或「塞纳河48身份」）：标题行右侧的品牌渐变小药丸，悬停给出选档说明 */
+    .row-profile-badge {
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: #fff;
+      background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
+      cursor: default;
+    }
+
+    /* 版本号：紧贴标题的次要徽标，等宽数字便于逐位辨读 */
+    .row-version {
+      margin-left: 6px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.02em;
+      color: var(--el-text-color-secondary);
+      background: color-mix(in srgb, var(--el-text-color-secondary) 12%, transparent);
+    }
+
+    /* 新版本徽标：标题右侧的告警色小药丸，进入设置页即可察觉有更新 */
+    .row-update-badge {
+      margin-left: 6px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: #fff;
+      background: var(--el-color-warning);
+    }
+
+    /* available 态的描述加粗切主文字色，与其余状态的中性文案区分 */
+    .row-desc.is-update {
+      font-weight: 600;
+      color: var(--el-text-color-primary);
+    }
+
+    .row-desc {
+      margin-top: 2px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--el-text-color-secondary);
+    }
+  }
+
+  /* 更新行没有中间控件，允许描述用满剩余宽度；普通行仍保持 180px 对齐 */
+  .setting-row .row-text--fluid {
+    flex: 1;
+    width: auto;
+  }
+
+  .setting-row .row-control {
+    flex: 1;
+    min-width: 200px;
+    cursor: pointer;
+  }
+
+  .setting-row .row-actions {
+    flex-shrink: 0;
+    /* 屏蔽成员行没有 row-control 占位，auto 外边距保证按钮与其他行一样靠右 */
+    margin-left: auto;
+    display: flex;
+  }
+
+  /* 三态单选靠右：宽度由内容决定，不像 .row-control 那样撑满中间 */
+  .setting-row .topmost-actions {
+    flex-shrink: 0;
+    margin-left: auto;
+    display: flex;
+  }
+
+  /* 卡片正文：与标题行之间用虚线分隔 */
+  .setting-card .row-body {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--el-border-color-lighter);
+  }
+}
