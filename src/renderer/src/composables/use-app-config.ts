@@ -1,4 +1,4 @@
-import type { ConfigKey } from '@common/app-config'
+import type { AppConfig, ConfigKey } from '@common/app-config'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
@@ -40,8 +40,8 @@ export function useAppConfig() {
     downloadDirectory.value = await window.mainAPI.getConfig('downloadDirectory')
   }
 
-  /** 通用保存：写盘 + 成功提示 */
-  async function saveConfig(key: ConfigKey, value: string) {
+  /** 通用保存：写盘 + 成功提示。键值类型按契约收窄，写错取值在编译期就会被拦住 */
+  async function saveConfig<K extends ConfigKey>(key: K, value: AppConfig[K]) {
     await window.mainAPI.setConfig(key, value)
     ElMessage({ message: '设置成功', type: 'success' })
   }

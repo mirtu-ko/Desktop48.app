@@ -17,7 +17,7 @@ import type {
 import type { MemberTreeGroupNode } from './domain/member-tree'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { CONFIG_DEFAULTS, CONFIG_ENUMS } from '@common/app-config'
+import { assertConfigKey, CONFIG_DEFAULTS, isConfigKey, isConfigValueAllowed, parseConfigValue } from '@common/app-config'
 import { assertMemberFlagKind } from '@common/member-flags'
 import { assertMemberTeamPromotion, normalizeMemberTeamPromotions } from '@common/member-team-promotion'
 import { app } from 'electron'
@@ -26,18 +26,6 @@ import { addMemberFlagId, addMemberFlagIds, removeMemberFlagId, resolveMemberFla
 import { buildMemberTree, teamColorOf } from './domain/member-tree'
 import { log } from './logger'
 import { SafeJSONFileSync } from './safe-json-file-sync'
-
-/** 校验配置键。必须用 hasOwn：`in` 会沿原型链放行 `'toString'` 这类键 */
-function assertConfigKey(key: ConfigKey) {
-  if (!Object.hasOwn(CONFIG_DEFAULTS, key))
-    throw new Error(`Invalid config key: ${key}`)
-}
-
-/** 枚举型配置的取值校验：未登记取值集合的键（路径类）不受限 */
-function isConfigValueAllowed(key: ConfigKey, value: string): boolean {
-  const allowed = CONFIG_ENUMS[key]
-  return !allowed || allowed.includes(value)
-}
 
 /** 名单 kind → 持久化字段名；键名保持旧格式，避免迁移已有 database.json */
 function memberFlagKey(kind: MemberFlagKind): 'blockedMemberIds' | 'followedMemberIds' {
@@ -163,10 +151,12 @@ class Database {
 
     // 补齐未设置的配置并写盘：「未设置」= 缺失 / 空串 / 非字符串
     const stored = this.db.config as Partial<Record<ConfigKey, unknown>> | undefined
-    const config: AppConfig = { ...CONFIG_DEFAULTS }
+    // 装配期用宽类型承接动态键：联合键无法让 TS 证明「键-值」配对，
+    // 枚举取值已在下面逐键校验，装配完再一次性收窄回 AppConfig
+    const config: Record<ConfigKey, string> = { ...CONFIG_DEFAULTS }
     for (const [key, value] of Object.entries(runtimeDefaults)) {
-      if (Object.hasOwn(CONFIG_DEFAULTS, key) && typeof value === 'string' && value)
-        config[key as ConfigKey] = value
+      if (isConfigKey(key) && typeof value === 'string' && value)
+        config[key] = value
     }
     for (const key of Object.keys(CONFIG_DEFAULTS) as ConfigKey[]) {
       const value = stored?.[key]
@@ -174,7 +164,7 @@ class Database {
       if (typeof value === 'string' && value !== '' && isConfigValueAllowed(key, value))
         config[key] = value
     }
-    this.db.config = config
+    this.db.config = config as AppConfig
 
     // 建树（纯内存派生，不写回原始数据）
     this.rebuildMemberTree()
@@ -372,12 +362,14 @@ class Database {
     return this.db.config?.[key] || CONFIG_DEFAULTS[key]
   }
 
+  /**
+   * 写入配置：运行时校验 + 收窄一次（IPC 传来的裸字符串由 parseConfigValue 兜住），
+   * 校验通过后才落盘，避免脏值进库。
+   */
   public setConfig<K extends ConfigKey>(key: K, value: AppConfig[K]) {
-    assertConfigKey(key)
-    if (!isConfigValueAllowed(key, value))
-      throw new Error(`Invalid config value for ${key}: ${value}`)
+    const normalized = parseConfigValue(key, value)
     const config = this.db.config ?? { ...CONFIG_DEFAULTS }
-    config[key] = value
+    config[key] = normalized
     this.db.config = config
     this.storage.write(this.db)
   }

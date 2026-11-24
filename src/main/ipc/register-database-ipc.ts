@@ -8,6 +8,7 @@
 import type { ConfigKey } from '@common/app-config'
 import type { MemberFlagKind } from '@common/member-flags'
 import type { MemberTeamPromotion } from '@common/member-team-promotion'
+import { parseConfigValue } from '@common/app-config'
 import { promotionOwnerId } from '@common/member-team-promotion'
 import { Database } from '../database'
 import { getAuthState } from '../pocket48/pocket-auth'
@@ -40,7 +41,8 @@ export function registerDatabaseIPC(): void {
   handleTraced('setMemberTeamPromotion', async (_event, promotion: MemberTeamPromotion) => db().setMemberTeamPromotion(promotion, requireOwnerId()))
   handleTraced('removeMemberTeamPromotion', async (_event, userId: number) => db().removeMemberTeamPromotion(requireOwnerId(), userId))
   handleTraced('getConfig', async (_event, key: ConfigKey) => db().getConfig(key))
-  handleTraced('setConfig', async (_event, key: ConfigKey, value: string) => db().setConfig(key, value))
+  // IPC 线格式仍是 string：入口处收窄一次，非法键/取值在此抛错，不落库
+  handleTraced('setConfig', async (_event, key: ConfigKey, value: string) => db().setConfig(key, parseConfigValue(key, value)))
   // memberTree 是内存派生数据（不落盘），直接返回内存字段
   handleTraced('getMemberTree', async () => db().memberTree)
 }

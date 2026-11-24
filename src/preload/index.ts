@@ -60,7 +60,9 @@ const api = {
 
   // ===== 应用配置 =====
   // 对端：main/ipc/register-database-ipc.ts
-  getConfig: <K extends ConfigKey>(key: K) => invokeIpc('getConfig', key),
+  // getConfig 的线上返回值是 string（InvokeSpec 只能表达一种线格式），
+  // 键值关联的收窄在契约层完成：此处断言为 AppConfig[K]，渲染层拿到的即是该键的精确类型。
+  getConfig: <K extends ConfigKey>(key: K) => invokeIpc('getConfig', key) as Promise<AppConfig[K]>,
   setConfig: <K extends ConfigKey>(key: K, value: AppConfig[K]) => invokeIpc('setConfig', key, value),
 
   // ===== 文件系统与目录 =====
