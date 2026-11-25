@@ -6,6 +6,8 @@ import CoverImage from './CoverImage.vue'
 
 defineProps<{
   show: OpenLive
+  /** 不可点击原因：叠在封面底部，可点击时传空 */
+  hint?: string
 }>()
 
 function formatTime(stime: string): string {
@@ -34,6 +36,7 @@ function formatTime(stime: string): string {
       <el-tag v-if="show.status === 2" class="show-tag" type="danger" size="small">
         进行中
       </el-tag>
+      <span v-if="hint && show.status !== 2" class="show-hint">{{ hint }}</span>
       <span class="show-time">{{ formatTime(show.stime) }}</span>
     </div>
     <div class="show-info">
@@ -121,5 +124,22 @@ function formatTime(stime: string): string {
   font-size: 14px;
   line-height: 1;
   backdrop-filter: blur(4px);
+}
+
+/* 不可点击原因：盖在封面下半部分，只在卡片处于禁用态时由父级给出文案 */
+.show-hint {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 55%) 55%);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  /* 给角落的时间气泡让位，避免两段文字压在一起 */
+  padding: 18px 112px 6px 10px;
+  text-align: left;
+  pointer-events: none;
 }
 </style>

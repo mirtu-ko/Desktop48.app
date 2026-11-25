@@ -16,6 +16,7 @@ import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { resolveBilibiliRoomIdAsync } from '@renderer/utils/bilibili-room'
 import { debugLog } from '@renderer/utils/debug'
+import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -118,29 +119,43 @@ function play(item: LiveListItem) {
 }
 
 /**
- * 空态里的公演预告：只有「进行中」（status === 2）可点开直播，
- * 选路与弹幕房间映射与公演页（Shows.vue 的 openLiveStream）保持一致。
+ * 空态公演预告：仅「进行中」可点开直播，选路与公演页同口径。
+ * 不可点的卡片同样给出原因（悬浮提示 + 点击反馈）。
  */
+function showLockedHint(show: OpenLive): string {
+  if (show.status === 2)
+    return ''
+  if (show.status === 4)
+    return '已结束 · 暂无回放'
+  const started = Number.parseInt(show.stime) <= Date.now()
+  return started ? '尚未开始直播 · 请稍候' : '计划中 · 开播后观看'
+}
+
 async function openShowStream(show: OpenLive) {
-  if (show.status !== 2) {
-    debugLog('show', `公演选路: ${show.liveId} 状态=${show.status}（非进行中），忽略本次点击`)
+  if (show.status === 2) {
+    await openLive({
+      liveId: show.liveId,
+      nickname: show.teamList?.[0]?.teamName || '',
+      title: show.subTitle || show.title,
+      startTime: Number.parseInt(show.stime),
+      source: 'open',
+      // 公演没有主播头像，用封面作窗口头像（与公演页一致）
+      avatar: show.coverPath,
+      liveType: 1,
+      liveMode: 0,
+      // 弹幕房间三级解析（与公演页同口径）
+      bilibiliRoomId: await resolveBilibiliRoomIdAsync({
+        groupId: show.teamList?.[0]?.groupId,
+        texts: [show.title, show.subTitle],
+      }),
+    })
     return
   }
-  openLive({
-    liveId: show.liveId,
-    nickname: show.teamList?.[0]?.teamName || '',
-    title: show.subTitle || show.title,
-    startTime: Number.parseInt(show.stime),
-    source: 'open',
-    // 公演没有主播头像，用封面作窗口头像（与公演页一致）
-    avatar: show.coverPath,
-    liveType: 1,
-    liveMode: 0,
-    // 弹幕房间三级解析（与公演页同口径）
-    bilibiliRoomId: await resolveBilibiliRoomIdAsync({
-      groupId: show.teamList?.[0]?.groupId,
-      texts: [show.title, show.subTitle],
-    }),
+  debugLog('show', `公演选路: ${show.liveId} 状态=${show.status}（非进行中），提示用户原因`)
+  ElMessage({
+    type: 'info',
+    message: showLockedHint(show),
+    grouping: true,
   })
 }
 
@@ -255,15 +270,22 @@ onUnmounted(() => {
               </button>
             </h2>
             <div class="idle-shows">
-              <div
+              <el-tooltip
                 v-for="show in previewShows"
                 :key="show.liveId"
-                class="idle-show lift-card"
-                :class="{ clickable: show.status === 2 }"
-                @click="openShowStream(show)"
+                :content="showLockedHint(show)"
+                :disabled="show.status === 2"
+                placement="top"
+                :show-after="300"
               >
-                <ShowCard :show="show" />
-              </div>
+                <div
+                  class="idle-show lift-card"
+                  :class="show.status === 2 ? 'clickable' : 'is-disabled'"
+                  @click="openShowStream(show)"
+                >
+                  <ShowCard :show="show" :hint="showLockedHint(show)" />
+                </div>
+              </el-tooltip>
             </div>
           </template>
           <p v-else class="idle-hint">
