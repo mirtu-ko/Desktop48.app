@@ -53,6 +53,27 @@ describe('tools.pictureUrls / sourceUrl（图片路径归一化）', () => {
     expect(Tools.sourceUrl('https://cdn.example.com/a.png')).toBe('https://cdn.example.com/a.png')
   })
 
+  it('废弃的 SHY48 旧域名改写到现行官网域名；其余分团域名与官网 https 地址不动', () => {
+    expect(Tools.sourceUrl('http://www.shy48.com/images/member/zp_40026.jpg?ram=1'))
+      .toBe('https://www.snh48.com/images/member/zp_40026.jpg?ram=1')
+    expect(Tools.sourceUrl('http://www.snh48.com/images/member/zp_1.jpg'))
+      .toBe('https://www.snh48.com/images/member/zp_1.jpg')
+    for (const domain of ['bej48', 'gnz48', 'ckg48', 'cgt48']) {
+      const url = `https://www.${domain}.com/images/member/zp_10019.jpg`
+      expect(Tools.sourceUrl(url)).toBe(url)
+    }
+  })
+
+  it('改写只认域名本身：多级子域、超集域名与路径中的同名字符串都原样放过', () => {
+    for (const url of [
+      'https://www.www.shy48.com/images/a.jpg',
+      'https://www.shy48.com.cn/images/a.jpg',
+      'https://cdn.example.com/proxy/http://www.shy48.com/a.jpg',
+    ]) {
+      expect(Tools.sourceUrl(url)).toBe(url)
+    }
+  })
+
   it('逗号分隔的多个路径逐个转换', () => {
     expect(Tools.pictureUrls('/a.jpg,https://cdn.example.com/b.jpg')).toEqual([
       'https://source.48.cn/a.jpg',

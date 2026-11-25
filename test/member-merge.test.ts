@@ -319,4 +319,18 @@ describe('buildAdjuncts（兼任记录 = 本人档案 + 兼任队伍定位）', 
     expect(buildAdjuncts(merged, tree, [])).toEqual([])
     expect(buildAdjuncts([], tree, adjuncts).map(member => member.realName)).toEqual(['甲', '丙', '戊'])
   })
+
+  it('本人档案缺失时头像取自 headImg 并归一化（卡片原样渲染 member.avatar）', () => {
+    const cases: Array<[headImg: string, expected: string]> = [
+      ['/mediasource/adj-998.png', 'https://source.48.cn/mediasource/adj-998.png'],
+      ['http://www.shy48.com/images/member/zp_40026.jpg?ram=1', 'https://www.snh48.com/images/member/zp_40026.jpg?ram=1'],
+      ['https://www.gnz48.com/images/member/zp_30119.jpg', 'https://www.gnz48.com/images/member/zp_30119.jpg'],
+    ]
+    for (const [headImg, expected] of cases) {
+      const [member] = buildAdjuncts(merged, tree, [
+        { adjunctId: 21, userId: 998, starName: '己', headImg, groupId: 12, teamId: 402, status: 1 },
+      ])
+      expect(member.avatar).toBe(expected)
+    }
+  })
 })
