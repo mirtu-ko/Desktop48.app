@@ -7,6 +7,7 @@ import { ensureFloatTopmost } from '@renderer/stores/float-topmost'
 import { useBlockedMembersStore } from '@renderer/stores/member-flags'
 import { refreshPocketAuthState } from '@renderer/stores/pocket-auth'
 import Constants from '@renderer/utils/constants'
+import { countBucket, trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { nextTick, onActivated, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -89,6 +90,32 @@ async function handleCheckIn() {
 /** 屏蔽成员入口在成员页 */
 function goMembers() {
   router.push('/members')
+}
+
+/**
+ * 设置页的两个屏蔽名单出口（解除单个 / 清空）。
+ *
+ * 与卡片、详情抽屉共用 `member:block` 口径，`from: 'setting'` 标记入口：
+ * 设置页是用户主动清理名单的唯一地方，「屏蔽了又清掉」的比例正是判断该功能是否有害的关键，
+ * 而这条路径此前完全无数据。count 只报分桶（清空的绝对条数不是产品问题）。失败分支也要记，
+ * 否则「点了没反应」会被当成「没人点」。
+ */
+async function handleUnblock(userId: number) {
+  const ok = await unblockMember(userId)
+  trackEvent('member:block', { action: 'unblock', from: 'setting', ...(ok ? {} : { result: 'fail' }) })
+}
+
+async function handleClearBlocked() {
+  const count = blockedMembers.value.length
+  await clearBlockedMembers()
+  // clear() 不返回成败：以本地名单是否真的清空判定（成功即空，失败保持原样）
+  const cleared = count > 0 && blockedMembers.value.length === 0
+  trackEvent('member:block', {
+    action: 'unblock_all',
+    from: 'setting',
+    count: countBucket(count),
+    ...(cleared ? {} : { result: 'fail' }),
+  })
 }
 
 /** SettingApp 的反馈入口依赖主进程环境摘要，挂载时拉一次 */
@@ -249,8 +276,8 @@ onActivated(consumeUpdateFocus)
         <SettingMedia :app-config="appConfig" :ffmpeg="ffmpeg" />
         <SettingContent
           :blocked-members="blockedMembers"
-          @unblock="unblockMember"
-          @clear-all="clearBlockedMembers"
+          @unblock="handleUnblock"
+          @clear-all="handleClearBlocked"
           @go-members="goMembers"
         />
         <SettingApp ref="appRef" :updater="updater" />

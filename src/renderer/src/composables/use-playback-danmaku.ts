@@ -2,6 +2,7 @@ import type { DanmakuOverlayEntry } from '@renderer/composables/use-danmaku-over
 import { useDanmakuOverlay } from '@renderer/composables/use-danmaku-overlay'
 import Apis from '@renderer/services/apis'
 import Tools from '@renderer/utils/tools'
+import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { computed, ref, shallowRef } from 'vue'
 
@@ -50,9 +51,12 @@ export function usePlaybackDanmaku(options: {
       // 成功才标记已加载，否则一次解析异常会被当成「已加载」而不再重试
       loadedUrl = url
       barrageLoaded.value = true
+      // 回放弹幕是第三条独立弹幕源
+      trackEvent('danmaku:connect', { source: 'vod', result: 'ok' })
     }
     catch (error) {
       console.error('[use-playback-danmaku] 弹幕加载失败:', error)
+      trackEvent('danmaku:connect', { source: 'vod', result: 'fail' })
       ElMessage({ message: '弹幕加载失败', type: 'error' })
     }
   }

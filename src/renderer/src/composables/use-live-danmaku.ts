@@ -5,6 +5,7 @@ import { connectPocketChatroom, disconnectPocketChatroom, sendPocketBarrage } fr
 import { ensurePocketAuthState, pocketAuthState } from '@renderer/stores/pocket-auth'
 import { debugLog } from '@renderer/utils/debug'
 import { isSelfEcho } from '@renderer/utils/pocket-chat-message'
+import { trackEvent } from '@renderer/utils/umami'
 import { useIntervalFn } from '@vueuse/core'
 import { ElMessage } from 'element-plus'
 import { onScopeDispose, ref, watch } from 'vue'
@@ -66,6 +67,13 @@ export function useLiveDanmaku(options: {
 
   /** 口袋弹幕的降级提示只弹一次：重连是常态，反复打扰没有信息量 */
   let pocketWarned = false
+  /** 本场是否已上报过口袋连上 */
+  let pocketConnectedTracked = false
+
+  /** 弹幕源连接结果（每场每源一条） */
+  function trackDanmakuConnect(source: 'bili' | 'pocket' | 'vod', result: 'ok' | 'fail') {
+    trackEvent('danmaku:connect', { source, result })
+  }
 
   /**
    * 刚发出、已乐观上屏的弹幕。云信的聊天室上行只保证「服务端收下」，
@@ -103,6 +111,7 @@ export function useLiveDanmaku(options: {
     pendingSelfEcho.length = 0
     // 重新起会话时重置提示：用户手动重开值得再被告知一次
     pocketWarned = false
+    pocketConnectedTracked = false
     // 榜单跟着口袋会话走：会话停了榜单面板清空，避免换场显示上一场的榜单
     options.onRank?.([])
   }
@@ -123,8 +132,14 @@ export function useLiveDanmaku(options: {
         pocketStatus.value = status
         if (import.meta.env.DEV)
           debugLog('live', `口袋弹幕: ${status}`, message || '')
+        if (status === 'connected' && !pocketConnectedTracked) {
+          pocketConnectedTracked = true
+          trackDanmakuConnect('pocket', 'ok')
+        }
         if (status === 'disconnected' && !pocketWarned && pocketReceivedCount === 0) {
           pocketWarned = true
+          // 从未收到消息就断开才算失败；收到过再断属正常收摊
+          trackDanmakuConnect('pocket', 'fail')
           ElMessage.warning('口袋互动消息暂时连不上，不影响直播播放')
         }
       },
@@ -237,10 +252,12 @@ export function useLiveDanmaku(options: {
     }
     if (!ok) {
       debugLog('live', `B站弹幕: 房间 ${roomId} 握手失败，关闭弹幕层（不影响直播播放）`)
+      trackDanmakuConnect('bili', 'fail')
       stop()
       ElMessage.warning('B 站弹幕暂时连不上，不影响直播播放')
       return
     }
+    trackDanmakuConnect('bili', 'ok')
     debugLog('live', `B站弹幕: 房间 ${roomId} 已订阅`)
   }
 

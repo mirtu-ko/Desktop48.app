@@ -10,6 +10,8 @@ import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue'
 
 const props = defineProps<{
   messages: PocketRoomMessageView[]
+  /** 房主名：仅用于埋点（image:view 的业务维度），不参与展示 */
+  ownerName?: string
 }>()
 
 /** 消息流里的图片消息（保持时间序）；相册只反映当前已加载的消息范围 */
@@ -260,7 +262,7 @@ async function downloadAll() {
         fit="cover"
         hide-on-click-modal
         @load="onPhotoLoad($event, photo)"
-        @click="trackEvent('image:view', { from: 'album' })"
+        @click="trackEvent('image:view', { from: 'album', starName: props.ownerName ?? '' })"
       >
         <!-- 预览时可按需下载当前这张（工具条由 rooms 共用组件提供） -->
         <template #toolbar="{ actions, reset, activeIndex }">

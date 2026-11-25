@@ -1,4 +1,5 @@
 import type { AppConfig, ConfigKey } from '@common/app-config'
+import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
 
@@ -49,9 +50,18 @@ export function useAppConfig() {
   /** 选择下载目录并保存 */
   async function setDownloadDirectory() {
     const dir = await window.mainAPI.selectDirectory()
-    if (dir) {
-      downloadDirectory.value = dir
+    // 用户取消选择不算一次变更，不上报
+    if (!dir)
+      return
+    downloadDirectory.value = dir
+    try {
       await saveConfig('downloadDirectory', dir)
+      // 设置项变更：只记「哪一项、成没成」，绝不记路径（可能带用户名等本机信息）
+      trackEvent('setting:change', { key: 'downloadDir', result: 'ok' })
+    }
+    catch (error) {
+      trackEvent('setting:change', { key: 'downloadDir', result: 'fail' })
+      throw error
     }
   }
 

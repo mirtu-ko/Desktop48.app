@@ -225,7 +225,6 @@ danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveE
 - `main/stream-idle-guard.ts` 从 spawn 起算、每次 `ffmpeg.stdout` 数据刷新，10s 无数据即 `res.end('')` + 结束转流会话，把静默挂死转成媒体元素 `ended`，复用 §7.5 的既有重试链；渲染层不为它新增状态或定时器。正常流每秒几十个音频 tag，10s 是极大余量，误触发也只是重连一次。
 - 所有失败路径收敛到 `loadFailureKind`（`stream | detail | offline`）与唯一写入口 `markLoadFailed()`：停看门狗/重试计时器、上报一次 `live:load-failed { by }`；文案由 `describeLoadFailure()` 纯函数派生。`stream` = 起播静默或重试耗尽，`detail` = 首次详情失败，`offline` = 本机断网。
 - 离线时任何来源都归一为 `offline`；`recoverStream()` 与 `confirmExhaustedEnding()` 走同一个 `shortCircuitIfOffline()`，避免断网时白打详情与列表请求。`online` 事件触发 `retryAfterStall()` 自动重建。
-- 埋点分工：`live:stall` 起播超时、`live:fail` 重试预算耗尽、`live:load-failed` 最终展示的失败卡来源，三者不重复计数。
 
 ## 8. 弹幕链路
 

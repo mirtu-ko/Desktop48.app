@@ -78,22 +78,37 @@ const failedEndAvatars = reactive(new Set<string>())
 const isManuallyUnmounted = ref(false)
 
 let livePlayTracked = false
+/** 一次播放会话只报一条 live:end（下架等关窗路径不走 finishLiveEnded，需单独去重） */
+let liveEndTracked = false
+
+/** live:end 归因：结束卡 / 下架 / 推送，不合并 */
+type LiveEndBy = 'detail' | 'error' | 'list' | 'push' | 'removed'
+
+/** 终态上报（一次会话一条），失败率按此去重 */
+function trackLiveEnded(by: LiveEndBy) {
+  if (liveEndTracked)
+    return
+  liveEndTracked = true
+  trackEvent('live:end', { by, auth: pocketAuthState.value.loggedIn ? 'in' : 'guest' })
+}
 
 const isRadio = computed(() => props.liveType !== 1)
 
 /** 详情明确反馈直播已被删除：广播下架 + 关闭浮窗 */
 function closeUnavailableLive() {
   debugLog('live', `①直播:直播反馈不可用，关闭浮窗（liveId=${props.liveId}）`)
+  // 下架不进结束卡，但也算本场终结
+  trackLiveEnded('removed')
   ElMessage.error('直播不存在')
   EventBus.emit('live-unavailable', props.liveId)
   emit('close')
 }
 
 /** 状态查询确认本场已下播：埋点后进结束卡（不关窗） */
-function finishLiveEnded(by: 'detail' | 'error' | 'list') {
+function finishLiveEnded(by: Exclude<LiveEndBy, 'removed'>) {
   if (liveEnded.value || isManuallyUnmounted.value)
     return
-  trackEvent('live:end', { by, auth: pocketAuthState.value.loggedIn ? 'in' : 'guest' })
+  trackLiveEnded(by)
   void enterLiveEnded()
 }
 
@@ -345,6 +360,11 @@ function onComposeEnter(event: KeyboardEvent) {
   void submitDanmaku()
 }
 
+/** 发弹幕上报：starName 是唯一业务维度，reason 仅失败时带 */
+function trackDanmakuSend(result: 'ok' | 'fail', reason?: 'not-connected' | 'error') {
+  trackEvent('danmaku:send', { starName: realName.value, result, ...(reason ? { reason } : {}) })
+}
+
 /**
  * 发送：成功后清空输入但不收起（便于连发）。气泡在发送成功时即上屏（见 sendBarrage），
  * 不等 13/7 回推。失败提示交主进程的文案（未连接 / 超长 / 服务端拒绝各有明确说法）。
@@ -354,6 +374,8 @@ async function submitDanmaku() {
   if (!content || sending.value)
     return
   if (pocketStatus.value !== 'connected') {
+    // 未连接导致的发送失败单独记
+    trackDanmakuSend('fail', 'not-connected')
     ElMessage.warning('互动消息尚未连接，请稍后再试')
     return
   }
@@ -361,9 +383,11 @@ async function submitDanmaku() {
   try {
     await sendBarrage(content)
     draft.value = ''
-    trackEvent('danmaku:send', { source: 'float' })
+    trackDanmakuSend('ok')
   }
   catch (error) {
+    // 服务端拒绝 / 网络等合并记为 error
+    trackDanmakuSend('fail', 'error')
     ElMessage.error(error instanceof Error ? error.message : String(error))
   }
   finally {
@@ -472,7 +496,7 @@ function armStallWatchdog() {
     // 这里只兜住「既没出画也没任何错误事件」的静默卡顿
     if (!mediaLoading.value || liveEnded.value || loadFailed.value || isManuallyUnmounted.value)
       return
-    trackEvent('live:stall', { title: realName.value, phase: stallRetries === 0 ? 'first' : 'after-rebuild' })
+    trackEvent('live:stall', { starName: realName.value, phase: stallRetries === 0 ? 'first' : 'after-rebuild' })
     if (stallRetries >= 1) {
       markLoadFailed('stream')
       return
@@ -560,6 +584,8 @@ function beginSession() {
   debugLog('live', `①直播会话开始（liveId=${props.liveId}, source=${props.source}），复位 loading 与重试计数`)
   mediaLoading.value = true
   retry.reset()
+  // 换场 / 重开允许新会话重新上报终态
+  liveEndTracked = false
 }
 
 /** canplay：加载完成，复位恢复态与重试预算并刷新视频尺寸 */
@@ -575,7 +601,7 @@ function onPlayerCanPlay() {
     livePlayTracked = true
     markPlayDurationStarted()
     trackEvent('live:play', {
-      title: realName.value,
+      starName: realName.value,
       media: isRadio.value ? 'radio' : 'video',
       source: props.source === 'open' ? 'open' : 'user',
     })
@@ -602,7 +628,7 @@ function handleStreamError(reason: string, isNetwork: boolean) {
   trackEvent('player:error', {
     type: 'live',
     network: isNetwork ? 'net' : 'other',
-    title: realName.value,
+    starName: realName.value,
     liveId: props.liveId,
   })
   if (isNetwork) {
@@ -702,7 +728,8 @@ async function confirmExhaustedEnding() {
 /** 主播下播（CLOSELIVE，官方收到即切结束态）：进结束态展示复盘，不再直接关窗 */
 function closeLiveEnded() {
   debugLog('live', `①直播:收到 CLOSELIVE，直播结束（liveId=${props.liveId}）`)
-  void enterLiveEnded()
+  // 走统一入口，避免推送路径漏报 live:end
+  finishLiveEnded('push')
 }
 
 /**

@@ -38,6 +38,7 @@ import type { LiveListItem } from '@renderer/services/api-types'
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import type { RoomSnapshotRow } from '@renderer/utils/room-list-snapshot'
 import { mergeFollowedIds, OFFICIAL_POCKET_USER_ID } from '@common/pocket-rooms'
+import EventBus from '@renderer/services/event-bus'
 import { resolveMemberRoomChannel } from '@renderer/services/room-channel'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useLiveStatusStore } from '@renderer/stores/live-status'
@@ -217,9 +218,32 @@ export function usePocketRooms() {
     }
     return byUser
   })
-  /** 房间关闭态：undefined = 未关闭，null = 已关闭但还没解析到存档频道（历史仍在旧频道） */
+  /** 官方账号（officialInfo）的 userId：袋王 / 各团官方号没有留言板，jump 退到的直播频道 hasMsgBoard=0，会被通用关闭判据误标「已关闭」 */
+  const officialIds = ref<Set<number>>(new Set())
+  async function loadOfficialIds() {
+    try {
+      const payload = await window.mainAPI.getAllMembers()
+      officialIds.value = new Set((payload?.officials ?? [])
+        .map(item => Number(item.userId))
+        .filter(id => Number.isFinite(id)))
+    }
+    catch {
+      // 名录读不到就按普通成员处理（宁可显示「已关闭」，也不把真关掉的房间误放出来）
+    }
+  }
+  void loadOfficialIds()
+  // 名录更新（syncInfo 落库）后官方号集合可能变化，与成员名录缓存同口径失效重取
+  const onMembersUpdated = () => void loadOfficialIds()
+  EventBus.on('members-updated', onMembersUpdated)
+  onScopeDispose(() => EventBus.off('members-updated', onMembersUpdated))
+  /** 官方号的频道形态（直播频道，无留言板）不适用通用关闭判据，一律按未关闭展示 */
+  const isOfficialAccount = (userId: number | null): boolean => userId !== null && officialIds.value.has(userId)
+
+  /**
+   * 房间关闭态：undefined = 未关闭，null = 已关闭但还没解析到存档频道（历史仍在旧频道）
+   */
   function closureOf(userId: number | null): PocketRoomChannel | null | undefined {
-    if (userId === null)
+    if (userId === null || isOfficialAccount(userId))
       return undefined
     const override = closureOverrides.value[userId]
     if (override === 'open')
@@ -270,7 +294,7 @@ export function usePocketRooms() {
   let historyCursor = 0
   /** 上翻连续零新增计数，达 HISTORY_MISS_LIMIT 判到头；任何切房/换口径/有新增都归零 */
   let historyMissStreak = 0
-  /** 消息范围（见 PocketRoomMessageScope）；切换时重拉当前房间 */
+  /** 消息范围（见 PocketRoomMessageScope）；切房时官方号默认 all，其余默认 member */
   const messageScope = ref<PocketRoomMessageScope>('member')
   /** 大房间 / 小房间视图（见 PocketRoomViewMode）；切换时换频道重拉 */
   const viewMode = ref<PocketRoomViewMode>('room')
@@ -1567,6 +1591,10 @@ export function usePocketRooms() {
     }
     clearChat()
     selectedUserId.value = userId
+    // 官方号（袋王 / 各团官方号）的频道由官方账号发言组成，没有「房主本人」，
+    // homeowner 会把它们当系统账号过滤掉，开场就是空列表——默认走全部消息。
+    // 手动切过的范围随切房复位，与其他成员口径一致。
+    messageScope.value = userId !== null && isOfficialAccount(userId) ? 'all' : 'member'
     // 视图随选中成员复位到大房间；小房间频道异步发现（不阻塞大房间首屏）
     viewMode.value = 'room'
     smallChannel.value = null
