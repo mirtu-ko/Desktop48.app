@@ -1941,7 +1941,7 @@ watch([chatStatus, chatStatusText], () => {
                   </div>
                   <div
                     class="msg-row"
-                    :class="[`msg-row--${message.kind}`, { 'msg-row--member': message.isMember, 'msg-row--member-reply': message.isMember && message.quote && message.kind !== 'flip', 'is-arriving': arrivingIds.has(message.id) }]"
+                    :class="[`msg-row--${message.kind}`, { 'msg-row--member': message.isMember, 'msg-row--member-visitor': message.isMember && !isRoomOwner(message), 'msg-row--member-reply': message.isMember && message.quote && message.kind !== 'flip', 'is-arriving': arrivingIds.has(message.id) }]"
                     @contextmenu.prevent="openMessageMenu($event, message)"
                   >
                     <template v-if="message.kind === 'system'">
@@ -3159,7 +3159,8 @@ watch([chatStatus, chatStatusText], () => {
 
   line-height: 15px;
   color: #fff;
-  background: var(--color-rooms);
+  /* 随行取色：房主房间青、串门成员成员蓝（见 .msg-row--member-visitor） */
+  background: var(--msg-accent, var(--color-rooms));
 }
 
 .msg-time {
@@ -3245,17 +3246,26 @@ watch([chatStatus, chatStatusText], () => {
  * 规则放在礼物之后——成员发的礼物/翻牌同样按成员卡呈现（不再染金），
  * 系统通知走居中 pill，不经过这套样式 */
 .msg-row--member {
+  /* 成员身份色：房主走房间青。串门成员在下面覆写为成员蓝 */
+  --msg-accent: var(--color-rooms);
+
   .msg-nick {
-    color: var(--color-rooms);
+    color: var(--msg-accent);
   }
 
   /* 成员（xox）普通文字消息：相比普通用户气泡再微提一层，正文用主色、底色与描边更实。
    * 回复/引用类消息看 .msg-row--member-reply，不套这份强化 */
   .msg-bubble:not(.msg-bubble--media) {
     color: var(--el-text-color-primary);
-    background: color-mix(in srgb, var(--color-rooms) 14%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-rooms) 40%, transparent);
+    background: color-mix(in srgb, var(--msg-accent) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--msg-accent) 40%, transparent);
   }
+}
+
+/* 串门成员（roleId>1 但不是本房间房主）：身份色换成成员蓝，房间青留给房主本人。
+ * 只改取色变量——昵称 / 气泡底色与描边 / 「成员」徽标同时换色，层级仍与房主一致 */
+.msg-row--member-visitor {
+  --msg-accent: var(--color-members);
 }
 
 /* 成员回复/引用类消息：顺着别人话题回的次要消息，比成员原创、也比普通用户发言弱一档
