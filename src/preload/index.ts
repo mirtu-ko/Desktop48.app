@@ -77,6 +77,11 @@ const api = {
   roomAlbumDownloadProgress: (callback: (_progress: RoomAlbumDownloadProgress) => void) =>
     onIpc('roomAlbumDownloadProgress', callback),
 
+  // ===== 存储与缓存 =====
+  // 对端：main/cache-storage.ts（渲染层只展示与触发）
+  getStorageUsage: () => invokeIpc('getStorageUsage'),
+  clearCache: () => invokeIpc('clearCache'),
+
   // ===== FFmpeg 环境 =====
   // 对端：main/ipc/register-system-ipc.ts（判定口径在 main/ffmpeg/ffmpeg-process.ts 的 inspectFfmpegDir）
   getFfmpegStatus: (dir?: string) => invokeIpc('getFfmpegStatus', dir),

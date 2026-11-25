@@ -2,17 +2,22 @@
 import type { useUpdater } from '@renderer/composables/use-updater'
 
 import { FEEDBACK_CONTACT_MAX, FEEDBACK_CONTENT_MAX } from '@common/feedback'
-import { ChatDotRound, Connection, Download, Refresh, Top } from '@element-plus/icons-vue'
+import { ChatDotRound, Coin, Connection, Download, Refresh, Top } from '@element-plus/icons-vue'
+import { useCacheCleanup } from '@renderer/composables/use-cache-cleanup'
+import { trackEvent } from '@renderer/utils/umami'
 import { previewReleaseNotes } from '@renderer/utils/update-notes'
 import { ElMessage } from 'element-plus'
-import { computed, ref } from 'vue'
+import { computed, onActivated, onMounted, ref } from 'vue'
 
 /**
- * 应用组：版本 / 自动更新、网络诊断、问题反馈。
+ * 应用组：版本 / 自动更新、网络诊断、问题反馈、缓存占用。
  *
  * 自动更新状态来自 use-updater（主进程持真相），本组件只把状态映射成文案与按钮；
  * 诊断结果与反馈表单只在本组内使用，状态留在这里，生命周期与设置页一致（页面被 KeepAlive 缓存）。
  * 两个弹窗外壳用 el-dialog + append-to-body，搬家不改变浮层层级。
+ *
+ * 缓存占用归本组：它是「应用级维护」（占了多少磁盘、要不要回收），不是播放/文件配置，
+ * 所以放在问题反馈之后；数字与清理动作走 use-cache-cleanup（口径在主进程 cache-storage.ts）。
  *
  * 与其它分组一致：composable 结果解构到 setup 顶层，模板里直接用 ref 名（自动解包）。
  */
@@ -79,7 +84,7 @@ const releaseNotesPreview = computed(() =>
   previewReleaseNotes(availableUpdate.value?.releaseNotes ?? ''),
 )
 
-/** 字节数格式化：下载进度的已传 / 总量与速率 */
+/** 字节数格式化：下载进度的已传 / 总量与速率，缓存释放量也用这个（口径与 use-cache-cleanup 一致） */
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0)
     return '0 B'
@@ -275,6 +280,36 @@ async function handleSubmitFeedback() {
 
 /** 页面挂载时由父页调用：反馈入口的可用性依赖主进程的环境摘要 */
 defineExpose({ loadFeedbackMeta })
+
+// ===== 缓存占用 =====
+
+/** 缓存占用：onActivated 时刷新，避免 keep-alive 切回来还显示旧数字 */
+const { loading: cacheLoading, clearing: cacheClearing, cacheText, limitText, otherText, refresh: refreshCache, clear: clearCacheStore } = useCacheCleanup()
+
+onActivated(() => {
+  void refreshCache()
+})
+
+// 不在 keep-alive 时 onActivated 不触发，靠 onMounted 兜底；refresh 有并发守卫，不会重复发 IPC
+onMounted(() => {
+  void refreshCache()
+})
+
+/** 清理缓存：只清 Chromium 缓存，不动用户设置与登录态 */
+async function clearCache() {
+  const result = await clearCacheStore()
+  if (!result) {
+    trackEvent('cache:clear', { result: 'fail' })
+    ElMessage.error('清理缓存失败，请稍后重试')
+    return
+  }
+  // 上报可读档位而非原始字节，便于看出释放量级
+  trackEvent('cache:clear', { result: 'ok', freed: formatBytes(result.freedBytes) })
+  ElMessage({
+    message: result.freedBytes > 0 ? `已清理 ${formatBytes(result.freedBytes)}` : '缓存已清理',
+    type: 'success',
+  })
+}
 </script>
 
 <template>
@@ -413,7 +448,7 @@ defineExpose({ loadFeedbackMeta })
           问题反馈
         </div>
         <div class="row-desc">
-          描述使用中遇到的问题，提交时会附带版本与运行环境；不收集账号凭据、手机号与聊天内容
+          戳一下开发者 / 描述使用中遇到的问题 / 👍
         </div>
       </div>
       <div class="row-actions">
@@ -424,6 +459,51 @@ defineExpose({ loadFeedbackMeta })
           反馈一下
         </el-button>
       </div>
+    </div>
+  </section>
+
+  <section class="setting-card glass-card">
+    <div class="setting-row">
+      <span
+        class="row-icon icon-tile"
+        :style="{ '--tile-color': 'var(--color-downloads)' }"
+      >
+        <el-icon><Coin /></el-icon>
+      </span>
+      <div class="row-text">
+        <div class="row-title">
+          缓存占用
+        </div>
+        <div class="row-desc">
+          图片与网页缓存
+        </div>
+      </div>
+      <div class="cache-size">
+        <span class="cache-size-value">{{ cacheText }}</span>
+        <span
+          v-if="limitText"
+          class="cache-size-limit"
+        >{{ limitText }}</span>
+      </div>
+      <div class="row-actions">
+        <el-button
+          type="primary"
+          :loading="cacheClearing"
+          :disabled="cacheLoading || cacheClearing"
+          @click="clearCache"
+        >
+          清理缓存
+        </el-button>
+      </div>
+    </div>
+
+    <div
+      v-if="otherText"
+      class="row-body"
+    >
+      <p class="cache-note">
+        {{ otherText }}
+      </p>
     </div>
   </section>
 
@@ -797,5 +877,40 @@ defineExpose({ loadFeedbackMeta })
 
 .update-progress {
   margin-top: 10px;
+}
+
+/* 数字右对齐、等宽，便于比对大小；字重低于标题，避免抢走注意力 */
+.cache-size {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.cache-size .cache-size-value {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  color: var(--el-text-color-primary);
+}
+
+.cache-size .cache-size-limit {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+/* 右侧已有数字，按钮行不再需要 auto 外边距把它推到边上 */
+.setting-row .cache-size + .row-actions {
+  margin-left: 14px;
+}
+
+.cache-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
 }
 </style>

@@ -148,6 +148,26 @@ export interface RoomAlbumDownloadResult {
   failed: number
 }
 
+// ===== 存储与缓存 =====
+
+/** userData 占用明细（字节）；仅 cacheBytes 可清，口径在 main/cache-storage.ts，渲染层不自己扫目录 */
+export interface StorageUsage {
+  /** Chromium 浏览器缓存，可一键清理 */
+  cacheBytes: number
+  /** 成员库及其隔离文件，属用户数据，不清理 */
+  databaseBytes: number
+  /** FFmpeg 二进制，属一次性依赖，不清理 */
+  ffmpegBytes: number
+  /** 磁盘缓存硬上限，用于展示天花板 */
+  cacheLimitBytes: number
+}
+
+/** 清理结果；freedBytes 是磁盘实测差值，可能小于逻辑释放量（清理异步落盘） */
+export interface ClearCacheResult {
+  freedBytes: number
+  usage: StorageUsage
+}
+
 // ===== 播放 =====
 
 /** createLiveStream 返回：本地 HTTP-FLV 播放地址（对端：main/stream.ts） */
@@ -546,6 +566,10 @@ interface StaticIpcInvokeMap {
   saveImageFile: InvokeSpec<[dataUrl: string, suggestedName: string], string | null>
   /** 打开一次目录选择器，随后把相册图片逐张写入所选目录（对端：main/pocket48/room-album-download.ts） */
   roomAlbumDownload: InvokeSpec<[sources: RoomAlbumDownloadSource[], filterSmall: boolean], RoomAlbumDownloadResult>
+  /** 磁盘占用明细（对端：main/cache-storage.ts） */
+  getStorageUsage: InvokeSpec<[], StorageUsage>
+  /** 清理浏览器缓存；不动 localStorage / IndexedDB / Cookies 与登录凭证 */
+  clearCache: InvokeSpec<[], ClearCacheResult>
   /** FFmpeg 环境状态：省略 dir 时校验当前生效配置，传入时校验指定目录（选择/下载后的即时校验） */
   getFfmpegStatus: InvokeSpec<[dir?: string], FfmpegStatus>
   downloadFfmpeg: InvokeSpec<[], string>

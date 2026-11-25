@@ -26,7 +26,7 @@ import { usePocketCheckIn } from '../composables/use-pocket-checkin'
  * - SettingAccount  账号：use-pocket-account（登录态 / 登录 / 验证）
  * - SettingMedia    播放与文件：use-app-config、use-ffmpeg-setup、stores/float-topmost
  * - SettingContent  内容与可见性：stores/member-flags
- * - SettingApp      应用：use-updater、网络诊断、问题反馈
+ * - SettingApp      应用：use-updater、网络诊断、问题反馈、use-cache-cleanup（缓存占用）
  * - SettingAbout    关于：data/setting-links 的静态清单
  *
  * 页面只持有「跨分组共享」的东西：分组标题（导航滚动锚点必须由页面自己渲染）、

@@ -9,14 +9,10 @@ import { ElMessage } from 'element-plus'
 import { computed } from 'vue'
 
 /**
- * 播放与文件组：默认下载目录、FFmpeg 目录、播放窗置顶策略。
- *
- * 状态来源都不在本组件：下载目录来自 use-app-config，FFmpeg 环境与修复动作来自
- * use-ffmpeg-setup（与启动门禁同一判定口径），置顶偏好是 stores/float-topmost 的模块级单例。
- * 本组件只做模板接线与操作结果的用户提示。
- *
- * ⚠️ 两个 composable 的返回值都是普通对象，内部 ref 在模板里不会自动解包，
- * 因此解构到 setup 顶层（顶层 ref 由模板自动解包）。
+ * 播放与文件组：下载目录、FFmpeg、置顶策略。
+ * 状态都在外部 composable / store，本组件只做模板接线与提示。
+ * 缓存占用归「应用」组（见 SettingApp.vue）：那是应用级维护，不是播放/文件配置。
+ * ⚠️ composable 返回普通对象、内部 ref 不会自动解包，需解构到 setup 顶层。
  */
 const props = defineProps<{
   appConfig: ReturnType<typeof useAppConfig>

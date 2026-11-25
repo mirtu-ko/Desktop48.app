@@ -8,6 +8,7 @@ import trayIco from '../../resources/tray.ico?asset'
 import trayTemplate from '../../resources/trayTemplate.png?asset'
 import trayUnread from '../../resources/trayUnread.png?asset'
 import { cleanupDanmakuSessions } from './bilibili/danmaku-session'
+import { DISK_CACHE_LIMIT_BYTES, scheduleCacheAutoClean } from './cache-storage'
 import { ConfigStore } from './config-store'
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
@@ -25,6 +26,9 @@ import { closeAllFloatWindows } from './window/float-window'
 import { centerWindow, computeWindowBounds, fitWindowToWorkArea } from './window/window-bounds'
 import { wireWindowMaximizeEvents } from './window/window-events'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
+
+/** Chromium 磁盘缓存硬上限（淘汰口径见 cache-storage.ts）；必须在 app ready 前设置 */
+app.commandLine.appendSwitch('disk-cache-size', String(DISK_CACHE_LIMIT_BYTES))
 
 /**
  * 下载目录的系统默认值。Electron 的标准路径按当前平台解析：
@@ -281,6 +285,9 @@ app.whenReady().then(async () => {
 
   // 自动更新：mac 未签名不启用、dev 环境跳过（判据见 updater.ts 的 resolveUpdaterSupport）
   initUpdater()
+
+  // 缓存兜底：20s 后查一次，只清上限管不到的部分
+  scheduleCacheAutoClean()
 
   app.on('activate', () => {
     // 点击 Dock / 任务栏图标恢复应用，统一走 showMainWindow
