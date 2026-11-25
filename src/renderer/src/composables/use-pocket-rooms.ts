@@ -38,6 +38,7 @@ import type { LiveListItem } from '@renderer/services/api-types'
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import type { RoomSnapshotRow } from '@renderer/utils/room-list-snapshot'
 import { mergeFollowedIds, OFFICIAL_POCKET_USER_ID } from '@common/pocket-rooms'
+import EventBus from '@renderer/services/event-bus'
 import { resolveMemberRoomChannel } from '@renderer/services/room-channel'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { useLiveStatusStore } from '@renderer/stores/live-status'
@@ -217,9 +218,32 @@ export function usePocketRooms() {
     }
     return byUser
   })
-  /** 房间关闭态：undefined = 未关闭，null = 已关闭但还没解析到存档频道（历史仍在旧频道） */
+  /** 官方账号（officialInfo）的 userId：袋王 / 各团官方号没有留言板，jump 退到的直播频道 hasMsgBoard=0，会被通用关闭判据误标「已关闭」 */
+  const officialIds = ref<Set<number>>(new Set())
+  async function loadOfficialIds() {
+    try {
+      const payload = await window.mainAPI.getAllMembers()
+      officialIds.value = new Set((payload?.officials ?? [])
+        .map(item => Number(item.userId))
+        .filter(id => Number.isFinite(id)))
+    }
+    catch {
+      // 名录读不到就按普通成员处理（宁可显示「已关闭」，也不把真关掉的房间误放出来）
+    }
+  }
+  void loadOfficialIds()
+  // 名录更新（syncInfo 落库）后官方号集合可能变化，与成员名录缓存同口径失效重取
+  const onMembersUpdated = () => void loadOfficialIds()
+  EventBus.on('members-updated', onMembersUpdated)
+  onScopeDispose(() => EventBus.off('members-updated', onMembersUpdated))
+  /** 官方号的频道形态（直播频道，无留言板）不适用通用关闭判据，一律按未关闭展示 */
+  const isOfficialAccount = (userId: number | null): boolean => userId !== null && officialIds.value.has(userId)
+
+  /**
+   * 房间关闭态：undefined = 未关闭，null = 已关闭但还没解析到存档频道（历史仍在旧频道）
+   */
   function closureOf(userId: number | null): PocketRoomChannel | null | undefined {
-    if (userId === null)
+    if (userId === null || isOfficialAccount(userId))
       return undefined
     const override = closureOverrides.value[userId]
     if (override === 'open')

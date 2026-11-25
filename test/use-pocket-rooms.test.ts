@@ -237,6 +237,10 @@ async function setup(options: SetupOptions = {}) {
 
   vi.stubGlobal('window', {
     mainAPI: {
+      getAllMembers: vi.fn(async () => ({
+        allmembers: [],
+        officials: Object.entries(options.officials ?? {}).map(([userId, item]) => ({ userId: Number(userId), realName: item.name, avatar: item.avatar })),
+      })),
       pocketGetFollowedIds: vi.fn(async () => {
         calls.pocketFollowedIds++
         if (options.pocketFollowFails)
