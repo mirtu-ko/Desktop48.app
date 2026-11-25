@@ -24,7 +24,7 @@ export function formatBytes(bytes: number): string {
 const cacheText = computed(() => (usage.value ? formatBytes(usage.value.cacheBytes) : '—'))
 
 /** 上限说明：缓存有天花板 */
-const limitText = computed(() => (usage.value ? `上限 ${formatBytes(usage.value.cacheLimitBytes)}` : ''))
+const limitText = computed(() => (usage.value ? `超过 ${formatBytes(usage.value.cacheLimitBytes * 2)} 重启自动清理` : ''))
 
 /** 成员库与 FFmpeg 不清理，避免用户以为会被删 */
 const otherText = computed(() => {
