@@ -259,3 +259,102 @@ describe('usePagedList 刷新语义（refresh / reset）', () => {
     expect(list.loadFailed.value).toBe(false)
   })
 })
+
+describe('usePagedList 软刷新（refreshFromTop({ keepList: true })）', () => {
+  it('刷新期间保留旧列表，第一页回包后整体替换并重置游标', async () => {
+    const gate = deferred<PagedPage<Item>>()
+    const nexts: string[] = []
+    let call = 0
+    const list = usePagedList<Item>({
+      loadPage: (next) => {
+        nexts.push(next)
+        return ++call === 1 ? page(['a', 'b'], '2') : gate.promise
+      },
+      itemKey: i => i.id,
+    })
+    await list.getList()
+
+    const pending = list.refreshFromTop({ keepList: true })
+    // 关键：loading 已升起但列表没被清空 —— 页面不会掉回骨架屏 / 空态
+    expect(list.loading.value).toBe(true)
+    expect(list.list.value.map(i => i.id)).toEqual(['a', 'b'])
+
+    gate.resolve(page(['b', 'c'], '5'))
+    await expect(pending).resolves.toBe(true)
+
+    // 第二次请求从第一页开始，结果整体替换而不是与旧列表去重追加
+    expect(nexts).toEqual(['0', '0'])
+    expect(list.list.value.map(i => i.id)).toEqual(['b', 'c'])
+    expect(list.listNext.value).toBe('5')
+    expect(list.loading.value).toBe(false)
+  })
+
+  it('刷新失败：旧列表与翻页游标原样保留，之后触底照常追加', async () => {
+    let call = 0
+    const list = usePagedList<Item>({
+      loadPage: () => {
+        call += 1
+        if (call === 1)
+          return page(['a', 'b'], '2')
+        if (call === 2)
+          throw new Error('boom')
+        return page(['c'], '0')
+      },
+      itemKey: i => i.id,
+    })
+    await list.getList()
+
+    await expect(list.refreshFromTop({ keepList: true })).resolves.toBe(false)
+    expect(list.list.value.map(i => i.id)).toEqual(['a', 'b'])
+    expect(list.listNext.value).toBe('2')
+    expect(list.noMore.value).toBe(false)
+    expect(list.loadFailed.value).toBe(true)
+
+    // 失败不能残留「下一页整体替换」的标记，否则下一次触底会把列表换成单页
+    await list.getList()
+    expect(list.list.value.map(i => i.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('软刷新途中被硬刷新取代：以硬刷新结果为准，不回滚游标', async () => {
+    const gate = deferred<PagedPage<Item>>()
+    let call = 0
+    const list = usePagedList<Item>({
+      loadPage: () => {
+        call += 1
+        if (call === 1)
+          return page(['a'], '2')
+        if (call === 2)
+          return gate.promise
+        return page(['hard'], '7')
+      },
+      itemKey: i => i.id,
+    })
+    await list.getList()
+
+    const soft = list.refreshFromTop({ keepList: true })
+    await list.refresh()
+    expect(list.list.value.map(i => i.id)).toEqual(['hard'])
+
+    gate.resolve(page(['stale'], '3'))
+    await expect(soft).resolves.toBe(false)
+    expect(list.list.value.map(i => i.id)).toEqual(['hard'])
+    expect(list.listNext.value).toBe('7')
+  })
+
+  it('不传 keepList 时保持原语义：先清空再重拉', async () => {
+    const gate = deferred<PagedPage<Item>>()
+    let call = 0
+    const list = usePagedList<Item>({
+      loadPage: () => (++call === 1 ? page(['a'], '2') : gate.promise),
+      itemKey: i => i.id,
+    })
+    await list.getList()
+
+    const pending = list.refreshFromTop()
+    expect(list.list.value).toEqual([])
+
+    gate.resolve(page(['fresh'], '0'))
+    await pending
+    expect(list.list.value.map(i => i.id)).toEqual(['fresh'])
+  })
+})

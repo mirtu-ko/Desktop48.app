@@ -6,17 +6,14 @@ import ShowCard from '@renderer/components/ui/ShowCard.vue'
 import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.vue'
 import useLoadMore from '@renderer/composables/use-load-more'
 import usePagedList from '@renderer/composables/use-paged-list'
+import { isShowLive, isTodayShow, showLockedHint, useShowActions } from '@renderer/composables/use-show-actions'
 import Apis from '@renderer/services/apis'
-import useFloatPlayersStore from '@renderer/stores/float-players'
-import { resolveBilibiliRoomIdAsync } from '@renderer/utils/bilibili-room'
 import Constants from '@renderer/utils/constants'
-import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
-import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
 
-// 独立播放窗：与直播/回放页共用全局播放挂载点
-const { openLive, openPlayback } = useFloatPlayersStore()
+// 公演卡片点击选路（进行中开直播 / 其余提示原因 / 历史开回放）：与直播页空态预告共用，见 use-show-actions
+const { onShowClick, openShowPlayback } = useShowActions()
 
 /** 当前团体 groupId：取值见 Constants.GroupTabs（'0'=全部） */
 const groupId = ref('0')
@@ -97,36 +94,6 @@ const { onInfiniteScroll } = useLoadMore({
  *  全页遮罩只呈现一次；避免多接口轮流置 loading 导致页面连续刷新多次 */
 const initialLoading = ref(false)
 
-/** 是否进行中：页面内「可点击」的唯一真值来源 */
-function isLive(show: OpenLive): boolean {
-  return show.status === 2
-}
-
-/** 不可点击卡片的原因文案（可点击时为空）：封面角上已有时间，这里不重复 */
-function lockedHint(show: OpenLive): string {
-  if (isLive(show))
-    return ''
-  if (show.status === 4)
-    return '已结束 · 暂无回放'
-  // status === 1：区分「时间没到」与「已过点但还没推流」
-  const started = Number.parseInt(show.stime) <= Date.now()
-  return started ? '尚未开始直播 · 请稍候' : '计划中 · 开播后观看'
-}
-
-/** 排期卡片点击：进行中直接开播；其余弹提示说明原因，避免点了没反应 */
-async function onScheduleClick(show: OpenLive) {
-  if (isLive(show)) {
-    await openLiveStream(show)
-    return
-  }
-  debugLog('show', `公演选路: ${show.liveId} 状态=${show.status}（非进行中），提示用户原因`)
-  ElMessage({
-    type: 'info',
-    message: lockedHint(show),
-    grouping: true,
-  })
-}
-
 /** 首次进入 / 刷新 / 切换团体共用的首屏加载序列 */
 async function loadFirstScreen() {
   initialLoading.value = true
@@ -158,61 +125,12 @@ const refresh = reload
 watch(groupId, reload)
 
 /** 分组：当日开演 → “即将开始”，其余 → “最近公演” */
-function isToday(stime: string): boolean {
-  const d = new Date(Number.parseInt(stime))
-  const now = new Date()
-  return d.getFullYear() === now.getFullYear()
-    && d.getMonth() === now.getMonth()
-    && d.getDate() === now.getDate()
-}
-
-const todayShows = computed(() => showList.value.filter(show => isToday(show.stime)))
-const recentShows = computed(() => showList.value.filter(show => !isToday(show.stime)))
+const todayShows = computed(() => showList.value.filter(show => isTodayShow(show)))
+const recentShows = computed(() => showList.value.filter(show => !isTodayShow(show)))
 
 // 首屏/切换团体时展示接近真实分区的骨架；已有数据刷新不整页遮罩
 const showSkeleton = computed(() =>
   initialLoading.value && showList.value.length === 0 && historyList.value.length === 0)
-
-/** 进行中的公演：以独立播放窗直接打开直播，停留当前页继续浏览 */
-async function openLiveStream(show: OpenLive) {
-  if (show.status !== 2) {
-    debugLog('show', `公演选路: ${show.liveId} 状态=${show.status}（非进行中），忽略本次点击`)
-    return
-  }
-  debugLog('show', `公演选路: ${show.liveId} 进行中 → 进入直播链（LivePlayer, source=open）`, show)
-  openLive({
-    liveId: show.liveId,
-    nickname: show.teamList?.[0]?.teamName || '',
-    title: show.subTitle || show.title,
-    startTime: Number.parseInt(show.stime),
-    source: 'open',
-    // 公演没有主播头像，用封面作窗口头像（与录播窗口一致）
-    avatar: show.coverPath,
-    liveType: 1,
-    liveMode: 0,
-    // 弹幕房间三级解析：groupId → 标题文本 → 在播官方房间标题兜底；全部落空则无弹幕入口
-    bilibiliRoomId: await resolveBilibiliRoomIdAsync({
-      groupId: show.teamList?.[0]?.groupId,
-      texts: [show.title, show.subTitle],
-    }),
-  })
-}
-
-/** 历史公演（已结束）：以独立回放窗打开 VOD 流，停留当前页继续浏览 */
-function openHistoryStream(show: OpenLive) {
-  debugLog('show', `公演选路: ${show.liveId} → 进入录播链（PlaybackPlayer, source=open）`, show)
-  openPlayback({
-    liveId: show.liveId,
-    nickname: '',
-    title: show.subTitle || show.title,
-    startTime: Number.parseInt(show.stime),
-    source: 'open',
-    // 公演没有主播头像，用封面作窗口头像（与录播窗口一致）
-    avatar: show.coverPath,
-    liveType: 1,
-    liveMode: 0,
-  })
-}
 </script>
 
 <template>
@@ -254,17 +172,17 @@ function openHistoryStream(show: OpenLive) {
             <el-tooltip
               v-for="show in todayShows"
               :key="show.liveId"
-              :content="lockedHint(show)"
-              :disabled="isLive(show)"
+              :content="showLockedHint(show)"
+              :disabled="isShowLive(show)"
               placement="top"
               :show-after="300"
             >
               <div
                 class="show-item lift-card"
-                :class="isLive(show) ? 'clickable' : 'is-disabled'"
-                @click="onScheduleClick(show)"
+                :class="isShowLive(show) ? 'clickable' : 'is-disabled'"
+                @click="onShowClick(show)"
               >
-                <ShowCard :show="show" :hint="lockedHint(show)" />
+                <ShowCard :show="show" :hint="showLockedHint(show)" />
               </div>
             </el-tooltip>
           </div>
@@ -278,17 +196,17 @@ function openHistoryStream(show: OpenLive) {
             <el-tooltip
               v-for="show in recentShows"
               :key="show.liveId"
-              :content="lockedHint(show)"
-              :disabled="isLive(show)"
+              :content="showLockedHint(show)"
+              :disabled="isShowLive(show)"
               placement="top"
               :show-after="300"
             >
               <div
                 class="show-item lift-card"
-                :class="isLive(show) ? 'clickable' : 'is-disabled'"
-                @click="onScheduleClick(show)"
+                :class="isShowLive(show) ? 'clickable' : 'is-disabled'"
+                @click="onShowClick(show)"
               >
-                <ShowCard :show="show" :hint="lockedHint(show)" />
+                <ShowCard :show="show" :hint="showLockedHint(show)" />
               </div>
             </el-tooltip>
           </div>
@@ -303,7 +221,7 @@ function openHistoryStream(show: OpenLive) {
               v-for="show in historyList"
               :key="show.liveId"
               class="show-item lift-card clickable"
-              @click="openHistoryStream(show)"
+              @click="openShowPlayback(show)"
             >
               <ShowCard :show="show" />
             </div>

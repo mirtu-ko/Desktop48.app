@@ -28,12 +28,18 @@ export interface UsePagedListOptions<TIn, TOut extends TIn = TIn> {
   scrollbarRef?: Ref<any>
 }
 
+/** refreshFromTop 的选项 */
+export interface RefreshOptions {
+  /** 软刷新：刷新期间保留旧列表，第一页回包后整体替换；失败则旧列表与游标原样保留 */
+  keepList?: boolean
+}
+
 /**
  * 分页列表通用逻辑（Lives / Playbacks / Shows 三页共用）：
  * - 列表 / 游标 / loading / noMore 四件套
  * - 请求序号丢弃过期响应，避免刷新与滚动并发导致数据错乱
  * - 去重追加 + 触底加载（useLoadMore）
- * - 刷新重置（refresh）、回顶刷新（refreshFromTop）与仅重置（reset，供多列表联动场景使用）
+ * - 刷新重置（refresh）、软刷新（softRefresh）、回顶刷新（refreshFromTop）与仅重置（reset）
  */
 export function usePagedList<TIn, TOut extends TIn = TIn>({
   loadPage,
@@ -54,6 +60,12 @@ export function usePagedList<TIn, TOut extends TIn = TIn>({
 
   // 列表请求序号，用于丢弃过期响应，避免刷新/滚动并发时数据错乱
   let listRequestId = 0
+
+  /**
+   * 软刷新挂起标记：为 true 时下一次成功落地的页整体替换列表而不是追加。
+   * 由 softRefresh 置位、成功落地或 reset 时清除
+   */
+  let replaceOnSuccess = false
 
   /**
    * 整页过滤（如屏蔽成员）+ 并行补全展示信息：
@@ -105,6 +117,13 @@ export function usePagedList<TIn, TOut extends TIn = TIn>({
       const items = await transformItems(page.items, requestId)
       if (!items)
         return false
+      // 软刷新：旧列表一直展示到此刻，用新的第一页一次性替换（与 reset + 追加的结果一致）
+      if (replaceOnSuccess) {
+        replaceOnSuccess = false
+        list.value = [...items]
+        debugLog('list', `①翻页: 软刷新落地，整体替换为 ${items.length} 条，next=${page.next}${noMore.value ? '（无更多）' : ''}`)
+        return true
+      }
       // 兜底去重，避免接口分页边界返回重复项导致列表出现重复卡片
       const existedIds = new Set(list.value.map(item => itemKey(item)))
       const fresh = items.filter(item => !existedIds.has(itemKey(item)))
@@ -142,6 +161,7 @@ export function usePagedList<TIn, TOut extends TIn = TIn>({
     listNext.value = '0'
     noMore.value = false
     loadFailed.value = false
+    replaceOnSuccess = false
   }
 
   /** 重置后拉取第一页；返回 getList 的 Promise，调用方需要时可 await 其成功与否 */
@@ -150,10 +170,36 @@ export function usePagedList<TIn, TOut extends TIn = TIn>({
     return getList()
   }
 
-  /** 回到列表顶部并拉取第一页：手动刷新按钮与「双击回顶」手势的统一入口；列表未渲染时静默跳过 */
-  function refreshFromTop(): Promise<boolean> {
+  /**
+   * 软刷新：不清空列表，直接从第一页重拉，成功后整体替换。
+   * 刷新期间旧卡片继续展示（列表非空 → 页面不会切到骨架屏 / 空态），
+   * 失败时恢复原游标与 noMore，旧列表保持可用、可继续触底翻页。
+   */
+  async function softRefresh(): Promise<boolean> {
+    const snapshot = { next: listNext.value, noMore: noMore.value }
+    listNext.value = '0'
+    noMore.value = false
+    replaceOnSuccess = true
+    const pending = getList()
+    // getList 同步递增序号：记下本次请求号，用来判断回包时是否已被更新的请求取代
+    const requestId = listRequestId
+    const ok = await pending
+    if (!ok && requestId === listRequestId && replaceOnSuccess) {
+      replaceOnSuccess = false
+      listNext.value = snapshot.next
+      noMore.value = snapshot.noMore
+      debugLog('list', `①翻页: 软刷新失败，保留旧列表 ${list.value.length} 条并恢复游标 next=${snapshot.next}`)
+    }
+    return ok
+  }
+
+  /**
+   * 回到列表顶部并拉取第一页：手动刷新按钮与「双击回顶」手势的统一入口；列表未渲染时静默跳过。
+   * keepList=true 走软刷新（见 softRefresh），默认仍是清空后重拉
+   */
+  function refreshFromTop(options?: RefreshOptions): Promise<boolean> {
     scrollbarRef.value?.setScrollTop?.(0)
-    return refresh()
+    return options?.keepList ? softRefresh() : refresh()
   }
 
   return {
@@ -169,6 +215,7 @@ export function usePagedList<TIn, TOut extends TIn = TIn>({
     getList, // 分页加载函数
     reset, // 仅重置列表状态，不发起请求（多列表联动的刷新序列里使用）
     refresh, // 刷新重置后拉取第一页
+    softRefresh, // 保留旧列表的刷新：成功整体替换，失败原样保留
     refreshFromTop, // 回顶 + 刷新重置（手动刷新 / 双击回顶手势）
   }
 }

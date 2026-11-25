@@ -15,7 +15,7 @@
  */
 
 export interface Events {
-  /** 浮窗放流失败（流不存在/直播下架），参数为 liveId；Lives 页若该直播在列表中则自动刷新 */
+  /** 浮窗放流失败（流不存在/直播下架），参数为 liveId；Lives 页摘掉该条并同步移除共享直播状态中的同场直播（不整页重拉） */
   'live-unavailable': string
   /**
    * 请求刷新直播列表（发射点：App.vue 双击底部 Dock 的直播项）。
