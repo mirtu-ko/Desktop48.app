@@ -916,6 +916,25 @@ describe('use-pocket-rooms / 官方频道', () => {
     expect(calls.channelFetched).toContain(63)
   })
 
+  it('官方号进房默认「全部消息」，普通成员仍默认「只看房主」', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [63, 10001],
+      directory: { 10001: { realName: '成员1', avatar: '', teamName: '', teamColor: '' } },
+      officials: { 63: { name: '袋王', avatar: '' } },
+    })
+    await api.load()
+
+    await api.selectRoom(63)
+    await nextTick()
+    expect(api.messageScope.value).toBe('all')
+    expect(calls.messageFetched.at(-1)?.scope).toBe('all')
+
+    await api.selectRoom(10001)
+    await nextTick()
+    expect(api.messageScope.value).toBe('member')
+    expect(calls.messageFetched.at(-1)?.scope).toBe('member')
+  })
+
   // 同一个 userId 同时存在于成员名录与官方号索引时以成员为准：官方号不覆盖成员详情
   it('成员与官方号索引撞车时成员优先', async () => {
     const { api } = await setup({

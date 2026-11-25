@@ -294,7 +294,7 @@ export function usePocketRooms() {
   let historyCursor = 0
   /** 上翻连续零新增计数，达 HISTORY_MISS_LIMIT 判到头；任何切房/换口径/有新增都归零 */
   let historyMissStreak = 0
-  /** 消息范围（见 PocketRoomMessageScope）；切换时重拉当前房间 */
+  /** 消息范围（见 PocketRoomMessageScope）；切房时官方号默认 all，其余默认 member */
   const messageScope = ref<PocketRoomMessageScope>('member')
   /** 大房间 / 小房间视图（见 PocketRoomViewMode）；切换时换频道重拉 */
   const viewMode = ref<PocketRoomViewMode>('room')
@@ -1591,6 +1591,10 @@ export function usePocketRooms() {
     }
     clearChat()
     selectedUserId.value = userId
+    // 官方号（袋王 / 各团官方号）的频道由官方账号发言组成，没有「房主本人」，
+    // homeowner 会把它们当系统账号过滤掉，开场就是空列表——默认走全部消息。
+    // 手动切过的范围随切房复位，与其他成员口径一致。
+    messageScope.value = userId !== null && isOfficialAccount(userId) ? 'all' : 'member'
     // 视图随选中成员复位到大房间；小房间频道异步发现（不阻塞大房间首屏）
     viewMode.value = 'room'
     smallChannel.value = null
