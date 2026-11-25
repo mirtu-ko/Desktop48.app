@@ -15,6 +15,16 @@ const MemberStatusMeta: Record<number, { label: string, tag: 'success' | 'warnin
 }
 
 /**
+ * 开放公演状态（OpenLive.status 字段取值，getOpenLiveList 接口约定）。
+ * 只有 Live 可以点开直播；判定与提示文案集中在 composables/use-show-actions.ts
+ */
+const ShowStatus = {
+  Scheduled: 1,
+  Live: 2,
+  Ended: 4,
+} as const
+
+/**
  * 分团官方 logo 的兜底图（SNH48 那张 about-logo-snh.png）。
  * 成员页分区标题在没有队伍徽章、又查不到所属团体 logo（IDFT / 燃烧吧团魂 / 新星闪耀计划 等）
  * 时统一用它，避免标题左侧出现空盒。
@@ -49,6 +59,7 @@ const Constants = {
 
   MemberStatus,
   MemberStatusMeta,
+  ShowStatus,
 
   /**
    * 分团切换 tab（公演页 / 成员页左上角浮动切换器共用）：key 即 groupId。

@@ -385,7 +385,7 @@ export function buildAdjuncts(
         realName: own?.realName || text(a.starName),
         nickname: own?.nickname || text(a.nickname),
         abbr: own?.abbr || text(a.abbr),
-        avatar: own?.avatar || text(a.headImg),
+        avatar: own?.avatar || Tools.sourceUrl(text(a.headImg)),
         sid: own?.sid || '',
         ranking: own?.ranking || '',
         // 本人档案缺失时仍保留档案里的 userId：屏蔽与回放入口依赖它

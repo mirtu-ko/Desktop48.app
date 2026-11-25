@@ -1,19 +1,18 @@
 import type { RouteRecordRaw } from 'vue-router'
-import { defineAsyncComponent } from 'vue'
 
 /**
- * 页面按需加载：此前全部静态 import，首屏必须下载所有页面的代码。
- * 改为异步组件后每个页面各自成 chunk（Electron 从本地 file:// 读取，切页开销可忽略）；
- * KeepAlive 与异步组件兼容——缓存的是解析后的页面实例，激活/停用行为不变。
+ * 页面按需加载：每个页面各自成 chunk，导航进入时才加载（file:// 本地读取，切页开销可忽略）。
+ * vue-router 原生支持懒加载，无需再用 defineAsyncComponent 包一层。
+ * KeepAlive 缓存的是解析后的页面实例，激活/停用行为不变。
  */
-const Albums = defineAsyncComponent(() => import('./pages/Albums.vue'))
-const Elections = defineAsyncComponent(() => import('./pages/Elections.vue'))
-const Lives = defineAsyncComponent(() => import('./pages/Lives.vue'))
-const Members = defineAsyncComponent(() => import('./pages/Members.vue'))
-const Playbacks = defineAsyncComponent(() => import('./pages/Playbacks.vue'))
-const Rooms = defineAsyncComponent(() => import('./pages/Rooms.vue'))
-const Setting = defineAsyncComponent(() => import('./pages/Setting.vue'))
-const Shows = defineAsyncComponent(() => import('./pages/Shows.vue'))
+const Albums = () => import('./pages/Albums.vue')
+const Elections = () => import('./pages/Elections.vue')
+const Lives = () => import('./pages/Lives.vue')
+const Members = () => import('./pages/Members.vue')
+const Playbacks = () => import('./pages/Playbacks.vue')
+const Rooms = () => import('./pages/Rooms.vue')
+const Setting = () => import('./pages/Setting.vue')
+const Shows = () => import('./pages/Shows.vue')
 
 const routes: RouteRecordRaw[] = [
   {

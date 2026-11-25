@@ -89,6 +89,40 @@ describe('live-status 共享 store', () => {
     expect(store.useLiveStatusStore().liveIdSet.value).toEqual(new Set(['L1', 'L2']))
   })
 
+  it('removeLive 同步摘掉缓存条目，派生集合随之更新，新鲜期内也不会复活', async () => {
+    apisMock.lives.mockImplementationOnce(async () => ({ next: '0', liveList: [live('L1', 1), live('L2', 2)] }))
+    const api = store.useLiveStatusStore()
+    await api.refreshLiveStatus(true)
+
+    api.removeLive('L1')
+
+    expect(api.liveItems.value.map(item => item.liveId)).toEqual(['L2'])
+    expect(api.liveByUserId.value.has(1)).toBe(false)
+    expect(api.liveIdSet.value).toEqual(new Set(['L2']))
+    // 空态轮询在新鲜期内读缓存，不能再拿到已下架的那一场
+    expect((await api.ensureLiveStatusFresh()).map(item => item.liveId)).toEqual(['L2'])
+
+    // 即使服务端列表仍短暂带着已下架直播，强刷结果也要继续过滤
+    apisMock.lives.mockImplementationOnce(async () => ({ next: '0', liveList: [live('L1', 1), live('L2', 2)] }))
+    expect((await api.refreshLiveStatus(true)).map(item => item.liveId)).toEqual(['L2'])
+  })
+
+  it('removeLive 发生在刷新在途时，回包不会把已下架直播带回来', async () => {
+    let resolveLives!: (value: { next: string, liveList: any[] }) => void
+    apisMock.lives.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveLives = resolve
+    }))
+
+    const api = store.useLiveStatusStore()
+    const pending = api.refreshLiveStatus(true)
+    // 广播在请求飞行途中到达：回包落地时要按最新的 removedLiveIds 过滤
+    api.removeLive('L1')
+
+    resolveLives({ next: '0', liveList: [live('L1', 1), live('L2', 2)] })
+    expect((await pending).map(item => item.liveId)).toEqual(['L2'])
+    expect(api.liveItems.value.map(item => item.liveId)).toEqual(['L2'])
+  })
+
   it('轮询按消费者引用计数启动和停止', async () => {
     const api = store.useLiveStatusStore()
     const release1 = api.acquireLiveStatusPolling()

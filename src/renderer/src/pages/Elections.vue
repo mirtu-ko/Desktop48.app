@@ -6,6 +6,7 @@ import ElectionRankCard from '@renderer/components/election/ElectionRankCard.vue
 import RankChangeChip from '@renderer/components/election/RankChangeChip.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
+import MemberAvatar from '@renderer/components/ui/MemberAvatar.vue'
 import { ELECTIONS } from '@renderer/data/elections'
 import {
   avatarUrl,
@@ -152,11 +153,14 @@ function jumpToYear(target: number) {
                 <!-- 加冕：皇冠压在头像顶沿，头像背后一圈金色光环 -->
                 <MediaIcon v-if="spot.role === 'champion'" name="crownFilled" :size="36" class="spot-crown" />
                 <span class="spot-halo" aria-hidden="true" />
-                <el-image class="spot-avatar" :src="avatarUrl(spot.member.sid)" fit="cover">
-                  <template #error>
-                    <span class="avatar-fallback">{{ spot.member.name.slice(0, 1) }}</span>
-                  </template>
-                </el-image>
+                <!-- 官网头像偶发失败：MemberAvatar 自带一次自动重试，重试仍失败才显示姓氏占位 -->
+                <MemberAvatar
+                  class="spot-avatar"
+                  :src="avatarUrl(spot.member.sid)"
+                  :alt="spot.member.name"
+                >
+                  <span class="avatar-fallback">{{ spot.member.name.slice(0, 1) }}</span>
+                </MemberAvatar>
                 <span v-if="spot.role === 'runner'" class="rank-badge spot-no is-medal">{{ spot.member.rank }}</span>
               </div>
 

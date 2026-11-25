@@ -23,6 +23,14 @@ const loaded = ref(false)
 const refreshing = ref(false)
 const lastFetchedAt = ref(0)
 
+/**
+ * 本会话内被判定下架（直播不存在/已下播）的 liveId。
+ * 播放器链在拿到「不可用」结论后会广播 live-unavailable，此时服务端列表或缓存里可能仍短暂留有该场，
+ * 必须同步摘掉并在后续拉取结果中持续过滤，否则空态轮询会拿旧条目把列表重新刷回来。
+ * liveId 标识一场直播，不会复用，因此本会话内永久过滤即可，不需要定时清理。
+ */
+const removedLiveIds = new Set<string>()
+
 /** 进行中的全量刷新：并发调用共用同一请求。 */
 let inflight: Promise<LiveListItem[]> | null = null
 /** 轮询消费者的引用计数：没有页面需要时停止定时器。 */
@@ -80,7 +88,9 @@ async function refreshLiveStatus(force = false): Promise<LiveListItem[]> {
   refreshing.value = true
   inflight = (async () => {
     try {
-      const items = await fetchAllLiveItems()
+      const fetched = await fetchAllLiveItems()
+      // 请求发出后才收到下架广播时，回包仍可能带着那一场；按最新 removedLiveIds 再过滤一次
+      const items = fetched.filter(item => !removedLiveIds.has(String(item.liveId)))
       liveItems.value = items
       loaded.value = true
       lastFetchedAt.value = Date.now()
@@ -103,6 +113,17 @@ async function refreshLiveStatus(force = false): Promise<LiveListItem[]> {
 /** 页面进入或恢复时使用：优先复用新鲜缓存。 */
 function ensureLiveStatusFresh(): Promise<LiveListItem[]> {
   return refreshLiveStatus(false)
+}
+
+/**
+ * 播放器链判定某场直播已不可用：立即从共享状态摘掉。
+ * 同步更新很关键 —— 空态轮询在列表摘空后马上读 liveItems，若这里留着旧条目，
+ * 会立刻触发 handleLiveFound → 列表重刷，把刚摘掉的直播又拉回来。
+ */
+function removeLive(liveId: string): void {
+  const removed = String(liveId)
+  removedLiveIds.add(removed)
+  liveItems.value = liveItems.value.filter(item => String(item.liveId) !== removed)
 }
 
 function stopPollTimer(): void {
@@ -152,6 +173,7 @@ export function useLiveStatusStore() {
     lastFetchedAt,
     refreshLiveStatus,
     ensureLiveStatusFresh,
+    removeLive,
     acquireLiveStatusPolling,
   }
 }

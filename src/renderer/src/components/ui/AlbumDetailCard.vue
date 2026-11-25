@@ -9,8 +9,6 @@ import { computed, onBeforeUnmount, onMounted } from 'vue'
 /** 专辑详情卡片：左栏封面 / 黑胶 / 元信息 / 全部操作，右栏曲目列表独立滚动。播放规则见 composables/use-album-player */
 const props = defineProps<{
   album: MusicAlbum | null
-  /** 封面刷新版本号，透传给 CoverImage 做 cache-busting */
-  version?: number
   /** 上一个 / 下一个专辑是否存在；不传则 ↑ / ↓ 不响应 */
   hasPrev?: boolean
   hasNext?: boolean
@@ -101,7 +99,6 @@ function onVisibilityChange(value: boolean) {
                 <CoverImage
                   class="cover-src media-fill"
                   :src="album.image"
-                  :version="version"
                   :alt="album.title"
                 >
                   <div class="cover-fallback">

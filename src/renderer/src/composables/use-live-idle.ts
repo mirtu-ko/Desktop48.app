@@ -7,6 +7,7 @@ import Tools from '@renderer/utils/tools'
 import dayjs from 'dayjs'
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { enrichLiveItem } from './use-paged-live-list'
+import { isTodayShow } from './use-show-actions'
 
 /** 空态公演最多展示几场。 */
 const MAX_PREVIEW_SHOWS = 4
@@ -63,7 +64,7 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   })
 
   /** 今日开演的公演。 */
-  const todayShows = computed(() => shows.value.filter(show => isToday(show.stime)))
+  const todayShows = computed(() => shows.value.filter(show => isTodayShow(show)))
 
   /** 今日优先，其次最近公演。 */
   const previewShows = computed(() => (todayShows.value.length ? todayShows.value : shows.value).slice(0, MAX_PREVIEW_SHOWS))
@@ -76,14 +77,6 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   const playbacksTitle = computed(() => (playbackSource.value === 'followed' ? '看看回放 · 你关注的成员' : '看看回放'))
 
   const hasPlaybacks = computed(() => playbacks.value.length > 0)
-
-  function isToday(stime: string): boolean {
-    const date = new Date(Number.parseInt(stime))
-    const now = new Date()
-    return date.getFullYear() === now.getFullYear()
-      && date.getMonth() === now.getMonth()
-      && date.getDate() === now.getDate()
-  }
 
   /** 拉取公演排期；失败静默降级。 */
   async function loadShows(): Promise<void> {

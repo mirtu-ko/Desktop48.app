@@ -13,8 +13,6 @@ import { computed, onMounted, ref } from 'vue'
 
 const albumList = ref<MusicAlbum[]>([])
 const loading = ref(false)
-/** 封面刷新版本：手动刷新时递增，保证同一封面 URL 也会重新请求 */
-const imageVersion = ref(0)
 
 /** 年份筛选：全部 + 数据中出现的年份（新→旧） */
 const yearFilter = ref('0')
@@ -50,13 +48,6 @@ async function fetchAlbums() {
 
 /** 已有数据时的轻量刷新反馈：卡片降透明度，完成后恢复 */
 const isRefreshing = computed(() => loading.value && albumList.value.length > 0)
-
-async function refreshAlbums() {
-  imageVersion.value += 1
-  await fetchAlbums()
-}
-
-const refresh = refreshAlbums
 
 // 首次加载或刷新后无专辑时展示骨架；已有数据刷新不整页遮罩
 const showSkeleton = computed(() => loading.value && albumList.value.length === 0)
@@ -100,7 +91,7 @@ onMounted(fetchAlbums)
       :tabs="yearTabs"
       :active="yearFilter"
       @change="yearFilter = $event"
-      @refresh="refresh"
+      @refresh="fetchAlbums"
     />
 
     <div v-if="showSkeleton" class="albums-skeleton" aria-busy="true">
@@ -141,12 +132,12 @@ onMounted(fetchAlbums)
             <div class="album-cover">
               <div class="vinyl">
                 <span class="vinyl-label">
-                  <CoverImage class="media-fill" :src="album.image" :version="imageVersion" loading="lazy" />
+                  <CoverImage class="media-fill" :src="album.image" loading="lazy" />
                 </span>
               </div>
               <!-- 原生懒加载：视口外不请求，滚动接近时浏览器提前预取，比 el-image 的滚动节流更早就位 -->
               <div class="cover-img">
-                <CoverImage class="cover-src media-fill" :src="album.image" :version="imageVersion" loading="lazy">
+                <CoverImage class="cover-src media-fill" :src="album.image" loading="lazy">
                   <div class="cover-fallback">
                     <el-icon><Headset /></el-icon>
                   </div>
@@ -219,13 +210,12 @@ onMounted(fetchAlbums)
     <!-- 右上角浮动刷新按钮 -->
     <FloatingRefreshDock
       :loading="loading"
-      @refresh="refresh"
+      @refresh="fetchAlbums"
     />
 
     <!-- 专辑详情卡片：全屏蒙版 + 左专辑栏 / 右曲目列表，↑ / ↓ 切专辑 -->
     <AlbumDetailCard
       :album="currentAlbum"
-      :version="imageVersion"
       :has-prev="hasPrevAlbum"
       :has-next="hasNextAlbum"
       @close="currentAlbum = null"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { OpenLive } from '@renderer/services/api-types'
+import { isShowLive } from '@renderer/composables/use-show-actions'
 import Tools from '@renderer/utils/tools'
 import dayjs from 'dayjs'
 import CoverImage from './CoverImage.vue'
@@ -33,10 +34,10 @@ function formatTime(stime: string): string {
           {{ Tools.shortTeamName(team.teamName) }}
         </span>
       </div>
-      <el-tag v-if="show.status === 2" class="show-tag" type="danger" size="small">
+      <el-tag v-if="isShowLive(show)" class="show-tag" type="danger" size="small">
         进行中
       </el-tag>
-      <span v-if="hint && show.status !== 2" class="show-hint">{{ hint }}</span>
+      <span v-if="hint && !isShowLive(show)" class="show-hint">{{ hint }}</span>
       <span class="show-time">{{ formatTime(show.stime) }}</span>
     </div>
     <div class="show-info">

@@ -3,6 +3,7 @@ import type { ElectionMember } from '@renderer/data/elections'
 import type { ElectionHistoryEntry } from '@renderer/utils/election'
 import RankChangeChip from '@renderer/components/election/RankChangeChip.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
+import MemberAvatar from '@renderer/components/ui/MemberAvatar.vue'
 import { ELECTIONS } from '@renderer/data/elections'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import {
@@ -194,11 +195,9 @@ function onVisibilityChange(visible: boolean) {
 
       <!-- 头部：头像 + 姓名 / 团体 + 概览 -->
       <header class="history-head">
-        <el-image class="history-avatar" :src="avatarSrc" fit="cover">
-          <template #error>
-            <span class="avatar-fallback">{{ member.name.slice(0, 1) }}</span>
-          </template>
-        </el-image>
+        <MemberAvatar class="history-avatar" :src="avatarSrc" :alt="member.name">
+          <span class="avatar-fallback">{{ member.name.slice(0, 1) }}</span>
+        </MemberAvatar>
         <div class="history-id">
           <p class="history-name ellipsis" :title="member.name">
             {{ member.name }}

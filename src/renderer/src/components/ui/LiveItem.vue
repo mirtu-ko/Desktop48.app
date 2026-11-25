@@ -5,11 +5,11 @@ import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promot
 import { formatRelativeDate } from '@renderer/utils/relative-date'
 import Tools from '@renderer/utils/tools'
 import { formatViewNum } from '@renderer/utils/view-num'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps<{
   item: LiveListItemView
-  /** 刷新版本号：变化时给封面 URL 追加 cache-busting 参数，强制失败图重试 */
+  /** 刷新版本号：封面失败后换版本号才会重试，成功的一直用原地址 */
   imageVersion?: number | string
   /** 是否被关注成员的直播：为 true 时整卡金色描边高亮，右上角标「已关注」胶囊 */
   followed?: boolean
@@ -27,13 +27,11 @@ const dateText = computed(() =>
     : props.item.date,
 )
 
-const coverSrc = computed(() => {
-  const source = props.item.cover?.[0]
-  if (!source || !props.imageVersion)
-    return source
-  const separator = source.includes('?') ? '&' : '?'
-  return `${source}${separator}_r=${encodeURIComponent(String(props.imageVersion))}`
-})
+/** 封面地址：只有加载失败过才追加 version 重试 */
+const coverFailed = ref(false)
+const coverSrc = computed(() =>
+  Tools.retryImageUrl(props.item.cover?.[0] ?? '', coverFailed.value ? Number(props.imageVersion) || 0 : 0),
+)
 
 /** 展示用队伍：预备生的本地升格只在直播 / 录播卡片生效 */
 const { displayTeamOf } = useMemberTeamPromotionStore()
@@ -61,6 +59,7 @@ const liveBadge = computed(() => {
         :src="coverSrc"
         fit="cover"
         lazy
+        @error="coverFailed = true"
       >
         <template #placeholder>
           <div class="media-ph" />

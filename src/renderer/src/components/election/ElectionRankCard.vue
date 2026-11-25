@@ -2,6 +2,7 @@
 import type { ElectionMember } from '@renderer/data/elections'
 import type { RankChange } from '@renderer/utils/election'
 import RankChangeChip from '@renderer/components/election/RankChangeChip.vue'
+import MemberAvatar from '@renderer/components/ui/MemberAvatar.vue'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { avatarUrl, formatVotes, groupColor, medalColor } from '@renderer/utils/election'
 import { computed, ref, watch } from 'vue'
@@ -87,11 +88,10 @@ const cardStyle = computed(() => {
     <div class="avatar-slot">
       <div class="avatar-wrap">
         <span class="avatar-flow" />
-        <el-image class="avatar" :src="avatarSrc" fit="cover" lazy>
-          <template #error>
-            <span class="avatar-fallback">{{ member.name.slice(0, 1) }}</span>
-          </template>
-        </el-image>
+        <!-- 官网头像偶发失败：MemberAvatar 自带一次自动重试，重试仍失败才显示姓氏占位 -->
+        <MemberAvatar class="avatar" :src="avatarSrc" :alt="member.name" loading="lazy">
+          <span class="avatar-fallback">{{ member.name.slice(0, 1) }}</span>
+        </MemberAvatar>
 
         <span class="rank-badge" :class="{ 'is-medal': !!medal }">{{ member.rank }}</span>
       </div>
