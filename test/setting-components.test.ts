@@ -61,7 +61,7 @@ const CASES: Case[] = [
   { component: 'components/setting/SettingAccount.vue', prop: 'account', composable: 'composables/use-pocket-account.ts', minMembers: 20 },
   { component: 'components/setting/SettingMedia.vue', prop: 'ffmpeg', composable: 'composables/use-ffmpeg-setup.ts', minMembers: 10 },
   { component: 'components/setting/SettingMedia.vue', prop: 'appConfig', composable: 'composables/use-app-config.ts', minMembers: 3 },
-  { component: 'components/setting/SettingApp.vue', prop: 'updater', composable: 'composables/use-updater.ts', minMembers: 4 },
+  { component: 'components/setting/SettingApp.vue', prop: 'updater', composable: 'stores/use-updater.ts', minMembers: 8 },
 ]
 
 describe('设置页组件：composable 结果必须解构到 setup 顶层', () => {

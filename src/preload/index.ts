@@ -77,6 +77,11 @@ const api = {
   roomAlbumDownloadProgress: (callback: (_progress: RoomAlbumDownloadProgress) => void) =>
     onIpc('roomAlbumDownloadProgress', callback),
 
+  // ===== 存储与缓存 =====
+  // 对端：main/cache-storage.ts（渲染层只展示与触发）
+  getStorageUsage: () => invokeIpc('getStorageUsage'),
+  clearCache: () => invokeIpc('clearCache'),
+
   // ===== FFmpeg 环境 =====
   // 对端：main/ipc/register-system-ipc.ts（判定口径在 main/ffmpeg/ffmpeg-process.ts 的 inspectFfmpegDir）
   getFfmpegStatus: (dir?: string) => invokeIpc('getFfmpegStatus', dir),
@@ -160,12 +165,13 @@ const api = {
   allowSleep: (id: number) => invokeIpc('allowSleep', id),
 
   // ===== 应用更新 =====
-  // 对端：main/ipc/register-updater-ipc.ts，状态与逻辑在 main/updater.ts
+  // 对端：main/ipc/register-updater-ipc.ts，状态机在 main/updater/engine.ts
   getAppVersion: () => invokeIpc('getAppVersion'),
   updaterGetState: () => invokeIpc('updaterGetState'),
   updaterCheck: () => invokeIpc('updaterCheck'),
   updaterDownload: () => invokeIpc('updaterDownload'),
   updaterInstall: () => invokeIpc('updaterInstall'),
+  updaterDismiss: () => invokeIpc('updaterDismiss'),
   // updaterState 由 IpcEventMap 自动派生，此处必须实现以满足 satisfies mainAPI
   updaterState: (callback: (_state: UpdaterState) => void) =>
     onIpc('updaterState', callback),

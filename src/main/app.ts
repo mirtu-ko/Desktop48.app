@@ -8,6 +8,7 @@ import trayIco from '../../resources/tray.ico?asset'
 import trayTemplate from '../../resources/trayTemplate.png?asset'
 import trayUnread from '../../resources/trayUnread.png?asset'
 import { cleanupDanmakuSessions } from './bilibili/danmaku-session'
+import { DISK_CACHE_LIMIT_BYTES, scheduleCacheAutoClean } from './cache-storage'
 import { ConfigStore } from './config-store'
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
@@ -20,11 +21,14 @@ import { cleanupRoomQChatSessions } from './pocket48/pocket-room-qchat'
 import { startPocketUnread, stopPocketUnread } from './pocket48/pocket-unread'
 import { cleanupStreamSessions } from './stream'
 import { destroyTray, installTray, isTrayActive } from './tray'
-import { initUpdater } from './updater'
+import { initUpdater, scheduleStartupCheck, startPendingInstall } from './updater'
 import { closeAllFloatWindows } from './window/float-window'
 import { centerWindow, computeWindowBounds, fitWindowToWorkArea } from './window/window-bounds'
 import { wireWindowMaximizeEvents } from './window/window-events'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
+
+/** Chromium 磁盘缓存硬上限（淘汰口径见 cache-storage.ts）；必须在 app ready 前设置 */
+app.commandLine.appendSwitch('disk-cache-size', String(DISK_CACHE_LIMIT_BYTES))
 
 /**
  * 下载目录的系统默认值。Electron 的标准路径按当前平台解析：
@@ -247,6 +251,12 @@ app.on('second-instance', () => {
 })
 
 app.whenReady().then(async () => {
+  // 更新模块先就位：上次可能已经把包下好，本次启动就地静默装掉，用户看到的是「启动稍慢，直接是新版本」。
+  // 装成功时安装器接管进程，不再建窗口/托盘/轮询——否则会先闪一帧旧界面
+  initUpdater()
+  if (await startPendingInstall())
+    return
+
   // 异步加密器在 ready 之后才初始化：先载入凭证，再开窗口与轮询，避免首个请求被判未登录
   await ensureAuthLoaded()
 
@@ -279,8 +289,11 @@ app.whenReady().then(async () => {
   // 房间未读检测：主进程 60s 低频轮询（页面没开 / 窗口最小化时未读照样积累）
   startPocketUnread()
 
-  // 自动更新：mac 未签名不启用、dev 环境跳过（判据见 updater.ts 的 resolveUpdaterSupport）
-  initUpdater()
+  // 缓存兜底：20s 后查一次，只清上限管不到的部分
+  scheduleCacheAutoClean()
+
+  // 更新检查只做一次（3s + 抖动），没有周期轮询：应用更新频率低，不值得持续联网
+  scheduleStartupCheck()
 
   app.on('activate', () => {
     // 点击 Dock / 任务栏图标恢复应用，统一走 showMainWindow

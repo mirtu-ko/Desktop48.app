@@ -148,6 +148,26 @@ export interface RoomAlbumDownloadResult {
   failed: number
 }
 
+// ===== 存储与缓存 =====
+
+/** userData 占用明细（字节）；仅 cacheBytes 可清，口径在 main/cache-storage.ts，渲染层不自己扫目录 */
+export interface StorageUsage {
+  /** Chromium 浏览器缓存，可一键清理 */
+  cacheBytes: number
+  /** 成员库及其隔离文件，属用户数据，不清理 */
+  databaseBytes: number
+  /** FFmpeg 二进制，属一次性依赖，不清理 */
+  ffmpegBytes: number
+  /** 磁盘缓存硬上限，用于展示天花板 */
+  cacheLimitBytes: number
+}
+
+/** 清理结果；freedBytes 是磁盘实测差值，可能小于逻辑释放量（清理异步落盘） */
+export interface ClearCacheResult {
+  freedBytes: number
+  usage: StorageUsage
+}
+
 // ===== 播放 =====
 
 /** createLiveStream 返回：本地 HTTP-FLV 播放地址（对端：main/stream.ts） */
@@ -193,32 +213,63 @@ export interface FloatPlayerPayload {
 
 // ===== 应用更新 =====
 
+/** 更新流程所处的阶段；`available` 专指「只能手动获取」（macOS / 免安装版）。 */
+export type UpdaterPhase
+  = | 'idle'
+    | 'checking'
+    | 'up-to-date'
+    | 'available'
+    | 'downloading'
+    | 'ready'
+    | 'installing'
+    | 'error'
+    | 'unsupported'
+
+/** 下载进度：百分比 + 速率 + 已传/总量。 */
+export interface UpdaterProgress {
+  percent: number
+  bytesPerSecond: number
+  transferred: number
+  total: number
+}
+
+/** 检查到的新版本。 */
+export interface UpdateCandidate {
+  version: string
+  /** 更新说明原文（可能含 markdown，渲染端自行裁剪） */
+  releaseNotes: string
+  /** in-app：应用内下载并安装；manual：只能引导到下载页 */
+  delivery: 'in-app' | 'manual'
+  /** 手动下载地址：manual 态的落地页，也是 in-app 下载失败时的逃生门 */
+  url?: string
+  /** 版本号来源（排查用） */
+  source: 'mirror' | 'github'
+}
+
 /**
- * 自动更新状态（对端：main/updater.ts）。
+ * 自动更新状态（对端：main/updater/）。
  *
- * 用可辨识联合而非多个布尔字段：各状态互斥，布尔组合会产生 2^n 种非法状态，
- * 渲染端只能靠约定断言。`phase` 即判别键，可安全 switch / if 收窄。
+ * 不是可辨识联合：各阶段共享「当前版本 / 检查时间 / 候选版本 / 进度」，
+ * 拆成按 phase 分支的对象会让渲染端到处写类型守卫。`phase` 决定界面呈现。
  *
  * 定义在契约文件而非主进程模块：避免 web 类型程序经此引用拉入主进程文件
- * （与 FfmpegDownloadProgress 同理）。
+ * （与 FfmpegDownloadProgress 同理）。主进程侧的对应类型见 main/updater/types.ts，两者结构必须一致。
  */
-export type UpdaterState
-  /** 尚未检查 */
-  = | { phase: 'idle' }
-  /** 正在检查（首次检查可能持续数秒） */
-    | { phase: 'checking' }
-  /** 检查完成且当前没有可用更新 */
-    | { phase: 'up-to-date' }
-  /** 发现新版本；manualUpdate 表示只能引导到下载页手动安装（macOS） */
-    | { phase: 'available', version: string, releaseNotes: string, manualUpdate?: boolean, url?: string }
-  /** 正在下载 */
-    | { phase: 'downloading', version: string, percent: number, bytesPerSecond: number, transferred: number, total: number }
-  /** 已下载完成，等待重启安装 */
-    | { phase: 'ready', version: string }
-  /** 检查 / 下载失败（国内访问 GitHub 不稳定属常态，非致命） */
-    | { phase: 'error', message: string }
-  /** 当前环境不支持自动更新（dev 环境 / 免安装版）；url 非空时可引导手工下载 */
-    | { phase: 'unsupported', reason: string, url?: string }
+export interface UpdaterState {
+  phase: UpdaterPhase
+  /** 当前运行版本 */
+  currentVersion: string
+  /** 最近一次检查完成的时刻；null 表示本次会话还没查过 */
+  checkedAt: number | null
+  candidate: UpdateCandidate | null
+  download: UpdaterProgress | null
+  /** 已中文化的错误文案；只在 phase === 'error' 时非空 */
+  error: string | null
+  /** 不支持自动更新的原因（dev / 免安装版） */
+  unsupported: { reason: string, url?: string } | null
+  /** 主进程按「用户点过稍后」算好的提示；渲染端纯展示 */
+  notice: { version: string, kind: 'ready' | 'available' } | null
+}
 
 // ===== 口袋48账号 =====
 
@@ -546,6 +597,10 @@ interface StaticIpcInvokeMap {
   saveImageFile: InvokeSpec<[dataUrl: string, suggestedName: string], string | null>
   /** 打开一次目录选择器，随后把相册图片逐张写入所选目录（对端：main/pocket48/room-album-download.ts） */
   roomAlbumDownload: InvokeSpec<[sources: RoomAlbumDownloadSource[], filterSmall: boolean], RoomAlbumDownloadResult>
+  /** 磁盘占用明细（对端：main/cache-storage.ts） */
+  getStorageUsage: InvokeSpec<[], StorageUsage>
+  /** 清理浏览器缓存；不动 localStorage / IndexedDB / Cookies 与登录凭证 */
+  clearCache: InvokeSpec<[], ClearCacheResult>
   /** FFmpeg 环境状态：省略 dir 时校验当前生效配置，传入时校验指定目录（选择/下载后的即时校验） */
   getFfmpegStatus: InvokeSpec<[dir?: string], FfmpegStatus>
   downloadFfmpeg: InvokeSpec<[], string>
@@ -573,14 +628,16 @@ interface StaticIpcInvokeMap {
   allowSleep: InvokeSpec<[id: number], void>
   /** 当前应用版本号（如 "0.1.9"），设置页展示用 */
   getAppVersion: InvokeSpec<[], string>
-  /** 取当前更新状态（渲染端挂载时回取一次快照；后续变化走 updaterState 事件） */
+  /** 取当前更新状态（渲染端首次使用时回取一次快照；后续变化走 updaterState 事件） */
   updaterGetState: InvokeSpec<[], UpdaterState>
   /** 手动检查更新；返回检查后的状态（失败已折进状态，调用方无需 try/catch） */
   updaterCheck: InvokeSpec<[], UpdaterState>
-  /** 用户确认后开始下载新版本 */
-  updaterDownload: InvokeSpec<[], void>
+  /** 重新下载（自动下载失败后的「重试」）；返回开始下载时的状态 */
+  updaterDownload: InvokeSpec<[], UpdaterState>
   /** 退出并安装已下载的更新 */
   updaterInstall: InvokeSpec<[], void>
+  /** 「稍后」：同一版本不再提示；返回清掉提示后的状态 */
+  updaterDismiss: InvokeSpec<[], UpdaterState>
 
   // ===== 口袋48账号 =====
   // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts
@@ -744,7 +801,7 @@ export type IpcEventMap = {
   /** 登录凭证已因 token 失效被清除（对端：pocket-auth.ts），各窗镜像据此复位 */
   pocketAuthExpired: []
   /**
-   * 更新状态变化（对端：main/updater.ts）。
+   * 更新状态变化（对端：main/updater/engine.ts）。
    * 状态归主进程所有、每个窗口各存镜像，因此广播给全部窗口（见 main/ipc/send.ts 的 broadcastIpc）。
    */
   updaterState: [state: UpdaterState]

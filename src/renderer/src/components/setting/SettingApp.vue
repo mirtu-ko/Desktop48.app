@@ -1,144 +1,101 @@
 <script setup lang="ts">
-import type { useUpdater } from '@renderer/composables/use-updater'
+import type { useUpdater } from '@renderer/stores/use-updater'
 
 import { FEEDBACK_CONTACT_MAX, FEEDBACK_CONTENT_MAX } from '@common/feedback'
-import { ChatDotRound, Connection, Download, Refresh, Top } from '@element-plus/icons-vue'
+import { ChatDotRound, Coin, Connection, Download, Refresh, Top } from '@element-plus/icons-vue'
+import { useCacheCleanup } from '@renderer/composables/use-cache-cleanup'
+import { trackEvent } from '@renderer/utils/umami'
 import { previewReleaseNotes } from '@renderer/utils/update-notes'
+import { DOWNLOAD_PAGE_URL, formatBytes, downloadSizeText as formatDownloadProgress } from '@renderer/utils/updater-view'
 import { ElMessage } from 'element-plus'
-import { computed, ref } from 'vue'
+import { computed, onActivated, onMounted, ref } from 'vue'
 
 /**
- * 应用组：版本 / 自动更新、网络诊断、问题反馈。
- *
- * 自动更新状态来自 use-updater（主进程持真相），本组件只把状态映射成文案与按钮；
- * 诊断结果与反馈表单只在本组内使用，状态留在这里，生命周期与设置页一致（页面被 KeepAlive 缓存）。
- * 两个弹窗外壳用 el-dialog + append-to-body，搬家不改变浮层层级。
- *
- * 与其它分组一致：composable 结果解构到 setup 顶层，模板里直接用 ref 名（自动解包）。
+ * 应用组：版本 / 自动更新、网络诊断、问题反馈、缓存占用。
+ * 更新状态由主进程持有（stores/use-updater），本组件只把状态映射成文案与按钮；
+ * 诊断与反馈的状态只在本组内用，生命周期跟设置页（KeepAlive）一致。
  */
 const props = defineProps<{ updater: ReturnType<typeof useUpdater> }>()
 
-// composable 返回值是普通对象，内部 ref 在模板里不会自动解包，因此解构到 setup 顶层
-const { state, checking, version, check, download, install } = props.updater
+// composable 返回值是普通对象，内部 ref 不会自动解包，所以解构到 setup 顶层
+// description / action 由 utils/updater-view.ts 从状态推导
+const { state, checking, version, check, retryDownload, install, description, action } = props.updater
 
 // ===== 版本行 =====
 
-/** 更新行的描述文案：一行说清当前处于什么状态、下一步该做什么 */
-const updaterDesc = computed(() => {
-  const s = state.value
-  switch (s.phase) {
-    case 'checking':
-      return '正在检查更新，请稍候…'
-    case 'up-to-date':
-      return '当前已是最新版本，无需更新'
-    case 'available':
-      return `发现新版本 v${s.version}`
-    case 'downloading':
-      return `正在下载新版本 v${s.version}…`
-    case 'ready':
-      return `新版本 v${s.version} 已下载完成，重启后生效`
-    case 'error':
-      return `检查更新失败：${s.message}`
-    case 'unsupported':
-      return s.reason
-    default:
-      return '检查是否有可用的新版本'
-  }
-})
+/** available / ready 态切强调样式，与其余状态的中性文案区分 */
+const updaterDescClass = computed(() =>
+  state.value.phase === 'available' || state.value.phase === 'ready' ? 'is-update' : '',
+)
 
-/** available 态的描述切强调样式，与其余状态的中性文案区分 */
-const updaterDescClass = computed(() => state.value.phase === 'available' ? 'is-update' : '')
-
-/** 新版本信息：仅 available 态非空 */
+/** 候选版本：仅 available（需手动获取）时非空 */
 const availableUpdate = computed(() =>
-  state.value.phase === 'available' ? state.value : null,
+  state.value.phase === 'available' ? state.value.candidate : null,
 )
-/** 下载中信息：仅 downloading 态非空，提示块内的进度展示取自此状态 */
+/** 下载进度：仅 downloading 态非空，提示块内的进度展示取自此状态 */
 const downloadingUpdate = computed(() =>
-  state.value.phase === 'downloading' ? state.value : null,
+  state.value.phase === 'downloading' ? state.value.download : null,
 )
-
-/** 提示块标题：available / downloading 各一句；版本号在脚本侧拼接，模板不做类型收窄 */
-const availableTitle = computed(() =>
-  availableUpdate.value ? `发现新版本 v${availableUpdate.value.version}` : '')
-const downloadingTitle = computed(() =>
-  downloadingUpdate.value ? `正在下载新版本 v${downloadingUpdate.value.version}` : '')
+/** 已下载待安装：ready 态把更新内容摊开，Windows 用户也看得到日志 */
+const readyUpdate = computed(() =>
+  state.value.phase === 'ready' ? state.value.candidate : null,
+)
 
 /** 版本对比行：已知当前版本时给出「当前 vX → 最新 vY」，否则只报最新版本 */
 const updateVersionLine = computed(() => {
   const next = availableUpdate.value
   if (!next)
     return ''
-  return version.value
-    ? `当前 v${version.value} → 最新 v${next.version}`
+  return state.value.currentVersion
+    ? `当前 v${state.value.currentVersion} → 最新 v${next.version}`
     : `最新版本 v${next.version}`
 })
 
-/** 更新说明预览：剥掉 markdown 标记后按纯文本行展示，并过滤 Full Changelog 汇总行；最多 4 行 */
+/** 更新说明预览：剥掉 markdown 后按行展示，最多 4 行 */
 const releaseNotesPreview = computed(() =>
-  previewReleaseNotes(availableUpdate.value?.releaseNotes ?? ''),
+  previewReleaseNotes((availableUpdate.value ?? readyUpdate.value)?.releaseNotes ?? ''),
 )
 
-/** 字节数格式化：下载进度的已传 / 总量与速率 */
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0)
-    return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  const exp = Math.min(units.length - 1, Math.floor(Math.log2(bytes) / 10))
-  const value = bytes / 1024 ** exp
-  return `${exp === 0 || value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[exp]}`
-}
+/** 下载进度文字：已传 / 总量 · 速率 */
+const downloadSizeText = computed(() => formatDownloadProgress(downloadingUpdate.value))
 
-/** 下载进度文字：总量已知时给出「已传 / 总量 · 速率」，否则只报已传与速率 */
-const downloadSizeText = computed(() => {
-  const d = downloadingUpdate.value
-  if (!d)
-    return ''
-  const speed = `${formatBytes(d.bytesPerSecond)}/s`
-  return d.total > 0
-    ? `${formatBytes(d.transferred)} / ${formatBytes(d.total)} · ${speed}`
-    : `${formatBytes(d.transferred)} · ${speed}`
-})
+/** ready 态只在真有说明时才开提示块：没说明时描述行 + 「立即重启」已经够了 */
+const readyNotes = computed(() =>
+  readyUpdate.value !== null && releaseNotesPreview.value.lines.length > 0,
+)
 
-/** available 态是否只能跳转手动下载（macOS 当前走该链路） */
-const manualUpdateNotice = computed(() => availableUpdate.value?.manualUpdate ?? false)
+/** 下载进度百分比（提示块内进度条与文字共用） */
+const updaterPercent = computed(() => Math.min(100, downloadingUpdate.value?.percent ?? 0))
 
-/** 下载进度百分比（提示块内的进度条与百分比文字共用） */
-const updaterPercent = computed(() =>
-  state.value.phase === 'downloading'
-    ? Math.min(100, state.value.percent)
-    : 0,
+/** 「重新检查」只在已经查过一次的阶段出现 */
+const canRecheck = computed(() =>
+  ['up-to-date', 'available', 'ready', 'error'].includes(state.value.phase),
 )
 
 /**
- * 打开手工下载页。
- *
- * 经 `window.open` 触发主进程的 `setWindowOpenHandler`，转交系统浏览器
- * （与 use-album-player.ts 同一路径；主进程只放行 http/https）。
+ * 打开下载页：经 window.open 走主进程 setWindowOpenHandler，转交系统浏览器。
  */
 function openReleasePage(url: string) {
   window.open(url, '_blank', 'noopener')
 }
 
-/** 手动下载兜底地址：官方下载页。正常情况下主进程会在 available 态带上镜像安装包直链 */
-const MANUAL_RELEASE_PAGE_URL = 'https://48.v2ing.com/'
-
-/** 主操作按钮：状态决定文案与语义；自动更新 available 态是「更新版本」，macOS 是「去下载」 */
-const updaterAction = computed<{ label: string, disabled: boolean, loading: boolean, handler: () => void }>(() => {
-  const s = state.value
-  if (s.phase === 'downloading')
-    return { label: '下载中', disabled: true, loading: true, handler: () => {} }
-  if (s.phase === 'ready')
-    return { label: '立即重启', disabled: false, loading: false, handler: install }
-  if (s.phase === 'available' && s.manualUpdate)
-    return { label: '去下载', disabled: false, loading: false, handler: () => openReleasePage(availableUpdate.value?.url ?? MANUAL_RELEASE_PAGE_URL) }
-  if (s.phase === 'available')
-    return { label: '更新版本', disabled: false, loading: false, handler: download }
-  // 免安装版等不支持自动更新的环境给出手工出路，别让用户对着禁用按钮无计可施
-  if (s.phase === 'unsupported' && s.url)
-    return { label: '去下载', disabled: false, loading: false, handler: () => openReleasePage(s.url!) }
-  return { label: '检查更新', disabled: checking.value || s.phase === 'unsupported', loading: checking.value, handler: check }
-})
+/** 主按钮动作：语义由 updater-view 决定，这里只做分发 */
+function runAction() {
+  switch (action.value.kind) {
+    case 'install':
+      install()
+      return
+    case 'download':
+      void retryDownload()
+      return
+    case 'open-page':
+      trackEvent('update:open_page', { at: 'setting', version: state.value.candidate?.version ?? '' })
+      openReleasePage(action.value.url ?? DOWNLOAD_PAGE_URL)
+      return
+    case 'check':
+      void check()
+  }
+}
 
 // ===== 网络诊断 =====
 // 对核心服务域名逐一探测连通性（主进程对端 main/net/net-diagnose.ts）。
@@ -230,10 +187,7 @@ const feedbackRemaining = computed(() => FEEDBACK_CONTENT_MAX - feedbackContent.
 const FEEDBACK_REPLY_URL = 'https://48.v2ing.com/feedback'
 
 /**
- * 打开回复页。
- *
- * 经 `window.open` 触发主进程的 `setWindowOpenHandler`，转交系统浏览器
- * （与 openReleasePage 同一路径；主进程只放行 http/https）。
+ * 打开回复页：同走 window.open → setWindowOpenHandler。
  */
 function openFeedbackReplies() {
   window.open(FEEDBACK_REPLY_URL, '_blank', 'noopener')
@@ -275,6 +229,36 @@ async function handleSubmitFeedback() {
 
 /** 页面挂载时由父页调用：反馈入口的可用性依赖主进程的环境摘要 */
 defineExpose({ loadFeedbackMeta })
+
+// ===== 缓存占用 =====
+
+/** 缓存占用：onActivated 时刷新，避免切回来还显示旧数字 */
+const { loading: cacheLoading, clearing: cacheClearing, cacheText, limitText, otherText, refresh: refreshCache, clear: clearCacheStore } = useCacheCleanup()
+
+onActivated(() => {
+  void refreshCache()
+})
+
+// 不在 keep-alive 时 onActivated 不触发，靠 onMounted 兜底；refresh 有并发守卫，不会重复发 IPC
+onMounted(() => {
+  void refreshCache()
+})
+
+/** 清理缓存：只清 Chromium 缓存，不动用户设置与登录态 */
+async function clearCache() {
+  const result = await clearCacheStore()
+  if (!result) {
+    trackEvent('cache:clear', { result: 'fail' })
+    ElMessage.error('清理缓存失败，请稍后重试')
+    return
+  }
+  // 上报可读档位而非原始字节，便于看出释放量级
+  trackEvent('cache:clear', { result: 'ok', freed: formatBytes(result.freedBytes) })
+  ElMessage({
+    message: result.freedBytes > 0 ? `已清理 ${formatBytes(result.freedBytes)}` : '缓存已清理',
+    type: 'success',
+  })
+}
 </script>
 
 <template>
@@ -296,12 +280,12 @@ defineExpose({ loadFeedbackMeta })
           <span v-if="availableUpdate" class="row-update-badge">有新版本</span>
         </div>
         <div class="row-desc" :class="updaterDescClass">
-          {{ updaterDesc }}
+          {{ description }}
         </div>
       </div>
       <div class="row-actions">
         <el-button
-          v-if="state.phase === 'available' || state.phase === 'ready'"
+          v-if="canRecheck"
           :disabled="checking"
           @click="check"
         >
@@ -309,22 +293,22 @@ defineExpose({ loadFeedbackMeta })
         </el-button>
         <el-button
           type="primary"
-          :disabled="updaterAction.disabled"
-          :loading="updaterAction.loading"
-          @click="updaterAction.handler"
+          :disabled="action.disabled"
+          :loading="action.loading"
+          @click="runAction"
         >
-          {{ updaterAction.label }}
+          {{ action.label }}
         </el-button>
       </div>
     </div>
 
-    <div v-if="availableUpdate || downloadingUpdate" class="row-body update-notice">
+    <div v-if="availableUpdate || downloadingUpdate || readyNotes" class="row-body update-notice">
       <template v-if="availableUpdate">
         <div class="update-notice-head">
           <el-icon class="update-notice-icon">
             <Top />
           </el-icon>
-          <span class="update-notice-title">{{ availableTitle }}</span>
+          <span class="update-notice-title">发现新版本 v{{ availableUpdate.version }}</span>
           <span class="update-notice-versions">{{ updateVersionLine }}</span>
         </div>
         <ul v-if="releaseNotesPreview.lines.length" class="update-notes">
@@ -339,9 +323,7 @@ defineExpose({ loadFeedbackMeta })
           更多更新内容详见官网
         </p>
         <p class="update-notice-hint">
-          {{ manualUpdateNotice
-            ? 'macOS 暂不支持应用内更新，请点击「去下载」打开下载页，下载后手动安装。'
-            : '点击「更新版本」开始下载，下载完成后重启应用即可完成升级。' }}
+          暂不支持应用内更新，请点击「去下载」打开下载页，下载后手动安装。
         </p>
       </template>
       <template v-else-if="downloadingUpdate">
@@ -349,7 +331,7 @@ defineExpose({ loadFeedbackMeta })
           <el-icon class="update-notice-icon">
             <Download />
           </el-icon>
-          <span class="update-notice-title">{{ downloadingTitle }}</span>
+          <span class="update-notice-title">正在下载新版本</span>
           <span class="update-notice-versions">{{ updaterPercent.toFixed(0) }}%</span>
         </div>
         <el-progress
@@ -360,6 +342,29 @@ defineExpose({ loadFeedbackMeta })
         />
         <p class="update-notice-hint">
           {{ downloadSizeText }}，下载完成后需重启应用以完成更新。
+        </p>
+      </template>
+      <template v-else-if="readyNotes">
+        <div class="update-notice-head">
+          <el-icon class="update-notice-icon">
+            <Top />
+          </el-icon>
+          <span class="update-notice-title">本次更新内容</span>
+          <span class="update-notice-versions">v{{ readyUpdate?.version }}</span>
+        </div>
+        <ul v-if="releaseNotesPreview.lines.length" class="update-notes">
+          <li
+            v-for="(line, index) in releaseNotesPreview.lines"
+            :key="index"
+          >
+            {{ line }}
+          </li>
+        </ul>
+        <p v-if="releaseNotesPreview.truncated" class="update-notes-more">
+          更多更新内容详见官网
+        </p>
+        <p class="update-notice-hint">
+          点「立即重启」完成安装，重启后即生效。
         </p>
       </template>
     </div>
@@ -413,7 +418,7 @@ defineExpose({ loadFeedbackMeta })
           问题反馈
         </div>
         <div class="row-desc">
-          描述使用中遇到的问题，提交时会附带版本与运行环境；不收集账号凭据、手机号与聊天内容
+          戳一下开发者 / 描述使用中遇到的问题 / 👍
         </div>
       </div>
       <div class="row-actions">
@@ -424,6 +429,51 @@ defineExpose({ loadFeedbackMeta })
           反馈一下
         </el-button>
       </div>
+    </div>
+  </section>
+
+  <section class="setting-card glass-card">
+    <div class="setting-row">
+      <span
+        class="row-icon icon-tile"
+        :style="{ '--tile-color': 'var(--color-downloads)' }"
+      >
+        <el-icon><Coin /></el-icon>
+      </span>
+      <div class="row-text">
+        <div class="row-title">
+          缓存占用
+        </div>
+        <div class="row-desc">
+          图片与网页缓存
+        </div>
+      </div>
+      <div class="cache-size">
+        <span class="cache-size-value">{{ cacheText }}</span>
+        <span
+          v-if="limitText"
+          class="cache-size-limit"
+        >{{ limitText }}</span>
+      </div>
+      <div class="row-actions">
+        <el-button
+          type="primary"
+          :loading="cacheClearing"
+          :disabled="cacheLoading || cacheClearing"
+          @click="clearCache"
+        >
+          清理缓存
+        </el-button>
+      </div>
+    </div>
+
+    <div
+      v-if="otherText"
+      class="row-body"
+    >
+      <p class="cache-note">
+        {{ otherText }}
+      </p>
     </div>
   </section>
 
@@ -797,5 +847,40 @@ defineExpose({ loadFeedbackMeta })
 
 .update-progress {
   margin-top: 10px;
+}
+
+/* 数字右对齐、等宽，便于比对大小；字重低于标题，避免抢走注意力 */
+.cache-size {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.cache-size .cache-size-value {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  color: var(--el-text-color-primary);
+}
+
+.cache-size .cache-size-limit {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+/* 右侧已有数字，按钮行不再需要 auto 外边距把它推到边上 */
+.setting-row .cache-size + .row-actions {
+  margin-left: 14px;
+}
+
+.cache-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-text-color-secondary);
 }
 </style>

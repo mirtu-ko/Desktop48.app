@@ -1,7 +1,7 @@
 import type { FeedbackInput } from '@common/feedback'
 import type { NetRequestOptions, NetResponse } from '@preload/ipc-contract'
 /**
- * 系统服务类 IPC 通道注册：路径/对话框/网络请求/ffmpeg 二进制检查。
+ * 系统服务类 IPC 通道注册：路径/对话框/网络请求/ffmpeg 二进制检查/存储占用与缓存清理。
  *
  * 这些通道的共同点是「无领域状态」——每次调用独立完成，不依赖模块级可变状态，
  * 因此可以直接内联实现而不必拆出业务模块。有状态的领域（数据库/直播流/任务）
@@ -15,6 +15,7 @@ import path from 'node:path'
 import { SITE_USER_AGENT } from '@common/android-device'
 import { app, clipboard, ClipboardItem, dialog, net, shell } from 'electron'
 import { isPathInAllowedRoots } from '../allowed-path'
+import { clearBrowserCache, getStorageUsage } from '../cache-storage'
 import { ConfigStore } from '../config-store'
 import { collectFeedbackMeta, isFeedbackEndpointReady, submitFeedback } from '../feedback'
 import { inspectFfmpegDir, resolveFfmpegEnvironment } from '../ffmpeg/ffmpeg-process'
@@ -307,6 +308,10 @@ export function registerSystemIPC(): void {
     dir
       ? inspectFfmpegDir(dir)
       : resolveFfmpegEnvironment(ConfigStore.instance().getConfig('ffmpegDirectory')))
+
+  // 存储占用与缓存清理：口径见 cache-storage.ts，只碰缓存目录
+  handleTraced('getStorageUsage', () => getStorageUsage())
+  handleTraced('clearCache', () => clearBrowserCache())
 
   // 网络诊断：对核心服务域名逐一轻量探测（设置页「网络诊断」），目标清单在 net-diagnose.ts
   handleTraced('netDiagnose', async () => diagnoseTargets())
