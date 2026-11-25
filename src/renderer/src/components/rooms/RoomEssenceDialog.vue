@@ -16,6 +16,8 @@ const props = defineProps<{
   loading: boolean
   /** 翻页到底：true 时底部按钮换成「没有更多了」 */
   exhausted: boolean
+  /** 房主名：仅透传给 PreviewImage 做埋点，不参与展示 */
+  roomName?: string
 }>()
 
 const emit = defineEmits<{
@@ -111,6 +113,7 @@ const essenceImageMetas = computed(() =>
                 :preview-list="essenceImageUrls"
                 :initial-index="essenceImageUrls.indexOf(item.imageUrl)"
                 :name-metas="essenceImageMetas"
+                :owner-name="roomName ?? ''"
                 :max-width="300"
                 :max-height="260"
               />

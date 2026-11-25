@@ -1,4 +1,5 @@
 import type { Router } from 'vue-router'
+import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { describeFfmpegProblem } from './use-ffmpeg-setup'
 import { useSettingsNav } from './use-settings-nav'
@@ -45,6 +46,8 @@ export function useLiveGuard(router?: Router) {
       if (status.ok)
         return true
 
+      // 被环境拦下的开播请求单独计数
+      trackEvent('live:blocked', { reason: status.problem ?? 'unset' })
       const { title, action } = describeFfmpegProblem(status.problem, status.directory)
       ElMessage({
         // 未配置时补一句说明；其余两类 title 已说明问题本身，不必再重复
@@ -59,6 +62,7 @@ export function useLiveGuard(router?: Router) {
     }
     catch (error) {
       console.error('[useLiveGuard] 检查 FFmpeg 环境失败:', error)
+      trackEvent('live:blocked', { reason: 'check-error' })
       ElMessage({ message: '检查播放环境失败，请稍后重试', type: 'error' })
       return false
     }

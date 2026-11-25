@@ -1,6 +1,5 @@
 import type { Ref } from 'vue'
 import { nextRetryAttempt } from '@renderer/utils/live-stream'
-import { trackEvent } from '@renderer/utils/umami'
 import { ref } from 'vue'
 
 /**
@@ -65,8 +64,7 @@ export function useStreamRetry(options: {
     if (next === null) {
       options.mediaLoading.value = false
       isRecoveringStream.value = false
-      // 重试预算耗尽：是否下播由调用方查状态判定，这里只记恢复失败
-      trackEvent('live:fail')
+      // 重试耗尽不上报：归并由调用方的终态事件统一记，避免一次会话两条
       options.onExhausted()
       return
     }

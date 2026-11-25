@@ -36,11 +36,18 @@ const props = withDefaults(defineProps<{
   nameMetas?: Array<ImageNameMeta | undefined>
   /** 来源，仅用于埋点区分入口；缺省按消息流计 */
   from?: 'room' | 'essence' | 'date' | 'album'
+  /**
+   * 房主名，仅用于埋点（不参与渲染、不是 tooltip）：image:view 只带 from 时看不出
+   * 「谁家的图被点开」，而这正是相册/图片功能唯一关心的业务维度。
+   * 由调用方传入（房主名来自 selectedRoom.nickname），空串会被 trackEvent 剔掉。
+   */
+  ownerName?: string
 }>(), {
   maxWidth: 240,
   maxHeight: 280,
   lazy: false,
   from: 'room',
+  ownerName: '',
 })
 
 const emit = defineEmits<{ load: [], error: [] }>()
@@ -84,7 +91,7 @@ const boxStyle = computed<CSSProperties>(() => {
     referrerpolicy="no-referrer"
     @load="emit('load')"
     @error="emit('error')"
-    @click="trackEvent('image:view', { from })"
+    @click="trackEvent('image:view', { from, starName: ownerName })"
   >
     <!-- 预览工具条：整排自绘后追加下载一项 -->
     <template #toolbar="{ actions, reset, activeIndex }">

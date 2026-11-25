@@ -75,7 +75,7 @@ function openMemberDetail(member: MemberDetail | null) {
   if (!member)
     return
   selectedMember.value = member
-  trackEvent('member:detail_open', { from: 'members' })
+  trackEvent('member:detail_open', { starName: member.realName || member.nickname, from: 'members' })
 }
 
 /** 屏蔽名单：模块级共享状态，机制见 stores/member-flags.ts */
@@ -504,8 +504,8 @@ useEventListener(window, 'keydown', onKeydown)
       @close="selectedMember = null"
       @prev="stepMember(-1)"
       @next="stepMember(1)"
-      @toggle-block="m => toggleBlockMember(m, 'detail')"
-      @toggle-follow="m => toggleFollowMember(m, 'detail')"
+      @toggle-block="m => toggleBlockMember(m, 'detail', 'members')"
+      @toggle-follow="m => toggleFollowMember(m, 'detail', 'members')"
     />
   </div>
 </template>

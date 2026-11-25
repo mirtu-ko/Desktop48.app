@@ -3,8 +3,11 @@
 // 页面以 file:// 加载，自动采集会把本机安装路径当作 URL 上报，故统一由这里清洗后发送。
 // 计费口径：pageview、自定义事件、每条事件属性各算 1 条配额。
 // 因此不带数字 ID（撑爆维度）与恒定属性，高频事件只带低基数枚举 / 分桶。
-// 例外：低频排障事件 player:error / live:stall 带 title（前者另带 liveId）才能定位场次；
-// rooms:enter 每日按房间去重，保留 starName 作为唯一业务维度。
+// 带名称（starName：房主名 / 成员名）的事件只此几类：player:error 与 live:stall 是低频排障；
+// danmaku:send 是「谁家弹幕有人发」的唯一业务维度（只出现在个人直播，公演没有可写通道）；
+// member:detail_open 用来看「谁被点开」；image:view 用来看「谁家的图被看」——
+// 名称即业务维度，故与 rooms:enter 的 starName 同口径。
+// rooms:enter 每日按房间去重，保留 starName 与 from（左列点击 / 深链）作为业务维度。
 import { debugLog } from '@renderer/utils/debug'
 
 interface UmamiTrackProps {

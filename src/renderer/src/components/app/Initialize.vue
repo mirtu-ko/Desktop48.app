@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { describeFfmpegProblem, useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
+import { trackEvent } from '@renderer/utils/umami'
 import { computed, onMounted, ref } from 'vue'
 
 const emit = defineEmits(['initialized'])
@@ -69,6 +70,19 @@ const initHint = computed(() => {
   return copy.value.hint
 })
 
+/** 首启门禁判定（低基数枚举，不含路径） */
+type GateState = 'ok' | 'unset' | 'missing-dir' | 'missing-binary' | 'error'
+
+/** 首启门禁埋点：每次启动一条 */
+function trackGate(state: GateState) {
+  trackEvent('ffmpeg:check', { state })
+}
+
+/** 修复动作埋点：动作与结果分开 */
+function trackFix(action: 'download' | 'choose' | 'skip', result: 'ok' | 'fail' | 'invalid' | 'canceled') {
+  trackEvent('ffmpeg:fix', { action, result, at: 'init' })
+}
+
 onMounted(() => {
   void init()
 })
@@ -88,6 +102,7 @@ async function init() {
     fatalText.value = 'Electron API 未注入，无法获取平台信息'
     fatalHint.value = '请重启应用；如果仍然出现，说明安装包可能已损坏'
     phase.value = 'error'
+    trackGate('error')
     console.error('window.mainAPI 未定义或 getFfmpegStatus 方法不存在')
     return
   }
@@ -97,31 +112,37 @@ async function init() {
     fatalText.value = '初始化失败，请重启应用重试'
     fatalHint.value = 'FFmpeg 环境检查中断。重启应用通常可以恢复，也可以直接重新下载或选择 FFmpeg 目录。'
     phase.value = 'error'
+    trackGate('error')
     return
   }
   if (status.ok) {
     phase.value = 'ready'
+    trackGate('ok')
     emit('initialized')
     return
   }
   // 未配置 / 已失效：停在修复页，下载与选择两个入口都给出
   phase.value = 'blocked'
+  trackGate(status.problem ?? 'unset')
 }
 
 /** 一键下载：主进程按当前系统拉取 ffmpeg 二进制并解压到应用数据目录（userData/ffmpeg） */
 async function onDownload() {
   actionError.value = ''
   if (await downloadFfmpeg()) {
+    trackFix('download', 'ok')
     phase.value = 'ready'
     emit('initialized')
     return
   }
+  trackFix('download', 'fail')
   actionError.value = '下载失败：请检查网络后重试，或手动选择本机已有的 FFmpeg 目录。'
 }
 
 async function onChooseDir() {
   actionError.value = ''
   const result = await chooseFfmpegDir()
+  trackFix('choose', result.outcome === 'failed' ? 'fail' : result.outcome)
   if (result.outcome === 'ok') {
     phase.value = 'ready'
     emit('initialized')
@@ -137,6 +158,7 @@ async function onChooseDir() {
 
 /** 环境待修复时的临时放行：功能入口仍有各自的校验与提示兜底（见 use-download-guard.ts） */
 function skipSetup() {
+  trackFix('skip', 'ok')
   emit('initialized')
 }
 </script>

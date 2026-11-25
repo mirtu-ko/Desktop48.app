@@ -4,6 +4,7 @@ import type { useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { Cpu, Folder, Position } from '@element-plus/icons-vue'
 import { describeFfmpegProblem } from '@renderer/composables/use-ffmpeg-setup'
 import { floatTopmost, setFloatTopmost } from '@renderer/stores/float-topmost'
+import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { computed } from 'vue'
 
@@ -51,18 +52,30 @@ const ffmpegStateClass = computed(() => {
   return status.value.ok ? 'is-ready' : 'is-broken'
 })
 
+/**
+ * FFmpeg 修复动作埋点：与启动门禁共用 ffmpeg:fix，用 at 区分发生在哪一侧
+ * （首启被拦 vs 用户主动来设置页修），两条链路的成功率要能分开算。
+ */
+function trackFfmpegFix(action: 'download' | 'choose', result: 'ok' | 'fail' | 'invalid' | 'canceled') {
+  trackEvent('ffmpeg:fix', { action, result, at: 'setting' })
+}
+
 /** 一键下载 FFmpeg：成功即已写入配置，无需再点保存 */
 async function downloadFfmpeg() {
   if (await download()) {
+    trackFfmpegFix('download', 'ok')
     ElMessage({ message: 'FFmpeg 已就绪', type: 'success' })
     return
   }
+  trackFfmpegFix('download', 'fail')
   ElMessage.error('下载 FFmpeg 失败：请检查网络后重试，或手动选择已有目录')
 }
 
 /** 手动选择目录：校验通过才落盘，校验失败说明错在哪（目录不存在 / 目录内缺 ffmpeg） */
 async function chooseFfmpegDir() {
   const result = await choose()
+  // failed = 流程本身出错；invalid = 选中的目录不可用；canceled = 用户取消选择器
+  trackFfmpegFix('choose', result.outcome === 'failed' ? 'fail' : result.outcome)
   if (result.outcome === 'ok') {
     ElMessage({ message: '设置成功', type: 'success' })
     return
@@ -76,9 +89,17 @@ async function chooseFfmpegDir() {
 }
 
 /** 单选组的事件是宽联合类型，这里收窄成三个合法取值再落盘，其余值忽略 */
-function onPickFloatTopmost(value: string | number | boolean | undefined) {
-  if (value === 'always' || value === 'playing' || value === 'never')
-    void setFloatTopmost(value)
+async function onPickFloatTopmost(value: string | number | boolean | undefined) {
+  if (value !== 'always' && value !== 'playing' && value !== 'never')
+    return
+  await setFloatTopmost(value)
+  // 值本身是低基数枚举（always / playing / never），直接带上比只记「改过」有用得多；
+  // 写盘失败时 store 会回滚到旧值，故以最终生效值判定成败
+  trackEvent('setting:change', {
+    key: 'floatTopmost',
+    value,
+    result: floatTopmost.value === value ? 'ok' : 'fail',
+  })
 }
 </script>
 

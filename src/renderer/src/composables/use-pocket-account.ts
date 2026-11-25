@@ -306,9 +306,12 @@ export function usePocketAccount(onLoginSuccess?: () => void) {
     }
     try {
       await logoutPocket()
+      // 登录有 pocket:login，登出同样要有：否则账号留存 / 主动登出率永远算不出来
+      trackEvent('pocket:logout', { result: 'ok' })
       ElMessage.success('已退出登录')
     }
     catch (error) {
+      trackEvent('pocket:logout', { result: 'fail' })
       debugLog('pocket-auth', '退出登录失败：', error)
       ElMessage.error(pocketAuthErrorMessage(error))
     }

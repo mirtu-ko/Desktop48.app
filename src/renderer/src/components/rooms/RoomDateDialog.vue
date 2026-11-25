@@ -345,6 +345,7 @@ watch(
                 :preview-list="imageUrls"
                 :initial-index="imageUrls.indexOf(item.imageUrl)"
                 :name-metas="imageMetas"
+                :owner-name="roomName"
                 :max-width="260"
                 :max-height="220"
               />

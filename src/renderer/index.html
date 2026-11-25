@@ -29,9 +29,9 @@
         base-uri 'self';
         form-action 'none'"
     />
-    <!-- 关闭自动采集（data-auto-track），改由 utils/umami.ts 的 trackPage 上报清洗后的 hash 路由 -->
+    <!-- 关闭自动采集，由 utils/umami.ts 自行上报；必须 async，否则域名超时会卡住 main.ts -->
     <script
-      defer
+      async
       src="https://log.v2ing.com/script.js"
       data-website-id="fb9582f4-983a-46ef-87a8-8e7393766bb5"
       data-auto-track="false"

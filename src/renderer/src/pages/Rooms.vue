@@ -116,6 +116,19 @@ function openDateDialog() {
   trackEvent('room:date_open')
 }
 
+/** 进房上报：from 区分左列点击与深链，每日每房间去重 */
+function trackRoomEnter(userId: number, from: 'list' | 'query') {
+  const starName = rooms.value.find(room => room.userId === userId)?.nickname || ''
+  if (shouldTrackRoomEnter(userId, starName))
+    trackEvent('rooms:enter', { starName, from })
+}
+
+/** 房间页关注上报：target 区分口袋账号关注与本机关注 */
+function trackRoomFollow(action: 'follow' | 'unfollow', target: 'pocket' | 'local', failed = false) {
+  const starName = selectedRoom.value?.nickname || ''
+  trackEvent('member:follow', { action, from: 'room', target, starName, ...(failed ? { result: 'fail' } : {}) })
+}
+
 const { findMemberByUserId } = useMemberDirectoryStore()
 /** 本地关注名单：资料卡「本地关注」开关的写入口（见 toggleLocalFollow） */
 const { followMember, unfollowMember } = useFollowedMembersStore()
@@ -124,6 +137,14 @@ const { followMember, unfollowMember } = useFollowedMembersStore()
 const { displayTeamOf } = useMemberTeamPromotionStore()
 /** 置顶名单（本地展示偏好，见 stores/room-pins）：顺序由 composable 的 sortRooms 统一决定，这里只读标记与切换 */
 const { isRoomPinned, toggleRoomPin } = useRoomPinsStore()
+
+/** 置顶上报：from 区分右键菜单与头部按钮，action 取点击前状态 */
+function onToggleRoomPin(userId: number, from: 'menu' | 'header') {
+  const action = isRoomPinned(userId) ? 'unpin' : 'pin'
+  toggleRoomPin(userId)
+  const starName = rooms.value.find(room => room.userId === userId)?.nickname || ''
+  trackEvent('room:pin', { action, from, starName })
+}
 const displayRooms = computed(() => rooms.value.map(room => ({
   ...room,
   pinned: isRoomPinned(room.userId),
@@ -265,6 +286,7 @@ async function togglePocketFollow() {
       notePocketFollow(room.userId, true)
       const localOk = await followMember({ userId: room.userId, realName: room.nickname, teamColor: room.teamColor })
       applyRoomFollowSource(room.userId, localOk ? 'both' : 'pocket')
+      trackRoomFollow('follow', 'pocket')
       ElMessage({
         message: localOk ? '已关注（口袋账号 + 本机）' : '已关注口袋账号，本机记录同步失败',
         type: localOk ? 'success' : 'warning',
@@ -274,12 +296,14 @@ async function togglePocketFollow() {
     await window.mainAPI.pocketUnfollowMember(room.userId)
     notePocketFollow(room.userId, false)
     applyRoomFollowSource(room.userId, keepLocal ? 'local' : undefined)
+    trackRoomFollow('unfollow', 'pocket')
     ElMessage({
       message: keepLocal ? '已取消口袋关注，本地关注保留' : '已取消关注，房间已移出列表',
       type: 'success',
     })
   }
   catch (error) {
+    trackRoomFollow(willFollow ? 'follow' : 'unfollow', 'pocket', true)
     ElMessage.error(willFollow ? '口袋关注失败，请稍后重试' : '口袋取关失败，请稍后重试')
     debugLog('pocket-rooms', '口袋关注/取关失败', error)
   }
@@ -301,6 +325,7 @@ async function toggleLocalFollow() {
   try {
     if (willFollow) {
       const ok = await followMember({ userId: room.userId, realName: room.nickname, teamColor: room.teamColor })
+      trackRoomFollow('follow', 'local', !ok)
       if (!ok) {
         ElMessage.error('本地关注失败，请稍后重试')
         return
@@ -310,6 +335,7 @@ async function toggleLocalFollow() {
       return
     }
     const ok = await unfollowMember(room.userId)
+    trackRoomFollow('unfollow', 'local', !ok)
     if (!ok) {
       ElMessage.error('本地取关失败，请稍后重试')
       return
@@ -728,9 +754,7 @@ async function settleBigRoomEnter(userId: number, unreadCount: number) {
 
 /** 点进房间（左列条目）：选中 → 清大房间未读（有未读则回底） */
 async function enterRoom(userId: number) {
-  const starName = rooms.value.find(room => room.userId === userId)?.nickname || ''
-  if (shouldTrackRoomEnter(userId, starName))
-    trackEvent('rooms:enter', { starName })
+  trackRoomEnter(userId, 'list')
   // 未读数在 markRoomRead 乐观清零前取，否则永远是 0
   const hadUnread = unreadChannelOf(userId).big
   // 换房先撤掉上一间的分割线：消息清空与水位重取之间有间隙，别让旧锚点落回新列表
@@ -759,8 +783,14 @@ watch(() => route.query.member, async (value) => {
     return
   }
   const result = await openTemporaryRoom(userId)
-  if (!result.ok)
-    ElMessage.warning(result.message || '未能打开该成员的大房间')
+  if (result.ok) {
+    // 深链进房与左列共用每日去重
+    trackRoomEnter(userId, 'query')
+    return
+  }
+  // 失败单独记，不占每日去重额度
+  trackEvent('rooms:enter', { from: 'query', result: 'fail' })
+  ElMessage.warning(result.message || '未能打开该成员的大房间')
 }, { immediate: true })
 
 /** 左列关掉临时房间：一并清掉 query。否则 URL 还留着这个成员，下次点同一个入口不触发 watch */
@@ -1150,8 +1180,7 @@ function connectConfirmBody(): VNode {
   return h('div', { class: 'app-confirm-body' }, [
     h('p', { class: 'app-confirm-lead' }, '发言需要以当前账号连接云信 IM。'),
     h('ul', { class: 'app-confirm-list' }, [
-      h('li', '同一账号只允许一台设备在线, 同时连接会顶掉手机端口袋48'),
-      h('li', '推荐杀掉手机app再连接, 不用时及时断开连接'),
+      h('li', '同一账号只允许一台设备在线。'),
     ]),
   ])
 }
@@ -1412,7 +1441,7 @@ function onMenuPick(key: string) {
   const { target } = current
   if (target.kind === 'room') {
     if (key === 'pin' || key === 'unpin') {
-      toggleRoomPin(target.room.userId)
+      onToggleRoomPin(target.room.userId, 'menu')
       return
     }
     void markRoomRead(target.room.userId, key === 'read-small' ? 'small' : 'room')
@@ -1815,7 +1844,7 @@ watch([chatStatus, chatStatusText], () => {
               class="head-pin-btn"
               :class="{ 'is-on': selectedRoomPinned }"
               :title="selectedRoomPinned ? '取消置顶：不再排在左列最前' : '置顶：把该房间排到左列最前'"
-              @click="toggleRoomPin(selectedRoom.userId)"
+              @click="onToggleRoomPin(selectedRoom.userId, 'header')"
             >
               <MediaIcon name="pushpinFilled" :size="13" />
               {{ selectedRoomPinned ? '已置顶' : '置顶' }}
@@ -2013,6 +2042,7 @@ watch([chatStatus, chatStatusText], () => {
                             :preview-list="messageImageUrls"
                             :initial-index="messageImageIndex.get(message.id) ?? 0"
                             :name-metas="messageImageMetas"
+                            :owner-name="selectedRoom?.nickname ?? ''"
                             lazy
                             @load="onMediaLoad"
                             @error="onMediaLoad"
@@ -2230,7 +2260,7 @@ watch([chatStatus, chatStatusText], () => {
                 @toggle-pocket-follow="togglePocketFollow"
                 @toggle-local-follow="toggleLocalFollow"
               />
-              <RoomAlbum :messages="messages" />
+              <RoomAlbum :messages="messages" :owner-name="selectedRoom?.nickname ?? ''" />
             </aside>
           </div>
 
@@ -2240,6 +2270,7 @@ watch([chatStatus, chatStatusText], () => {
             :messages="essenceMessages"
             :loading="essenceLoading"
             :exhausted="essenceExhausted"
+            :room-name="selectedRoom?.nickname ?? ''"
             @load-more="loadMoreEssence"
           />
 

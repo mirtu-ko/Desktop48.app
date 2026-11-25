@@ -1,5 +1,6 @@
 /** 页面级成员详情卡片：列表点成员名 → 按 userId 从 stores/member-directory 反查合并详情并打开卡片。关注 / 屏蔽的互斥规则见 use-member-actions，状态每页各持一份故落在 composables */
 import type { MemberDetail } from '@renderer/utils/member-merge'
+import type { MemberActionPage } from './use-member-actions'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
@@ -12,6 +13,9 @@ export function useMemberDetail() {
 
   /** 当前查看详情的成员（null = 卡片关闭） */
   const selectedMember = ref<MemberDetail | null>(null)
+
+  /** 抽屉所在页面（直播页 / 回放页共用本 composable） */
+  const detailPage = ref<MemberActionPage>('lives')
 
   /** 卡片里的关注 / 屏蔽态：跟着当前成员走，打开卡片本身不改名单 */
   const detailFollowed = computed(() => !!selectedMember.value?.userId && isFollowed(selectedMember.value.userId))
@@ -34,16 +38,17 @@ export function useMemberDetail() {
       return
     }
     selectedMember.value = member
-    trackEvent('member:detail_open', { from })
+    detailPage.value = from === 'playback' ? 'playbacks' : 'lives'
+    trackEvent('member:detail_open', { starName: member.realName || member.nickname, from })
   }
 
   function closeMemberDetail() {
     selectedMember.value = null
   }
 
-  // 详情抽屉里的按钮统一按 detail 来源记账，页面无需知道埋点参数
-  const toggleFollowInDetail = (member: MemberDetail) => toggleFollowMember(member, 'detail')
-  const toggleBlockInDetail = (member: MemberDetail) => toggleBlockMember(member, 'detail')
+  // 详情按钮按 detail 来源 + 当前页面记账
+  const toggleFollowInDetail = (member: MemberDetail) => toggleFollowMember(member, 'detail', detailPage.value)
+  const toggleBlockInDetail = (member: MemberDetail) => toggleBlockMember(member, 'detail', detailPage.value)
 
   return {
     selectedMember,
