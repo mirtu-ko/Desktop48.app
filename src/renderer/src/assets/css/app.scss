@@ -488,7 +488,8 @@ body,
 
 /* ===== 实底列表卡片皮肤（直播 / 回放 / 公演 / 成员列表卡共用） =====
  * 与 .glass-card（磨砂半透明）语义不同，二者并存；
- * hover 上浮仅在 .clickable 时启用，非可点击卡片保持静止 */
+ * hover 上浮仅在 .clickable 时启用；不可点击的卡片不置灰（整片置灰更难看也更难分辨），
+ * 可辨识性全部加在可点击一侧：指针 + 上浮 + 品牌色描边。 */
 .lift-card {
   overflow: hidden;
   border: 1px solid var(--el-border-color-lighter);
@@ -497,14 +498,31 @@ body,
   box-shadow: var(--shadow-sm);
   transition:
     transform 0.2s ease-in-out,
-    box-shadow 0.2s ease-in-out;
+    box-shadow 0.2s ease-in-out,
+    border-color 0.2s ease-in-out;
+
+  /* 默认态（.lift-card 不带 .clickable）：无法交互，视觉保持原样 */
+  &,
+  &.is-disabled {
+    cursor: default;
+  }
 
   &.clickable {
     cursor: pointer;
 
     &:hover {
       transform: translateY(-3px);
+      border-color: color-mix(in srgb, var(--brand-primary) 45%, var(--el-border-color-lighter));
       box-shadow: var(--shadow-md);
+    }
+
+    &:active {
+      transform: translateY(-1px);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--brand-primary);
+      outline-offset: 2px;
     }
   }
 }

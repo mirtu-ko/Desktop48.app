@@ -12,6 +12,7 @@ import { resolveBilibiliRoomIdAsync } from '@renderer/utils/bilibili-room'
 import Constants from '@renderer/utils/constants'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
+import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref, watch } from 'vue'
 
 // 独立播放窗：与直播/回放页共用全局播放挂载点
@@ -95,6 +96,36 @@ const { onInfiniteScroll } = useLoadMore({
 /** 首屏加载中：覆盖“拉第一页 → 补满首屏（含衔接历史公演）”的整段串行请求，
  *  全页遮罩只呈现一次；避免多接口轮流置 loading 导致页面连续刷新多次 */
 const initialLoading = ref(false)
+
+/** 是否进行中：页面内「可点击」的唯一真值来源 */
+function isLive(show: OpenLive): boolean {
+  return show.status === 2
+}
+
+/** 不可点击卡片的原因文案（可点击时为空）：封面角上已有时间，这里不重复 */
+function lockedHint(show: OpenLive): string {
+  if (isLive(show))
+    return ''
+  if (show.status === 4)
+    return '已结束 · 暂无回放'
+  // status === 1：区分「时间没到」与「已过点但还没推流」
+  const started = Number.parseInt(show.stime) <= Date.now()
+  return started ? '尚未开始直播 · 请稍候' : '计划中 · 开播后观看'
+}
+
+/** 排期卡片点击：进行中直接开播；其余弹提示说明原因，避免点了没反应 */
+async function onScheduleClick(show: OpenLive) {
+  if (isLive(show)) {
+    await openLiveStream(show)
+    return
+  }
+  debugLog('show', `公演选路: ${show.liveId} 状态=${show.status}（非进行中），提示用户原因`)
+  ElMessage({
+    type: 'info',
+    message: lockedHint(show),
+    grouping: true,
+  })
+}
 
 /** 首次进入 / 刷新 / 切换团体共用的首屏加载序列 */
 async function loadFirstScreen() {
@@ -220,15 +251,22 @@ function openHistoryStream(show: OpenLive) {
             即将开始
           </h2>
           <div class="shows-list">
-            <div
+            <el-tooltip
               v-for="show in todayShows"
               :key="show.liveId"
-              class="show-item lift-card"
-              :class="{ clickable: show.status === 2 }"
-              @click="openLiveStream(show)"
+              :content="lockedHint(show)"
+              :disabled="isLive(show)"
+              placement="top"
+              :show-after="300"
             >
-              <ShowCard :show="show" />
-            </div>
+              <div
+                class="show-item lift-card"
+                :class="isLive(show) ? 'clickable' : 'is-disabled'"
+                @click="onScheduleClick(show)"
+              >
+                <ShowCard :show="show" :hint="lockedHint(show)" />
+              </div>
+            </el-tooltip>
           </div>
         </template>
 
@@ -237,15 +275,22 @@ function openHistoryStream(show: OpenLive) {
             最近公演
           </h2>
           <div class="shows-list">
-            <div
+            <el-tooltip
               v-for="show in recentShows"
               :key="show.liveId"
-              class="show-item lift-card"
-              :class="{ clickable: show.status === 2 }"
-              @click="openLiveStream(show)"
+              :content="lockedHint(show)"
+              :disabled="isLive(show)"
+              placement="top"
+              :show-after="300"
             >
-              <ShowCard :show="show" />
-            </div>
+              <div
+                class="show-item lift-card"
+                :class="isLive(show) ? 'clickable' : 'is-disabled'"
+                @click="onScheduleClick(show)"
+              >
+                <ShowCard :show="show" :hint="lockedHint(show)" />
+              </div>
+            </el-tooltip>
           </div>
         </template>
 
@@ -303,5 +348,26 @@ function openHistoryStream(show: OpenLive) {
   grid-template-columns: repeat(auto-fill, minmax(var(--show-min), 1fr));
 }
 
-/* 卡片皮肤（实底白卡 + hover 上浮）见全局 .lift-card */
+/* 排期卡片外层的 el-tooltip 包裹层承接 grid 列宽，卡片自己撑满 */
+.shows-list :deep(.el-tooltip__trigger) {
+  display: block;
+  min-width: 0;
+  height: 100%;
+}
+
+.show-item {
+  min-width: 0;
+  height: 100%;
+  /* 拉满行高，与其他卡片等高 */
+  display: flex;
+  flex-direction: column;
+}
+
+.show-item > :deep(.show-card) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 卡片皮肤与 .clickable / .is-disabled 的差别见全局 .lift-card */
 </style>
