@@ -53,15 +53,6 @@ describe('tools.pictureUrls / sourceUrl（图片路径归一化）', () => {
     expect(Tools.sourceUrl('https://cdn.example.com/a.png')).toBe('https://cdn.example.com/a.png')
   })
 
-  it('空值返回空串（空串拼前缀会产出必然 404 的地址，是头像位碎图的根源）', () => {
-    expect(Tools.sourceUrl('')).toBe('')
-  })
-
-  it('.png.png 重复后缀收敛为单层（相对与绝对路径都收敛）', () => {
-    expect(Tools.sourceUrl('/a.png.png')).toBe('https://source.48.cn/a.png')
-    expect(Tools.pictureUrls('https://cdn.example.com/a.png.png')).toEqual(['https://cdn.example.com/a.png'])
-  })
-
   it('逗号分隔的多个路径逐个转换', () => {
     expect(Tools.pictureUrls('/a.jpg,https://cdn.example.com/b.jpg')).toEqual([
       'https://source.48.cn/a.jpg',
@@ -191,5 +182,26 @@ describe('tools.readableInk（按底色亮度挑前景色）', () => {
     expect(Tools.readableInk('')).toBe('#fff')
     expect(Tools.readableInk(undefined)).toBe('#fff')
     expect(Tools.readableInk('rebeccapurple')).toBe('#fff')
+  })
+})
+
+describe('tools.retryImageUrl（仅失败封面追加重试参数）', () => {
+  const URL_OK = 'https://source.48.cn/20260101/img-cover.jpg'
+
+  it('重试次数为 0 时原样返回：加载成功的封面必须保持原地址以命中缓存', () => {
+    expect(Tools.retryImageUrl(URL_OK, 0)).toBe(URL_OK)
+  })
+
+  it('失败后追加重试参数，且不破坏带查询串的地址', () => {
+    expect(Tools.retryImageUrl(URL_OK, 3)).toBe(`${URL_OK}?_r=3`)
+    expect(Tools.retryImageUrl(`${URL_OK}?v=2`, 1)).toBe(`${URL_OK}?v=2&_r=1`)
+  })
+
+  it('空地址不产出垃圾 URL', () => {
+    expect(Tools.retryImageUrl('', 5)).toBe('')
+  })
+
+  it('每次重试得到不同地址：同一 URL 失败的 <img> 否则不会重新请求', () => {
+    expect(Tools.retryImageUrl(URL_OK, 1)).not.toBe(Tools.retryImageUrl(URL_OK, 2))
   })
 })

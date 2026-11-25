@@ -6,9 +6,15 @@ const YI_ZHI_BO_HOST = 'alcdn.hls.xiaoka.tv'
 /** 流地址前缀：http(s)://host/{数字} */
 const STREAM_PATH_REGEX = /^(http|https):\/\/([^/]+)\/(\d+)/
 
-/**
- * 将相对路径 / 相对图片路径归一化为 source.48.cn 完整 URL；已是完整 URL 时原样返回
- */
+/** 失败过的图片 URL 追加 _r：同一地址失败后 <img> 不会重试，换成新地址才会重新请求 */
+function retryImageUrl(url: string, retry: number): string {
+  if (!url || !retry)
+    return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}_r=${retry}`
+}
+
+/** 将相对路径 / 相对图片路径归一化为 source.48.cn 完整 URL；已是完整 URL 时原样返回 */
 function toSourceUrl(path: string): string {
   // 空进空出：空串拼前缀会产出必然 404 的垃圾 URL（头像位碎图的根源）
   if (!path)
@@ -151,6 +157,7 @@ function readableInk(background: string | undefined): string {
 const Tools = {
   pictureUrls,
   sourceUrl,
+  retryImageUrl,
   timeToSecond,
   lyricsParse,
   streamPathHandle,
