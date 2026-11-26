@@ -5,13 +5,15 @@ on:
     tags:
       - 'v*' # v 开头的 tag 触发，三端全量发布
   # 手动触发：单独补发某个平台，或从一个还没打 tag 的 commit 首发。
-  # 必须在这里显式传 tag —— GitHub 的「Use workflow from」下拉框只列分支，选不到 tag，
-  # 直接依赖 GITHUB_REF_NAME 会拿到 main，进而创建出一个叫 main 的 release。
+  # tag 必须走输入而不是 GITHUB_REF_NAME —— GitHub 的「Use workflow from」下拉框只列分支、
+  # 选不到 tag，直接依赖它就会拿到 main，进而创建出一个叫 main 的 release。
+  # 输入留空时按 package.json 的版本补，这样「发当前 main 的版本」不用手打 tag。
   workflow_dispatch:
     inputs:
       tag:
-        description: 要发布的 tag（如 v0.2.16）。不存在时按 package.json 的版本创建
-        required: true
+        description: 要发布的 tag（如 v0.2.16）。留空则取 package.json 的版本；该 tag 不存在时从当前 commit 创建
+        required: false
+        default: ''
         type: string
       # 重发已有版本的修复包时用：tag 决定发到哪个 release，ref 决定用哪份代码构建。
       # 留空则用 tag 本身。注意产物会与 tag 指向的源码不一致——这是「同版本号重发」的固有代价，
@@ -73,6 +75,12 @@ jobs:
             matrix='["ubuntu-latest","windows-latest","macos-latest"]'
           else
             tag="$INPUT_TAG"
+            # 留空就按 package.json 的版本推出来：描述里承诺了这个行为，否则空值会走下面的
+            # 格式校验直接报错，等于逼人背版本号。
+            if [ -z "$tag" ]; then
+              tag="v$(jq -r .version package.json)"
+              echo "未指定 tag，按 package.json 取 ${tag}"
+            fi
 
             case "$tag" in
               v[0-9]*) ;;
