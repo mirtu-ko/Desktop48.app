@@ -215,7 +215,9 @@ body,
   overflow: hidden;
   background: var(--el-bg-color-page);
   color: var(--el-text-color-primary);
-  font-family: 'PingFang SC', 'Helvetica Neue', Helvetica, 'Microsoft YaHei', Arial, sans-serif;
+  font-family:
+    'PingFang SC', 'Helvetica Neue', Helvetica, 'Microsoft YaHei', 'Noto Sans CJK SC', 'Noto Sans SC',
+    'Source Han Sans SC', 'WenQuanYi Micro Hei', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 

@@ -43,7 +43,7 @@ function splashPage(iconDataUrl: string): string {
     gap: 18px;
     background: radial-gradient(120% 120% at 50% 0%, #ffffff 0%, #f2effc 55%, #e9e4fb 100%);
     border-radius: 22px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", sans-serif;
     user-select: none;
     -webkit-user-select: none;
   }

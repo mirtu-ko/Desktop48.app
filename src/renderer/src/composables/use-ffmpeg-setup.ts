@@ -34,28 +34,40 @@ export interface FfmpegProblemCopy {
  * 未配置要引导配置；目录不存在多因目录被移动/删除；缺二进制多因手选错了目录。
  * 就绪且来源是系统安装（linux）时单独说明，否则用户看到 /usr/bin 会以为配错了。
  */
-export function describeFfmpegProblem(problem: FfmpegProblem | null, directory = '', source: FfmpegSource = 'directory'): FfmpegProblemCopy {
+export function describeFfmpegProblem(
+  problem: FfmpegProblem | null,
+  directory = '',
+  source: FfmpegSource = 'directory',
+  canDownload = true,
+): FfmpegProblemCopy {
+  const fixAction = canDownload ? '重新下载或选择 FFmpeg 目录' : '安装系统 ffmpeg 或选择目录'
   switch (problem) {
     case 'missing-dir':
       return {
         label: '目录不存在',
         title: 'FFmpeg 目录已失效',
-        hint: `已配置的目录不存在或已被移动：${directory}。请重新下载，或选择 FFmpeg 所在目录。`,
-        action: '重新下载或选择 FFmpeg 目录',
+        hint: canDownload
+          ? `已配置的目录不存在或已被移动：${directory}。请重新下载，或选择 FFmpeg 所在目录。`
+          : `已配置的目录不存在或已被移动：${directory}。请通过系统包管理器安装 ffmpeg，或选择已有目录。`,
+        action: fixAction,
       }
     case 'missing-binary':
       return {
         label: '缺少 ffmpeg',
         title: '该目录下没有 FFmpeg',
-        hint: `目录 ${directory} 存在，但其中没有 ffmpeg 可执行文件。请重新下载，或选择包含 ffmpeg 的目录。`,
-        action: '重新下载或选择 FFmpeg 目录',
+        hint: canDownload
+          ? `目录 ${directory} 存在，但其中没有 ffmpeg 可执行文件。请重新下载，或选择包含 ffmpeg 的目录。`
+          : `目录 ${directory} 存在，但其中没有 ffmpeg 可执行文件。请通过系统包管理器安装 ffmpeg，或选择包含 ffmpeg 的目录。`,
+        action: fixAction,
       }
     case 'unset':
       return {
         label: '未配置',
-        title: '请下载或选择 FFmpeg 目录',
-        hint: '播放直播/回放与媒体下载都需要 FFmpeg。可一键下载，也可以手动指定本机已有的目录。',
-        action: '下载或选择 FFmpeg 目录',
+        title: canDownload ? '请下载或选择 FFmpeg 目录' : '请安装或选择 FFmpeg',
+        hint: canDownload
+          ? '播放直播/回放与媒体下载都需要 FFmpeg。可一键下载，也可以手动指定本机已有的目录。'
+          : '播放直播/回放与媒体下载都需要 FFmpeg。请通过系统包管理器安装 ffmpeg（如 sudo apt install ffmpeg），或手动选择已有目录。',
+        action: canDownload ? '下载或选择 FFmpeg 目录' : '安装系统 ffmpeg 或选择目录',
       }
     default:
       if (source === 'system')
@@ -90,7 +102,8 @@ export function useFfmpegSetup() {
   const problem = computed<FfmpegProblem | null>(() => (status.value && !status.value.ok ? status.value.problem : null))
   const directory = computed(() => status.value?.directory ?? '')
   const source = computed<FfmpegSource>(() => status.value?.source ?? 'directory')
-  const copy = computed(() => describeFfmpegProblem(problem.value, directory.value, source.value))
+  const canDownload = computed(() => status.value?.canDownload !== false)
+  const copy = computed(() => describeFfmpegProblem(problem.value, directory.value, source.value, canDownload.value))
   /** 已由系统包提供时不该再走下载：linux 的下载产物正是解析不了域名的那份静态构建 */
   const isSystem = computed(() => status.value?.ok === true && source.value === 'system')
 
@@ -199,6 +212,7 @@ export function useFfmpegSetup() {
     downloading,
     busy,
     isReady,
+    canDownload,
     isSystem,
     problem,
     directory,

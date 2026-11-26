@@ -29,6 +29,11 @@ export function resolveUpdaterSupport(): UpdaterSupport {
   if (process.platform === 'darwin' || devFlag)
     return { ok: true, mode: 'manual' }
 
+  // Linux 仅 AppImage 支持 electron-updater 应用内更新（依赖 APPIMAGE 环境变量）；
+  // .deb 等系统包走手动更新（查版本号并引导至下载页/直链），否则下载安装会直接报错
+  if (process.platform === 'linux' && !process.env.APPIMAGE)
+    return { ok: true, mode: 'manual' }
+
   // 免安装版没有 app-update.yml，electron-updater 会在 checkForUpdates 时直接抛错
   if (!existsSync(path.join(process.resourcesPath, 'app-update.yml')))
     return { ok: false, reason: '当前为免安装版，不支持自动更新（请使用安装包版本）', url: DOWNLOAD_PAGE_URL }

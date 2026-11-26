@@ -39,7 +39,9 @@ export function pickFfmpegSource(platform: string, arch: string): FfmpegDownload
   else if (platform === 'win32')
     name = 'ffmpeg-win32-x64'
   else if (platform === 'linux')
-    name = arch === 'arm64' ? 'ffmpeg-linux-arm64' : 'ffmpeg-linux-x64'
+    // ffmpeg-static 的 linux 构建为静态 glibc 链接，dlopen libnss_dns.so.2 会失败导致域名解析异常，
+    // 不能提供给用户下载，统一引导使用系统包管理器安装动态链接版
+    throw new Error('Linux 请通过系统包管理器安装 ffmpeg（如 sudo apt install ffmpeg）')
   else
     throw new Error(`暂不支持的平台: ${platform}`)
 

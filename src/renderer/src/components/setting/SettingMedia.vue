@@ -25,6 +25,7 @@ const {
   checking,
   downloading,
   busy,
+  canDownload,
   isSystem,
   directory,
   copy,
@@ -163,7 +164,7 @@ async function onPickFloatTopmost(value: string | number | boolean | undefined) 
         :model-value="directory"
         class="row-control"
         readonly
-        placeholder="未配置，可一键下载或手动选择"
+        :placeholder="canDownload ? '未配置，可一键下载或手动选择' : '未配置，请安装系统 ffmpeg 或手动选择'"
         @click="chooseFfmpegDir"
       />
       <div class="row-actions">
@@ -180,6 +181,7 @@ async function onPickFloatTopmost(value: string | number | boolean | undefined) 
           选择
         </el-button>
         <el-button
+          v-if="canDownload"
           type="primary"
           :disabled="busy || isSystem"
           :loading="downloading"
@@ -219,7 +221,7 @@ async function onPickFloatTopmost(value: string | number | boolean | undefined) 
         v-else-if="status && !status.ok"
         class="ffmpeg-fix-hint"
       >
-        下一步：点击「下载」自动获取，或点击「选择」指定本机已有的 FFmpeg 目录。
+        {{ canDownload ? '下一步：点击「下载」自动获取，或点击「选择」指定本机已有的 FFmpeg 目录。' : '下一步：通过系统包管理器安装 ffmpeg（如 sudo apt install ffmpeg），或点击「选择」指定已有目录。' }}
       </p>
     </div>
   </section>

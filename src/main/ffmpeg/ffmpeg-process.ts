@@ -57,6 +57,8 @@ export interface FfmpegStatus {
   binaryPath: string
   /** 本次判定对应的来源 */
   source: FfmpegSource
+  /** 当前平台是否支持一键下载（Linux 静态构建有 glibc DNS 缺陷，不支持一键下载） */
+  canDownload?: boolean
 }
 
 /** 平台相关的可执行文件名拼装，唯一取值点（状态判定 / 二进制解析 / 下载落盘共用） */
@@ -66,15 +68,16 @@ export function ffmpegBinaryPath(ffmpegDir: string): string {
 
 /** 判定目录是否构成可用的 FFmpeg 环境（纯函数，可单测）：逐层区分未配置 / 目录不存在 / 缺二进制 */
 export function inspectFfmpegDir(ffmpegDir: string): FfmpegStatus {
+  const canDownload = process.platform !== 'linux'
   const directory = ffmpegDir?.trim() ?? ''
   if (!directory)
-    return { ok: false, problem: 'unset', directory: '', binaryPath: '', source: 'directory' }
+    return { ok: false, problem: 'unset', directory: '', binaryPath: '', source: 'directory', canDownload }
   if (!fs.existsSync(directory))
-    return { ok: false, problem: 'missing-dir', directory, binaryPath: '', source: 'directory' }
+    return { ok: false, problem: 'missing-dir', directory, binaryPath: '', source: 'directory', canDownload }
   const binaryPath = ffmpegBinaryPath(directory)
   if (!fs.existsSync(binaryPath))
-    return { ok: false, problem: 'missing-binary', directory, binaryPath: '', source: 'directory' }
-  return { ok: true, problem: null, directory, binaryPath, source: 'directory' }
+    return { ok: false, problem: 'missing-binary', directory, binaryPath: '', source: 'directory', canDownload }
+  return { ok: true, problem: null, directory, binaryPath, source: 'directory', canDownload }
 }
 
 /**
@@ -145,7 +148,7 @@ export function resolveFfmpegEnvironment(
   const systemBinary = probe()
   if (!systemBinary)
     return status
-  return { ok: true, problem: null, directory: path.dirname(systemBinary), binaryPath: systemBinary, source: 'system' }
+  return { ok: true, problem: null, directory: path.dirname(systemBinary), binaryPath: systemBinary, source: 'system', canDownload: false }
 }
 
 /** 各类不可用原因对应的失败信息：与 inspectFfmpegDir 同一口径 */

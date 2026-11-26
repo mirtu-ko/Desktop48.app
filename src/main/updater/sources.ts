@@ -66,18 +66,40 @@ export function readVersion(raw: unknown, source: string): string {
 }
 
 /**
- * 挑当前架构的安装包直链，只处理 mac（Windows 走 electron-updater，免安装版给官网）。
+ * 挑当前平台与架构的安装包直链：mac 挑 dmg，linux 挑对应架构的 AppImage / deb，
+ * 找不到或其余平台一律退回官网下载页。
  */
 export function pickMirrorDownloadUrl(files: unknown): string {
   if (!Array.isArray(files))
     return DOWNLOAD_PAGE_URL
-  const suffix = process.arch === 'arm64' ? '-arm64.dmg' : '-x64.dmg'
-  const hit = files.find((file) => {
-    const name = (file as { name?: unknown })?.name
-    return typeof name === 'string' && name.endsWith(suffix)
-  })
-  const name = (hit as { name?: string } | undefined)?.name
-  return name ? `${MIRROR_BASE}/${encodeURIComponent(name)}` : DOWNLOAD_PAGE_URL
+  let suffixes: string[] = []
+  if (process.platform === 'darwin') {
+    suffixes = [process.arch === 'arm64' ? '-arm64.dmg' : '-x64.dmg']
+  }
+  else if (process.platform === 'linux') {
+    if (process.env.APPIMAGE) {
+      suffixes = process.arch === 'arm64'
+        ? ['-arm64.AppImage', '-aarch64.AppImage']
+        : ['-x86_64.AppImage', '-x64.AppImage']
+    }
+    else {
+      suffixes = process.arch === 'arm64'
+        ? ['_arm64.deb', '-arm64.deb']
+        : ['_amd64.deb', '-amd64.deb']
+    }
+  }
+  if (!suffixes.length)
+    return DOWNLOAD_PAGE_URL
+  for (const suffix of suffixes) {
+    const hit = files.find((file) => {
+      const name = (file as { name?: unknown })?.name
+      return typeof name === 'string' && name.endsWith(suffix)
+    })
+    const name = (hit as { name?: string } | undefined)?.name
+    if (name)
+      return `${MIRROR_BASE}/${encodeURIComponent(name)}`
+  }
+  return DOWNLOAD_PAGE_URL
 }
 
 function requestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {

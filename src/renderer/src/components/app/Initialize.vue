@@ -22,6 +22,7 @@ const {
   problem,
   downloadPercent,
   downloadLabel,
+  canDownload,
   refresh: refreshFfmpeg,
   download: downloadFfmpeg,
   choose: chooseFfmpegDir,
@@ -190,6 +191,7 @@ function skipSetup() {
 
       <div v-if="showActions" class="init-actions">
         <el-button
+          v-if="canDownload"
           :loading="downloading"
           :disabled="checking"
           type="primary"
@@ -200,6 +202,7 @@ function skipSetup() {
         <el-button
           :loading="checking"
           :disabled="downloading"
+          :type="canDownload ? 'default' : 'primary'"
           @click="onChooseDir"
         >
           {{ checking ? '校验中' : '手动选择目录' }}

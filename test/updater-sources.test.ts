@@ -46,18 +46,46 @@ describe('readVersion', () => {
 
 describe('pickMirrorDownloadUrl', () => {
   const originalArch = process.arch
+  const originalPlatform = process.platform
+  const originalAppImage = process.env.APPIMAGE
 
   afterEach(() => {
     Object.defineProperty(process, 'arch', { value: originalArch, configurable: true })
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    if (originalAppImage === undefined)
+      delete process.env.APPIMAGE
+    else
+      process.env.APPIMAGE = originalAppImage
   })
 
   it('按当前架构挑 dmg 直链', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
     Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true })
     expect(pickMirrorDownloadUrl([{ name: 'Desktop48-1.1.0-x64.dmg' }, { name: 'Desktop48-1.1.0-arm64.dmg' }]))
       .toBe('https://dl.v2ing.com/Desktop48-1.1.0-arm64.dmg')
   })
 
+  it('linux 非 AppImage 环境挑对应架构 deb 直链', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    delete process.env.APPIMAGE
+    Object.defineProperty(process, 'arch', { value: 'x64', configurable: true })
+    expect(pickMirrorDownloadUrl([{ name: 'Desktop48_1.1.0_amd64.deb' }, { name: 'Desktop48_1.1.0_arm64.deb' }]))
+      .toBe('https://dl.v2ing.com/Desktop48_1.1.0_amd64.deb')
+  })
+
+  it('linux AppImage 环境按当前架构与优先级挑 AppImage 直链，绝不跨架构错配', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    process.env.APPIMAGE = '/tmp/Desktop48.AppImage'
+    Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true })
+    expect(pickMirrorDownloadUrl([{ name: 'Desktop48-1.1.0-x86_64.AppImage' }, { name: 'Desktop48-1.1.0-arm64.AppImage' }]))
+      .toBe('https://dl.v2ing.com/Desktop48-1.1.0-arm64.AppImage')
+    // 清单只有 x64 时，arm64 必须退回官网下载页，不能把 x64 包推给 arm64
+    expect(pickMirrorDownloadUrl([{ name: 'Desktop48-1.1.0-x64.AppImage' }, { name: 'Desktop48-1.1.0-x86_64.AppImage' }]))
+      .toBe(DOWNLOAD_PAGE_URL)
+  })
+
   it('清单里没有对应架构时退回官网下载页', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
     Object.defineProperty(process, 'arch', { value: 'x64', configurable: true })
     expect(pickMirrorDownloadUrl([{ name: 'Desktop48-1.1.0-arm64.dmg' }])).toBe(DOWNLOAD_PAGE_URL)
     expect(pickMirrorDownloadUrl(undefined)).toBe(DOWNLOAD_PAGE_URL)
@@ -65,7 +93,14 @@ describe('pickMirrorDownloadUrl', () => {
 })
 
 describe('fetchLatestManualRelease', () => {
+  const originalPlatform = process.platform
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+  })
+
   it('镜像清单可用时一次请求就拿到版本、说明与安装包', async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
     fetchMock.mockResolvedValueOnce(jsonResponse({
       version: 'v1.1.0',
       notes: '- 修好了若干问题',

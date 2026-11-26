@@ -24,9 +24,9 @@ describe('ffmpeg-download.pickFfmpegSource', () => {
     expect(source.filename).toBe('ffmpeg.exe')
   })
 
-  it('linux 区分 x64 与 arm64', () => {
-    expect(pickFfmpegSource('linux', 'x64').url).toContain('ffmpeg-linux-x64.gz')
-    expect(pickFfmpegSource('linux', 'arm64').url).toContain('ffmpeg-linux-arm64.gz')
+  it('linux 禁用静态下载并提示通过系统包管理器安装', () => {
+    expect(() => pickFfmpegSource('linux', 'x64')).toThrow('系统包管理器')
+    expect(() => pickFfmpegSource('linux', 'arm64')).toThrow('系统包管理器')
   })
 
   it('未知平台抛出可读错误', () => {
