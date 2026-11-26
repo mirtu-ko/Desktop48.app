@@ -624,6 +624,11 @@ interface StaticIpcInvokeMap {
   windowToggleMaximize: InvokeSpec<[], void>
   windowClose: InvokeSpec<[], void>
   windowIsMaximized: InvokeSpec<[], boolean>
+  /**
+   * 本平台的窗口管理器是否采信置顶请求。ChromeOS 的 Linux 容器（Crostini）返回 false，
+   * 渲染端据此把图钉与设置项降级为说明态（对端：main/window/topmost-support.ts）。
+   */
+  windowTopmostSupported: InvokeSpec<[], boolean>
   preventSleep: InvokeSpec<[], number>
   allowSleep: InvokeSpec<[id: number], void>
   /** 当前应用版本号（如 "0.1.9"），设置页展示用 */

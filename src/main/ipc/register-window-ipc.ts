@@ -8,6 +8,7 @@
 import type { IpcMainInvokeEvent } from 'electron'
 import { BrowserWindow } from 'electron'
 import { allowSleepForSender, preventSleepForSender } from '../app'
+import { isTopmostSupported } from '../window/topmost-support'
 import { handleTraced } from './trace'
 
 function senderWindow(event: IpcMainInvokeEvent) {
@@ -34,6 +35,8 @@ export function registerWindowIPC(): void {
   handleTraced('windowIsMaximized', (event) => {
     return senderWindow(event)?.isMaximized() ?? false
   })
+  // 置顶能力与具体窗口无关，只看平台：Crostini 的 Ash 不采信置顶请求
+  handleTraced('windowTopmostSupported', () => isTopmostSupported())
 
   // 阻止/允许系统休眠：id 由主进程按 webContents 维护，
   // 渲染进程刷新或崩溃时无法回传 id，只能以 event.sender 为准

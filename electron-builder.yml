@@ -90,6 +90,7 @@ deb:
     - ffmpeg
 appImage:
   artifactName: ${name}-${version}-${arch}.${ext}
+afterPack: scripts/after-pack-linux.mjs
 npmRebuild: false
 publish:
   provider: github

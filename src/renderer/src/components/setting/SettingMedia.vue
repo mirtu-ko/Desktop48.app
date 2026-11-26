@@ -4,6 +4,7 @@ import type { useFfmpegSetup } from '@renderer/composables/use-ffmpeg-setup'
 import { Cpu, Folder, Position } from '@element-plus/icons-vue'
 import { describeFfmpegProblem } from '@renderer/composables/use-ffmpeg-setup'
 import { floatTopmost, setFloatTopmost } from '@renderer/stores/float-topmost'
+import { ensureTopmostSupport, topmostSupported } from '@renderer/stores/topmost-support'
 import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { computed } from 'vue'
@@ -20,6 +21,8 @@ const props = defineProps<{
 }>()
 
 const { downloadDirectory, setDownloadDirectory, openDownloadDirectory } = props.appConfig
+// 置顶能力：Crostini 的窗口管理器不采信置顶请求，这一行要能说明「为什么不生效」
+void ensureTopmostSupport()
 const {
   status,
   checking,
@@ -226,7 +229,7 @@ async function onPickFloatTopmost(value: string | number | boolean | undefined) 
     </div>
   </section>
 
-  <section class="setting-card glass-card">
+  <section v-if="topmostSupported" class="setting-card glass-card">
     <div class="setting-row">
       <span
         class="row-icon icon-tile"
@@ -263,6 +266,13 @@ async function onPickFloatTopmost(value: string | number | boolean | undefined) 
 </template>
 
 <style scoped lang="scss">
+/* 置顶不可用时的说明：单选组仍可改（换到普通发行版会生效），但必须说清在本机不生效 */
+.topmost-unsupported {
+  display: block;
+  margin-top: 4px;
+  color: var(--el-color-warning);
+}
+
 /* FFmpeg 就绪状态：圆点 + 结论 + 原因说明，broken 态再补一条可直接照做的修复提示。
    行的横向骨架（.setting-row / .row-icon / .row-text / .row-control / .row-actions）
    由设置页引入的 setting-shared 提供，这里只有本组特有的状态块。 */

@@ -25,7 +25,7 @@ import { initUpdater, scheduleStartupCheck, startPendingInstall } from './update
 import { closeAllFloatWindows } from './window/float-window'
 import { closeSplashWindow, fadeInWindow, fadeOutSplashWindow, isSplashWindow, showSplashWindow } from './window/splash-window'
 import { centerWindow, computeWindowBounds, fitWindowToWorkArea } from './window/window-bounds'
-import { wireWindowMaximizeEvents } from './window/window-events'
+import { wireWindowStateEvents } from './window/window-events'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
 
 /** Chromium 磁盘缓存硬上限（淘汰口径见 cache-storage.ts）；必须在 app ready 前设置 */
@@ -209,7 +209,7 @@ function createWindow(): void {
     // 幂等：Windows / Linux 上随后 before-quit 再清一次无害。
     cleanupStreamSessions()
   })
-  wireWindowMaximizeEvents(win)
+  wireWindowStateEvents(win)
 
   // 外链一律转系统浏览器：openExternal 会把 URL 交给操作系统的默认处理器，
   // 因此必须限定协议——否则渲染层构造 file:// / smb:// 之类即可触发本地动作。

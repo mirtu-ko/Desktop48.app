@@ -17,7 +17,8 @@ import icon from '../../../resources/icon.png?asset'
 import { ConfigStore } from '../config-store'
 import { sendIpc } from '../ipc/send'
 import { log } from '../logger'
-import { wireWindowMaximizeEvents } from './window-events'
+import { isTopmostSupported } from './topmost-support'
+import { wireWindowStateEvents } from './window-events'
 
 /** 窗口图标：与主窗口同口径，Windows 取多尺寸 ico，macOS / Linux 取带留白的方形图稿（见 app.ts） */
 const appIcon = process.platform === 'win32' ? iconWin : icon
@@ -76,6 +77,8 @@ function topmostPreference(): FloatTopmost {
  * setAlwaysOnTop 每次都排一次 z-order，断流重试的 pause→play 不该让它空转。
  */
 function applyTopmost(record: FloatWindowRecord): void {
+  if (!isTopmostSupported())
+    return
   const desired = resolveFloatTopmost(record.topmost, record.playing)
   if (record.applied === desired)
     return
@@ -133,9 +136,9 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
   const workArea = resolveAnchorDisplay(mainWindow).workArea
   const { w: width, h: height } = computeInitialWindowSize(FLOAT_DEFAULT_ASPECT, workArea)
   const { x, y } = resolveFloatWindowPosition(workArea, { w: width, h: height }, records.size)
-  // 建窗即按全局偏好定态：never 不置顶，其余先顶上，避免打开瞬间被主窗口盖住
+  // 建窗即按全局偏好定态：不支持置顶的平台（Linux）始终为 false；其余按偏好置顶，避免打开瞬间被主窗口盖住
   const preference = topmostPreference()
-  const initialTopmost = initialFloatTopmost(preference)
+  const initialTopmost = isTopmostSupported() && initialFloatTopmost(preference)
 
   const win = new BrowserWindow({
     width,
@@ -174,16 +177,23 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
   }
   records.set(key, record)
 
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    if (win.isDestroyed())
+      return
+    win.show()
+    win.focus()
+  })
 
   // 最大化 / 还原状态推给本窗渲染进程：标题栏按钮的图标要跟着换
-  wireWindowMaximizeEvents(win)
-  // 最大化视同用户接管尺寸（否则后续 aspect 定形会把最大化抹掉），
-  // 同时置位 autoFitSettled：最大化本身就是一次尺寸落定
-  win.on('maximize', () => {
+  wireWindowStateEvents(win)
+  // 最大化 / 全屏都视同用户接管尺寸（否则后续 aspect 定形会把最大化抹掉），
+  // 同时置位 autoFitSettled：它们本身就是一次尺寸落定
+  const takeOverSize = () => {
     record.userResized = true
     record.autoFitSettled = true
-  })
+  }
+  win.on('maximize', takeOverSize)
+  win.on('enter-full-screen', takeOverSize)
 
   // 置顶不跟 focus / blur 联动：播放状态由渲染端上报（见 setFloatWindowPlaying）。
   // will-resize 只在用户手动缩放时触发（程序化设置不触发，Linux 不发射，
@@ -228,6 +238,12 @@ export function fitFloatWindowAspect(sender: WebContents, aspect: number): void 
   const record = findByWindow(win)
   if (!record)
     return
+  // 最大化 / 全屏期间几何归窗口管理器：此时 setBounds 会被忽略，部分窗口管理器上
+  // 反而会直接退出全屏。定形推迟到还原 / 退出全屏后的下一次元数据到达
+  if (win.isMaximized() || win.isFullScreen()) {
+    log('[float-window] 最大化或全屏中，跳过自动定形:', record.payload.liveId, aspect)
+    return
+  }
 
   const [currentW, currentH] = win.getSize()
   const { userResized, fit } = decideAutoFit(record, { w: currentW, h: currentH }, RESIZE_DETECT_EPSILON)

@@ -233,18 +233,27 @@ export function showSplashWindow(): void {
 export function fadeInWindow(win: BrowserWindow): void {
   if (win.isDestroyed())
     return
+  // Linux（含 ChromeOS Sommelier / 无合成器 WM）上 setOpacity(0) 可能静默失效或导致窗口无法置前，
+  // 直接显示并聚焦，避免主窗口卡在后台或不可见
+  if (process.platform === 'linux') {
+    win.show()
+    win.focus()
+    return
+  }
   // 先置透明再 show，避免先闪一帧全不透明窗口；show 必须由这里负责，
   // 调用方 ready-to-show 里不再直接 win.show()
   try {
     win.setOpacity(0)
     win.show()
+    win.focus()
     animateOpacity(win, 0, 1)
   }
   catch (error) {
-    // setOpacity 依赖平台合成器（如 Linux 无 compositor 的 WM）：失败时降级为直接显示，
+    // setOpacity 依赖平台合成器：失败时降级为直接显示，
     // 决不能让主窗口停留在不可见状态，也不能吞掉调用方后续的启动画面收尾
     log('[splash-window] 淡入动画不可用，降级为直接显示:', error)
     win.show()
+    win.focus()
   }
 }
 

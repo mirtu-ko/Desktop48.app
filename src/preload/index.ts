@@ -156,6 +156,7 @@ const api = {
   windowToggleMaximize: () => invokeIpc('windowToggleMaximize'),
   windowClose: () => invokeIpc('windowClose'),
   windowIsMaximized: () => invokeIpc('windowIsMaximized'),
+  windowTopmostSupported: () => invokeIpc('windowTopmostSupported'),
   windowOnMaximizeChange: (callback: (_isMaximized: boolean) => void) =>
     onIpc('windowOnMaximizeChange', callback),
   // windowOnTopmostChange 由 IpcEventMap 派生：主进程写入置顶偏好后广播
