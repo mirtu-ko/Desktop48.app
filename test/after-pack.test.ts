@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import afterPackLinux, { buildWrapperScript } from '../scripts/after-pack-linux.mjs'
+import afterPack, { buildWrapperScript } from '../scripts/after-pack.mjs'
 
 /** 包一层 Promise，方便 await 子进程输出的参数回显 */
 function execFileAsync(file: string, args: string[], options: ExecFileOptions): Promise<string> {
@@ -38,11 +38,11 @@ function linuxContext(appOutDir: string) {
   return { electronPlatformName: 'linux', appOutDir, packager: { executableName: 'Desktop48' } }
 }
 
-describe('afterPackLinux（产物目录里的真二进制改名为 -bin）', () => {
+describe('afterPack（产物目录里的真二进制改名为 -bin）', () => {
   it('原位换成包装脚本，真二进制搬到 -bin 且可执行位不变', async () => {
     const appOutDir = await makeAppOut()
 
-    await afterPackLinux(linuxContext(appOutDir))
+    await afterPack(linuxContext(appOutDir))
 
     expect(await readFile(join(appOutDir, 'Desktop48-bin'), 'utf8')).toBe(FAKE_BINARY)
     const wrapper = join(appOutDir, 'Desktop48')
@@ -53,22 +53,71 @@ describe('afterPackLinux（产物目录里的真二进制改名为 -bin）', () 
   it('重复执行是幂等的：不会把包装脚本搬成 -bin 覆盖真二进制', async () => {
     const appOutDir = await makeAppOut()
 
-    await afterPackLinux(linuxContext(appOutDir))
+    await afterPack(linuxContext(appOutDir))
     const wrapperBefore = await readFile(join(appOutDir, 'Desktop48'), 'utf8')
-    await afterPackLinux(linuxContext(appOutDir))
+    await afterPack(linuxContext(appOutDir))
 
     // 第二次若照旧 rename，-bin 会变成包装脚本，exec 自己形成死循环
     expect(await readFile(join(appOutDir, 'Desktop48-bin'), 'utf8')).toBe(FAKE_BINARY)
     expect(await readFile(join(appOutDir, 'Desktop48'), 'utf8')).toBe(wrapperBefore)
   })
 
-  it('非 Linux 平台直接跳过，产物保持原样', async () => {
+  it('非 Linux 平台直接跳过包装脚本，产物保持原样', async () => {
     const appOutDir = await makeAppOut()
 
-    await afterPackLinux({ ...linuxContext(appOutDir), electronPlatformName: 'darwin' })
+    await afterPack({ ...linuxContext(appOutDir), electronPlatformName: 'darwin' })
 
     expect(await readdir(appOutDir)).toEqual(['Desktop48'])
     expect(await readFile(join(appOutDir, 'Desktop48'), 'utf8')).toBe(FAKE_BINARY)
+  })
+
+  it('linux 下在改名为 -bin 之前翻转 Electron fuses，幂等重跑不重复执行', async () => {
+    const appOutDir = await makeAppOut()
+    const calls: string[] = []
+    const context = {
+      ...linuxContext(appOutDir),
+      packager: {
+        executableName: 'Desktop48',
+        generateFuseConfig(fuses: Record<string, boolean>) {
+          calls.push(`generate:${Object.keys(fuses).length}`)
+          return Promise.resolve({ version: '1', ...fuses })
+        },
+        async addElectronFuses() {
+          // 此时真二进制必须还在原位，尚未被替换成 shell 包装脚本
+          const content = await readFile(join(appOutDir, 'Desktop48'), 'utf8')
+          calls.push(content === FAKE_BINARY ? 'fuses-on-binary' : 'fuses-on-wrapper')
+        },
+      },
+    }
+
+    await afterPack(context)
+    await afterPack(context)
+
+    expect(calls).toEqual(['generate:5', 'fuses-on-binary'])
+  })
+
+  it('非 Linux 平台也会翻转 Electron fuses', async () => {
+    const appOutDir = await makeAppOut()
+    const calls: string[] = []
+    const context = {
+      ...linuxContext(appOutDir),
+      electronPlatformName: 'win32',
+      packager: {
+        executableName: 'Desktop48',
+        generateFuseConfig() {
+          calls.push('generate')
+          return Promise.resolve({ version: '1' })
+        },
+        addElectronFuses() {
+          calls.push('fuses')
+          return Promise.resolve()
+        },
+      },
+    }
+
+    await afterPack(context)
+
+    expect(calls).toEqual(['generate', 'fuses'])
   })
 })
 
