@@ -23,6 +23,7 @@ import { cleanupStreamSessions } from './stream'
 import { destroyTray, installTray, isTrayActive } from './tray'
 import { initUpdater, scheduleStartupCheck, startPendingInstall } from './updater'
 import { closeAllFloatWindows } from './window/float-window'
+import { closeSplashWindow, fadeInWindow, fadeOutSplashWindow, isSplashWindow, showSplashWindow } from './window/splash-window'
 import { centerWindow, computeWindowBounds, fitWindowToWorkArea } from './window/window-bounds'
 import { wireWindowMaximizeEvents } from './window/window-events'
 import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
@@ -110,7 +111,7 @@ function shouldHideToTray(): boolean {
 
 /** 显示 / 聚焦主窗口；主窗口不存在（已销毁）时重建。托盘点击、菜单与 activate/second-instance 共用 */
 function showMainWindow(): BrowserWindow | null {
-  const win = activeWindow() ?? BrowserWindow.getAllWindows().find(w => !w.isDestroyed())
+  const win = activeWindow() ?? BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && !isSplashWindow(w))
   if (!win) {
     createWindow()
     return activeWindow()
@@ -177,8 +178,24 @@ function createWindow(): void {
       win.hide()
     }
   })
+  // 首帧只处理一次：dev 下 HMR full-reload 等场景可能再次派发 ready-to-show，
+  // 不能把已隐藏到托盘的窗口拉回，也不能把已不透明的窗口重播一遍透明淡入
+  let shownOnce = false
   win.on('ready-to-show', () => {
-    win.show()
+    if (shownOnce)
+      return
+    shownOnce = true
+    // 主窗口淡入 + 启动画面淡出同步进行，避免从动画直接切到静止页面的突兀感
+    fadeInWindow(win)
+    fadeOutSplashWindow()
+  })
+  // 加载失败兜底：ready-to-show 永不到来，启动画面不能悬停在屏幕上（splash-window 内部另有超时安全网）。
+  // 只认主帧失败：子资源加载失败不应收起画面
+  win.webContents.on('did-fail-load', (_event, _errorCode, errorDescription, _validatedURL, isMainFrame) => {
+    if (!isMainFrame)
+      return
+    log('[app.ts] 主窗口加载失败:', errorDescription)
+    closeSplashWindow()
   })
   // 窗口销毁后必须解除引用：可选链挡不住已销毁对象，调用其方法会抛 "Object has been destroyed"
   win.on('closed', () => {
@@ -251,11 +268,16 @@ app.on('second-instance', () => {
 })
 
 app.whenReady().then(async () => {
+  // 启动动画先行：覆盖凭证载入等异步阶段，主窗口就绪后由 ready-to-show 收尾
+  showSplashWindow()
+
   // 更新模块先就位：上次可能已经把包下好，本次启动就地静默装掉，用户看到的是「启动稍慢，直接是新版本」。
   // 装成功时安装器接管进程，不再建窗口/托盘/轮询——否则会先闪一帧旧界面
   initUpdater()
-  if (await startPendingInstall())
+  if (await startPendingInstall()) {
+    closeSplashWindow()
     return
+  }
 
   // 异步加密器在 ready 之后才初始化：先载入凭证，再开窗口与轮询，避免首个请求被判未登录
   await ensureAuthLoaded()
@@ -299,6 +321,12 @@ app.whenReady().then(async () => {
     // 点击 Dock / 任务栏图标恢复应用，统一走 showMainWindow
     showMainWindow()
   })
+}).catch((error) => {
+  // 启动链路任一环失败都要收掉启动画面，否则它会一直悬在屏幕上
+  log('[app.ts] 启动失败:', error)
+  closeSplashWindow()
+  // 此刻无任何窗口可用，继续常驻只会留下一个不可见的僵尸进程，直接退出
+  app.quit()
 })
 
 // 所有窗口关闭但应用常驻：macOS 菜单栏常驻一律不退出；Windows 仅在托盘在驻且开关开启时保持
@@ -315,6 +343,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // 进入退出流程：解除 close→hide 拦截并销毁托盘
   isQuitting = true
+  closeSplashWindow()
   destroyTray()
   // 应用退出前统一清理独立播放窗 / 直播会话 / 转流进程 / 弹幕长连接
   closeAllFloatWindows()
