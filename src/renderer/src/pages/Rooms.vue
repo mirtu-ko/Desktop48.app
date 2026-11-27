@@ -5,7 +5,6 @@
 import type { PocketRoom } from '@renderer/composables/use-pocket-rooms'
 import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import type { Component, ComponentPublicInstance } from 'vue'
-import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { ArrowRight, Calendar, ChatDotRound, Check, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
 import RoomComposer from '@renderer/components/rooms/RoomComposer.vue'
@@ -20,6 +19,7 @@ import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
+import { useUnreadSeenGuard } from '@renderer/composables/use-unread-seen'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promotion'
@@ -30,6 +30,7 @@ import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
 import { resolveDateChannel, resolveRoomArchiveStart } from '@renderer/utils/room-date-jump'
 import { shouldTrackRoomEnter } from '@renderer/utils/room-enter-tracker'
+import { unreadShownCount, unreadBadgeText as unreadText } from '@renderer/utils/room-unread'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
 import { useDebounceFn, useDocumentVisibility, useEventListener, useIntersectionObserver, useResizeObserver } from '@vueuse/core'
@@ -217,11 +218,6 @@ const essenceSummary = computed(() => {
     return ''
   return message.text || '[消息]'
 })
-
-/** 未读数字角标文案：计数按列表一页封顶，触顶即「至少这么多」，收敛为 50+ */
-function unreadText(count: number): string {
-  return count >= ROOM_MESSAGE_LIMIT ? `${ROOM_MESSAGE_LIMIT}+` : String(count)
-}
 
 /** 左列房间未读角标文案：v-if 与插值共用同一出口，计数语义与封顶规则只此一处 */
 function roomUnreadText(userId: number): string {
@@ -433,14 +429,25 @@ const unreadAnchorBeyond = computed(() =>
   unreadAnchor.value?.beyond === true && unreadIndex.value === 0,
 )
 
+/**
+ * 分割线与底部胶囊共用的条数：两处必须同一个数。角标快照取自进房瞬间（60s 检测轮的口径），
+ * 与「列表里比水位新的可见条数」会差 1～几条，混用就是「分割线 4 条、胶囊 3 条」。
+ */
+const unreadShown = computed(() =>
+  unreadShownCount({
+    region: unreadRegionCount.value,
+    snapshot: unreadAnchor.value?.count ?? 0,
+    beyond: unreadAnchorBeyond.value,
+  }),
+)
+
 /** 分割线文案：正常报「以下是 N 条」；水位在未加载区域时降级为提示上翻 */
 const unreadDividerText = computed(() => {
-  const anchor = unreadAnchor.value
-  if (!anchor)
+  if (!unreadAnchor.value)
     return ''
   return unreadAnchorBeyond.value
-    ? `新消息从更早开始（${unreadText(anchor.count)} 条），上翻继续查看`
-    : `以下是 ${unreadRegionCount.value} 条新消息`
+    ? `新消息从更早开始（${unreadText(unreadShown.value)} 条），上翻继续查看`
+    : `以下是 ${unreadShown.value} 条新消息`
 })
 
 /**
@@ -631,6 +638,30 @@ let preservingScroll = false
 
 /** 上翻历史时收到的新消息数：浮标提示用，回底 / 切房清零 */
 const newCount = ref(0)
+
+/** 当前房间、当前频道的角标未读：贴底自愈的触发源（贴底时它应为 0） */
+const activeUnreadCount = computed(() => {
+  const userId = selectedUserId.value
+  if (userId === null)
+    return 0
+  const unread = unreadChannelOf(userId)
+  return viewMode.value === 'small' ? unread.small : unread.big
+})
+
+/**
+ * 贴底自愈（见 composables/use-unread-seen）：检测轮把已经看过的消息又数成未读时补标一次。
+ * 收尾在途不补——分割线还要截旧水位（entryMarkDepth）。
+ */
+useUnreadSeenGuard({
+  unread: activeUnreadCount,
+  selectedUserId,
+  viewMode,
+  atBottom,
+  pageVisible: computed(() => docVisibility.value === 'visible'),
+  hasMessages: computed(() => messages.value.length > 0),
+  entryBusy: () => entryMarkDepth > 0,
+  markRead: (userId, target) => void markRoomRead(userId, target),
+})
 
 function onListScroll() {
   const el = listRef.value
@@ -2170,7 +2201,7 @@ watch([chatStatus, chatStatusText], () => {
                   <el-icon :size="12">
                     <ArrowRight />
                   </el-icon>
-                  {{ unreadText(unreadAnchor.count) }} 条未读
+                  {{ unreadText(unreadShown) }} 条未读
                 </button>
               </Transition>
 
