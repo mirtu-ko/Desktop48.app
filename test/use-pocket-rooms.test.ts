@@ -2232,8 +2232,7 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(api.canSpeak.value).toBe(false)
-    // 即使连接已就绪（optIn 是账号级、从别的房间带过来），禁言房间也不该把消息发出去
-    await api.connectRoomQChat()
+    // 禁言判定先于连接态：连接已随进房订阅就绪也不发
     expect(await api.sendMessage('禁言房间')).toEqual({ ok: false, message: '房主已开启全员禁言，暂时不能发言' })
     expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
   })
@@ -2270,12 +2269,12 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
   })
 
   it('发送成功：ACK 回显入列、冷却倒数、回复态清空', async () => {
-    const { api } = await setup(sendFixture())
+    const { api, emitRoomBatch } = await setup(sendFixture())
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    // 默认不连云信，发送前需确认连接
-    expect(await api.connectRoomQChat()).toEqual({ ok: true })
+    // 进房即订阅，连接态由主进程经 pocketRoomBatch 异步推进
+    emitRoomBatch({ kind: 'status', status: 'connected' })
 
     // 先进回复态：发送成功后清空
     api.startReply(api.messages.value[0])
@@ -2316,7 +2315,6 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
 
     expect(await api.sendMessage('第一条')).toEqual({ ok: true })
     await vi.advanceTimersByTimeAsync(1600)
@@ -2332,7 +2330,6 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
 
     vi.mocked(window.mainAPI.pocketSendRoomMessage).mockImplementationOnce(async () => {
       throw new Error('房间连接已失效，请重新进入房间')
@@ -2343,7 +2340,7 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     expect(api.sendCooldownLeft.value).toBe(0)
   })
 
-  it('未进房 / 未确认连接 / 纯空白：拒绝发送且不进 IPC', async () => {
+  it('未进房 / 纯空白：拒绝发送且不进 IPC', async () => {
     const { api } = await setup(sendFixture())
     await api.load()
 
@@ -2352,30 +2349,7 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
 
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    // 进房不自动连云信：未确认前一律不发
-    expect(await api.sendMessage('在吗')).toEqual({ ok: false, message: '请先点击聊天框连接房间' })
-    expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
-
-    await api.connectRoomQChat()
     expect(await api.sendMessage('   ')).toEqual({ ok: false })
-    expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
-  })
-
-  it('主动断开连接：撤销授权、退订当前频道，回到只看模式', async () => {
-    const { api } = await setup(sendFixture())
-    await api.load()
-    await api.selectRoom(10001)
-    await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
-    expect(api.qchatOptIn.value).toBe(true)
-
-    await api.disconnectRoomQChat()
-
-    expect(api.qchatOptIn.value).toBe(false)
-    expect(api.qchatStatus.value).toBe('disconnected')
-    expect(window.mainAPI.pocketRoomQChatLeave).toHaveBeenCalledWith('srv-10001', 'ch-10001')
-    // 断开后发送被拒，提示先连接（不会直接发）
-    expect(await api.sendMessage('还在吗')).toEqual({ ok: false, message: '请先点击聊天框连接房间' })
     expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
   })
 
@@ -2384,7 +2358,6 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
 
     // 挂起发送：回包落地前切到 10002
     let release: (value: unknown) => void = () => {}
@@ -2407,7 +2380,6 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
     await api.sendMessage('我发的消息')
     const mine = api.messages.value.at(-1)!
 
@@ -2620,18 +2592,15 @@ describe('use-pocket-rooms / QChat 订阅同步', () => {
     }
   }
 
-  it('进房不建连；确认后订阅；切房先订新房再退旧房；退房退订', async () => {
+  it('进房即订阅；切房先订新房再退旧房；退房退订', async () => {
     const { api, calls } = await setup(syncFixture())
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    // 默认不连云信：只看房间不建连、不订阅，消息靠 HTTP 轮询
-    expect(calls.qchatEntered).toEqual([])
-    expect(api.qchatStatus.value).toBe('disconnected')
-    expect(api.chatStatus.value).toBe('ready')
-
-    expect(await api.connectRoomQChat()).toEqual({ ok: true })
+    // 进房即订阅（无需确认）；连接态由主进程推送，这里保持默认
     expect(calls.qchatEntered).toEqual([{ serverId: 'srv-10001', channelId: 'ch-10001' }])
+    expect(api.chatStatus.value).toBe('ready')
+    expect(api.qchatStatus.value).toBe('disconnected')
 
     await api.selectRoom(10002)
     await vi.advanceTimersByTimeAsync(0)
@@ -2655,7 +2624,6 @@ describe('use-pocket-rooms / QChat 订阅同步', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
 
     scope.stop()
     await vi.advanceTimersByTimeAsync(0)
@@ -2663,14 +2631,13 @@ describe('use-pocket-rooms / QChat 订阅同步', () => {
     expect(calls.qchatLeft).toEqual([{ serverId: 'srv-10001', channelId: 'ch-10001' }])
   })
 
-  it('连接失败：返回原因、连接态置 disconnected，消息链路不受影响', async () => {
+  it('订阅失败：原因进 qchatHint、连接态置 disconnected，消息链路不受影响', async () => {
     const { api } = await setup(syncFixture())
     await api.load()
     vi.mocked(window.mainAPI.pocketRoomQChatEnter).mockImplementationOnce(async () => ({ ok: false, message: '连接超时' }))
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
 
-    expect(await api.connectRoomQChat()).toEqual({ ok: false, message: '连接超时' })
     expect(api.qchatStatus.value).toBe('disconnected')
     expect(api.qchatHint.value).toBe('连接超时')
     // 实时链路失败只禁发送；HTTP 轮询仍是消息链路兜底

@@ -195,7 +195,7 @@ export function usePocketRooms() {
   const roomPermission = ref<PocketRoomPermission | null>(null)
   /**
    * 能否在本房间发文字：false = 房主开了房间级禁言（或个人禁言）。
-   * 供输入框直接显示禁言态，并在点击前就拦住 QChat 建连（建连会顶掉手机端）。
+   * 供输入框直接显示禁言态，并在点击前就拦住发送。
    */
   const canSpeak = computed(() => roomPermission.value?.sendText !== false)
   /** 正在拉权限的频道 id：切房后旧回包不得覆盖新房间 */
@@ -269,14 +269,9 @@ export function usePocketRooms() {
     return closureOf(userId) !== undefined
   }
   /**
-   * 用户是否已确认「连接云信会挤掉其他登录端」。默认 false：进房只跑 HTTP 轮询，
-   * 不建连、不订阅；点聊天框确认后置位，登出即复位。
-   */
-  const qchatOptIn = ref(false)
-  /**
-   * QChat 连接状态：确认连接后由主进程经 pocketRoomBatch 推进
-   * （connecting → connected；断线 disconnected → reconnecting，重连成功后订阅自动恢复）。
-   * disconnected 时发送不可用（输入条禁用并给出原因）。
+   * QChat 连接状态：进房即订阅，登录即在线（同云信 SDK 的长连接常驻），状态由主进程经
+   * pocketRoomBatch 推进（connecting → connected；断线 disconnected → reconnecting）。
+   * 未 connected 时发送不可用。
    */
   const qchatStatus = ref<PocketRoomQChatStatus>('disconnected')
   /** 连接状态附言（重连次数 / 失败原因）；空串 = 无 */
@@ -1031,40 +1026,6 @@ export function usePocketRooms() {
     return qchatSyncChain
   }
 
-  /**
-   * 用户确认后连接当前房间（置位 optIn 并同步订阅）。
-   * 确认文案在页面层——这里只管「确认之后就按已授权处理」，失败原因经 qchatHint 回传。
-   */
-  async function connectRoomQChat(): Promise<{ ok: boolean, message?: string }> {
-    const target = activeChannel
-    if (!target)
-      return { ok: false, message: '请先进入房间' }
-    if (!loggedIn.value)
-      return { ok: false, message: '登录口袋48账号后才能发言' }
-    qchatOptIn.value = true
-    await syncQChatChannel()
-    // 以订阅表为准判断成败：qchatChannel 只在 enter 回包 ok 时更新，
-    // 而连接状态由主进程异步推送，回包这一刻可能还没到
-    const settled = qchatChannel
-    if (!settled || settled.serverId !== target.serverId || settled.channelId !== target.channelId)
-      return { ok: false, message: qchatHint.value || '房间连接失败' }
-    return { ok: true }
-  }
-
-  /**
-   * 主动断开房间 QChat：撤销连接授权并退订当前频道（连接按需销毁）。
-   * 断开后本页回到只看模式：消息继续走 HTTP 轮询，不再顶掉手机等其他设备。
-   */
-  async function disconnectRoomQChat(): Promise<void> {
-    qchatOptIn.value = false
-    replyTarget.value = null
-    clearSendCooldown()
-    qchatStatus.value = 'disconnected'
-    qchatHint.value = ''
-    // 走同一收敛点退订当前频道：reconcileQChatChannel 见 optIn=false 会退旧房
-    await syncQChatChannel()
-  }
-
   async function leaveQChatChannel(channel: { serverId: string, channelId: string }): Promise<void> {
     try {
       await window.mainAPI.pocketRoomQChatLeave(channel.serverId, channel.channelId)
@@ -1077,14 +1038,6 @@ export function usePocketRooms() {
   async function reconcileQChatChannel(): Promise<void> {
     const next = activeChannel
     const previous = qchatChannel
-    if (next && !qchatOptIn.value) {
-      // 未确认连接：不建连、不订阅，消息走 HTTP 轮询。确认后由 connectRoomQChat 触发
-      if (previous)
-        await leaveQChatChannel(previous)
-      qchatChannel = null
-      qchatStatus.value = 'disconnected'
-      return
-    }
     const sameChannel = !!next && !!previous && next.serverId === previous.serverId && next.channelId === previous.channelId
     if (sameChannel || (!next && !previous))
       return
@@ -1136,8 +1089,6 @@ export function usePocketRooms() {
       return { ok: false, message: '请先进入房间' }
     if (!loggedIn.value)
       return { ok: false, message: '登录口袋48账号后才能发言' }
-    if (!qchatOptIn.value)
-      return { ok: false, message: '请先点击聊天框连接房间' }
     // 服务端已明确禁言：入口已拦住，这里是并发/时序变化时的兜底
     if (!canSpeak.value)
       return { ok: false, message: '房主已开启全员禁言，暂时不能发言' }
@@ -1622,8 +1573,7 @@ export function usePocketRooms() {
     chatStatus.value = 'ready'
     chatStatusText.value = ''
     resumeMessagePoll()
-    // 进房不连 QChat：消息走 HTTP 轮询。用户点聊天框确认后才建连（会挤掉其他登录端），
-    // 见 connectRoomQChat；退旧房在 sync 内部后置，见 reconcileQChatChannel
+    // 进房即订阅；退旧房在 sync 内部后置，见 reconcileQChatChannel
     void syncQChatChannel()
   }
 
@@ -1981,12 +1931,9 @@ export function usePocketRooms() {
     })
   }
 
-  // 登录态变化（在设置页登录/退出后回到本页）：重新首灌；退出即撤回连接授权并退订
-  watch(loggedIn, (value) => {
-    if (!value) {
-      qchatOptIn.value = false
-      void syncQChatChannel()
-    }
+  // 登录态变化（设置页登录/退出后回到本页）：重新首灌；退出时由 load() 清空 activeChannel 并退订当前频道
+  // （主进程已按 token 失效清会话，见 resetRoomQChatSessions）
+  watch(loggedIn, () => {
     void load()
   })
 
@@ -2077,11 +2024,8 @@ export function usePocketRooms() {
 
     qchatStatus,
     qchatHint,
-    qchatOptIn,
     /** 当前房间是否允许发言（房主房间级禁言时 false，输入框据此禁用并跳过建连） */
     canSpeak,
-    connectRoomQChat,
-    disconnectRoomQChat,
     sendBusy,
     sendCooldownLeft,
     replyTarget,

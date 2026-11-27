@@ -4,7 +4,7 @@
 
 import type { PocketRoom } from '@renderer/composables/use-pocket-rooms'
 import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
-import type { Component, ComponentPublicInstance, VNode } from 'vue'
+import type { Component, ComponentPublicInstance } from 'vue'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { ArrowRight, Calendar, ChatDotRound, Check, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
@@ -85,10 +85,7 @@ const {
 
   qchatStatus,
   qchatHint,
-  qchatOptIn,
   canSpeak,
-  connectRoomQChat,
-  disconnectRoomQChat,
   sendBusy,
   sendCooldownLeft,
   replyTarget,
@@ -1113,7 +1110,7 @@ const composerMuted = computed(() => speakBlock.value === 'muted')
 /** 阻断提示节流：反复点输入框时只每 3s 提示一次，不堆一屏 toast */
 let speakBlockToastAt = 0
 
-/** 输入条可交互（不含连接状态）：未连接时点击它用于引导连接；阻断态直接不可交互 */
+/** 输入条可交互（不含连接状态）：阻断态直接不可交互；未连接时点发送钮给出状态提示 */
 const composerUsable = computed(() =>
   composerVisible.value
   && !speakBlock.value
@@ -1121,18 +1118,17 @@ const composerUsable = computed(() =>
   && sendCooldownLeft.value === 0,
 )
 
-/** 可发送：已确认连接 + 连接就绪 + 不在发送中 / 冷却中（主进程同口径限流是最终防线） */
+/** 可发送：连接就绪 + 不在发送中 / 冷却中（主进程同口径限流是最终防线） */
 const canSend = computed(() =>
   composerUsable.value
-  && qchatOptIn.value
   && qchatStatus.value === 'connected',
 )
 
-/** 占位文案即状态：未连接时是「点击连接」的引导，连接后是连接状态与冷却倒数 */
+/** 占位文案即状态：未就绪时只提示连接 / 重连，不给点击引导 */
 const composerPlaceholder = computed(() => {
   if (!composerVisible.value)
     return ''
-  // 阻断原因优先于连接状态：连接了也发不出去，别让文案引导用户去建连
+  // 阻断原因优先于连接状态：连接了也发不出去，别让文案引导用户等连接
   if (speakBlock.value === 'unfollowed')
     return '请关注后发言'
   if (speakBlock.value === 'muted')
@@ -1141,8 +1137,6 @@ const composerPlaceholder = computed(() => {
     return '正在发送…'
   if (sendCooldownLeft.value > 0)
     return `发送冷却中（${Math.ceil(sendCooldownLeft.value / 1000)}s）…`
-  if (!qchatOptIn.value)
-    return '点击此处连接房间后发言'
   if (qchatStatus.value === 'connecting')
     return '正在连接房间…'
   if (qchatStatus.value === 'reconnecting')
@@ -1176,60 +1170,12 @@ const sendButtonHint = computed(() => {
     return '正在发送消息'
   if (sendCooldownLeft.value > 0)
     return `发言冷却中，${Math.ceil(sendCooldownLeft.value / 1000)}s 后可继续发送`
-  if (!qchatOptIn.value)
-    return '先点击输入框连接房间，连接后即可发言'
   if (qchatStatus.value !== 'connected')
     return '房间连接未就绪，暂不能发送'
   return '发送消息（也可按 Enter）'
 })
 
-/**
- * 连接确认正文：一句前提 + 两条影响，拆成要点比整段说明更好扫读。
- * 弹窗挂在 body 下，正文样式复用 app.scss 的 .app-confirm-body / .app-confirm-list。
- */
-function connectConfirmBody(): VNode {
-  return h('div', { class: 'app-confirm-body' }, [
-    h('p', { class: 'app-confirm-lead' }, '发言需要以当前账号连接云信 IM。'),
-    h('ul', { class: 'app-confirm-list' }, [
-      h('li', '同一账号只允许一台设备在线。'),
-    ]),
-  ])
-}
-
-/**
- * 连接房间前的确认：发言必须以当前账号登录云信 IM，同账号只允许一台设备在线，
- * 连接后手机（或其他设备）上的口袋48 会被顶下线。确认一次后本窗口内不再打扰。
- */
-async function requestQChatConnection(): Promise<boolean> {
-  if (qchatOptIn.value)
-    return qchatStatus.value !== 'disconnected'
-  try {
-    await ElMessageBox.confirm(
-      connectConfirmBody(),
-      '连接房间',
-      {
-        type: 'warning',
-        customClass: 'app-confirm',
-        modalClass: 'detail-card-overlay',
-        confirmButtonText: '连接并发言',
-        cancelButtonText: '取消',
-      },
-    )
-  }
-  catch {
-    // 用户取消：保持未连接，房间消息仍可正常浏览（HTTP 轮询）
-    return false
-  }
-  const result = await connectRoomQChat()
-  if (!result.ok) {
-    ElMessage.error(result.message || '连接房间失败')
-    return false
-  }
-  composerEl.value?.focus()
-  return true
-}
-
-/** 阻断态点输入框：只解释原因，绝不发起 QChat 建连（建连会顶掉手机端，而这里本就发不出去） */
+/** 阻断态点输入框：只解释原因，不发请求 */
 function noticeSpeakBlock(): void {
   const block = speakBlock.value
   if (!block || Date.now() - speakBlockToastAt < 3000)
@@ -1240,15 +1186,10 @@ function noticeSpeakBlock(): void {
     : '房主已开启全员禁言，暂时不能发言')
 }
 
-/** 未连接时点输入框：先确认再连接，不吞掉用户的输入意图 */
+/** 点输入框：阻断态只解释原因（连接随进房自动建立） */
 function onComposerClick(): void {
-  if (speakBlock.value) {
+  if (speakBlock.value)
     noticeSpeakBlock()
-    return
-  }
-  if (!composerUsable.value || qchatOptIn.value)
-    return
-  void requestQChatConnection()
 }
 
 /** Enter 发送；组词中的 Enter 是拼音选字，不是确认 */
@@ -1258,37 +1199,17 @@ function onDraftEnter(event: KeyboardEvent) {
   void onSendClick('enter')
 }
 
-/** 输入条上的「断开连接」：回到只看模式（不再顶手机），断开前二次确认 */
-async function onDisconnectClick(): Promise<void> {
-  try {
-    await ElMessageBox.confirm(
-      '断开连接后回到只看模式，手机等其他设备不再被顶下线；房间消息仍通过 HTTP 轮询。',
-      '断开房间连接',
-      {
-        type: 'warning',
-        customClass: 'app-confirm',
-        modalClass: 'detail-card-overlay',
-        confirmButtonText: '断开',
-        cancelButtonText: '取消',
-      },
-    )
-  }
-  catch {
-    return
-  }
-  await disconnectRoomQChat()
-  ElMessage.success('已断开房间连接')
-}
-
 async function onSendClick(via: 'enter' | 'button') {
   if (!composerUsable.value)
     return
   if (!canSend.value) {
-    // 未连接：先引导连接。连接成功后由用户再点一次发送，避免「确认完就误发」
-    if (!qchatOptIn.value)
-      void requestQChatConnection()
-    else if (qchatStatus.value !== 'connected')
-      ElMessage.info(qchatHint.value || '房间正在连接，请稍候')
+    // 连接随进房建立：只在尚未就绪时解释一句
+    if (qchatStatus.value !== 'connected') {
+      const fallback = qchatStatus.value === 'disconnected'
+        ? '房间未连接，暂不能发言'
+        : '房间正在连接，请稍候'
+      ElMessage.info(qchatHint.value || fallback)
+    }
     return
   }
   const text = draft.value.trim()
@@ -2212,14 +2133,12 @@ watch([chatStatus, chatStatusText], () => {
                 </template>
               </div>
 
-              <!-- 发言输入条：房间就绪后常驻消息区底部。默认不连接云信（只看不挤手机），
-                   点输入框先确认「会挤掉其他登录端」，确认后才建连；回复态在输入行上方显示引用摘要 -->
+              <!-- 发言输入条：房间就绪后常驻消息区底部。进房即订阅，未就绪时占位文案即状态 -->
               <RoomComposer
                 v-if="composerVisible"
                 ref="composerEl"
                 v-model:draft="draft"
                 :reply-target="replyTarget"
-                :qchat-opt-in="qchatOptIn"
                 :send-busy="sendBusy"
                 :blocked="!!speakBlock"
                 :muted="composerMuted"
@@ -2229,7 +2148,6 @@ watch([chatStatus, chatStatusText], () => {
                 :send-hint="sendButtonHint"
                 :send-label="sendButtonLabel"
                 @cancel-reply="cancelReply"
-                @disconnect="onDisconnectClick"
                 @composer-click="onComposerClick"
                 @draft-enter="onDraftEnter"
                 @send="onSendClick('button')"
