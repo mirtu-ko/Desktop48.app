@@ -66,8 +66,17 @@ const EMPTY_CHANNEL_TTL = 30 * 60 * 1000
 const MAX_MESSAGE_PROBES = 9
 /** 消息列表并发上限：一轮最多 9 个房间，分 3 路拉完 */
 const PROBE_CONCURRENCY = 3
-/** 小房间主动发现的间隔：每个成员 server 两次「拉频道列表 + 试暗号」之间的最小间隔 */
-const SMALL_DISCOVER_TTL = 5 * 60 * 1000
+/**
+ * 小房间未读探测的轮次间隔：小房间消息少、频道 ID 变化少，不必与大房间同频。
+ * 每 N 轮（POLL_MS 为一轮，即约 5 分钟）才探测一次小房间；大房间每轮照常。
+ * 跳过的小房间不推进 seenKey / lastProbeAt，下一个小房间轮次会补上，新消息不会丢。
+ */
+const SMALL_PROBE_EVERY_ROUNDS = 5
+/**
+ * 小房间主动发现的间隔：每个成员 server 两次「拉频道列表 + 试暗号」之间的最小间隔。
+ * 小房间频道 ID 变化很少，30 分钟足够；房主换房由 invalidateSmallChannel 立即纠正，不依赖这个间隔。
+ */
+const SMALL_DISCOVER_TTL = 30 * 60 * 1000
 /** 小房间主动发现的并发上限：按成员 server 分组，一次最多查 3 个 server */
 const SMALL_DISCOVER_CONCURRENCY = 3
 /** 频道连续探测失败达这个次数即作废重解析：成员换房 / 关房后旧频道会一直失败 */
@@ -155,6 +164,8 @@ let stored: StoredUnread | null = null
 let timer: NodeJS.Timeout | null = null
 /** 轮询重入护栏：上一轮请求还没回来时直接跳过本轮 */
 let ticking = false
+/** 已进入探测阶段的轮次计数：用于 SMALL_PROBE_EVERY_ROUNDS 的小房间降频 */
+let probeRound = 0
 /** start 时上一轮还没结束：等它释放护栏后立即补跑，而不是落到下一个 60s 定时器 */
 let startRequested = false
 /**
@@ -1095,6 +1106,19 @@ async function tick(): Promise<void> {
       }
     }
 
+    // 小房间降频：非小房间轮次把小房间从本轮探测队列里摘掉（大房间不受影响）。
+    // 摘掉的频道不推进 seenKey / lastProbeAt，留给下一个小房间轮次，新消息不会丢。
+    const smallRound = probeRound % SMALL_PROBE_EVERY_ROUNDS === 0
+    probeRound++
+    const smallChannelIds = new Set(Object.values(data.smallChannels).map(channel => channel.channelId))
+    // 从未探测过的小房间（刚发现）不降频：首次锚定要尽快完成，否则新房间要等数轮才出角标
+    if (!smallRound) {
+      for (const channelId of [...pending.keys()]) {
+        if (smallChannelIds.has(channelId) && lastProbeAt.has(channelId))
+          pending.delete(channelId)
+      }
+    }
+
     const probes = [...pending.values()]
       .sort((a, b) => (lastProbeAt.get(a.channelId) ?? 0) - (lastProbeAt.get(b.channelId) ?? 0))
       .slice(0, MAX_MESSAGE_PROBES)
@@ -1106,7 +1130,10 @@ async function tick(): Promise<void> {
     // 校对归属：旧频道只要还能读历史消息，探测就不会失败，失败自愈永远等不到。
     // 补探本就是低频路径（多数轮次 0~1 个频道），一次 jump 换掉永久错挂的角标很划算。
     // 必须排在 probe 之后：probe 会把旧频道重新写成「有未读」，校验晚一步才清得干净。
-    await Promise.all(staleChannels.map(async (channelId) => {
+    const staleToCheck = smallRound
+      ? staleChannels
+      : staleChannels.filter(channelId => !smallChannelIds.has(channelId))
+    await Promise.all(staleToCheck.map(async (channelId) => {
       const ownerKey = channelOwner.get(channelId)
       if (!ownerKey)
         return
