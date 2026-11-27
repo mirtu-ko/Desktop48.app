@@ -1,10 +1,14 @@
 <script setup lang="ts">
+import type { PropType } from 'vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import { formatMediaTime } from '@renderer/utils/time-format'
+import { computed, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps({
   playing: { type: Boolean, default: false },
   muted: { type: Boolean, default: false },
+  /** 当前音量 0..1，0 视同静音 */
+  volume: { type: Number, default: 1 },
   isFullscreen: { type: Boolean, default: false },
   /** 录播必须可 seek，直播隐藏进度条 */
   showProgress: { type: Boolean, default: false },
@@ -12,9 +16,82 @@ const props = defineProps({
   duration: { type: Number, default: 0 },
   /** 紧凑模式：时间串只显示当前进度，总时长让位给进度条 */
   compact: { type: Boolean, default: false },
+  /** 快捷键提示（调音量时显示当前音量） */
+  hint: { type: Object as PropType<{ id: number, text: string } | null>, default: null },
 })
 
-const emit = defineEmits(['togglePlay', 'toggleMute', 'toggleFullscreen', 'seek'])
+const emit = defineEmits(['togglePlay', 'toggleMute', 'toggleFullscreen', 'seek', 'volumeChange'])
+
+// 音量：点喇叭切静音，悬停展开滑块。
+// 收起延迟 220ms：鼠标从钮斜着移向滑块时会先离开 .mini-volume，立即收起就够不着了。
+const volumeOpen = ref(false)
+let volumeCloseTimer: ReturnType<typeof setTimeout> | null = null
+
+function openVolume() {
+  if (volumeCloseTimer) {
+    clearTimeout(volumeCloseTimer)
+    volumeCloseTimer = null
+  }
+  volumeOpen.value = true
+}
+
+function scheduleCloseVolume() {
+  if (volumeCloseTimer)
+    clearTimeout(volumeCloseTimer)
+  volumeCloseTimer = setTimeout(() => {
+    volumeOpen.value = false
+    volumeCloseTimer = null
+  }, 220)
+}
+
+onUnmounted(() => {
+  if (volumeCloseTimer)
+    clearTimeout(volumeCloseTimer)
+})
+
+const volumePercent = computed(() => Math.round(Math.min(1, Math.max(0, props.volume)) * 100))
+/** 图标按「实际无声」走：静音或音量归零 */
+const mutedIcon = computed(() => props.muted || props.volume <= 0)
+const sliderPercent = computed(() => (mutedIcon.value ? 0 : volumePercent.value))
+
+// 提示槽：键盘 ↑/↓ 的提示由宿主经 hint 传入，拖动滑块在本组件内合成，两者共用
+const hintText = ref('')
+let hintTimer: ReturnType<typeof setTimeout> | null = null
+let lastHintId = 0
+
+function showHint(text: string) {
+  hintText.value = text
+  if (hintTimer)
+    clearTimeout(hintTimer)
+  hintTimer = setTimeout(() => {
+    hintText.value = ''
+  }, 1000)
+}
+
+watch(() => props.hint, (hint) => {
+  if (!hint || hint.id === lastHintId)
+    return
+  lastHintId = hint.id
+  // 浮层开着时滑块本身就在动，不再叠一条
+  if (volumeOpen.value)
+    return
+  showHint(hint.text)
+})
+
+onUnmounted(() => {
+  if (hintTimer)
+    clearTimeout(hintTimer)
+})
+
+function onVolumeInput(event: Event) {
+  const value = Number.parseFloat((event.target as HTMLInputElement).value)
+  if (Number.isNaN(value))
+    return
+  // 按拖动位置直接报：宿主解除静音是异步的，等它回报会滞后
+  const percent = Math.round(Math.min(100, Math.max(0, value)))
+  showHint(percent > 0 ? `音量 ${percent}%` : '静音')
+  emit('volumeChange', value / 100)
+}
 
 function timeText(): string {
   const current = formatMediaTime(props.currentTime)
@@ -30,9 +107,7 @@ function onRangeInput(event: Event) {
 </script>
 
 <template>
-  <!-- 全自绘控制条：直播与录播共用同一条胶囊。
-       直播在 #leading 插槽放状态段（LIVE 徽标/时长），录播用内置进度段；
-       加载期间整条随宿主 v-if 隐藏，连接中不显示 LIVE 状态。 -->
+  <!-- 全自绘控制条：直播与录播共用。直播经 #leading 插槽放状态段，录播用内置进度段 -->
   <div class="mini-controls player-capsule" :class="{ 'mini-controls--progress': showProgress }">
     <slot name="leading" />
 
@@ -54,9 +129,44 @@ function onRangeInput(event: Event) {
       <span class="mini-time">{{ timeText() }}</span>
     </template>
 
-    <button class="player-capsule__btn" :aria-label="muted ? '取消静音' : '静音'" @click="emit('toggleMute')">
-      <MediaIcon :name="muted ? 'volumeOff' : 'volumeOn'" />
-    </button>
+    <!-- 音量：点喇叭切静音，悬停浮出滑块 -->
+    <div
+      class="mini-volume"
+      @pointerenter="openVolume"
+      @pointerleave="scheduleCloseVolume"
+    >
+      <button
+        class="player-capsule__btn"
+        :class="{ 'is-open': volumeOpen }"
+        :aria-label="mutedIcon ? '取消静音' : '静音'"
+        @click="emit('toggleMute')"
+      >
+        <MediaIcon :name="mutedIcon ? 'volumeOff' : 'volumeOn'" />
+      </button>
+
+      <div v-if="volumeOpen" class="mini-volume__panel" @dblclick.stop>
+        <div class="mini-volume__track">
+          <input
+            type="range"
+            class="mini-volume__slider"
+            min="0"
+            max="100"
+            step="1"
+            :value="sliderPercent"
+            :style="{ '--fill': `${sliderPercent}%` }"
+            aria-label="音量"
+            @pointerdown.stop
+            @input="onVolumeInput"
+          >
+        </div>
+      </div>
+
+      <!-- 音量提示：浮层打开时抬高到面板之上 -->
+      <Transition name="mini-hint">
+        <span v-if="hintText" class="mini-hint" :class="{ 'is-above-panel': volumeOpen }">{{ hintText }}</span>
+      </Transition>
+    </div>
+
     <button
       class="player-capsule__btn"
       :aria-label="isFullscreen ? '退出全屏' : '全屏'"
@@ -70,14 +180,11 @@ function onRangeInput(event: Event) {
 <style scoped lang="scss">
 @use '../../assets/css/fluid' as *;
 
-/* 全自绘控制条：不参与旋转，恒定贴在容器底部；窄容器（迷你浮窗）下限宽自适应。
- * 深色玻璃胶囊骨架见全局 .player-capsule */
+/* 全自绘控制条：不参与旋转，恒定贴在容器底部。深色玻璃胶囊骨架见全局 .player-capsule */
 .mini-controls {
   /* 进度条轨道 / 滑块：随浮层曲线收放，滑块垂直居中按两者差值算 */
   --mini-track: #{fp(4px, 6px)};
   --mini-thumb: #{fp(10px, 12px)};
-  /* 左右留白与「离底边悬空量」是两回事：后者（--fp-control-gap）管纵向距离，
-     拿它当横向留白会让窄窗胶囊横向撑满、几乎贴到窗边 */
   --mini-gutter: #{fp(12px, 18px)};
 
   position: absolute;
@@ -87,22 +194,16 @@ function onRangeInput(event: Event) {
   max-width: calc(100% - 2 * var(--mini-gutter));
   min-width: 0;
   gap: 0px;
-  /* 上下内距走 --fp-capsule-pad：胶囊总高与弹幕避让量（use-danmaku-layer）同一条式子 */
   padding: var(--fp-capsule-pad) fp(7px, 12px);
   z-index: 20;
 }
 
-/* 有进度段（录播/回放）：容器足够宽时胶囊随容器拉伸，520px 封顶，富余空间由进度条吸收；
- * 直播（无进度段）与窄容器仍走 shrink-to-fit + max-width 兜底 */
+/* 有进度段（录播/回放）：随容器拉伸，520px 封顶；直播与窄容器仍走 shrink-to-fit */
 .mini-controls--progress {
   width: min(calc(100% - 2 * var(--mini-gutter)), 520px);
 }
 
-/* 按钮永不收缩：拥挤时让位给进度条 / 时间 / leading 插槽内容。
- * 透明圆钮（尺寸 / hover 白纱 / 按下缩放）见全局 .player-capsule__btn */
-
-/* 迷你进度条：录播可 seek。grow 1 = 富余空间全归进度条（时间串推到右端）；
- * shrink 1000 = 空间不足时先收缩（可压到 0），让尽后才轮到时间串截断 */
+/* 迷你进度条：优先吸收富余空间，空间不足时先收缩 */
 .mini-range {
   flex: 1 1000 140px;
   min-width: 0;
@@ -114,7 +215,6 @@ function onRangeInput(event: Event) {
   &::-webkit-slider-runnable-track {
     height: var(--mini-track);
     border-radius: calc(var(--mini-track) / 2);
-    /* --fill 由模板按 currentTime/duration 注入：填充段品牌渐变，底段半透明白 */
     background: linear-gradient(
       to right,
       var(--brand-secondary),
@@ -151,7 +251,127 @@ function onRangeInput(event: Event) {
   }
 }
 
-/* 时间串优先级高于进度条：只在进度条让尽后才截断 */
+/* 音量：锚住喇叭钮，面板从胶囊上沿浮出 */
+.mini-volume {
+  position: relative;
+  flex-shrink: 0;
+
+  /* 浮层开着时喇叭钮保持高亮 */
+  .player-capsule__btn.is-open {
+    background: var(--player-glass-hover);
+  }
+
+  &__panel {
+    position: absolute;
+    /* 紧贴喇叭钮上沿，中间不留空档 */
+    bottom: calc(100% + #{fp(1px, 2px)});
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    justify-content: center;
+    padding: fp(4px, 5px);
+    border-radius: var(--radius-pill);
+    /* 与胶囊同一块玻璃；叠第二层同值半透明会发白，只补描边 */
+    background: var(--player-glass-bg);
+    box-shadow: inset 0 0 0 1px var(--player-glass-ring);
+    z-index: 30;
+  }
+
+  /* 滑块热区：竖条很细，靠它留出左右落点 */
+  &__track {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: fp(16px, 20px);
+    height: fp(84px, 104px);
+    cursor: pointer;
+  }
+
+  /* 竖向滑条：rtl 让低音量落在底端。
+   * 填充方向与 thumb 相反 —— rtl 只翻转 thumb 落点，渐变仍从块起点长起，故写 to top
+   * （写 to right / to left 会在小声时亮满整条） */
+  &__slider {
+    --vol-track: #{fp(5px, 6px)};
+    --vol-thumb: #{fp(14px, 17px)};
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    writing-mode: vertical-lr;
+    direction: rtl;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+
+    &::-webkit-slider-runnable-track {
+      width: var(--vol-track);
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(
+        to top,
+        var(--brand-secondary),
+        var(--brand-primary) var(--fill, 0%),
+        rgba(255, 255, 255, 0.22) var(--fill, 0%)
+      );
+    }
+
+    /* vertical-lr 下 thumb 偏轨道左沿，用 margin-left 拉回居中 */
+    &::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: var(--vol-thumb);
+      height: var(--vol-thumb);
+      margin-left: calc((var(--vol-track) - var(--vol-thumb)) / 2);
+      border-radius: 50%;
+      border: fp(2px, 2.5px) solid rgba(255, 255, 255, 0.92);
+      background: var(--brand-primary);
+      box-shadow: 0 fp(1px, 2px) fp(3px, 4px) rgba(0, 0, 0, 0.35);
+      transition: transform 0.15s ease;
+    }
+
+    &:hover::-webkit-slider-thumb,
+    &:active::-webkit-slider-thumb {
+      transform: scale(1.12);
+    }
+  }
+}
+
+/* 音量提示：浮层正上方居中，不参与 flex、不撑宽胶囊 */
+.mini-hint {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + #{fp(10px, 14px)});
+  transform: translateX(-50%);
+  padding: fp(3px, 4px) fp(9px, 12px);
+  border-radius: var(--radius-pill);
+  background: var(--player-glass-bg);
+  box-shadow: inset 0 0 0 1px var(--player-glass-ring);
+  font-size: var(--fp-font-sm);
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 31;
+
+  /* 浮层展开时抬到面板顶之上 */
+  &.is-above-panel {
+    bottom: calc(100% + #{fp(102px, 126px)});
+  }
+}
+
+.mini-hint-enter-active,
+.mini-hint-leave-active {
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.mini-hint-enter-from,
+.mini-hint-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 4px);
+}
+
+/* 时间串在进度条让尽后才截断 */
 .mini-time {
   flex: 0 1 auto;
   min-width: 0;

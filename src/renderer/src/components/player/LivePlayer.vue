@@ -122,6 +122,7 @@ const {
   videoWrapperStyle,
   videoStyle,
   rotateHint,
+  shortcutHint,
   rotateLeft,
   rotateRight,
   resetRotation,
@@ -130,8 +131,12 @@ const {
   toggleFullscreen,
   playing,
   muted,
+  volume,
   togglePlay,
   toggleMute,
+  onVolumeSliderInput,
+  adjustVolume,
+  VOLUME_STEP,
   onVolumeChange,
   updateVideoDimensions,
 } = useVideoRotation({
@@ -786,10 +791,16 @@ const { running: recording, onActionClick: onRecordClick } = useMediaDownload({
 
 // ── 键盘快捷键（窗口级监听：按键只到 OS 激活的播放窗） ──────────────────────
 // 按键分派与 PlaybackPlayer 共用 useMediaShortcuts（键位单源）；
-// 直播场景只接旋转族快捷键（seek/音量对直播流无意义，不传对应 action 即不响应）
+// 直播不接 ←/→（seek 对直播无意义）；↑/↓ 音量作用于本地 media，直播同样有效
 useMediaShortcuts({
   getMedia: () => null,
-  actions: { rotateLeft, rotateRight, resetRotation },
+  actions: {
+    rotateLeft,
+    rotateRight,
+    resetRotation,
+    volumeUp: () => adjustVolume(VOLUME_STEP),
+    volumeDown: () => adjustVolume(-VOLUME_STEP),
+  },
   isEnabled: () => !isRadio.value,
 })
 
@@ -1049,9 +1060,12 @@ onUnmounted(() => {
         v-if="!mediaLoading && !liveEnded"
         :playing="playing"
         :muted="muted"
+        :volume="volume"
+        :hint="shortcutHint"
         :is-fullscreen="isFullscreen"
         @toggle-play="togglePlay"
         @toggle-mute="toggleMute"
+        @volume-change="onVolumeSliderInput"
         @toggle-fullscreen="toggleFullscreen"
       >
         <template #leading>

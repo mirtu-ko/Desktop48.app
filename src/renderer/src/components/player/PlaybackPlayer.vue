@@ -77,6 +77,7 @@ const {
   videoWrapperStyle,
   videoStyle,
   rotateHint,
+  shortcutHint,
   rotateLeft,
   rotateRight,
   resetRotation,
@@ -85,8 +86,12 @@ const {
   toggleFullscreen,
   playing,
   muted,
+  volume,
   togglePlay,
   toggleMute,
+  onVolumeSliderInput,
+  adjustVolume,
+  VOLUME_STEP,
   onVolumeChange,
   updateVideoDimensions,
 } = useVideoRotation({
@@ -236,6 +241,9 @@ useMediaShortcuts({
     rotateLeft,
     rotateRight,
     resetRotation,
+    // ↑/↓ 调音量：与迷你条音量滑块走同一条通道（静音态下自动解除静音）
+    volumeUp: () => adjustVolume(VOLUME_STEP),
+    volumeDown: () => adjustVolume(-VOLUME_STEP),
   },
 })
 
@@ -472,6 +480,8 @@ onUnmounted(() => {
             v-if="!mediaLoading"
             :playing="playing"
             :muted="muted"
+            :volume="volume"
+            :hint="shortcutHint"
             :is-fullscreen="isFullscreen"
             :show-progress="true"
             :current-time="currentTime"
@@ -479,6 +489,7 @@ onUnmounted(() => {
             :compact="compact"
             @toggle-play="togglePlay"
             @toggle-mute="toggleMute"
+            @volume-change="onVolumeSliderInput"
             @toggle-fullscreen="toggleFullscreen"
             @seek="onMiniSeek"
           >
