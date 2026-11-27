@@ -119,6 +119,7 @@ function showMainWindow(): BrowserWindow | null {
   if (win.isMinimized())
     win.restore()
   win.show()
+  win.moveTop()
   win.focus()
   // macOS 从菜单栏 / Dock 唤回时进程可能仍未激活，show 不会把应用拉到前台，需显式激活
   if (process.platform === 'darwin')
@@ -126,11 +127,22 @@ function showMainWindow(): BrowserWindow | null {
   return win
 }
 
-/** 托盘点未读房间：先唤回主窗口，再让渲染层切到房间页定位该成员 */
+/**
+ * 托盘点未读房间：先唤回主窗口，再让渲染层切到房间页定位该成员。
+ */
 function openRoomFromTray(userId: number): void {
   const win = showMainWindow()
   if (!win)
     return
+  if (process.platform === 'darwin') {
+    setTimeout(() => {
+      if (win.isDestroyed())
+        return
+      win.show()
+      win.moveTop()
+      app.focus({ steal: true })
+    }, 150)
+  }
   const deliver = () => sendIpc(win.webContents, 'openRoomFromTray', userId)
   // 窗口刚重建时渲染层还没加载完，直接 send 会丢，等它就绪再发一次
   if (win.webContents.isLoading())
