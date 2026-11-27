@@ -9,7 +9,6 @@
  * 凭证读写与请求收窄全部在 pocket-auth-core.ts；本模块只负责登录流程编排。
  * 对外入口统一是 `./pocket-auth`（barrel），消费方不要直接引用本文件。
  */
-import type { PocketClientProfileId } from '@common/pocket-client-profile'
 import type { PocketAuthState, PocketSmsResult, PocketUserInfo } from './pocket-auth-core'
 import {
   CHECKIN_URL,
@@ -21,7 +20,6 @@ import {
 import { debug, log } from '../logger'
 import {
   credentials,
-  currentClientProfile,
   expireStoredAuth,
   getAuthState,
   getToken,
@@ -50,19 +48,16 @@ function isValidMobile(mobile: string, area: string): boolean {
  * 发送登录验证码。
  * 正常返回 needCaptcha=false；命中反爬问答题（2001）时返回题目与选项，
  * 用户作答后把 answer 随下一次发送一并提交。
- * clientProfile 为本次登录选定的身份档位（凭证写入前就按它发请求）；省略时用当前档位。
  */
 export async function sendSms(
   mobile: string,
   area?: string,
   answer?: string,
-  clientProfile?: PocketClientProfileId,
 ): Promise<PocketSmsResult> {
   const normalizedArea = normalizeArea(area)
   const trimmed = mobile.trim()
   if (!isValidMobile(trimmed, normalizedArea))
     throw new Error(normalizedArea === '86' ? '请输入 11 位手机号' : '请输入有效的手机号')
-  const profile = clientProfile ?? currentClientProfile()
   // 7.1.44 APK：无答题时带业务码（登录注册=1）与空风控 token；有答题时只带 answer。
   const payload: Record<string, unknown> = answer
     ? { mobile: trimmed, area: normalizedArea, answer }
@@ -73,11 +68,10 @@ export async function sendSms(
         intelligenceToken: '',
       }
   debug('[pocket-auth] → 发送验证码：', JSON.stringify({
-    profile,
     mobile: maskMobile(trimmed, normalizedArea) || '***',
     hasCaptchaAnswer: !!answer,
   }))
-  const envelope = await postPocket(SMS_SEND_URL, payload, undefined, undefined, profile)
+  const envelope = await postPocket(SMS_SEND_URL, payload)
   debug('[pocket-auth] ← 发送验证码：', summarizeEnvelope(envelope))
   if (envelope.status === CAPTCHA_STATUS) {
     // message 内嵌 JSON：{question: string, answer: string[]}
@@ -113,15 +107,11 @@ function pickUserInfo(content: Record<string, unknown> | undefined | null): Pock
   }
 }
 
-/**
- * 验证码登录：成功后落盘凭证（含身份档位）并返回登录态。
- * clientProfile 为本轮登录选定的身份档位，随凭证保存并成为此后所有请求的档位。
- */
+/** 验证码登录：成功后落盘凭证并返回登录态 */
 export async function loginByCode(
   mobile: string,
   code: string,
   area?: string,
-  clientProfile?: PocketClientProfileId,
 ): Promise<PocketAuthState> {
   const normalizedArea = normalizeArea(area)
   const trimmedMobile = mobile.trim()
@@ -130,9 +120,7 @@ export async function loginByCode(
     throw new Error(normalizedArea === '86' ? '请输入 11 位手机号' : '请输入有效的手机号')
   if (!trimmedCode)
     throw new Error('请输入验证码')
-  const profile = clientProfile ?? currentClientProfile()
   debug('[pocket-auth] → 验证码登录：', JSON.stringify({
-    profile,
     mobile: maskMobile(trimmedMobile, normalizedArea) || '***',
     codeLength: trimmedCode.length,
   }))
@@ -145,7 +133,7 @@ export async function loginByCode(
     },
     loginType: 'MOBILE_SMS_CODE',
     deviceToken: '',
-  }, undefined, undefined, profile)
+  })
   const token = envelope.content?.token
   if (!isEnvelopeOk(envelope) || !token) {
     debug('[pocket-auth] ✕ 验证码登录失败：', JSON.stringify({
@@ -160,33 +148,30 @@ export async function loginByCode(
   // 登录响应的 content 里未必带资料，再校验一次顺手取昵称头像（失败不阻断，资料只是展示用）
   let info: PocketUserInfo = { nickname: '', avatar: '', userId: '' }
   try {
-    const check = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, token, undefined, profile)
+    const check = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, token)
     if (check.success)
       info = pickUserInfo(check.content)
   }
   catch (error) {
     log('[pocket-auth] 登录后拉取资料失败（不阻断登录）', error)
   }
-  await saveAuth(trimmedMobile, token, info, normalizedArea, profile)
+  await saveAuth(trimmedMobile, token, info, normalizedArea)
   return getAuthState()
 }
 
-/** Token 粘贴登录：user/info/reload 校验有效后落盘（档位同验证码登录，随凭证保存） */
+/** Token 粘贴登录：user/info/reload 校验有效后落盘 */
 export async function loginByToken(
   token: string,
   mobile = '',
-  clientProfile?: PocketClientProfileId,
 ): Promise<PocketAuthState> {
   const trimmed = token.trim()
   if (!trimmed)
     throw new Error('请输入 token')
-  const profile = clientProfile ?? currentClientProfile()
   debug('[pocket-auth] → token 登录：', JSON.stringify({
-    profile,
     mobile: maskMobile(mobile.trim()) || '***',
     tokenLength: trimmed.length,
   }))
-  const envelope = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, trimmed, undefined, profile)
+  const envelope = await postPocket<Record<string, unknown>>(TOKEN_CHECK_URL, { from: 'appstart' }, trimmed)
   if (!envelope.success) {
     const invalid = envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status)
     debug('[pocket-auth] ✕ token 登录失败：', JSON.stringify({
@@ -199,7 +184,7 @@ export async function loginByToken(
   }
   const info = pickUserInfo(envelope.content)
   // token 登录的手机号由用户手填、无区号语义（该链路不校验手机号），按 86 存档只为展示不带前缀
-  await saveAuth(mobile.trim(), trimmed, info, '86', profile)
+  await saveAuth(mobile.trim(), trimmed, info, '86')
   return getAuthState()
 }
 

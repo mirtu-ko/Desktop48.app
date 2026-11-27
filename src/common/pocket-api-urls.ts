@@ -78,7 +78,7 @@ export const ROOM_ANSWER_VERIFY_URL = `${ORIGIN}/im/api/v1/team/channel/question
  * 频道详情（seine 服务）：给定 team server 返回其下全部频道，含服务端给的 channelName。
  * 房间页「房间 / 小房间」切换要显示真实频道名，而 jump 与 lastMsgList 都不带频道名，
  * 被暗号拦下的 room/info 也拿不到 channelInfo——名称只能从这里取。
- * 参考实现 yaya_msg 同款；seine 有独立的客户端特征，见 seineHeaderOverrides。
+ * 参考实现 yaya_msg 同款；客户端特征统一走 client-profile（恒为塞纳河48，自带 X-Custom-Device-Type: ANDROID）。
  */
 export const SEINE_SERVER_DETAIL_URL = `${ORIGIN}/im/api/seine/server/detail`
 /**

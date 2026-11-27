@@ -5,18 +5,18 @@
  * 同一聊天室多个窗口共用一条连接，渲染层按 chatroomId 过滤事件批次。
  * 凭据（accid + imToken）与常量 appKey 由主进程内部取用，渲染层接触不到。
  *
- * 进房身份随登录档位（`nimIdentityFor(currentClientProfile())`）：会话建立时取一次并
- * 写入客户端，此后该连接不再变。档位切换必须经「登出 → 重新登录」，故登录态变更时由
- * `resetPocketDanmakuSessions` 断开旧会话，避免旧档身份 / 已删 token 的连接残留。
+ * 进房身份恒为塞纳河48 客户端（`nimIdentity()`，与 HTTP 同源）：会话建立时取一次并写入
+ * 客户端，此后该连接不再变。登录态变更（登出 / 换号）时由 `resetPocketDanmakuSessions`
+ * 断开旧会话，避免已删 token 的连接残留。
  */
 import type { PocketDanmakuStatus, PocketRawChatMessage } from '@preload/ipc-contract'
 import type { WebContents } from 'electron'
 import type { ChatroomSender, ChatroomSendResult } from './nim-chatroom'
 import { sendIpc } from '../ipc/send'
 import { debug, error } from '../logger'
-import { nimIdentityFor, pocketDeviceId, profileFor } from './client-profile'
+import { nimIdentity, POCKET_CLIENT, pocketDeviceId } from './client-profile'
 import { NimChatroomClient } from './nim-chatroom'
-import { currentClientProfile, getImCredentials, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
+import { getImCredentials, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
 
 interface PocketDanmakuSession {
   chatroomId: string
@@ -99,8 +99,8 @@ export async function handlePocketDanmakuStart(chatroomId: string, liveId: strin
     account: credentials.accid,
     token: credentials.token,
     roomId: roomKey,
-    // 会话建立时定档：取一次当前档位的云信身份，与本次凭据同源
-    nim: nimIdentityFor(currentClientProfile()),
+    // 云信身份与 HTTP 请求同源（塞纳河48 APK），建会话时取一次
+    nim: nimIdentity(),
     onConnected: () => {
       debug(`[pocket-danmaku] 聊天室 ${roomKey} 已进入`)
       pushStatus(session, 'connected')
@@ -126,13 +126,12 @@ export async function handlePocketDanmakuStart(chatroomId: string, liveId: strin
 
 /**
  * 拼发送弹幕用的发送者特征：账号资料（user/info/reload 快照，含等级 / 徽章）
- * + 当前档位的客户端事实（fromApp / 版本 / 机型）。
+ * + 客户端事实（fromApp / 版本 / 机型，与 HTTP 头同源）。
  * 放在发送时取而非建会话时取：资料接口是 HTTP，不能拖慢进房；
  * `getRoomSenderProfile` 自己会缓存，连续发送不会重复请求。
  */
 async function buildChatroomSender(): Promise<ChatroomSender> {
-  const profile = profileFor(currentClientProfile())
-  const info = profile.appInfo(pocketDeviceId())
+  const info = POCKET_CLIENT.appInfo(pocketDeviceId())
   const sender = await getRoomSenderProfile()
   return {
     user: {
@@ -185,9 +184,8 @@ export function handlePocketDanmakuStop(chatroomId: string, sender: WebContents)
 }
 
 /**
- * 登录态变更（登出 / 切换档位）时断开全部会话并告知订阅者：旧连接用的是旧档进房身份与
- * 已作废的 token，继续挂着只会收到「已过期」或按旧身份计费，不该沿用。
- * 渲染层收到 disconnected 后重开浮窗即会以新档重新参会。
+ * 登录态变更（登出 / 换号）时断开全部会话并告知订阅者：旧连接用的是已作废的 token，
+ * 继续挂着只会收到「已过期」，不该沿用。渲染层收到 disconnected 后重开浮窗即会以新凭证重新参会。
  * 与 `cleanupPocketDanmakuSessions` 的分工：那个用于应用退出——窗口即将销毁，
  * 既不该也没必要再发 IPC。
  */

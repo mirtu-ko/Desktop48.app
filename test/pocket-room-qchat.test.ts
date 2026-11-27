@@ -114,12 +114,11 @@ vi.mock('../src/main/pocket48/pocket-auth', () => ({
     const permission = authMock.permissions[channelId]
     return permission ? { sendText: true, roomRole: '0', followFlag: true, hasMsgBoard: true, ...permission } : null
   },
-  currentClientProfile: () => 'pocket48',
   expireStoredAuth: expireAuthMock,
 }))
 
 vi.mock('../src/main/pocket48/client-profile', () => ({
-  nimIdentityFor: () => ({ sdkVersion: 92012, packageName: 'com.pocket.snh48.activity' }),
+  nimIdentity: () => ({ sdkVersion: 92110, packageName: 'com.seine48.app' }),
 }))
 
 vi.mock('../src/main/ipc/send', () => ({

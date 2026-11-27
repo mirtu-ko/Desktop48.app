@@ -21,9 +21,9 @@ import type {
 import type { WebContents } from 'electron'
 import { sendIpc } from '../ipc/send'
 import { debug } from '../logger'
-import { nimIdentityFor } from './client-profile'
+import { nimIdentity } from './client-profile'
 import { isFatalAuthError, NimQChatClient } from './nim-qchat'
-import { currentClientProfile, expireStoredAuth, getImCredentials, getRoomPermissions, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
+import { expireStoredAuth, getImCredentials, getRoomPermissions, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
 import { buildRoomSendInput } from './room-message-payload'
 
 /**
@@ -145,7 +145,7 @@ export async function handleRoomQChatEnter(
         account: credentials.accid,
         token: credentials.token,
         // 会话建立时定档：与本次凭据、HTTP 请求同源（云信登录身份恒为 AOS，同官方 App）
-        nim: nimIdentityFor(currentClientProfile()),
+        nim: nimIdentity(),
         onConnected: () => pushBatch(session!, { kind: 'status', status: 'connected' }),
         onReconnecting: attempt => pushBatch(session!, { kind: 'status', status: 'reconnecting', message: `第 ${attempt} 次重连` }),
         onDisconnected: () => pushBatch(session!, { kind: 'status', status: 'disconnected' }),

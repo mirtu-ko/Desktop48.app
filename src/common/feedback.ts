@@ -35,7 +35,7 @@ export interface FeedbackMeta {
   electron: string
   /** 系统语言标记 */
   locale: string
-  /** 口袋客户端身份档 id（仅档位名，不含账号信息） */
+  /** 模拟的官方客户端身份（恒为塞纳河48，不含账号信息） */
   clientProfile: string
   /** 是否已登录（布尔值，便于判断问题是否与登录态相关） */
   loggedIn: boolean

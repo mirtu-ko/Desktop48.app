@@ -3,7 +3,6 @@
  * safeStorage 的加解密只在载入 / 保存时各做一次，业务侧仍按原口径读盘取快照、读内存取 token。
  * 加解密与文件读写由调用方注入，本模块不依赖 Electron，可在 node 环境单测。
  */
-import type { PocketClientProfileId } from '@common/pocket-client-profile'
 
 /** 落盘形态：token 以系统密文或明文降级二选一保存，二者不同时有值 */
 export interface StoredAuth {
@@ -11,8 +10,6 @@ export interface StoredAuth {
   mobile: string
   /** 登录时使用的区号（如 '852'）；旧版本无此字段，读取时按 86 处理 */
   area?: string
-  /** 登录时选定的客户端档位；旧版本无此字段，读取时按口袋48 处理 */
-  clientProfile?: PocketClientProfileId
   tokenEnc: string
   tokenPlain: string
   nickname: string
@@ -91,13 +88,13 @@ export class AuthCredentialStore {
         await this.reEncrypt(token)
     }
     catch (error) {
-      // 保留磁盘快照：档位 / 手机号仍可读，下次启动或重新登录还能恢复
+      // 保留磁盘快照：手机号 / 资料仍可读，下次启动或重新登录还能恢复
       this.report('[pocket-auth] token 解密失败，按未登录处理', error)
       this.plainToken = ''
     }
   }
 
-  /** 落盘快照（档位 / 手机号 / 资料）；读盘代价可忽略，登录与退出都不需要缓存失效 */
+  /** 落盘快照（手机号 / 资料）；读盘代价可忽略，登录与退出都不需要缓存失效 */
   getStored(): StoredAuth | null {
     return this.file.read()
   }

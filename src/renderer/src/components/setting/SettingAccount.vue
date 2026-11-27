@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { usePocketAccount } from '@renderer/composables/use-pocket-account'
 import type { InputInstance } from 'element-plus'
+import { POCKET_CLIENT_LABEL } from '@common/pocket-client-profile'
 import { Lock, User, WarningFilled } from '@element-plus/icons-vue'
 import { pocketAuthState } from '@renderer/stores/pocket-auth'
 import { computed, ref } from 'vue'
@@ -28,17 +29,14 @@ const emit = defineEmits<{
 
 const auth = pocketAuthState
 
+/** 登录身份是固定的塞纳河48 客户端，只在弹窗副标题里说明，不再提供选择 */
+const clientLabel = POCKET_CLIENT_LABEL
+
 const {
   avatarUrl,
   rowTitle,
-  profileLabel,
-  currentProfileHint,
   loginDialogVisible,
   loginTab,
-  loginProfile,
-  loginProfileHint,
-  profileLogos,
-  profileOptions,
   areaOptions,
   smsForm,
   tokenForm,
@@ -77,11 +75,6 @@ function formatCount(value: string): string {
 function focusSmsMobile() {
   smsMobileRef.value?.focus()
 }
-
-/** logo 加载失败时隐藏图片，露出首字磁贴 */
-function hideLogo(event: Event) {
-  (event.target as HTMLImageElement).style.display = 'none'
-}
 </script>
 
 <template>
@@ -108,11 +101,7 @@ function hideLogo(event: Event) {
       </span>
       <div class="row-text row-text--fluid">
         <div class="row-title">
-          {{ rowTitle }}<span
-            v-if="profileLabel"
-            class="row-profile-badge"
-            :title="currentProfileHint"
-          >{{ profileLabel }}</span>
+          {{ rowTitle }}
         </div>
         <div class="row-desc">
           <template v-if="auth.loggedIn">
@@ -179,38 +168,11 @@ function hideLogo(event: Event) {
             登录口袋48账号
           </h3>
           <p class="login-head-sub">
-            短信验证码或 Token 均可登录
+            以「{{ clientLabel }}」客户端身份登录 · 短信验证码或 Token 均可
           </p>
         </div>
       </div>
     </template>
-    <div class="login-profile">
-      <div class="login-profile-row">
-        <el-radio-group
-          v-model="loginProfile"
-          size="small"
-        >
-          <el-radio-button
-            v-for="option in profileOptions"
-            :key="option.id"
-            :value="option.id"
-          >
-            <span class="profile-option">
-              <img
-                class="profile-option-logo"
-                :src="profileLogos[option.id]"
-                alt=""
-                @error="hideLogo"
-              >
-              {{ option.label }}
-            </span>
-          </el-radio-button>
-        </el-radio-group>
-      </div>
-      <div class="login-profile-hint">
-        {{ loginProfileHint }}
-      </div>
-    </div>
     <el-tabs
       v-model="loginTab"
       class="login-tabs"
@@ -482,62 +444,6 @@ function hideLogo(event: Event) {
   margin: 2px 0 0;
   font-size: 12px;
   line-height: 1.4;
-  color: var(--el-text-color-secondary);
-}
-
-/* 登录身份选择：口袋48 / 塞纳河48 两个官方客户端档位，同一账号可在两端并存 */
-.login-profile {
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--brand-primary) 4%, transparent);
-}
-
-.login-profile-row {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-
-  /* 身份档位分段拉满剩余宽度，两端选项等宽，视觉更稳 */
-  :deep(.el-radio-group) {
-    flex: 1;
-    display: flex;
-  }
-
-  :deep(.el-radio-button) {
-    flex: 1;
-
-    .el-radio-button__inner {
-      width: 100%;
-    }
-  }
-}
-
-.login-profile-label {
-  flex: none;
-  font-size: 13px;
-  color: var(--el-text-color-primary);
-}
-
-/* 档位按钮内 APP logo：16px 圆角小图，加载失败自动隐藏只留文字 */
-.profile-option {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.profile-option-logo {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  object-fit: contain;
-}
-
-.login-profile-hint {
-  margin-top: 8px;
-  font-size: 12px;
-  line-height: 1.5;
   color: var(--el-text-color-secondary);
 }
 

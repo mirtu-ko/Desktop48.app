@@ -1,4 +1,4 @@
-import type { PocketAuthState, PocketCheckInResult, PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
+import type { PocketAuthState, PocketCheckInResult, PocketVerifyResult } from '@preload/ipc-contract'
 /**
  * 口袋48登录态的共享实现（模块级单例，与 stores/member-flags.ts 同一模式）。
  *
@@ -6,7 +6,6 @@ import type { PocketAuthState, PocketCheckInResult, PocketClientProfileId, Pocke
  * 不持有凭证本体——token 只留在主进程，渲染层拿到的永远是脱敏登录态。
  * 登录态一律经 applyAuthState 写入，账号身份变化时顺带作废小房间暗号的解锁态。
  */
-import { DEFAULT_POCKET_CLIENT_PROFILE } from '@common/pocket-client-profile'
 import { clearSmallRoomUnlocks } from '@renderer/utils/small-room-unlock'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
@@ -17,7 +16,6 @@ const LOGGED_OUT: PocketAuthState = {
   avatar: '',
   userId: '',
   mobileMasked: '',
-  clientProfile: DEFAULT_POCKET_CLIENT_PROFILE,
   plainFallback: false,
   savedAt: 0,
 }
@@ -71,25 +69,23 @@ export function ensurePocketAuthState(): PocketAuthState {
   return pocketAuthState.value
 }
 
-/** 验证码登录；clientProfile 为本轮选定的身份档位（口袋48 / 塞纳河48）；失败抛错由调用方提示 */
+/** 验证码登录；失败抛错由调用方提示 */
 export async function loginBySmsCode(
   mobile: string,
   code: string,
   area?: string,
-  clientProfile?: PocketClientProfileId,
 ): Promise<PocketAuthState> {
-  const state = await window.mainAPI.pocketLoginByCode(mobile, code, area, clientProfile)
+  const state = await window.mainAPI.pocketLoginByCode(mobile, code, area)
   applyAuthState(state)
   return state
 }
 
-/** Token 粘贴登录；clientProfile 同上；失败抛错由调用方提示 */
+/** Token 粘贴登录；失败抛错由调用方提示 */
 export async function loginByPastedToken(
   token: string,
   mobile = '',
-  clientProfile?: PocketClientProfileId,
 ): Promise<PocketAuthState> {
-  const state = await window.mainAPI.pocketLoginByToken(token, mobile, clientProfile)
+  const state = await window.mainAPI.pocketLoginByToken(token, mobile)
   applyAuthState(state)
   return state
 }

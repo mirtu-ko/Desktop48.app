@@ -19,7 +19,6 @@ import {
 import { toApiId, toMessageId } from '@common/pocket-ids'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { debug, log } from '../logger'
-import { clientHeaders, profileFor } from './client-profile'
 import { getToken, onSessionReset, postPocket, throwAuthExpired, TOKEN_INVALID_STATUSES } from './pocket-auth-core'
 
 /**
@@ -242,15 +241,6 @@ export interface PocketServerChannel {
 }
 
 /**
- * seine 服务的伪装头覆盖项：seine48 有独立的客户端特征（appName、UA、appVersion 与
- * 主 App 不同，且带 `X-Custom-Device-Type: ANDROID`），全部来自 client-profile。
- * 返回完整公共头由 postPocket 覆盖合并；`pa` 仍由其统一现算，避免两处签名不一致。
- */
-function seineHeaderOverrides(): Record<string, string> {
-  return clientHeaders(profileFor('seine48'))
-}
-
-/**
  * 拉取某个 team server 下的全部频道（channelId + channelName）。
  * 房间页用它把「房间 / 小房间」两个 tab 显示成真实频道名；
  * 字段结构无官方文档，失败/缺字段由调用方静默回退通用名。
@@ -267,7 +257,6 @@ export async function getServerChannels(serverId: string, force = false): Promis
     SEINE_SERVER_DETAIL_URL,
     { serverId: toApiId(serverId) },
     token,
-    seineHeaderOverrides(),
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
     throwAuthExpired()

@@ -23,7 +23,6 @@
 
 // ===== 底座：凭证状态 / 身份头 / 请求 / 登录态 =====
 export {
-  currentClientProfile,
   ensureAuthLoaded,
   expireStoredAuth,
   getAuthState,

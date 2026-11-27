@@ -17,7 +17,6 @@ const ACCOUNT_A: PocketAuthState = {
   avatar: '',
   userId: '10001',
   mobileMasked: '139****0001',
-  clientProfile: 'pocket48',
   plainFallback: false,
   savedAt: 1000,
 }

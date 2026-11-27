@@ -205,9 +205,9 @@ yaya_msg 有「自定义发言身份」（`common/sender-profile.js`）：把 `n
 **已确认**
 
 1. **发言链路可用**：QChat `2/2 → 24/1 → 24/2 → 24/10` 打通，发送、回复、删除自己刚发的消息均已实现；删/撤走 HTTP `im/api/v1/team/msg/delete`。
-2. **登录身份档位**：QChat 与聊天室统一报当前档位的 SDK 版本与包名；终端类型恒 1（AOS），与两个官方 App 一致。
+2. **登录身份固定**：桌面端恒以塞纳河48 客户端身份登录，QChat 与聊天室统一报该 APK 的 SDK 版本与包名；终端类型恒 1（AOS），与官方 App 一致。
 3. **`im/userinfo` 回包只有 `accid/pwd/userId`**：不下发 appKey，同一账号恒定返回同一 accid。
-4. **两个档位是同一个账号**：pocket48 与 seine48 实测 `accid` 与 `userId` 完全相同。
+4. **客户端指纹不改变账号身份**：曾用口袋48 / 塞纳河48 两档登录，实测 `accid` 与 `userId` 完全相同，故固定塞纳河48 不影响既有凭证。
 5. **连接会让同账号的其他设备下线**，故默认不连、确认后才连（第 3 节）。
 6. **房间发言权限取自 `team/room/info` 的 `userFunction.sendText`**（2026-10 实测，账号「海市」对照 7 个房间）：
    - 「增锅的房间🍳」1311973（房主开了**房间级全员禁言**）：`sendText / sendGif / sendEmoticon / sendForward` 全 `false`，`cdTime = 30`；

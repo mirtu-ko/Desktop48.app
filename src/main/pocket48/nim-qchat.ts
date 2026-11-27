@@ -13,8 +13,8 @@
  * - 请求/响应靠 serial + 服务号/指令号匹配（serial 从 2 起，32767 回绕），单请求 12s 超时；
  * - 心跳 1/2（15s，两条连接各自发）；任一条异常断开即整体重连（QChat 地址需重新索取）。
  *
- * 登录身份（SDK 版本 + 包名）取当前档位（client-profile.ts 的 nimIdentityFor），
- * 与聊天室、HTTP 同档——参考实现的 QChat 文件报的是旧版 seine SDK，档位口径以本项目为准。
+ * 登录身份（SDK 版本 + 包名）取 client-profile.ts 的 `nimIdentity()`（塞纳河48 APK），
+ * 与聊天室、HTTP 同源——参考实现的 QChat 文件报的是旧版 seine SDK，本项目口径以 client-profile 为准。
  *
  * 终端类型（属性 3）恒为 AOS：两个官方 App 都是 Android 客户端，忠实模拟即报 AOS。
  * 注意 `2/2` 是账号级登录，建连会顶掉同账号的其他在线设备，故房间页默认不连、确认后才连。

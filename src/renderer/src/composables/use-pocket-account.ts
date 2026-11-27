@@ -1,5 +1,4 @@
-import type { PocketClientProfileId, PocketVerifyResult } from '@preload/ipc-contract'
-import { DEFAULT_POCKET_CLIENT_PROFILE, POCKET_CLIENT_PROFILE_OPTIONS, pocketClientProfileOption } from '@common/pocket-client-profile'
+import type { PocketVerifyResult } from '@preload/ipc-contract'
 import {
   loginByPastedToken,
   loginBySmsCode,
@@ -23,12 +22,6 @@ import { computed, getCurrentInstance, onBeforeUnmount, onScopeDispose, reactive
  * 登录与凭证存储在主进程（stores/pocket-auth.ts 接线）；这里只管表单与流程编排。
  * 签到按钮的防连点与文案在 use-pocket-checkin.ts。
  */
-
-/** 登录身份档位的 APP 图标：与「推荐链接」里两个官方客户端的 logo 同源 */
-const PROFILE_LOGOS: Record<PocketClientProfileId, string> = {
-  pocket48: 'https://h5.48.cn/pocket48/image/logo.png',
-  seine48: 'https://www.ckg48.cn/favicon.ico',
-}
 
 /** 支持的国家/地区区号：保持短列表，避免一个全量国家表喧宾夺主 */
 const AREA_OPTIONS = [
@@ -70,27 +63,10 @@ export function usePocketAccount(onLoginSuccess?: () => void) {
     return s.loggedIn && s.nickname ? s.nickname : '口袋48账号'
   })
 
-  /** 已登录账号的身份标签：口袋48 / 塞纳河48 都展示当前登录档位 */
-  const profileLabel = computed(() => {
-    const s = pocketAuthState.value
-    return s.loggedIn ? `${pocketClientProfileOption(s.clientProfile).label}身份` : ''
-  })
-
-  /** 当前登录档位的说明（徽标悬停提示）：与登录弹窗里选中档位的 hint 同一口径 */
-  const currentProfileHint = computed(() => pocketClientProfileOption(pocketAuthState.value.clientProfile).hint)
-
   // ===== 登录弹窗 =====
 
   const loginDialogVisible = ref(false)
   const loginTab = ref<'sms' | 'token'>('sms')
-
-  /**
-   * 登录身份：本轮登录模拟哪个官方客户端（只影响请求头里的客户端身份）。
-   * 档位随凭证落盘并对之后所有请求生效；换档需退出后重新登录。
-   */
-  const loginProfile = ref<PocketClientProfileId>(DEFAULT_POCKET_CLIENT_PROFILE)
-  /** 当前所选身份的说明文案（登录弹窗内随选择变化） */
-  const loginProfileHint = computed(() => pocketClientProfileOption(loginProfile.value).hint)
 
   /** 上次成功发码时刻（ms）；0 = 本次会话还没发过 */
   const smsSentAt = ref(0)
@@ -167,7 +143,6 @@ export function usePocketAccount(onLoginSuccess?: () => void) {
     }
     smsForm.sending = true
     debugLog('pocket-auth', '发送验证码：', JSON.stringify({
-      profile: loginProfile.value,
       mobile: maskMobileForLog(smsForm.mobile, smsForm.area),
       hasCaptchaAnswer: !!smsForm.captcha?.answer,
     }))
@@ -176,7 +151,6 @@ export function usePocketAccount(onLoginSuccess?: () => void) {
         smsForm.mobile,
         smsForm.area,
         smsForm.captcha?.answer || undefined,
-        loginProfile.value,
       )
       debugLog('pocket-auth', '发送验证码结果：', JSON.stringify({
         needCaptcha: result.needCaptcha,
@@ -246,18 +220,17 @@ export function usePocketAccount(onLoginSuccess?: () => void) {
       return
     smsForm.loggingIn = true
     debugLog('pocket-auth', '提交验证码登录：', JSON.stringify({
-      profile: loginProfile.value,
       mobile: maskMobileForLog(smsForm.mobile, smsForm.area),
       codeLength: smsForm.code.trim().length,
     }))
     try {
-      const state = await loginBySmsCode(smsForm.mobile, smsForm.code, smsForm.area, loginProfile.value)
+      const state = await loginBySmsCode(smsForm.mobile, smsForm.code, smsForm.area)
       // Umami 事件：口袋登录成功率（不带任何账号信息）
-      trackEvent('pocket:login', { method: 'sms', profile: loginProfile.value, result: 'ok' })
+      trackEvent('pocket:login', { method: 'sms', result: 'ok' })
       await afterLogin(state)
     }
     catch (error) {
-      trackEvent('pocket:login', { method: 'sms', profile: loginProfile.value, result: 'fail' })
+      trackEvent('pocket:login', { method: 'sms', result: 'fail' })
       debugLog('pocket-auth', '验证码登录失败：', error)
       ElMessage.error(pocketAuthErrorMessage(error))
     }
@@ -271,18 +244,17 @@ export function usePocketAccount(onLoginSuccess?: () => void) {
       return
     tokenForm.loggingIn = true
     debugLog('pocket-auth', '提交 token 登录：', JSON.stringify({
-      profile: loginProfile.value,
       mobile: maskMobileForLog(tokenForm.mobile),
       tokenLength: tokenForm.token.trim().length,
     }))
     try {
-      const state = await loginByPastedToken(tokenForm.token, tokenForm.mobile, loginProfile.value)
+      const state = await loginByPastedToken(tokenForm.token, tokenForm.mobile)
       // Umami 事件：口袋登录成功率（不带任何账号信息）
-      trackEvent('pocket:login', { method: 'token', profile: loginProfile.value, result: 'ok' })
+      trackEvent('pocket:login', { method: 'token', result: 'ok' })
       await afterLogin(state)
     }
     catch (error) {
-      trackEvent('pocket:login', { method: 'token', profile: loginProfile.value, result: 'fail' })
+      trackEvent('pocket:login', { method: 'token', result: 'fail' })
       debugLog('pocket-auth', 'token 登录失败：', error)
       ElMessage.error(pocketAuthErrorMessage(error))
     }
@@ -376,15 +348,9 @@ export function usePocketAccount(onLoginSuccess?: () => void) {
     // 展示
     avatarUrl,
     rowTitle,
-    profileLabel,
-    currentProfileHint,
     // 登录弹窗
     loginDialogVisible,
     loginTab,
-    loginProfile,
-    loginProfileHint,
-    profileLogos: PROFILE_LOGOS,
-    profileOptions: POCKET_CLIENT_PROFILE_OPTIONS,
     areaOptions: AREA_OPTIONS,
     smsForm,
     tokenForm,

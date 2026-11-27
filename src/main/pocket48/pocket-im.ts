@@ -11,7 +11,6 @@ import { IM_USER_INFO_URL, ROOM_MSG_DELETE_URL, TOKEN_CHECK_URL } from '@common/
 import { debug } from '../logger'
 import {
   credentials,
-  currentClientProfile,
   getToken,
   onSessionReset,
   postPocket,
@@ -38,7 +37,7 @@ function maskCredential(value: string): string {
   return value.length <= 8 ? `${value.slice(0, 2)}***` : `${value.slice(0, 4)}***${value.slice(-4)}`
 }
 
-/** 同一（档位, 账号）只报一次：换账号或换档位后会再次触发，便于对比两个身份 */
+/** 同一账号只报一次：换账号后会再次触发，便于对比不同账号的凭据 */
 const credentialReports = new Set<string>()
 
 /**
@@ -47,14 +46,12 @@ const credentialReports = new Set<string>()
  * userId 不打码（它是房间消息里公开的数字 ID），否则无法逐位比对。
  */
 function reportImCredentials(accid: string, content: Record<string, unknown>): void {
-  const profile = currentClientProfile()
   const userId = String(content.userId ?? content.userid ?? '')
-  const key = `${profile}:${userId}:${accid}`
+  const key = `${userId}:${accid}`
   if (credentialReports.has(key))
     return
   credentialReports.add(key)
   debug('[pocket-auth] IM 凭据诊断：', JSON.stringify({
-    档位: profile,
     回包字段: Object.keys(content).sort().join(','),
     accid: maskCredential(accid),
     userId: userId || '(无)',

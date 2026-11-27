@@ -2,7 +2,7 @@
  * 口袋48账号 IPC 通道注册：只接线，登录/凭证逻辑归 main/pocket48/pocket-auth.ts。
  * 通道清单与 preload/index.ts 的 mainAPI 契约一一对应，两边改动请同步。
  */
-import type { PocketClientProfileId, PocketRoomReplyTarget } from '@preload/ipc-contract'
+import type { PocketRoomReplyTarget } from '@preload/ipc-contract'
 import type { IpcMainInvokeEvent } from 'electron'
 import * as pocketAuth from '../pocket48/pocket-auth'
 import {
@@ -28,7 +28,7 @@ export function registerPocketIPC(): void {
   // 轮询对 token 失效走「整轮冻结、未读不丢」，那是给瞬时网络故障的，真失效不适用
   pocketAuth.setAuthExpiredNotifier(() => {
     pocketUnread.clearAccountUnread()
-    // 房间 QChat 长连接用的是已作废 token 的旧档身份，一并断掉
+    // 房间 QChat / 聊天室长连接用的是已作废 token，一并断掉
     resetRoomQChatSessions()
     broadcastIpc('pocketAuthExpired')
   })
@@ -37,21 +37,18 @@ export function registerPocketIPC(): void {
     mobile: string,
     area?: string,
     answer?: string,
-    clientProfile?: PocketClientProfileId,
-  ) => pocketAuth.sendSms(mobile, area, answer, clientProfile))
+  ) => pocketAuth.sendSms(mobile, area, answer))
   handleTraced('pocketLoginByCode', (
     _event: IpcMainInvokeEvent,
     mobile: string,
     code: string,
     area?: string,
-    clientProfile?: PocketClientProfileId,
-  ) => pocketAuth.loginByCode(mobile, code, area, clientProfile))
+  ) => pocketAuth.loginByCode(mobile, code, area))
   handleTraced('pocketLoginByToken', (
     _event: IpcMainInvokeEvent,
     token: string,
     mobile?: string,
-    clientProfile?: PocketClientProfileId,
-  ) => pocketAuth.loginByToken(token, mobile, clientProfile))
+  ) => pocketAuth.loginByToken(token, mobile))
   handleTraced('pocketGetAuthState', () => pocketAuth.getAuthState())
   handleTraced('pocketLogout', () => {
     // 凭证既然要删，按该凭证建立的聊天室长连接（含进房身份）也一并断掉
