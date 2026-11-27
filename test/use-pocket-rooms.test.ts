@@ -2824,6 +2824,34 @@ describe('use-pocket-rooms / 关闭房间的判定与轮询', () => {
     expect(calls.messageFetched.length).toBe(before + 1)
   })
 
+  it('兜底轮询失败不占用降频窗口：下一个 tick 立即重试', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': openPermission },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.qchatStatus.value).toBe('connected')
+
+    const before = calls.messageFetched.length
+    roomMock.messageFail.add('ch-10001')
+    // 失败不记入降频窗口：QChat 健康时也按 5s 节奏重试
+    await vi.advanceTimersByTimeAsync(12_000)
+    const failed = calls.messageFetched.length
+    expect(failed).toBe(before + 2)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls.messageFetched.length).toBe(failed + 1)
+
+    // 恢复成功后重新用满 30s 窗口
+    roomMock.messageFail.delete('ch-10001')
+    await vi.advanceTimersByTimeAsync(5_000)
+    const recovered = calls.messageFetched.length
+    expect(recovered).toBe(failed + 2)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls.messageFetched.length).toBe(recovered)
+  })
+
   it('qChat 断开：下一个 5s tick 立即恢复轮询，不等满 30s', async () => {
     const { api, calls, emitRoomBatch } = await setup({
       pocketIds: [10001],
@@ -3277,6 +3305,40 @@ describe('use-pocket-rooms / 切回页面的列表复用', () => {
     expect(api.rooms.value).toEqual([])
     expect(api.listNeedsReload()).toBe(true)
   })
+
+  it('首灌进行中（loading）：切回不重复触发重拉', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    vi.advanceTimersByTime(61_000)
+    expect(api.listNeedsReload()).toBe(true)
+
+    // 快速来回切页：在途加载未完成时不再叠一次（否则新的会作废旧的，首灌永远完不成）
+    const pending = api.load()
+    expect(api.listNeedsReload()).toBe(false)
+    await pending
+    expect(api.listNeedsReload()).toBe(false)
+  })
+
+  it('拉取期间成员集合变化：签名按构建列表时的输入截取，下次切回仍会重拉', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    const gate: { release?: () => void } = {}
+    // 卡在 load 的末尾（预览批量），制造「列表已按旧输入构建、签名尚未截取」的窗口
+    vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(() =>
+      new Promise((resolve) => {
+        gate.release = () => resolve([])
+      }))
+
+    const pending = api.load()
+    await vi.advanceTimersByTimeAsync(0)
+    // 此刻在成员页关注了另一个成员：当前输入已变，但列表不含它
+    api.notePocketFollow(10003, true)
+    expect(gate.release).toBeTypeOf('function')
+    gate.release!()
+    await pending
+
+    // 签名记的是构建列表时的那份输入，与当前状态不符 → 下次激活仍会重拉
+    expect(api.listNeedsReload()).toBe(true)
+  })
 })
 
 describe('use-pocket-rooms / 精华缓存与排序键', () => {
@@ -3312,6 +3374,26 @@ describe('use-pocket-rooms / 精华缓存与排序键', () => {
     await vi.advanceTimersByTimeAsync(50)
 
     expect(calls.essenceFetched.filter(item => item.channelId === 'ch-10001').length).toBe(2)
+  })
+
+  it('登出清空精华缓存：重新登录后进同一频道必须重拉', async () => {
+    const { api, calls } = await setup({ pocketIds: [10001] })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    const roomCalls = () => calls.essenceFetched.filter(item => item.channelId === 'ch-10001').length
+    expect(roomCalls()).toBe(1)
+
+    authMock.setLoggedIn(false)
+    await api.load()
+    authMock.setLoggedIn(true)
+    await nextTick()
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    // 缓存已随账号清空：不能再靠它跳过请求
+    expect(roomCalls()).toBe(2)
   })
 
   it('排序键化后结果与原判据一致：临时 > 置顶 > 已关闭沉底 > 直播 > 未读 > 昵称', async () => {

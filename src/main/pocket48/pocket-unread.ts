@@ -1111,10 +1111,10 @@ async function tick(): Promise<void> {
     const smallRound = probeRound % SMALL_PROBE_EVERY_ROUNDS === 0
     probeRound++
     const smallChannelIds = new Set(Object.values(data.smallChannels).map(channel => channel.channelId))
-    // 从未探测过的小房间（刚发现）不降频：首次锚定要尽快完成，否则新房间要等数轮才出角标
+    // 从未探测过（刚发现）或已读对齐挂起（alignPending）的小房间不降频：都要尽快锚定 / 补对齐
     if (!smallRound) {
       for (const channelId of [...pending.keys()]) {
-        if (smallChannelIds.has(channelId) && lastProbeAt.has(channelId))
+        if (smallChannelIds.has(channelId) && lastProbeAt.has(channelId) && !alignPending.has(channelId))
           pending.delete(channelId)
       }
     }

@@ -191,10 +191,7 @@ export function usePocketRooms() {
   const essenceExhausted = ref(false)
   /** 更早精华的游标；0 = 没有更多 */
   let essenceCursor = 0
-  /**
-   * 精华按频道的短期缓存：大房间 ↔ 小房间、切回同一房间不必每次重拉。
-   * 精华低频变更，TTL 内沿用；超时后下一次进房重新拉首屏。内存态，切号 / 退出不保留。
-   */
+  /** 精华按频道缓存：大小房间互切、重进同一房间不必重拉；登出 / 换号时清空 */
   const ESSENCE_CACHE_MS = 5 * 60_000
   const essenceCache = new Map<string, { messages: PocketRoomMessageView[], cursor: number, exhausted: boolean, at: number }>()
 
@@ -385,8 +382,10 @@ export function usePocketRooms() {
       ids(pocketFollowIds.value),
     ].join('|')
   }
-  /** 切回页面时是否需要整表重拉：列表为空、超出复用窗口、或成员集合输入已变 */
+  /** 切回页面是否需要整表重拉：列表空、超出复用窗口、或成员集合输入已变；加载中不重拉（会作废在途的那次） */
   function listNeedsReload(): boolean {
+    if (loading.value)
+      return false
     return rooms.value.length === 0
       || Date.now() - listLoadedAt > LIST_REUSE_MS
       || followSignature() !== listSignature
@@ -789,6 +788,8 @@ export function usePocketRooms() {
         rooms.value = []
         selectedUserId.value = null
         clearChat()
+        // 精华缓存随账号走，换号不能命中旧内容
+        essenceCache.clear()
         void syncQChatChannel()
         clearSnapshotRooms()
         return
@@ -810,6 +811,8 @@ export function usePocketRooms() {
       if (requestId !== loadRequestId)
         return
       pocketFollowIds.value = new Set(pocketIds)
+      // 签名按列表实际用到的输入截取：拉取期间再变，下次切回会因不符而重拉
+      const usedSignature = followSignature()
       const liveMap = await livePromise
       if (requestId !== loadRequestId)
         return
@@ -876,8 +879,7 @@ export function usePocketRooms() {
           applyRoomPreview(room, lastMessageMap)
       }
       saveSnapshotRooms()
-      // 签名在首灌完成时截取：拉取期间的外部变化若已反映在此刻状态里则不会误判为变化
-      listSignature = followSignature()
+      listSignature = usedSignature
       listLoadedAt = Date.now()
     }
     catch (error) {
@@ -1942,8 +1944,9 @@ export function usePocketRooms() {
   }
 
   /** 轮询用：拉最新一页，只追加新消息（无新消息零开销） */
-  /** 上次轮询拉取的时刻（ms）：QChat 健康时据此把兜底轮询放宽到 MESSAGE_POLL_QCHAT_MS */
+  /** 上次轮询的时刻（ms）与所属频道：QChat 健康时据此放宽到 MESSAGE_POLL_QCHAT_MS；换频道重新起算 */
   let lastMessagePollAt = 0
+  let lastMessagePollChannel = ''
   /**
    * 当前房间是否由 QChat 推送覆盖：订阅的正是当前频道，且连接已建立。
    * 只认 qchatChannel（enter 成功后才写入）与 qchatStatus，两者缺一都视为未覆盖。
@@ -1961,7 +1964,13 @@ export function usePocketRooms() {
     // 已关闭房间的当前频道恒空；判定后停掉空转轮询，历史由按日期入口走旧频道
     if (!activeChannel || chatStatus.value !== 'ready' || roomClosed.value)
       return
-    // QChat 健康时间隔放宽到 30s；一旦断开，下一个 5s tick 即补拉（不等满 30s）
+    // 换频道重新起算，不借上一个房间的时间戳
+    const channelKey = `${activeChannel.serverId}:${activeChannel.channelId}`
+    if (channelKey !== lastMessagePollChannel) {
+      lastMessagePollChannel = channelKey
+      lastMessagePollAt = 0
+    }
+    // QChat 健康时放宽到 30s；断开后下一个 5s tick 即补拉
     if (qchatCoversActiveChannel() && Date.now() - lastMessagePollAt < MESSAGE_POLL_QCHAT_MS)
       return
     lastMessagePollAt = Date.now()
@@ -1969,6 +1978,9 @@ export function usePocketRooms() {
       await fetchRoomPage(activeChannel, 0, 'append')
     }
     catch (error) {
+      // 失败不占降频窗口，按 5s 重试
+      if (lastMessagePollChannel === channelKey)
+        lastMessagePollAt = 0
       debugLog('pocket-rooms', '房间新消息轮询失败', error)
     }
   }

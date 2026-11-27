@@ -373,6 +373,51 @@ describe('pocket-unread（房间未读检测）', () => {
     expect(probedChannels).not.toContain('cX')
   })
 
+  it('已读对齐挂起的小房间：非小房间轮次也不降频（欠着的水位要尽快补）', async () => {
+    const { mod, auth } = await freshModule()
+    auth.getToken.mockReturnValue('tok')
+    auth.getFollowedIds.mockResolvedValue([1])
+    auth.getRoomChannel.mockResolvedValue({ serverId: 's1', channelId: 'c1' })
+    auth.getRoomChannelOwner.mockRejectedValue(gateError('{"questionId":"596","question":"暗号"}'))
+    auth.getServerChannels.mockResolvedValue([
+      { channelId: 'c1', channelName: '大房间' },
+      { channelId: 'cX', channelName: '小房间' },
+    ])
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    // 第 1 轮（小房间轮次）发现 cX；第 2 轮（非小房间轮次）cX 首见锚定并写入 lastProbeAt
+    auth.getRoomLastMessages.mockResolvedValue([lastOf('k1a', 'c1')[0], lastOf('k1b', 'cX')[0]])
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getSmallChannel(1)).toMatchObject({ channelId: 'cX' })
+
+    // 对齐到小房间轮次，让 cX 真的产生未读
+    await alignToSmallRound(auth, mod)
+    auth.getRoomLastMessages.mockResolvedValue([lastOf('k2a', 'c1')[0], lastOf('k2b', 'cX')[0]])
+    auth.getRoomMessages.mockImplementation(async (channelId: string) =>
+      channelId === 'cX' ? pageOf('m2', 'm1') : pageOf('m1'))
+    await runTick(auth, mod)
+    await settle()
+    expect(mod.getState().rooms['1']).toMatchObject({ count: 1, smallCount: 1 })
+
+    // 读小房间时对齐失败 → 该频道进入 alignPending
+    auth.getRoomMessages.mockImplementation(async (channelId: string) => {
+      if (channelId === 'cX')
+        throw new Error('网络异常')
+      return pageOf('m1')
+    })
+    await mod.markRead(1, 'small')
+    expect(mod.getState()).toMatchObject({ rooms: {}, total: 0 })
+
+    // 下一轮（非小房间轮次）：挂起的频道不能被降频门摘掉，必须重新对齐
+    auth.getRoomMessages.mockClear()
+    auth.getRoomMessages.mockResolvedValue(pageOf('m2', 'm1'))
+    await runTick(auth, mod)
+    await settle()
+    expect(auth.getRoomMessages.mock.calls.map(call => call[0])).toEqual(['cX'])
+    // 对齐后计数归零，不会把刚读过的消息复活
+    expect(mod.getState()).toMatchObject({ rooms: {}, total: 0 })
+  })
+
   it('小房间被房主更新（旧频道回「频道不存在」）：作废归属、清未读，下一轮重新发现新频道', async () => {
     const { mod, auth } = await freshModule()
     auth.getToken.mockReturnValue('tok')
