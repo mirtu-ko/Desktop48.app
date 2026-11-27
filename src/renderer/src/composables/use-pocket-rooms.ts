@@ -1043,6 +1043,9 @@ export function usePocketRooms() {
       return
     if (next) {
       let entered = false
+      // 建连在途：占位显示「正在连接」
+      if (qchatStatus.value !== 'connected')
+        qchatStatus.value = 'connecting'
       try {
         const result = await window.mainAPI.pocketRoomQChatEnter(next.serverId, next.channelId)
         entered = result.ok
@@ -1066,6 +1069,8 @@ export function usePocketRooms() {
       if (entered) {
         qchatChannel = next
         qchatHint.value = ''
+        // enter 仅在建连完成后返回 ok，故 ok 即已连接
+        qchatStatus.value = 'connected'
       }
     }
     // 只有成功换到新房（或本就要退房）才退旧房：换房失败时旧订阅仍是唯一链路，

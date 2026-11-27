@@ -1076,17 +1076,18 @@ watch(messages, (list) => {
 /** 输入草稿；发送成功即清空 */
 const draft = ref('')
 
-/** 输入条可见条件：已登录 + 选中房间 + 消息就绪 + 不在小房间暗号锁定态。
- * 连接状态不影响可见性——未连接也要把输入条摆出来，点它才引导连接。
- * 房间禁言 / 未关注也不隐藏：要让用户看到「为什么说不了话」，而不是输入框凭空消失。
- * 房间已关闭则隐藏：没有留言板，禁言文案（「房主已开启全员禁言」）在这里是错的。
- */
-const composerVisible = computed(() =>
+/** 输入条挂载条件：切房期间不随加载态卸载，避免底部跳动 */
+const composerMounted = computed(() =>
   loggedIn.value
   && !!selectedRoom.value
-  && chatStatus.value === 'ready'
   && !smallLocked.value
   && !roomClosed.value,
+)
+
+/** 输入条可交互条件：挂载 + 消息就绪 */
+const composerVisible = computed(() =>
+  composerMounted.value
+  && chatStatus.value === 'ready',
 )
 
 /**
@@ -1262,7 +1263,7 @@ useResizeObserver(
   { box: 'border-box' },
 )
 const newMsgFloatStyle = computed(() => ({
-  bottom: `${12 + (composerVisible.value ? composerHeight.value : 0)}px`,
+  bottom: `${12 + (composerMounted.value ? composerHeight.value : 0)}px`,
 }))
 
 // ===== 复制（hover 按钮 + 右键菜单）=====
@@ -1582,13 +1583,11 @@ function liveCardHint(message: PocketRoomMessageView): string {
 
 /** 右栏消息区状态文案 */
 const statusText = ref('')
+// 底部只显示错误：加载提示由消息区空态给出，重复显示会让高度跳动
 watch([chatStatus, chatStatusText], () => {
-  if (chatStatus.value === 'loading')
-    statusText.value = '正在加载房间消息…'
-  else if (chatStatus.value === 'error')
-    statusText.value = chatStatusText.value || '房间消息加载失败'
-  else
-    statusText.value = ''
+  statusText.value = chatStatus.value === 'error'
+    ? (chatStatusText.value || '房间消息加载失败')
+    : ''
 }, { immediate: true })
 </script>
 
@@ -2135,7 +2134,7 @@ watch([chatStatus, chatStatusText], () => {
 
               <!-- 发言输入条：房间就绪后常驻消息区底部。进房即订阅，未就绪时占位文案即状态 -->
               <RoomComposer
-                v-if="composerVisible"
+                v-if="composerMounted"
                 ref="composerEl"
                 v-model:draft="draft"
                 :reply-target="replyTarget"

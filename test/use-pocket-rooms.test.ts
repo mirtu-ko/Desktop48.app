@@ -2597,10 +2597,10 @@ describe('use-pocket-rooms / QChat 订阅同步', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    // 进房即订阅（无需确认）；连接态由主进程推送，这里保持默认
+    // 进房即订阅；enter 返回 ok 即已连接
     expect(calls.qchatEntered).toEqual([{ serverId: 'srv-10001', channelId: 'ch-10001' }])
     expect(api.chatStatus.value).toBe('ready')
-    expect(api.qchatStatus.value).toBe('disconnected')
+    expect(api.qchatStatus.value).toBe('connected')
 
     await api.selectRoom(10002)
     await vi.advanceTimersByTimeAsync(0)
