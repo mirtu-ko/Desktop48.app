@@ -89,6 +89,15 @@ export type PocketRoomChatStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 /** 房间新消息轮询间隔：参考实现通知轮询 2s，这里取 5s 平衡实时性与接口压力 */
 const MESSAGE_POLL_MS = 5_000
+/** 同房重选时强制重枚举小房间的最小间隔（同一成员） */
+const SAME_ROOM_RECHECK_MS = 60_000
+/** 昵称排序用的中文 Collator（与 localeCompare(x, 'zh') 同口径，但只构造一次） */
+const zhCollator = new Intl.Collator('zh')
+/**
+ * QChat 已订阅且连接正常时的兜底轮询间隔。推送是主路径；轮询只为补断线期间漏掉的消息。
+ * QChat 重连不回补历史（nim-qchat 的 scheduleReconnect 只重建连接），所以不能停掉兜底。
+ */
+const MESSAGE_POLL_QCHAT_MS = 30_000
 /**
  * 发送冷却下限（与主进程 pocket-room-qchat.ts 的 SEND_INTERVAL_MS 同值）。
  * 实际冷却取 max(本值, 服务端房间级 cdTime)：cdTime 才是真实的限流窗口，
@@ -182,6 +191,12 @@ export function usePocketRooms() {
   const essenceExhausted = ref(false)
   /** 更早精华的游标；0 = 没有更多 */
   let essenceCursor = 0
+  /**
+   * 精华按频道的短期缓存：大房间 ↔ 小房间、切回同一房间不必每次重拉。
+   * 精华低频变更，TTL 内沿用；超时后下一次进房重新拉首屏。内存态，切号 / 退出不保留。
+   */
+  const ESSENCE_CACHE_MS = 5 * 60_000
+  const essenceCache = new Map<string, { messages: PocketRoomMessageView[], cursor: number, exhausted: boolean, at: number }>()
 
   /** 当前房间的频道（轮询/加载更多用）；null = 未选中或解析失败 */
   let activeChannel: { serverId: string, channelId: string } | null = null
@@ -347,6 +362,35 @@ export function usePocketRooms() {
   const channelCache = new Map<number, { serverId: string, channelId: string }>()
   /** 首灌请求序号：丢弃过期回包，避免快速刷新时数据错乱 */
   let loadRequestId = 0
+  /**
+   * 上次首灌成功时的成员集合签名（见 followSignature）与完成时刻。
+   * 切回页面时若签名未变且仍在复用窗口内，直接沿用当前列表。
+   * 用内容签名而非「变化即脏」：load() 自己写入关注 / 屏蔽名单也会触发对应 watch，
+   * 脏标记会被自己置位，复用永远不生效。
+   */
+  let listSignature = ''
+  let listLoadedAt = 0
+  /** 列表复用窗口：窗口内切回页面不整表重拉（直播 / 预览仍由各自的轮询与镜像维护） */
+  const LIST_REUSE_MS = 60_000
+  /**
+   * 决定成员集合的全部输入：登录账号、本地关注、屏蔽名单、口袋账号关注镜像。
+   * 任一变化都会改变签名，切回页面时据此整表重拉。
+   */
+  function followSignature(): string {
+    const ids = (values: Iterable<number>) => [...values].sort((a, b) => a - b).join(',')
+    return [
+      pocketAuthState.value.userId,
+      ids(followedMembers.value.map(entry => Number(entry.userId))),
+      ids(blockedMembers.value.map(entry => Number(entry.userId))),
+      ids(pocketFollowIds.value),
+    ].join('|')
+  }
+  /** 切回页面时是否需要整表重拉：列表为空、超出复用窗口、或成员集合输入已变 */
+  function listNeedsReload(): boolean {
+    return rooms.value.length === 0
+      || Date.now() - listLoadedAt > LIST_REUSE_MS
+      || followSignature() !== listSignature
+  }
   /** 选中请求序号：切人/卸载后丢弃在途解析与拉取回包，防消息串房 */
   let selectRequestId = 0
 
@@ -441,15 +485,27 @@ export function usePocketRooms() {
    * latestTime 取两频道最大值（aggregate 口径）；无未读恒为 0，已被第 5 级分走。
    */
   function sortRooms(list: PocketRoom[]) {
-    list.sort((a, b) =>
-      Number(!!b.temporary) - Number(!!a.temporary)
-      || Number(isRoomPinned(b.userId)) - Number(isRoomPinned(a.userId))
-      || Number(isRoomClosedOf(a.userId)) - Number(isRoomClosedOf(b.userId))
-      || Number(!!b.live) - Number(!!a.live)
-      || Number(unreadCountOf(b.userId) > 0) - Number(unreadCountOf(a.userId) > 0)
-      || latestUnreadTimeOf(b.userId) - latestUnreadTimeOf(a.userId)
-      || a.nickname.localeCompare(b.nickname, 'zh'),
+    // 每条的判据只读一次 store，比较函数里不再重复查询；昵称比较复用同一个 Collator
+    const keyed = list.map(room => ({
+      room,
+      temp: Number(!!room.temporary),
+      pinned: Number(isRoomPinned(room.userId)),
+      closed: Number(isRoomClosedOf(room.userId)),
+      live: Number(!!room.live),
+      unread: Number(unreadCountOf(room.userId) > 0),
+      latest: latestUnreadTimeOf(room.userId),
+    }))
+    keyed.sort((a, b) =>
+      b.temp - a.temp
+      || b.pinned - a.pinned
+      || a.closed - b.closed
+      || b.live - a.live
+      || b.unread - a.unread
+      || b.latest - a.latest
+      || zhCollator.compare(a.room.nickname, b.room.nickname),
     )
+    // 原地写回：rooms.value 的数组身份不变，外部持有的引用与响应式都照旧
+    list.splice(0, list.length, ...keyed.map(item => item.room))
     sortedUnreadIds = collectUnreadIds(list)
   }
 
@@ -820,10 +876,16 @@ export function usePocketRooms() {
           applyRoomPreview(room, lastMessageMap)
       }
       saveSnapshotRooms()
+      // 签名在首灌完成时截取：拉取期间的外部变化若已反映在此刻状态里则不会误判为变化
+      listSignature = followSignature()
+      listLoadedAt = Date.now()
     }
     catch (error) {
-      if (requestId === loadRequestId)
+      if (requestId === loadRequestId) {
         loadError.value = error instanceof Error ? error.message : String(error)
+        // 失败不留复用窗口：下次切回必须重拉
+        listLoadedAt = 0
+      }
       debugLog('pocket-rooms', '房间列表加载失败', error)
     }
     finally {
@@ -838,7 +900,8 @@ export function usePocketRooms() {
    * 预览的所有权按「来源」划分，不按时间戳比较 —— `lastMsgList` 实测拿不到真实 msgTime
    * （恒为 0，见 pa-sign.ts 的降级回包说明），时间守卫在这条链路上无从建立：
    * - 非选中房间：日常由主进程预览镜像（applyMirrorPreviews）维护，本函数供页面重新激活
-   *   （onActivated → refreshRoomStatus）与显式调用时一次性拉取，回包文案与本地不同即采纳
+   *   （手动刷新 refreshRoomStatus 与显式调用）时一次性拉取，回包文案与本地不同即采纳。
+   *   切回页面不再经此路径：onActivated 只在列表需要重拉时调 load()，load 内已整体回填预览
    *   （左列刷新按钮走 load() 的首灌路径，同样会整表回填预览）；
    * - 选中且未关闭的房间：由 5s 消息轮询即时维护（见 mergeMessages 的 append 分支），本函数不覆盖
    *   —— 批量接口有延迟，回写会把用户正看着的房间的预览退回上一条。判定条件与
@@ -1238,7 +1301,17 @@ export function usePocketRooms() {
     mode: 'replace' | 'more',
   ): Promise<void> {
     const requestId = selectRequestId
+    const cacheKey = `${channel.serverId}:${channel.channelId}`
     if (mode === 'replace') {
+      // TTL 内且同一频道：直接沿用缓存的已加载页，不打接口
+      const cached = essenceCache.get(cacheKey)
+      if (cached && Date.now() - cached.at < ESSENCE_CACHE_MS) {
+        essenceMessages.value = cached.messages
+        essenceCursor = cached.cursor
+        essenceExhausted.value = cached.exhausted
+        essenceLoading.value = false
+        return
+      }
       essenceMessages.value = []
       essenceCursor = 0
       essenceExhausted.value = false
@@ -1261,6 +1334,12 @@ export function usePocketRooms() {
       essenceMessages.value = [...essenceMessages.value, ...fresh].sort((a, b) => b.msgTime - a.msgTime)
       essenceCursor = result.nextTime
       essenceExhausted.value = !result.nextTime
+      essenceCache.set(cacheKey, {
+        messages: essenceMessages.value,
+        cursor: essenceCursor,
+        exhausted: essenceExhausted.value,
+        at: Date.now(),
+      })
     }
     catch (error) {
       if (requestId === selectRequestId)
@@ -1588,12 +1667,21 @@ export function usePocketRooms() {
    * 选中态在 await 期间可能已被切换/清空，回包后必须复核，否则消息会串房。
    * 房间留言流与直播与否无关：未开播的成员同样有房间消息。
    */
+  /** 同房重选上次强制校正的时刻（按成员）：用于 SAME_ROOM_RECHECK_MS 时间门槛 */
+  const sameRoomRecheckAt = new Map<number, number>()
   async function selectRoom(userId: number | null) {
-    // 同房且已就绪：消息流与轮询保持不动，但小房间可能刚被房主新建 / 换新，
-    // 补一次发现（缓存命中不打接口，主进程侧也有 server 级间隔）
+    // 同房且已就绪：消息流与轮询保持不动，只校正小房间入口（房主可能刚换了小房间）。
+    // 强制重枚举有时间门槛：同一成员每 SAME_ROOM_RECHECK_MS 至多一次，门槛内的重复点击走缓存，
+    // 不再每次点击都绕过缓存打接口。频道真正失效仍由 refreshAfterDrop 的 force 路径处理。
     if (userId === selectedUserId.value && chatStatus.value === 'ready') {
-      if (userId !== null)
-        void ensureSmallChannel(userId, true)
+      if (userId !== null) {
+        const now = Date.now()
+        const last = sameRoomRecheckAt.get(userId) ?? 0
+        const force = now - last >= SAME_ROOM_RECHECK_MS
+        if (force)
+          sameRoomRecheckAt.set(userId, now)
+        void ensureSmallChannel(userId, force)
+      }
       return
     }
     clearChat()
@@ -1854,10 +1942,29 @@ export function usePocketRooms() {
   }
 
   /** 轮询用：拉最新一页，只追加新消息（无新消息零开销） */
+  /** 上次轮询拉取的时刻（ms）：QChat 健康时据此把兜底轮询放宽到 MESSAGE_POLL_QCHAT_MS */
+  let lastMessagePollAt = 0
+  /**
+   * 当前房间是否由 QChat 推送覆盖：订阅的正是当前频道，且连接已建立。
+   * 只认 qchatChannel（enter 成功后才写入）与 qchatStatus，两者缺一都视为未覆盖。
+   */
+  function qchatCoversActiveChannel(): boolean {
+    const channel = activeChannel
+    const subscribed = qchatChannel
+    return !!channel && !!subscribed
+      && subscribed.serverId === channel.serverId
+      && subscribed.channelId === channel.channelId
+      && qchatStatus.value === 'connected'
+  }
+
   async function pollRoomMessages() {
     // 已关闭房间的当前频道恒空；判定后停掉空转轮询，历史由按日期入口走旧频道
     if (!activeChannel || chatStatus.value !== 'ready' || roomClosed.value)
       return
+    // QChat 健康时间隔放宽到 30s；一旦断开，下一个 5s tick 即补拉（不等满 30s）
+    if (qchatCoversActiveChannel() && Date.now() - lastMessagePollAt < MESSAGE_POLL_QCHAT_MS)
+      return
+    lastMessagePollAt = Date.now()
     try {
       await fetchRoomPage(activeChannel, 0, 'append')
     }
@@ -1922,10 +2029,10 @@ export function usePocketRooms() {
   if (getCurrentInstance()) {
     onActivated(() => {
       pageActive.value = true
-      // 关注名单可能在 keep-alive 后台被成员页 / 设置页改过：重新首灌会清掉陈旧的
-      // pocketFollowError，并按两份名单重建左列。load 已包含直播与预览刷新，
-      // 不再单独调 refreshRoomStatus（否则切回一次打两轮请求）。
-      void load()
+      // 成员集合输入未变且在复用窗口内则沿用当前列表，
+      // 直播与预览由共享轮询和镜像维护。否则整表重拉，清掉陈旧的 pocketFollowError 并重建左列。
+      if (listNeedsReload())
+        void load()
       if (activeChannel)
         void pollRoomMessages()
       resumeMessagePoll()
@@ -2022,6 +2129,9 @@ export function usePocketRooms() {
     applyRoomFollowSource,
     /** 口袋账号关注成功后维护镜像（见 notePocketFollow） */
     notePocketFollow,
+
+    /** 切回页面时列表是否需要整表重拉（脏标记 / 复用窗口），见 onActivated */
+    listNeedsReload,
 
     loadMoreHistory,
     openSharedLive,

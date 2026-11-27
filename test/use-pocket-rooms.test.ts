@@ -2787,11 +2787,13 @@ describe('use-pocket-rooms / 关闭房间的判定与轮询', () => {
     expect(calls.messageFetched).toHaveLength(before)
   })
 
-  it('正常房间：5s 轮询照常发，不被关闭态早退误停', async () => {
+  it('正常房间（QChat 未订阅）：5s 轮询照常发，不被关闭态早退误停', async () => {
     const { api, calls } = await setup({
       pocketIds: [10001],
       roomPermissions: { 'ch-10001': openPermission },
     })
+    // 订阅失败 → QChat 不覆盖当前频道，轮询走原 5s 节奏
+    vi.mocked(window.mainAPI.pocketRoomQChatEnter).mockImplementationOnce(async () => ({ ok: false, message: '连接超时' }))
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(50)
@@ -2801,6 +2803,40 @@ describe('use-pocket-rooms / 关闭房间的判定与轮询', () => {
     await vi.advanceTimersByTimeAsync(15_000)
 
     expect(calls.messageFetched.length).toBe(before + 3)
+  })
+
+  it('qChat 已订阅且连接正常：兜底轮询放宽到 30s，不再每 5s 打一次', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': openPermission },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.qchatStatus.value).toBe('connected')
+
+    // 首个 tick（约 5s）会打一次兜底轮询，先吸收掉，再量稳态节奏
+    await vi.advanceTimersByTimeAsync(6_000)
+    const before = calls.messageFetched.length
+    await vi.advanceTimersByTimeAsync(23_000)
+    expect(calls.messageFetched.length).toBe(before)
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(calls.messageFetched.length).toBe(before + 1)
+  })
+
+  it('qChat 断开：下一个 5s tick 立即恢复轮询，不等满 30s', async () => {
+    const { api, calls, emitRoomBatch } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': openPermission },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    const before = calls.messageFetched.length
+
+    emitRoomBatch({ kind: 'status', status: 'disconnected' })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls.messageFetched.length).toBe(before + 1)
   })
 
   it('房间重新开放：关闭态清除后轮询自动恢复', async () => {
@@ -3195,5 +3231,137 @@ describe('use-pocket-rooms / 首屏快照', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(storage.has(ROOM_LIST_SNAPSHOT_KEY)).toBe(false)
+  })
+})
+
+describe('use-pocket-rooms / 切回页面的列表复用', () => {
+  it('首灌完成后、窗口内：不需要重拉', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    expect(api.listNeedsReload()).toBe(false)
+  })
+
+  it('复用窗口（60s）到期后需要重拉', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    vi.advanceTimersByTime(60_001)
+    expect(api.listNeedsReload()).toBe(true)
+  })
+
+  it('从未成功加载过（列表为空）需要重拉', async () => {
+    const { api } = await setup({ pocketIds: [] })
+    expect(api.listNeedsReload()).toBe(true)
+  })
+
+  it('屏蔽名单变化（在后台页面被屏蔽）：标脏，切回时重拉', async () => {
+    const { api, setBlocked } = await setup({ pocketIds: [10001, 10002] })
+    await api.load()
+    expect(api.listNeedsReload()).toBe(false)
+    setBlocked([10002])
+    expect(api.listNeedsReload()).toBe(true)
+  })
+
+  it('账号关注镜像变化（notePocketFollow）：标脏，切回时重拉', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    api.notePocketFollow(10003, true)
+    expect(api.listNeedsReload()).toBe(true)
+  })
+
+  it('登出：列表清空，切回时需要重拉（不沿用旧账号的列表）', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    expect(api.listNeedsReload()).toBe(false)
+    authMock.setLoggedIn(false)
+    await api.load()
+    expect(api.rooms.value).toEqual([])
+    expect(api.listNeedsReload()).toBe(true)
+  })
+})
+
+describe('use-pocket-rooms / 精华缓存与排序键', () => {
+  it('同一频道在 TTL 内再次进房：沿用缓存，不再拉精华', async () => {
+    const { api, calls } = await setup({ pocketIds: [10001, 10002] })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    const first = calls.essenceFetched.length
+    expect(first).toBeGreaterThan(0)
+
+    await api.selectRoom(10002)
+    await vi.advanceTimersByTimeAsync(50)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    // 10002 是新频道，会拉一次；回到 10001 命中缓存，不再拉
+    const afterSwitch = calls.essenceFetched.length
+    expect(afterSwitch).toBe(first + 1)
+    expect(calls.essenceFetched.filter(item => item.channelId === 'ch-10001')).toHaveLength(first)
+  })
+
+  it('精华缓存超过 TTL（5 分钟）：重新拉首屏', async () => {
+    const { api, calls } = await setup({ pocketIds: [10001, 10002] })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    await api.selectRoom(10002)
+    await vi.advanceTimersByTimeAsync(50)
+
+    vi.advanceTimersByTime(5 * 60_000 + 1)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(calls.essenceFetched.filter(item => item.channelId === 'ch-10001').length).toBe(2)
+  })
+
+  it('排序键化后结果与原判据一致：临时 > 置顶 > 已关闭沉底 > 直播 > 未读 > 昵称', async () => {
+    const { api } = await setup({
+      pocketIds: [10001, 10002, 10003],
+      livePages: [{ next: '0', liveList: [live('L1', 10003)] }],
+      directory: {
+        10001: { realName: '甲', avatar: '', teamName: '', teamColor: '' },
+        10002: { realName: '乙', avatar: '', teamName: '', teamColor: '' },
+        10003: { realName: '丙', avatar: '', teamName: '', teamColor: '' },
+      },
+    })
+    await api.load()
+    // 直播的 10003 压过无直播的两位
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+  })
+})
+
+describe('use-pocket-rooms / 同房重选的小房间校正门槛', () => {
+  it('同房连续点击：60s 门槛内只首次强制校正，之后走缓存不打接口', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      smallChannels: { 10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    const before = calls.smallChannelRefreshed.length
+
+    await api.selectRoom(10001)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    // 门槛内的重复点击不再发起任何枚举请求
+    expect(calls.smallChannelRefreshed.length).toBe(before + 1)
+    expect(calls.smallChannelRefreshed.at(-1)).toEqual({ userId: 10001, force: true })
+  })
+
+  it('同房重选超过 60s：再次强制校正（能拿到房主新换的小房间）', async () => {
+    const smallChannels = { 10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' } }
+    const { api, calls } = await setup({ pocketIds: [10001], smallChannels })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    smallChannels[10001] = { serverId: 'srv-10001', channelId: 'ch-10001-small-new' }
+    vi.advanceTimersByTime(60_001)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(calls.smallChannelRefreshed.at(-1)).toEqual({ userId: 10001, force: true })
+    expect(api.smallChannel.value?.channelId).toBe('ch-10001-small-new')
   })
 })
