@@ -232,6 +232,7 @@ const api = {
   pocketInvalidateSmallChannel: (userId: number) => invokeIpc('pocketInvalidateSmallChannel', userId),
   pocketRefreshSmallChannel: (userId: number, force = false) => invokeIpc('pocketRefreshSmallChannel', userId, force),
   pocketGetRoomQuestion: (channelId: string) => invokeIpc('pocketGetRoomQuestion', channelId),
+  pocketGetRoomGate: (channelId: string) => invokeIpc('pocketGetRoomGate', channelId),
   pocketCheckRoomAnswer: (channelId: string, questionId: string, answer: string) =>
     invokeIpc('pocketCheckRoomAnswer', channelId, questionId, answer),
   pocketMarkRead: (userId: number, target?: 'room' | 'small') => invokeIpc('pocketMarkRead', userId, target),

@@ -66,9 +66,11 @@ export type {
 // ===== 房间 =====
 export {
   checkRoomAnswer,
+  classifyChannelGate,
   getRoomChannel,
   getRoomChannelOwner,
   getRoomEssenceMessages,
+  getRoomGate,
   getRoomLastMessages,
   getRoomMessages,
   getRoomPermissions,
@@ -78,6 +80,8 @@ export {
 } from './pocket-room-api'
 
 export type {
+  ChannelAccessGate,
+  ChannelAccessGateKind,
   PocketRoomAnswerResult,
   PocketRoomChannel,
   PocketRoomLastMessage,

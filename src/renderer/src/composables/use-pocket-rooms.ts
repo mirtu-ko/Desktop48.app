@@ -33,7 +33,7 @@
  * 唯一例外是 token 失效（重新登录才能恢复），直接上抛让整页报错。
  */
 import type { PocketRoomFollowSource } from '@common/pocket-rooms'
-import type { PocketRoomBatch, PocketRoomChannel, PocketRoomLastMessage, PocketRoomPermission, PocketRoomQChatStatus, PocketRoomQuestion, PocketRoomReplyTarget } from '@preload/ipc-contract'
+import type { PocketRoomBatch, PocketRoomChannel, PocketRoomGate, PocketRoomLastMessage, PocketRoomPermission, PocketRoomQChatStatus, PocketRoomQuestion, PocketRoomReplyTarget } from '@preload/ipc-contract'
 import type { LiveListItem } from '@renderer/services/api-types'
 import type { PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
 import type { RoomSnapshotRow } from '@renderer/utils/room-list-snapshot'
@@ -104,6 +104,11 @@ export type PocketRoomMessageScope = 'member' | 'all'
 
 /** 右侧消息视图：room = 大房间留言流（默认），small = 小房间（暗号频道问答流） */
 export type PocketRoomViewMode = 'room' | 'small'
+
+/**
+ * 门禁缓存时长：赠送门槛按整点刷新，缓存太久会让刚解锁的小房间一直进不去。
+ */
+const SMALL_GATE_TTL = 5 * 60 * 1000
 
 /** 频道已不存在：房主更新/删除小房间后旧频道即此结局（服务端原文，与主进程同一判据） */
 function isChannelMissing(error: unknown): boolean {
@@ -314,7 +319,13 @@ export function usePocketRooms() {
   const smallQuestionLoading = ref(false)
   const smallQuestionCache = new Map<string, PocketRoomQuestion | null>()
   /**
-   * 小房间是否需要暗号：已发现频道 + 确认被暗号拦下（拿到问题）+ 本进程未解锁。
+   * 当前小房间的门禁（含 null = 无门禁）。与暗号问题分开存：
+   * 不可作答的门禁只说明、不给输入框，题面也只在暗号门禁下才有。
+   */
+  const smallGate = ref<PocketRoomGate | null>(null)
+  const smallGateCache = new Map<string, { gate: PocketRoomGate | null, at: number }>()
+  /**
+   * 是否需要暗号（页签锁图标 + 输入层）：已发现频道 + 确认被暗号拦下（拿到问题）+ 本进程未解锁。
    * 解锁态在 utils/small-room-unlock.ts（模块级，页面层重建不丢）；
    * 刻意与当前视图解耦——页签上的锁要在大房间视图下同样可见，
    * 否则「需要暗号」这件事只在切过去之后才暴露。
@@ -324,8 +335,18 @@ export function usePocketRooms() {
     && smallQuestion.value !== null
     && !isSmallRoomUnlocked(smallChannel.value.channelId),
   )
-  /** 暗号输入层是否展示：当前在小房间视图且该频道仍被暗号拦着 */
-  const smallLocked = computed(() => viewMode.value === 'small' && smallRequiresAnswer.value)
+  /** 不可作答的门禁：只能说明原因。`unknown` 不算（可能只是接口抽风，别把房间说死） */
+  const smallGateNotice = computed<PocketRoomGate | null>(() => {
+    const gate = smallGate.value
+    if (!gate || gate.kind === 'question' || gate.kind === 'unknown')
+      return null
+    return gate
+  })
+  /** 锁定层是否展示：暗号（输入层）或不可作答的门禁（说明层） */
+  const smallLocked = computed(() =>
+    viewMode.value === 'small'
+    && (smallRequiresAnswer.value || smallGateNotice.value !== null),
+  )
 
   /** userId → 频道缓存：首灌批量解析后写入（懒解析 / 临时房间单发补入），选中/切回不重复解析 */
   const channelCache = new Map<number, { serverId: string, channelId: string }>()
@@ -1381,9 +1402,11 @@ export function usePocketRooms() {
   async function refreshAfterDrop(userId: number, channelId: string): Promise<{ serverId: string, channelId: string } | null> {
     smallChannelCache.delete(userId)
     smallQuestionCache.delete(channelId)
+    smallGateCache.delete(channelId)
     if (selectedUserId.value === userId) {
       smallChannel.value = null
       smallQuestion.value = null
+      smallGate.value = null
       viewMode.value = 'room'
     }
     try {
@@ -1399,25 +1422,54 @@ export function usePocketRooms() {
     }
   }
 
-  /** 拉取当前小房间的暗号问题（channelId 缓存；null = room/info 未被拦，即无门禁） */
+  /**
+   * 拉取当前小房间的暗号问题 + 门禁定性。
+   * 门禁按 `SMALL_GATE_TTL` 缓存：门槛会变，无限缓存会让解锁后的房间一直进不去。
+   */
   async function ensureSmallQuestion(): Promise<void> {
     const channel = smallChannel.value
-    if (!channel || smallQuestionCache.has(channel.channelId)) {
-      smallQuestion.value = smallQuestionCache.get(channel?.channelId ?? '') ?? null
+    if (!channel) {
+      smallQuestion.value = null
+      smallGate.value = null
       return
     }
-    smallQuestionLoading.value = true
+    if (smallQuestionCache.has(channel.channelId)) {
+      smallQuestion.value = smallQuestionCache.get(channel.channelId) ?? null
+    }
+    else {
+      smallQuestionLoading.value = true
+      try {
+        const question = await window.mainAPI.pocketGetRoomQuestion(channel.channelId)
+        smallQuestionCache.set(channel.channelId, question)
+        if (selectedUserId.value !== null && smallChannel.value?.channelId === channel.channelId)
+          smallQuestion.value = question
+      }
+      catch (error) {
+        debugLog('pocket-rooms', '暗号问题拉取失败', error)
+      }
+      finally {
+        smallQuestionLoading.value = false
+      }
+    }
+    await ensureSmallGate(channel.channelId)
+  }
+
+  /** 门禁定性（带 TTL 缓存）；拉取失败保持「未知」，不把房间说死进不去 */
+  async function ensureSmallGate(channelId: string): Promise<void> {
+    const cached = smallGateCache.get(channelId)
+    if (cached && Date.now() - cached.at < SMALL_GATE_TTL) {
+      if (smallChannel.value?.channelId === channelId)
+        smallGate.value = cached.gate
+      return
+    }
     try {
-      const question = await window.mainAPI.pocketGetRoomQuestion(channel.channelId)
-      smallQuestionCache.set(channel.channelId, question)
-      if (selectedUserId.value !== null && smallChannel.value?.channelId === channel.channelId)
-        smallQuestion.value = question
+      const gate = await window.mainAPI.pocketGetRoomGate(channelId)
+      smallGateCache.set(channelId, { gate, at: Date.now() })
+      if (smallChannel.value?.channelId === channelId)
+        smallGate.value = gate
     }
     catch (error) {
-      debugLog('pocket-rooms', '暗号问题拉取失败', error)
-    }
-    finally {
-      smallQuestionLoading.value = false
+      debugLog('pocket-rooms', '房间门禁拉取失败（按未知处理）', channelId, error)
     }
   }
 
@@ -1599,6 +1651,7 @@ export function usePocketRooms() {
     viewMode.value = 'room'
     smallChannel.value = null
     smallQuestion.value = null
+    smallGate.value = null
     if (userId === null) {
       // 退房（点空白处取消选中）：同步退掉 QChat 订阅，连接交给主进程按需销毁
       void syncQChatChannel()
@@ -1991,6 +2044,8 @@ export function usePocketRooms() {
     smallLocked,
     smallQuestion,
     smallQuestionLoading,
+    /** 不可作答的门禁（赠送鸡腿等）：锁定层改成说明，不给输入框 */
+    smallGateNotice,
     chatStatus,
     chatStatusText,
     roomClosed,

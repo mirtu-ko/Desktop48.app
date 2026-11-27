@@ -58,6 +58,7 @@ const {
   smallLocked,
   smallQuestion,
   smallQuestionLoading,
+  smallGateNotice,
   chatStatus,
   chatStatusText,
   roomClosed,
@@ -516,6 +517,16 @@ const roomTabs = computed<Array<{ mode: 'room' | 'small', name: string, unread: 
     })
   }
   return tabs
+})
+
+/** 不可作答门禁的说明：原文已转述，这里只说「本地无从解锁、条件满足后自动放行」 */
+const smallGateHint = computed(() => {
+  const kind = smallGateNotice.value?.kind
+  if (kind === 'chicken-leg')
+    return '这是成员给小房间设的赠送门槛，本应用无法代为解锁；条件满足后重新进入即可查看'
+  if (kind === 'contribution')
+    return '这是成员给小房间设的贡献 / 守护门槛（服务端只用同一个业务码回，分不出是哪一种），本应用无法代为解锁；条件满足后重新进入即可查看'
+  return '当前账号未通过该小房间的准入条件，本应用无法代为解锁'
 })
 
 /** 小房间暗号输入层（锁定态展示） */
@@ -2104,9 +2115,29 @@ watch([chatStatus, chatStatusText], () => {
                 </template>
               </div>
 
-              <!-- 小房间暗号锁定层：不展示消息内容，仅在暗号校验通过后进房 -->
+              <!-- 小房间门禁层：不展示消息内容。两种形态——
+                   暗号门禁给输入框（本地可作答）；赠送鸡腿一类的门槛只说明原因，本地无从解锁，
+                   给输入框只会把人引到「输错了无数遍」的死路 -->
               <div v-else-if="smallLocked" class="small-lock">
-                <div class="small-lock-card">
+                <div v-if="smallGateNotice" class="small-lock-card">
+                  <span class="small-lock-badge">
+                    <el-icon :size="18">
+                      <Lock />
+                    </el-icon>
+                  </span>
+                  <p class="small-lock-title">
+                    「{{ smallChannelName || '小房间' }}」需要权限
+                  </p>
+                  <!-- 门槛原文是服务端对当前账号的判定（含刷新说明），原样转述，不自己编改写规则 -->
+                  <blockquote v-if="smallGateNotice.message" class="small-lock-question">
+                    {{ smallGateNotice.message }}
+                  </blockquote>
+                  <p class="small-lock-hint">
+                    {{ smallGateHint }}
+                  </p>
+                </div>
+
+                <div v-else class="small-lock-card">
                   <span class="small-lock-badge">
                     <el-icon :size="18">
                       <Lock />
@@ -2932,9 +2963,10 @@ watch([chatStatus, chatStatusText], () => {
   text-overflow: ellipsis;
 }
 
-/* 小房间暗号锁定层：盖住消息区，不展示任何消息内容。
- * 卡片自成一块「门牌」：徽标 → 标题 → 成员出的题（引用块）→ 输入行 → 兜底提示。
- * 题目是成员手写的原话，用引用块而非正文呈现，避免与界面自己的措辞混作一类。 */
+/* 小房间门禁层：盖住消息区，不展示任何消息内容。
+ * 卡片自成一块「门牌」：徽标 → 标题 → 成员设的条件（引用块）→ 输入行 / 说明 → 兜底提示。
+ * 引用块里的都是成员或服务端给的原话（暗号题面 / 「最近30天内赠送过鸡腿礼物…」），
+ * 用引用块而非正文呈现，避免与界面自己的措辞混作一类。 */
 .small-lock {
   display: flex;
   flex: 1;

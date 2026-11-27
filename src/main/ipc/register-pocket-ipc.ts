@@ -124,9 +124,12 @@ export function registerPocketIPC(): void {
   // 重新发现小房间：选中成员时本地还没发现，或旧频道刚失效（force 绕过发现间隔）
   handleTraced('pocketRefreshSmallChannel', (_event: IpcMainInvokeEvent, userId: number, force = false) =>
     pocketUnread.refreshSmallChannel(userId, force))
-  // 小房间暗号：问题拉取（room/info 拦截信封）+ 作答校验（万能密码客户端直通）
+  // 小房间门禁：问题拉取（room/info 拦截信封）+ 作答校验（万能密码客户端直通）
   handleTraced('pocketGetRoomQuestion', (_event: IpcMainInvokeEvent, channelId: string) =>
     pocketAuth.getRoomQuestion(channelId))
+  // 门禁定性（含非暗号门禁：赠送鸡腿 / 贡献 / 守护）：锁态与提示文案都读这一份
+  handleTraced('pocketGetRoomGate', (_event: IpcMainInvokeEvent, channelId: string) =>
+    pocketAuth.getRoomGate(channelId))
   handleTraced('pocketCheckRoomAnswer', (_event: IpcMainInvokeEvent, channelId: string, questionId: string, answer: string) =>
     pocketAuth.checkRoomAnswer(channelId, questionId, answer))
   // 房间消息发送（QChat 圈组长连接，见 pocket-room-qchat.ts）：进房订阅 / 离房退订 /

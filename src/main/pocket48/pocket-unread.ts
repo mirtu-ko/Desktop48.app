@@ -2,6 +2,7 @@ import type { PocketRoomChannel, PocketRoomReadMark, PocketUnreadBatch } from '@
 import type { OfficialInfoItem } from '../data'
 import type { TrayUnreadRoom } from '../tray'
 import type { PocketRoomLastMessage, PocketRoomMessage } from './pocket-auth'
+import type { ChannelAccessGate, ChannelAccessGateKind } from './pocket-room-api'
 /**
  * 房间未读检测服务（主进程唯一真相）。
  *
@@ -135,10 +136,11 @@ interface StoredUnread {
   /** 大房间频道缓存（userId 为键）；channelId 为空串 = 解析过但无房间（或解析失败）的占位 */
   channels: Record<string, StoredChannel>
   /**
-   * 小房间（暗号频道，room/info 回 questionId 问答信封）缓存（userId 为键），
+   * 小房间缓存（userId 为键）：room/info 被「暗号 / 赠送鸡腿」等门禁拦下的频道。
    * 与大房间同 server，按「同 server 唯一关注成员」归属；大房间不存在时无从归属。
+   * `gate` 记拦下它的门禁种类，供渲染层说明「为什么进不去」（读不到内容不等于房间是空的）。
    */
-  smallChannels: Record<string, StoredChannel>
+  smallChannels: Record<string, StoredChannel & { gate?: ChannelAccessGateKind }>
   /**
    * 未归属频道的房主反查缓存（channelId 为键）：ownerId = 0 表示非成员房间
    * （翻牌/礼物回复等），按 TTL 重试；> 0 的归属终身复用。
@@ -463,19 +465,20 @@ async function healChannelOwners(
       if (error instanceof Error && error.message.includes('登录已过期'))
         throw error
       const message = error instanceof Error ? error.message : String(error)
-      if (isQuestionGate(message)) {
-        // 暗号频道 = 成员的小房间（room/info 被暗号拦下，拿不到 ownerId）：
+      const gate = readRoomGate(error)
+      if (gate && isSmallRoomGate(gate)) {
+        // 门禁拦下 = 成员的小房间（拿不到 ownerId 的不只暗号：赠送鸡腿 / 贡献 / 守护同样拦）：
         // 小房间与成员大房间同 server，按「同 server 的唯一关注成员」归属
         const fromResponse = lastMessages.find(item => item.channelId === channelId)?.serverId || ''
         const owners = Object.entries(data.channels)
           .filter(([, channel]) => channel.channelId && channel.serverId === fromResponse)
           .map(([userId]) => userId)
         if (owners.length === 1 && !data.smallChannels[owners[0]]) {
-          debug('[pocket-unread] 小房间（暗号频道）归属补全', owners[0], '->', channelId)
-          data.smallChannels[owners[0]] = { serverId: fromResponse, channelId, resolvedAt: Date.now() }
+          debug('[pocket-unread] 小房间（门禁频道）归属补全', owners[0], '->', channelId, gate.kind, gate.status)
+          data.smallChannels[owners[0]] = { serverId: fromResponse, channelId, resolvedAt: Date.now(), gate: gate.kind }
         }
         else {
-          debug('[pocket-unread] 小房间归属不唯一或已登记，记负缓存', channelId, owners.join(',') || '无同 server 成员')
+          debug('[pocket-unread] 小房间归属不唯一或已登记，记负缓存', channelId, gate.kind, gate.status, owners.join(',') || '无同 server 成员')
           data.roomOwners[channelId] = { ownerId: 0, resolvedAt: Date.now() }
         }
         dirty = true
@@ -581,21 +584,24 @@ async function discoverSmallChannels(targets?: number[], force = false): Promise
         return
       }
       let found = ''
+      let foundGate: ChannelAccessGateKind | undefined
       for (const candidate of list) {
         if (!candidate.channelId || candidate.channelId === channel.channelId)
           continue
         try {
           const info = await getRoomChannelOwner(candidate.channelId)
-          // 正常回包（公告/互动等普通频道）：不是暗号小房间
+          // 正常回包（公告/互动等普通频道）：不是小房间
           debug('[pocket-unread] 候选非小房间：room/info 正常回包', candidate.channelId, candidate.channelName || '无名字', 'owner', info.ownerId)
         }
         catch (error) {
           if (error instanceof Error && error.message.includes('登录已过期'))
             throw error
           const message = error instanceof Error ? error.message : String(error)
-          if (isQuestionGate(message)) {
+          const gate = readRoomGate(error)
+          if (gate && isSmallRoomGate(gate)) {
             found = candidate.channelId
-            debug('[pocket-unread] 候选命中小房间：room/info 要求暗号', candidate.channelId, candidate.channelName || '无名字')
+            foundGate = gate.kind
+            debug('[pocket-unread] 候选命中小房间：room/info 要求门禁', candidate.channelId, candidate.channelName || '无名字', gate.kind, gate.status)
             break
           }
           // 频道不存在等：列表里可能残留已删频道，继续看下一个候选
@@ -615,18 +621,26 @@ async function discoverSmallChannels(targets?: number[], force = false): Promise
           debug('[pocket-unread] 小房间已不存在（列表中已无该频道），作废旧记录', userId, stale)
         }
         else {
-          debug('[pocket-unread] 该 server 未发现暗号频道（列表里没有要求暗号的频道）', userId, serverId)
+          debug('[pocket-unread] 该 server 未发现小房间（列表里没有要求暗号 / 赠送鸡腿的频道）', userId, serverId)
         }
         return
       }
       if (data.smallChannels[userId]?.channelId === found) {
-        debug('[pocket-unread] 小房间无变化', userId, found)
+        // 门禁种类可能变（成员在「暗号 / 赠送鸡腿」之间改了权限）：种类变了同样要落盘广播
+        if (foundGate && data.smallChannels[userId].gate !== foundGate) {
+          data.smallChannels[userId].gate = foundGate
+          dirty = true
+          debug('[pocket-unread] 小房间门禁变化', userId, found, foundGate)
+        }
+        else {
+          debug('[pocket-unread] 小房间无变化', userId, found)
+        }
         return
       }
       const previous = data.smallChannels[userId]?.channelId
       if (previous)
         clearChannelRuntimeState(previous)
-      data.smallChannels[userId] = { serverId, channelId: found, resolvedAt: Date.now() }
+      data.smallChannels[userId] = { serverId, channelId: found, resolvedAt: Date.now(), gate: foundGate }
       dirty = true
       hits++
       debug('[pocket-unread] 小房间主动发现', userId, ':', previous || '-', '->', found)
@@ -684,12 +698,31 @@ function isChannelGone(error: unknown): boolean {
 }
 
 /**
- * room/info 被暗号拦下 = 该频道是小房间。这是唯一可靠的判据：
- * 未通过暗号的账号拿不到 channelInfo，只能拿到 questionId 信封；
- * 普通频道（公告/互动）是正常回包，不能按「请求成功」反推成小房间。
+ * 取回 room/info 失败的定性结果（`getRoomChannelOwner` 挂在 `cause` 上）；
+ * 拿不到 = 真网络异常，那才是「下轮重试」的失败。判据见 `classifyChannelGate`。
  */
-function isQuestionGate(message: string): boolean {
-  return message.includes('"questionId"')
+function readRoomGate(error: unknown): ChannelAccessGate | null {
+  const cause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined
+  if (!cause || typeof cause !== 'object')
+    return null
+  const gate = cause as Partial<ChannelAccessGate>
+  return typeof gate.kind === 'string' ? gate as ChannelAccessGate : null
+}
+
+/**
+ * 该门禁是否可能是成员的小房间：只认暗号与赠送鸡腿（已实测）。
+ * 贡献 / 守护与 unknown 不并入——认错会把别人的频道记成某位成员的小房间，比漏认糟。
+ */
+function isSmallRoomGate(gate: ChannelAccessGate): boolean {
+  return gate.kind === 'question' || gate.kind === 'chicken-leg'
+}
+
+/**
+ * 频道本身活着、只是本账号被门禁挡在外面（赠送鸡腿 / 贡献 / 守护等）：
+ * 探测该跳过，但不记失败——见 `probeChannels` 的失败分支。
+ */
+function isAccessGate(error: unknown): boolean {
+  return readRoomGate(error) !== null
 }
 
 /**
@@ -850,6 +883,11 @@ async function probeChannels(candidates: ProbeCandidate[]): Promise<boolean> {
       // 小房间频道已被房主更新：作废归属，下一轮自愈重新发现，
       // 否则每轮都要对着死频道重打一次请求
       if (isChannelGone(error) && dropSmallChannelByChannelId(channelId))
+        return
+      // 门禁类拒绝（赠送鸡腿 / 贡献 / 守护…）不是「频道坏了」：频道本身是活的，
+      // 只是本账号进不去，作废重解析也换不来能读的频道。它不该吃掉失败额度，
+      // 否则每轮看起来都像连续失败，大房间会被反复作废
+      if (isAccessGate(error))
         return
       // 大房间：成员换房 / 关房后旧频道会一直失败，连续失败达上限即作废重解析
       if (noteChannelFailure(channelId))

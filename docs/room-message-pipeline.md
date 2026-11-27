@@ -173,7 +173,7 @@ route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤�
 
 同一判据也是成员详情卡房间入口的显隐条件（见 2.3）：解析不出频道的成员连入口都不给。
 
-⚠️ **不应将 `im/team/room/info` 的 `channelStatus` 作为关闭判据**。该字段语义不明：实测正常房间同样返回非 0（曾据「非 0 = 已关闭」过滤，导致全部房间被误过滤）；被回收的房间在 jump 阶段即解析不出频道，已由上述路径覆盖。`room/info` 现用于三处：未读检测的频道归属反查（`getRoomChannelOwner`）、小房间的暗号题面拉取（`getRoomQuestion`，见第 8 节）、房间关闭判定（`hasMsgBoard`，见下）。
+⚠️ **不应将 `im/team/room/info` 的 `channelStatus` 作为关闭判据**。该字段语义不明：实测正常房间同样返回非 0（曾据「非 0 = 已关闭」过滤，导致全部房间被误过滤）；被回收的房间在 jump 阶段即解析不出频道，已由上述路径覆盖。`room/info` 现用于四处：未读检测的频道归属反查（`getRoomChannelOwner`，失败原因挂在错误的 `cause` 上）、小房间的暗号题面拉取（`getRoomQuestion`）、小房间门禁定性（`getRoomGate`，见第 8 节）、房间关闭判定（`hasMsgBoard`，见下）。
 
 **关闭的第二种形态（前端提示用）**：房间关闭后 jump 不报错，而是**退到该 server 的直播频道**。实测「刘增艳」房间关闭后回包：`channelId=1247148`、`channelName=直播`、`functionType=USER_LIVE`、`hasMsgBoard=0`；关闭前是留言频道 `1311973`（「增锅的房间🍳」）。对照正常房间（李婷「听听窝」）`functionType=CHAT_CHANNEL`、`hasMsgBoard=1`、`channelName` 为房主自定义名——两个字段同时区分了「留言频道」与「退到直播频道」。这类房间仍留在左列，但 `team/message/list` 恒回空页——与「房间还在、只是没人说话」在消息层面完全同形。
 
@@ -286,17 +286,31 @@ tick()（60s，重入护栏）
 - **被屏蔽成员剔除出检测范围**：检测名单再减本地屏蔽（`Database.getMemberFlagIds('blocked')`，每轮现读，屏蔽 / 解除屏蔽下一轮生效）。剔除后 `ensureChannels` 的取关清理会顺带清掉其频道缓存与未读——屏蔽本身只隐藏直播与回放，管不到未读，不剔除则角标照旧增长；
 - **未读累加需单独触发落盘**：dirty 仅覆盖频道解析/触发锚，遗漏将导致重启后未读数据丢失。
 
-**未归属频道自愈**：`lastMsgList` 回包会出现同 server 下未登记的频道（解析失败的关注成员房间、暗号小房间、非成员互动频道），用 `im/team/room/info` 反查房主——`ownerId` 命中关注名单 → 补进归属表，下一轮生效；`ownerId = 0`（非成员房间）→ 负缓存按 TTL 重试；被暗号拦下（回包带 `questionId`）→ 判定为成员小房间，按「同 server 唯一关注成员」归属，新消息同样计入该成员未读。小房间的主路径是主动枚举频道列表（见第 8 节），这里只兜底 lastMsgList 里出现的频道。
+**未归属频道自愈**：`lastMsgList` 回包会出现同 server 下未登记的频道（解析失败的关注成员房间、暗号小房间、非成员互动频道），用 `im/team/room/info` 反查房主——`ownerId` 命中关注名单 → 补进归属表，下一轮生效；`ownerId = 0`（非成员房间）→ 负缓存按 TTL 重试；被门禁拦下（暗号 `questionId` 或赠送鸡腿文案）→ 判定为成员小房间，按「同 server 唯一关注成员」归属，新消息同样计入该成员未读。小房间的主路径是主动枚举频道列表（见第 8 节），这里只兜底 lastMsgList 里出现的频道。
 
 持久化于 `userData/pocket48-unread.json`（SafeJSONFileSync 原子写 + 坏档回退）：频道解析结果（开销最高的环节）随已读水位与按频道的未读一并落盘，重启不重解析、不丢未读、也不把同一页消息重计一遍。
 
-## 8. 小房间与暗号门禁
+## 8. 小房间与门禁
 
-小房间是成员主频道之外的暗号频道，与大房间同属一个 team server。
+小房间是成员主频道之外、带准入条件的频道，与大房间同属一个 team server。
 
-**频道发现**：`im/server/jump` 不返回小房间。主进程主动枚举成员 server 的频道列表（seine `server/detail` → `channelInfoList`），对「大房间之外」的频道逐个试 `room/info`：被 `questionId` 拦下的即小房间（公告等普通频道是正常回包，**不能**按「请求成功」反推成小房间）。`lastMsgList` 只在频道有消息时回条，新建 / 换新的小房间在没人说话前根本不会出现，所以被动链路只作兜底。
+**门禁种类**：小房间的准入条件由成员自己设，`room/info` 拦下时的回包分两种结构，判据完全不同：
+
+| 种类 | 回包 | 能否本地解锁 |
+| --- | --- | --- |
+| `question` 暗号 | `status 2001`，`message` 是内嵌 JSON `{questionId, question}` | 能：`question/answer/verify` 逐题校验（见下「作答校验」） |
+| `chicken-leg` 赠送 | 纯文本，如 `最近30天内赠送过鸡腿礼物(*每30分钟整点刷新)可访问频道`，实测 `status` 也是 2002 | 不能：门槛由服务端按礼物记录判 |
+| `contribution` 贡献 / 守护 | 业务码 2002 / 2003，同归一类（官方进房动作的 2002 需贡献、2003 需守护；`room/info` 的 2002 不是贡献专属，鸡腿门槛也走它） | 不能 |
+
+定性只在一处：`pocket-room-api.ts` 的 `classifyChannelGate(envelope)` —— 先看 message 是不是暗号信封（可作答的门禁结构最稳），再看文案关键字（鸡腿），最后才按业务码兜底，认不出的归 `unknown` 并保留码与原文。**文案必须先于码值**：`room/info` 的 2002 是个笼统的「业务拒绝」，鸡腿门槛也走它，先按码判会把赠送门槛误报成贡献门槛。**不要按文案写死**：服务端文案由 App 侧定义，会改；也不要按「请求成功」反推（见下）。
+
+**频道发现**：`im/server/jump` 不返回小房间。主进程主动枚举成员 server 的频道列表（seine `server/detail` → `channelInfoList`），对「大房间之外」的频道逐个试 `room/info`：被 `question` 或 `chicken-leg` 拦下的即小房间（公告等普通频道是正常回包，**不能**按「请求成功」反推成小房间）；发现结果连同门禁种类一起写 `smallChannels[userId].gate`，种类变了同样落盘广播。贡献 / 守护暂不并入（认错比漏认糟；漏认只是每轮重试一次）。`lastMsgList` 只在频道有消息时回条，新建 / 换新的小房间在没人说话前根本不会出现，所以被动链路只作兜底。
 
 结果写入 `pocket48-unread.json` 的 `smallChannels`。渲染层选中成员时先读缓存，没有则调 `pocketRefreshSmallChannel(userId)` 立刻枚举一次——发现按 server 节流（5 分钟），反复选中不会反复打接口；检测轮也按同一间隔补扫。故入口异步出现，未发现时不渲染页签。
+
+**非暗号门禁的界面**：锁定层分两种形态——暗号门禁给输入框；其余门禁只展示服务端原文 + 一句「本应用无法代为解锁」，**不给输入框**（本地无从作答，给输入框只会把人引到死路）。门禁定性走 `pocketGetRoomGate`（与 `pocketGetRoomQuestion` 同一个 `room/info`，区别只是失败时返回定性结果而非抛错），结果按 5 分钟缓存：赠送门槛「每30分钟整点刷新」，缓存太久会让刚解锁的房间一直显示进不去。`unknown` 不锁界面（可能只是接口抽风），按「不知道」处理。
+
+**探测口径**：门禁类拒绝（`isAccessGate`）在 `probeChannels` 里直接返回，**不计 failCount**——频道本身是活的，只是本账号进不去，作废重解析也换不来能读的频道，计失败反而会让大房间被反复作废。
 
 **失效自愈**：房主更新小房间会换掉 channelId，旧频道随即回「频道不存在」。检测轮探测或渲染层打开该频道收到这个错误时，调 `invalidateSmallChannel(userId)` 清掉 `smallChannels` 条目及其未读/水位/触发锚、放开该 server 的发现间隔并广播；渲染层随后以 `force` 重新发现，**拿到新频道就直接切过去**，只有确实没有小房间了才退回大房间。不清理的话每轮都会对着死频道重打请求，入口也一直指着失效频道。另一种失效是「只删不建」：旧频道已不在 `lastMsgList` 里，探测永远等不到 404，因此枚举时若已登记的频道不在 server 的频道列表里，同样作废（列表非空才判断，接口抽风返回空列表只告警）。渲染层只缓存「已发现」的频道、未发现不缓存（缓存 null 会让新频道等到重启才出现）。
 
@@ -312,7 +326,7 @@ tick()（60s，重入护栏）
 
 **作答校验**：`POST im/api/v1/team/channel/question/answer/verify`，body `{ answer, questionId }`。`questionId` 逐题校验：真实 id 配错答回 `{"status":500,"success":false,"message":"回答错误"}`，不存在或缺失 id 回「问题不存在」；`success: true` 即通过。
 
-**锁态与解锁**：解锁状态只存渲染层内存（`unlockedSmallChannels`，`channelId` 为键），重启后重新校验。锁图标由 `smallRequiresAnswer` 判定（与当前视图无关，大房间视图下也常显），输入层由 `smallLocked`（= 小房间视图 && 未解锁）判定；校验失败一律停在锁定层。`MASTER_PASSCODE` 为自用通道（客户端直通、不发起请求），界面不公开。
+**锁态与解锁**：解锁状态只存渲染层内存（`unlockedSmallChannels`，`channelId` 为键），重启后重新校验。锁图标由 `smallRequiresAnswer` 判定（= 暗号门禁 && 本会话未解锁，与当前视图无关，大房间视图下也常显）；`smallLocked`（= 小房间视图 && 进不去）决定锁定层，层内再按 `smallGateNotice` 分流：有不可作答门禁时只出说明，否则出暗号输入框。校验失败一律停在锁定层。`MASTER_PASSCODE` 为自用通道（客户端直通、不发起请求），界面不公开——它只对 `questionId` 校验有效，所以赠送 / 贡献 / 守护类门禁**不提供**输入框。
 
 **频道名**：`jump` 与 `lastMsgList` 均不带频道名，名称取自 seine 频道详情 `im/api/seine/server/detail`（`{ serverId }` → `channelInfoList[].channelName`），一次请求覆盖该 server 下全部频道；取不到时静默回退「房间 / 小房间」。seine 接口带专属 `X-Custom-Device-Type: ANDROID`，其余 `appInfo` / `User-Agent` / `Content-Type` 与主 App 请求同源，`pa` 仍由 `postPocket` 现算；客户端特征唯一来源是 `main/pocket48/client-profile.ts`（恒为塞纳河48 Android 档；设备 ID 持久化，跨会话同一台设备；机型取自 `common/android-device.ts`，站点请求 UA 同源）。名称表连 `serverId` 一起存，读取时校验归属。
 

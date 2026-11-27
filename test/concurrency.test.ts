@@ -46,4 +46,35 @@ describe('mapWithConcurrency（保序有界并发映射）', () => {
       return item
     })).rejects.toThrow('boom')
   })
+
+  // 回归：早先 worker 在任务抛错后直接结束，排队中的条目永远不被处理，
+  // 而外层只知道「整体拒绝了」——静默漏掉一半工作（healChannelOwners 撞 token 失效即如此）
+  it('抛错后不再开始排队中的任务', async () => {
+    const started: number[] = []
+    await expect(mapWithConcurrency([1, 2, 3, 4, 5, 6], 1, async (item) => {
+      started.push(item)
+      if (item === 2)
+        throw new Error('boom')
+      return item
+    })).rejects.toThrow('boom')
+    expect(started).toEqual([1, 2])
+  })
+
+  it('抛错后不再开始排队中的任务（limit=3 时同批在途的照常跑完）', async () => {
+    const started: number[] = []
+    const finished: number[] = []
+    const running = mapWithConcurrency([1, 2, 3, 4, 5], 3, async (item) => {
+      started.push(item)
+      await new Promise(resolve => setTimeout(resolve, item === 1 ? 0 : 2))
+      finished.push(item)
+      if (item === 1)
+        throw new Error('boom')
+      return item
+    })
+    await expect(running).rejects.toThrow('boom')
+    // 同一批已在途的 2 / 3 照常跑完；4 / 5 从未开始
+    expect(started.sort()).toEqual([1, 2, 3])
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(finished.sort()).toEqual([1, 2, 3])
+  })
 })

@@ -66,6 +66,15 @@ interface AuthMock {
   getServerChannels: ReturnType<typeof vi.fn>
 }
 
+/**
+ * 与 `getRoomChannelOwner` 的真实失败一致：门禁定性挂在 `cause` 上（pocket-unread 靠它区分
+ * 「成员小房间的门禁」与「真的打不开」）。只 mock 成裸 Error 的话，主线会把它当网络失败。
+ */
+function gateError(message: string): Error {
+  const kind = message.includes('"questionId"') ? 'question' : message.includes('鸡腿') ? 'chicken-leg' : 'unknown'
+  return new Error(message, { cause: { kind, status: 2001, message: kind === 'question' ? '' : message } })
+}
+
 /** 重新加载被测模块与其 mock 依赖：resetModules 后 vi.fn 都是新实例，必须一并取回配置 */
 async function freshModule() {
   vi.resetModules()
@@ -276,7 +285,7 @@ describe('pocket-unread（房间未读检测）', () => {
       lastOf(smallKey, 'cX')[0],
     ]
     auth.getRoomLastMessages.mockResolvedValue(both('k1a', 'k1b'))
-    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"596","question":"暗号"}'))
+    auth.getRoomChannelOwner.mockRejectedValue(gateError('{"questionId":"596","question":"暗号"}'))
     auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
     // 频道列表如实包含大房间与小房间（主动发现据此确认 cX 仍在，不会当作已被删）
     auth.getServerChannels.mockResolvedValue([
@@ -320,7 +329,7 @@ describe('pocket-unread（房间未读检测）', () => {
     auth.getFollowedIds.mockResolvedValue([1])
     auth.getRoomChannel.mockResolvedValue({ serverId: 's1', channelId: 'c1' })
     // 同 server 的暗号频道：room/info 被 questionId 信封拦下，拿不到 ownerId（只能按唯一关注成员归属）
-    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"596","question":"暗号"}'))
+    auth.getRoomChannelOwner.mockRejectedValue(gateError('{"questionId":"596","question":"暗号"}'))
     // 频道列表包含大房间与旧小房间 cX（主动发现据列表判断 cX 是否已被房主删除）
     auth.getServerChannels.mockResolvedValue([
       { channelId: 'c1', channelName: '大房间' },
@@ -385,7 +394,7 @@ describe('pocket-unread（房间未读检测）', () => {
       { channelId: 'c1', channelName: '大房间' },
       { channelId: 'cX', channelName: '小房间' },
     ])
-    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"9","question":"暗号"}'))
+    auth.getRoomChannelOwner.mockRejectedValue(gateError('{"questionId":"9","question":"暗号"}'))
 
     mod.startPocketUnread()
     await vi.waitFor(() => expect(mod.getSmallChannel(1)).toMatchObject({ channelId: 'cX' }))
@@ -405,7 +414,7 @@ describe('pocket-unread（房间未读检测）', () => {
       { channelId: 'c1', channelName: '大房间' },
       { channelId: 'cNew', channelName: '新小房间' },
     ])
-    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"9","question":"暗号"}'))
+    auth.getRoomChannelOwner.mockRejectedValue(gateError('{"questionId":"9","question":"暗号"}'))
 
     mod.startPocketUnread()
     await vi.waitFor(() => expect(mod.getSmallChannel(1)).toMatchObject({ serverId: 's1', channelId: 'cNew' }))
@@ -438,7 +447,7 @@ describe('pocket-unread（房间未读检测）', () => {
       { channelId: 'c1', channelName: '大房间' },
       { channelId: 'cOld', channelName: '旧小房间' },
     ])
-    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"9","question":"暗号"}'))
+    auth.getRoomChannelOwner.mockRejectedValue(gateError('{"questionId":"9","question":"暗号"}'))
 
     mod.startPocketUnread()
     await vi.waitFor(() => expect(mod.getSmallChannel(1)).toMatchObject({ channelId: 'cOld' }))
@@ -796,7 +805,7 @@ describe('pocket-unread（房间未读检测）', () => {
       ? [{ channelId: 'c2', channelName: '大房间' }, { channelId: 'c2s', channelName: '暗号房' }]
       : [{ channelId: 'c1', channelName: '大房间' }]))
     // 该 server 下多余频道被暗号拦下 = 小房间
-    auth.getRoomChannelOwner.mockRejectedValue(new Error('{"questionId":"9","question":"暗号是什么"}'))
+    auth.getRoomChannelOwner.mockRejectedValue(gateError('{"questionId":"9","question":"暗号是什么"}'))
 
     await runTick(auth, mod)
     await settle()
