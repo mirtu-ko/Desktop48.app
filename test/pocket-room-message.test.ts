@@ -717,4 +717,15 @@ describe('pocket-room-message / QChat 实时推送（24/11）', () => {
     // ext 没有 user 时，QChat 线路的发送者身份就是 fromAccount
     expect(view.userId).toBe('acc-1')
   })
+
+  it('文本消息内容恰好是 JSON 片段时保留原文，不渲染为空白气泡', () => {
+    const objView = normalizePocketRoomQChatMessage(qchatMessage({ body: '{"a": 1}' }))!
+    const arrView = normalizePocketRoomQChatMessage(qchatMessage({ body: '[1, 2, 3]' }))!
+    const emptyShell = normalizePocketRoomMessage({ msgType: 'TEXT', msgTime: 1728000009000, bodys: '{}' })!
+
+    expect(objView.text).toBe('{"a": 1}')
+    expect(arrView.text).toBe('[1, 2, 3]')
+    // 空协议壳 {} 仍不当作正文
+    expect(emptyShell.text).toBe('')
+  })
 })

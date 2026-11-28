@@ -17,7 +17,6 @@
  * 与聊天室、HTTP 同源——参考实现的 QChat 文件报的是旧版 seine SDK，本项目口径以 client-profile 为准。
  *
  * 终端类型（属性 3）恒为 AOS：两个官方 App 都是 Android 客户端，忠实模拟即报 AOS。
- * 注意 `2/2` 是账号级登录，登录即在线，会顶掉同账号的其他在线设备。
  *
  * 会话骨架（握手 → 登录 → 请求/响应 + 心跳）见 nim-session.ts，本文件只保留 QChat 协议族。
  */
@@ -430,7 +429,7 @@ export class NimQChatClient {
 
   /**
    * 双会话建立 + 订阅恢复；任一步失败即整体作废（静默清理，不触发重连）。
-   * 登录身份恒为 AOS（属性 3 = 1，见 buildNimLoginPacket）；这一步会顶掉同账号的其他在线设备。
+   * 登录身份恒为 AOS（属性 3 = 1，见 buildNimLoginPacket）。
    */
   private async establish(): Promise<void> {
     const { appKey, account, token, nim } = this.options
@@ -464,8 +463,9 @@ export class NimQChatClient {
       if (!qchatAddresses.length)
         throw new Error('云信没有返回 QChat 连接地址')
 
+      const qchatAddress = qchatAddresses[this.reconnectAttempt % qchatAddresses.length]
       const qchatSession = this.createSession({
-        address: parseTcpAddress(qchatAddresses[0]),
+        address: parseTcpAddress(qchatAddress),
         loginPacket: buildQChatLoginPacket({ appKey, account, token, deviceId, nim }),
         loginServiceId: SERVICE_QCHAT,
         loginCommandId: CMD_QCHAT_LOGIN,
@@ -538,9 +538,7 @@ export class NimQChatClient {
       return
     if (this.stopped)
       return
-    this.connected = false
-    this.nimSession?.destroy()
-    this.qchatSession?.destroy()
+    this.destroySessions()
     if (!this.everConnected)
       return
     this.options.onDisconnected?.()

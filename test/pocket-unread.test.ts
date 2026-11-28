@@ -1266,3 +1266,35 @@ describe('pocket-unread / 批量频道解析（getRoomChannelsBatch）', () => {
     await expect(mod.getRoomChannelsBatch([1])).rejects.toThrow('登录已过期')
   })
 })
+
+describe('pocket-unread / 并发竞态与快照比对', () => {
+  it('探测在途期间调用 markRead 时，过期回包不会让已读角标复活', async () => {
+    const { mod, auth } = await freshModule()
+    stubOnline(auth, lastOf('k1'))
+    auth.getRoomMessages.mockResolvedValue(pageOf('m1'))
+    await runTick(auth, mod)
+    await settle()
+
+    // 下一轮探测返回 1 条新未读，先挂起 getRoomMessages 模拟网络在途
+    auth.getRoomLastMessages.mockResolvedValue(lastOf('k2'))
+    let resolveProbe!: (value: ReturnType<typeof pageOf>) => void
+    auth.getRoomMessages.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveProbe = resolve
+    }))
+
+    // 先写入 1 条已有未读，随后启动一轮探测并在探测在途期间 markRead
+    auth.getRoomMessages.mockResolvedValueOnce(pageOf('m2', 'm1'))
+    const tickPromise = runTick(auth, mod)
+    await vi.waitFor(() => expect(resolveProbe).toBeTypeOf('function'))
+
+    // 用户此刻进房标已读：markEpoch 递增
+    await mod.markRead(1, 'room')
+    // 随后过期探测回包到达，带着基于旧水位算出的新消息
+    resolveProbe(pageOf('m2', 'm1'))
+    await tickPromise
+    await settle()
+
+    expect(mod.getState().rooms['1']).toBeUndefined()
+    expect(mod.getState().total).toBe(0)
+  })
+})

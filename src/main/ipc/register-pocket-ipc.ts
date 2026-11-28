@@ -84,8 +84,7 @@ export function registerPocketIPC(): void {
   // 取关清理仍只归检测轮（子集调用不删名单外成员）
   handleTraced('pocketGetRoomChannels', (_event: IpcMainInvokeEvent, userIds: number[]) =>
     pocketUnread.getRoomChannelsBatch(userIds))
-  // 房间发言权限（room/info 的 userFunction）：房主开房间级禁言时 sendText=false。
-  // 渲染层据此在输入框直接显示禁言、并且不再引导 QChat 建连（建连会顶掉手机端）
+  // 房间发言权限（room/info 的 userFunction）：房主开房间级禁言时 sendText=false，渲染层据此在输入框直接显示禁言态
   handleTraced('pocketGetRoomPermissions', (_event: IpcMainInvokeEvent, channelId: string) =>
     pocketAuth.getRoomPermissions(channelId))
   handleTraced('pocketGetRoomMessages', (

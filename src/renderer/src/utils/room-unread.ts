@@ -25,6 +25,16 @@ export function unreadShownCount(input: { region: number, snapshot: number, beyo
 }
 
 /**
+ * 分割线与底部胶囊共用的条数文案：
+ * - 非 beyond：可见区域条数是精确值（补页后可超 50），直接报实数，避免「分割线 65 条、胶囊 50+ 条」；
+ * - beyond：水位在未加载区域，退回进房时的角标快照，沿用 50+ 封顶口径。
+ */
+export function unreadShownText(input: { region: number, snapshot: number, beyond: boolean }): string {
+  const count = unreadShownCount(input)
+  return input.beyond ? unreadBadgeText(count) : String(count)
+}
+
+/**
  * 贴底自愈：镜像里当前房间、当前频道又冒出未读时，是否该再标一次已读。
  *
  * 贴底标记（进房 / 回底 / 收到新消息）与主进程 60s 检测轮有竞态：标记时主进程还没

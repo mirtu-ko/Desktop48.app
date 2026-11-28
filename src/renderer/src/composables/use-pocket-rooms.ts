@@ -142,6 +142,8 @@ export function usePocketRooms() {
   } = useLiveStatusStore()
 
   const rooms = ref<PocketRoom[]>([])
+  /** 是否挂载在真实组件 setup 中（裸 effectScope 单测不走 KeepAlive 生命周期） */
+  const inComponent = !!getCurrentInstance()
   /** 页面是否处于 keep-alive 激活态：共享直播轮询只在可见房间页运行 */
   const pageActive = ref(false)
   /** 当前页持有的共享直播轮询释放函数 */
@@ -767,6 +769,21 @@ export function usePocketRooms() {
     debugLog('pocket-rooms', `首帧水合：${hydrated.length} 个房间（快照）`)
   }
 
+  /** 同房重选上次强制校正的时刻（按成员）：用于 SAME_ROOM_RECHECK_MS 时间门槛 */
+  const sameRoomRecheckAt = new Map<number, number>()
+  /** 上次首灌时的账号 ID，换号时同步清掉账号相关的门禁与房间缓存 */
+  let lastAccountUserId = ''
+
+  /** 清理与当前登录账号强绑定的缓存（登出 / 换号共用，避免门禁判定串号） */
+  function clearAccountCaches(): void {
+    essenceCache.clear()
+    smallGateCache.clear()
+    smallQuestionCache.clear()
+    smallChannelCache.clear()
+    sameRoomRecheckAt.clear()
+    closureOverrides.value = {}
+  }
+
   /**
    * 首灌：关注名单 + 成员详情 + 直播匹配 + 房间遍历（过滤无房间）+ 最新消息预览。
    * forceLive=true 供手动刷新（绕过 120s 直播缓存）；进页面复用新鲜缓存即可——
@@ -788,12 +805,16 @@ export function usePocketRooms() {
         rooms.value = []
         selectedUserId.value = null
         clearChat()
-        // 精华缓存随账号走，换号不能命中旧内容
-        essenceCache.clear()
+        clearAccountCaches()
+        lastAccountUserId = ''
         void syncQChatChannel()
         clearSnapshotRooms()
         return
       }
+      const currentAccountUserId = pocketAuthState.value.userId
+      if (lastAccountUserId && currentAccountUserId !== lastAccountUserId)
+        clearAccountCaches()
+      lastAccountUserId = currentAccountUserId
       // 屏蔽名单先就位：水合与名单过滤都读它（未加载的空名单恒放行）
       await ensureBlockedLoaded()
       if (requestId !== loadRequestId)
@@ -1233,6 +1254,9 @@ export function usePocketRooms() {
       qchatHint.value = batch.message || ''
       return
     }
+    // KeepAlive 切去其他页面时不再往后台消息数组追加推送（切回 onActivated 会立即 poll 补齐）
+    if (inComponent && !pageActive.value)
+      return
     if (chatStatus.value !== 'ready' || !activeChannel)
       return
     const message = batch.message
@@ -1669,8 +1693,6 @@ export function usePocketRooms() {
    * 选中态在 await 期间可能已被切换/清空，回包后必须复核，否则消息会串房。
    * 房间留言流与直播与否无关：未开播的成员同样有房间消息。
    */
-  /** 同房重选上次强制校正的时刻（按成员）：用于 SAME_ROOM_RECHECK_MS 时间门槛 */
-  const sameRoomRecheckAt = new Map<number, number>()
   async function selectRoom(userId: number | null) {
     // 同房且已就绪：消息流与轮询保持不动，只校正小房间入口（房主可能刚换了小房间）。
     // 强制重枚举有时间门槛：同一成员每 SAME_ROOM_RECHECK_MS 至多一次，门槛内的重复点击走缓存，
@@ -1960,7 +1982,7 @@ export function usePocketRooms() {
       && qchatStatus.value === 'connected'
   }
 
-  async function pollRoomMessages() {
+  async function pollRoomMessages(force = false) {
     // 已关闭房间的当前频道恒空；判定后停掉空转轮询，历史由按日期入口走旧频道
     if (!activeChannel || chatStatus.value !== 'ready' || roomClosed.value)
       return
@@ -1970,8 +1992,8 @@ export function usePocketRooms() {
       lastMessagePollChannel = channelKey
       lastMessagePollAt = 0
     }
-    // QChat 健康时放宽到 30s；断开后下一个 5s tick 即补拉
-    if (qchatCoversActiveChannel() && Date.now() - lastMessagePollAt < MESSAGE_POLL_QCHAT_MS)
+    // QChat 健康时放宽到 30s；断开后下一个 5s tick 即补拉；切回页面（force=true）绕过节流立即补拉
+    if (!force && qchatCoversActiveChannel() && Date.now() - lastMessagePollAt < MESSAGE_POLL_QCHAT_MS)
       return
     lastMessagePollAt = Date.now()
     try {
@@ -2032,7 +2054,7 @@ export function usePocketRooms() {
     }
   }
 
-  // pageActive 由 onActivated / onDeactivated 维护，只剩共享直播轮询一个开关
+  // pageActive 由 onActivated / onDeactivated 维护，同时用于暂停后台推送与未读补标
   watch([pageActive, loggedIn, () => rooms.value.length], () => {
     syncLiveStatusPolling()
   }, { immediate: true })
@@ -2045,8 +2067,9 @@ export function usePocketRooms() {
       // 直播与预览由共享轮询和镜像维护。否则整表重拉，清掉陈旧的 pocketFollowError 并重建左列。
       if (listNeedsReload())
         void load()
+      // 后台期间 QChat 推送会被 onRoomBatch 拦截，切回时绕过 30s 节流立即补拉
       if (activeChannel)
-        void pollRoomMessages()
+        void pollRoomMessages(true)
       resumeMessagePoll()
     })
     onDeactivated(() => {
@@ -2096,6 +2119,7 @@ export function usePocketRooms() {
 
   return {
     rooms,
+    pageActive,
     loading,
     liveRefreshing,
     loadError,

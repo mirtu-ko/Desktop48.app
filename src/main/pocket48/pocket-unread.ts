@@ -178,6 +178,8 @@ const lastProbeAt = new Map<string, number>()
  * 免得刚读过的消息被当成未读复活。挂起期间该频道不计数。
  */
 const alignPending = new Set<string>()
+/** 频道 markRead 世代号：递增后使在途的 probeChannels 回包作废，防止已读角标复活 */
+const markEpoch = new Map<string, number>()
 /**
  * 各 server 上一次主动发现小房间的时刻（仅本进程内）：按 server 节流，
  * 渲染层选中成员与检测轮共用同一份，避免两边各打一次频道列表。
@@ -379,6 +381,7 @@ async function ensureChannels(followedIds: number[]): Promise<{ dirty: boolean, 
         delete data.readMarks[channelId]
         lastProbeAt.delete(channelId)
         alignPending.delete(channelId)
+        markEpoch.delete(channelId)
       }
       dirty = true
       if (hadUnread)
@@ -860,9 +863,13 @@ async function probeChannels(candidates: ProbeCandidate[]): Promise<boolean> {
   const data = store()
   let dirty = false
   await mapWithConcurrency(candidates, PROBE_CONCURRENCY, async ({ channelId, serverId, previewKey }) => {
+    const epoch = markEpoch.get(channelId) ?? 0
     lastProbeAt.set(channelId, Date.now())
     try {
       const { messages } = await getRoomMessages(channelId, serverId, 0, 'member')
+      // 探测在途期间发生了 markRead：本轮结果基于旧水位，放弃写回以免已读复活
+      if ((markEpoch.get(channelId) ?? 0) !== epoch)
+        return
       if (clearChannelFailure(channelId))
         dirty = true
       const list = countableMessages(messages)
@@ -949,7 +956,11 @@ function sameSnapshot(a: Record<string, UnreadRoomState>, b: Record<string, Unre
   return ids.every((id) => {
     const before = b[id]
     const after = a[id]
-    return !!before && before.count === after.count && before.latestTime === after.latestTime
+    return !!before
+      && before.count === after.count
+      && before.bigCount === after.bigCount
+      && before.smallCount === after.smallCount
+      && before.latestTime === after.latestTime
   })
 }
 
@@ -973,6 +984,7 @@ export function clearAccountUnread(): void {
   latestPreviews = []
   alignPending.clear()
   lastProbeAt.clear()
+  markEpoch.clear()
   if (hadAccountState)
     persist()
   // 预览不持久化（重启由首轮检测重建），但渲染层镜像必须收到清空广播；
@@ -1258,20 +1270,17 @@ export async function getRoomChannelsBatch(userIds: number[]): Promise<Array<{ u
 /**
  * 把某频道的已读水位推到「当下」：拉一页最新消息，取其中最新一条为水位。
  * 失败不回滚已清零的结果，改为挂起——下一轮检测先对齐水位再计数，
- * 免得刚读过的消息被当成未读复活（挂起期间该频道不计数，最多损失一论的消息）。
+ * 免得刚读过的消息被当成未读复活（挂起期间该频道不计数，最多损失一轮的消息）。
  */
 async function alignReadMark(channel: StoredChannel): Promise<void> {
   const data = store()
   try {
     const { messages } = await getRoomMessages(channel.channelId, channel.serverId, 0, 'member')
     const newest = countableMessages(messages)[0]
-    if (newest) {
+    if (newest)
       data.readMarks[channel.channelId] = { msgTime: newest.msgTime, msgIdServer: newest.msgIdServer }
-      alignPending.delete(channel.channelId)
-    }
-    else {
-      alignPending.add(channel.channelId)
-    }
+    // 请求成功即解除挂起：频道确实没有房主发言时不必下一轮强行再拉一页
+    alignPending.delete(channel.channelId)
     lastProbeAt.set(channel.channelId, Date.now())
     persist()
     debug('[pocket-unread] 已读水位对齐完成', channel.channelId, '=', newest?.msgTime ?? '-')
@@ -1309,7 +1318,12 @@ export async function markRead(userId: number, target: 'room' | 'small' = 'room'
   // 清零前的水位带回；频道未解析或从未锚定时为 null。落盘的占位 id '0' 一并归一
   const mark = channelId ? data.readMarks[channelId] : undefined
   const prev: PocketRoomReadMark | null = mark ? { msgTime: mark.msgTime, msgIdServer: toMessageId(mark.msgIdServer) } : null
-  if (!entry || !channelId)
+  if (!channelId)
+    return prev
+  // 无论当前快照里是否已有未读，先递增世代号：若此刻正好有一轮 probeChannels 在途，
+  // 其基于旧水位算出的回包落地后应作废，避免刚标完已读又被旧探测复活
+  markEpoch.set(channelId, (markEpoch.get(channelId) ?? 0) + 1)
+  if (!entry)
     return prev
   // 清零只抹掉目标通道的计数，另一路原样保留；清完立即重建快照并广播，
   // 与渲染层的乐观清零值一致，避免「角标整块消失、对齐后小房间未读又冒回来」的闪烁
@@ -1353,6 +1367,7 @@ function clearChannelRuntimeState(channelId: string): void {
   delete data.seenKeys[channelId]
   lastProbeAt.delete(channelId)
   alignPending.delete(channelId)
+  markEpoch.delete(channelId)
 }
 
 /**

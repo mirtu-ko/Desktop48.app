@@ -9,6 +9,7 @@ interface UnreadSeenGuardOptions {
   selectedUserId: Ref<number | null>
   viewMode: Ref<PocketRoomViewMode>
   atBottom: Ref<boolean>
+  /** 页面处于激活态（KeepAlive 可见）且应用窗口可见 */
   pageVisible: Ref<boolean>
   hasMessages: Ref<boolean>
   /** 进房 / 切频道收尾在途：这期间不补标，分割线还要截旧水位 */

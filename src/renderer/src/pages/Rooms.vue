@@ -30,7 +30,7 @@ import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
 import { resolveDateChannel, resolveRoomArchiveStart } from '@renderer/utils/room-date-jump'
 import { shouldTrackRoomEnter } from '@renderer/utils/room-enter-tracker'
-import { unreadShownCount, unreadBadgeText as unreadText } from '@renderer/utils/room-unread'
+import { unreadShownText, unreadBadgeText as unreadText } from '@renderer/utils/room-unread'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
 import { useDebounceFn, useDocumentVisibility, useEventListener, useIntersectionObserver, useResizeObserver } from '@vueuse/core'
@@ -41,6 +41,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 const {
   rooms,
+  pageActive,
   loading,
   liveRefreshing,
   loadError,
@@ -101,8 +102,10 @@ const {
 const router = useRouter()
 const route = useRoute()
 
-/** 页面可见性：窗口隐藏 / 最小化时暂停左列直播特效动画（见 .rooms-page.is-paused） */
+/** 窗口可见性：与 pageActive 合并为 pageVisible */
 const docVisibility = useDocumentVisibility()
+/** 房间页可见性：合并 KeepAlive 激活态与窗口可见性，不可见时暂停左列动效与未读补标 */
+const pageVisible = computed(() => pageActive.value && docVisibility.value === 'visible')
 
 /** 精华消息弹层是否打开 */
 const essenceOpen = ref(false)
@@ -354,7 +357,7 @@ const unreadAnchor = ref<{
   /** 水位那条的服务端 id：优先按它定位（同一毫秒多条不致错位） */
   msgIdServer: string
   msgTime: number
-  /** 截下时的未读条数（角标口径，含封顶）：底部胶囊文案用 */
+  /** 截下时的未读条数（角标口径，含封顶）：仅 beyond 时作为分割线与胶囊的回退条数 */
   count: number
   /** 补页触顶后水位仍在窗口外：分割线钉窗口顶、文案降级（见 fillUnreadWindow） */
   beyond: boolean
@@ -405,6 +408,9 @@ function setUnreadAnchorEl(el: Element | ComponentPublicInstance | null) {
  * count 由调用方在清零前取得（乐观清零后只剩 0）。回包时已切房 / 换频道则不落锚点。
  */
 async function markRoomReadCapturing(userId: number, target: 'room' | 'small', count: number) {
+  // 先复核当前仍在目标房间与频道：避免切换加载期间又切走，在主进程误清未在看频道的未读
+  if (selectedUserId.value !== userId || viewMode.value !== target)
+    return false
   unreadJumped.value = false
   const prev = await markRoomRead(userId, target)
   if (selectedUserId.value !== userId || viewMode.value !== target)
@@ -430,11 +436,11 @@ const unreadAnchorBeyond = computed(() =>
 )
 
 /**
- * 分割线与底部胶囊共用的条数：两处必须同一个数。角标快照取自进房瞬间（60s 检测轮的口径），
- * 与「列表里比水位新的可见条数」会差 1～几条，混用就是「分割线 4 条、胶囊 3 条」。
+ * 分割线与底部胶囊共用的条数文案：两处必须完全一致（非 beyond 报精确条数，beyond 走 50+ 封顶），
+ * 避免「分割线 4 条、胶囊 3 条」或补页超 50 条时「分割线 65 条、胶囊 50+ 条」。
  */
-const unreadShown = computed(() =>
-  unreadShownCount({
+const unreadShownLabel = computed(() =>
+  unreadShownText({
     region: unreadRegionCount.value,
     snapshot: unreadAnchor.value?.count ?? 0,
     beyond: unreadAnchorBeyond.value,
@@ -446,8 +452,8 @@ const unreadDividerText = computed(() => {
   if (!unreadAnchor.value)
     return ''
   return unreadAnchorBeyond.value
-    ? `新消息从更早开始（${unreadText(unreadShown.value)} 条），上翻继续查看`
-    : `以下是 ${unreadShown.value} 条新消息`
+    ? `新消息从更早开始（${unreadShownLabel.value} 条），上翻继续查看`
+    : `以下是 ${unreadShownLabel.value} 条新消息`
 })
 
 /**
@@ -469,15 +475,21 @@ async function onViewModeChange(mode: 'room' | 'small') {
     return
   const userId = selectedUserId.value
   if (mode !== 'room') {
-    // 小房间未读同样在清零前截（两个频道各有自己的水位与条数）
+    // 小房间未读同样在清零前截（两个频道各有自己的水位与条数）；
+    // 必须等频道切换完成且未上锁、首屏消息就绪后再标已读，避免锁住或加载失败时误清未读
     const hadUnread = userId !== null ? unreadChannelOf(userId).small : 0
     unreadAnchor.value = null
     unreadJumped.value = false
     beginEntryMark()
     try {
-      void setViewMode(mode)
-      if (userId !== null && hadUnread > 0)
+      await setViewMode(mode)
+      if (userId !== null && hadUnread > 0 && !smallLocked.value && chatStatus.value === 'ready' && messages.value.length > 0) {
         await markRoomReadCapturing(userId, 'small', hadUnread)
+        if (selectedUserId.value === userId && viewMode.value === 'small') {
+          await nextTick()
+          scrollToBottom()
+        }
+      }
     }
     finally {
       endEntryMark()
@@ -657,7 +669,7 @@ useUnreadSeenGuard({
   selectedUserId,
   viewMode,
   atBottom,
-  pageVisible: computed(() => docVisibility.value === 'visible'),
+  pageVisible,
   hasMessages: computed(() => messages.value.length > 0),
   entryBusy: () => entryMarkDepth > 0,
   markRead: (userId, target) => void markRoomRead(userId, target),
@@ -686,7 +698,7 @@ function onListScroll() {
     newCount.value = 0
     // 上翻后回到底部即补标（贴底即已读，与 length 监听同口径）；只在刚回底这一刻标，
     // 停在底部时新消息由 length 监听管
-    if (!wasAtBottom && docVisibility.value === 'visible' && entryMarkDepth === 0
+    if (!wasAtBottom && pageVisible.value && entryMarkDepth === 0
       && selectedUserId.value !== null && messages.value.length) {
       void markRoomRead(selectedUserId.value, viewMode.value)
     }
@@ -769,6 +781,9 @@ function onRoomWrapDblClick(room: PocketRoom, event: MouseEvent) {
  * unreadCount 传条数：锚点要用它，而 markRoomRead 会乐观清零，之后只剩 0。
  */
 async function settleBigRoomEnter(userId: number, unreadCount: number) {
+  // 选房 / 切页签期间已切到其他房间或小房间：直接退出，不误清当前房间的锚点或未读
+  if (selectedUserId.value !== userId || viewMode.value !== 'room')
+    return
   // 加载失败：未读保留，留到下次进房成功再清
   if (chatStatus.value !== 'ready') {
     unreadAnchor.value = null
@@ -791,9 +806,9 @@ async function settleBigRoomEnter(userId: number, unreadCount: number) {
   scrollToBottom()
 }
 
-/** 点进房间（左列条目）：选中 → 清大房间未读（有未读则回底） */
-async function enterRoom(userId: number) {
-  trackRoomEnter(userId, 'list')
+/** 点进房间（左列条目 / 深链命中已关注成员）：选中 → 清大房间未读（有未读则回底） */
+async function enterRoom(userId: number, from: 'list' | 'query' = 'list') {
+  trackRoomEnter(userId, from)
   // 未读数在 markRoomRead 乐观清零前取，否则永远是 0
   const hadUnread = unreadChannelOf(userId).big
   // 换房先撤掉上一间的分割线：消息清空与水位重取之间有间隙，别让旧锚点落回新列表
@@ -813,12 +828,21 @@ async function enterRoom(userId: number) {
 /**
  * 临时房间的边界就是这条路由 query：成员详情卡底栏入口 push `/rooms?member=<userId>`，
  * query 一旦消失（Dock 切回房间页、走别的入口）即撤掉临时条目——离开页面就不再保留。
- * 成员不在关注名单里也照样打开，这正是「临时」的用途（不写关注名单、不落盘）。
+ * 成员不在关注名单里也照样打开，这正是「临时」的用途（不写关注名单、不落盘）；
+ * 若该成员已在关注列表中（如托盘点击未读房间），走 enterRoom 保留未读分割线与收尾保护。
  */
 watch(() => route.query.member, async (value) => {
   const userId = Number(Array.isArray(value) ? value[0] : value)
   if (!Number.isFinite(userId) || userId <= 0) {
     closeTemporaryRoom()
+    return
+  }
+  if (rooms.value.some(room => room.userId === userId)) {
+    closeTemporaryRoom()
+    await enterRoom(userId, 'query')
+    // 已关注成员进房后清掉 query：避免残留 ?member 挡住后续页内回显补标（临时房间保留 query 维系其生命周期）
+    if (route.path === '/rooms' && route.query.member === value)
+      void router.replace({ path: '/rooms' })
     return
   }
   const result = await openTemporaryRoom(userId)
@@ -864,24 +888,41 @@ watch(() => messages.value.length, async (len, oldLen) => {
   }
   newCount.value = 0
   // 贴底浏览即已读：主进程清当前视图频道未读并对齐基线，广播后角标同步消失；上翻不标记。
-  // 收尾在途时让位（见 entryMarkDepth）；窗口隐藏期间不标——用户看不见，静默清零等于吞掉
-  // 未读，回显时由 docVisibility 监听补标
-  if (docVisibility.value === 'visible' && entryMarkDepth === 0 && selectedUserId.value !== null && messages.value.length)
+  // 收尾在途时让位（见 entryMarkDepth）；不可见（窗口隐藏或 KeepAlive 停用）时不标，回到可见后由 pageVisible 补标
+  if (pageVisible.value && entryMarkDepth === 0 && selectedUserId.value !== null && messages.value.length)
     void markRoomRead(selectedUserId.value, viewMode.value)
   await nextTick()
   scrollToBottom()
 })
 
 /**
- * 回显补标：隐藏期间贴底到的消息先攒着未读（见 length 监听），回显时消息已在视口里，
- * 按「贴底即已读」补一次标记。上翻中（!atBottom）不补——那正是没看完的样子。
+ * 回显 / 切回补标：不可见期间攒有未读时，截旧水位画「以下是 N 条新消息」分割线再清零
+ * （新消息由 onActivated 的 pollRoomMessages 补齐后分割线自动落位）；无未读时仅常规补标。
+ * 带 member 深链切入且指向其他房间（如托盘点另一位未读成员）时让位给 enterRoom，避免误标旧房间。
  */
-watch(docVisibility, (visibility) => {
-  if (visibility !== 'visible')
+watch(pageVisible, async (visible) => {
+  if (!visible)
     return
-  if (entryMarkDepth > 0 || selectedUserId.value === null || !messages.value.length || !atBottom.value)
+  const rawQueryMember = route.query.member
+  const queryMember = Number(Array.isArray(rawQueryMember) ? rawQueryMember[0] : rawQueryMember)
+  if (Number.isFinite(queryMember) && queryMember > 0 && queryMember !== selectedUserId.value)
     return
-  void markRoomRead(selectedUserId.value, viewMode.value)
+  const userId = selectedUserId.value
+  if (entryMarkDepth > 0 || userId === null || !messages.value.length || !atBottom.value)
+    return
+  const target = viewMode.value
+  const hadUnread = activeUnreadCount.value
+  if (hadUnread <= 0) {
+    void markRoomRead(userId, target)
+    return
+  }
+  beginEntryMark()
+  try {
+    await markRoomReadCapturing(userId, target, hadUnread)
+  }
+  finally {
+    endEntryMark()
+  }
 })
 
 /**
@@ -1104,8 +1145,26 @@ watch(messages, (list) => {
 }, { flush: 'post' })
 
 // ===== 发言输入条（确认连接后在消息区底部常驻）=====
-/** 输入草稿；发送成功即清空 */
-const draft = ref('')
+/** 按房间频道暂存的输入草稿（`${userId}:${viewMode}` → 文本）：切房或切大小房间不串房，登出清空 */
+const roomDrafts = ref<Record<string, string>>({})
+const draftKey = computed(() => (selectedUserId.value === null ? '' : `${selectedUserId.value}:${viewMode.value}`))
+const draft = computed({
+  get: () => (draftKey.value ? (roomDrafts.value[draftKey.value] ?? '') : ''),
+  set: (value: string) => {
+    const key = draftKey.value
+    if (!key)
+      return
+    if (value)
+      roomDrafts.value[key] = value
+    else
+      delete roomDrafts.value[key]
+  },
+})
+
+watch(loggedIn, (isLoggedIn) => {
+  if (!isLoggedIn)
+    roomDrafts.value = {}
+})
 
 /** 输入条挂载条件：切房期间不随加载态卸载，避免底部跳动 */
 const composerMounted = computed(() =>
@@ -1244,6 +1303,7 @@ async function onSendClick(via: 'enter' | 'button') {
     }
     return
   }
+  const sendKey = draftKey.value
   const text = draft.value.trim()
   if (!text)
     return
@@ -1254,7 +1314,9 @@ async function onSendClick(via: 'enter' | 'button') {
     hasReply: replyTarget.value ? 'yes' : 'no',
   })
   if (result.ok) {
-    draft.value = ''
+    // 按发送前截下的频道键清理草稿，避免发送在途切房时误清目标房间的草稿
+    if (sendKey)
+      delete roomDrafts.value[sendKey]
     return
   }
   if (result.message)
@@ -1427,11 +1489,6 @@ function onMenuPick(key: string) {
 function openMessageMenu(event: MouseEvent, message: PocketRoomMessageView) {
   openMenu(event, { kind: 'message', message })
 }
-
-// ===== 左列房间条目的右键菜单 =====
-// 两件事：置顶 / 取消置顶（展示顺序），以及未读的手动出口。
-// 未读出口的由来：进房清零要求首屏消息加载成功（见 settleBigRoomEnter），频道失效 / 空页时
-// 那条路走不通，角标会一直挂着；右键直接标已读是这类房间当前唯一的手动出口。
 
 // ===== 左列房间条目的右键菜单 =====
 // 两件事：置顶 / 取消置顶（展示顺序），以及未读的手动出口。
@@ -1623,7 +1680,7 @@ watch([chatStatus, chatStatusText], () => {
 </script>
 
 <template>
-  <div class="page-root rooms-page" :class="{ 'is-paused': docVisibility === 'hidden' }">
+  <div class="page-root rooms-page" :class="{ 'is-paused': !pageVisible }">
     <!-- 未登录：居中登录卡片（房间依赖账号关注关系） -->
     <div v-if="!loggedIn && !loading" class="gate">
       <div class="gate-card frosted-surface">
@@ -2201,7 +2258,7 @@ watch([chatStatus, chatStatusText], () => {
                   <el-icon :size="12">
                     <ArrowRight />
                   </el-icon>
-                  {{ unreadText(unreadShown) }} 条未读
+                  {{ unreadShownLabel }} 条未读
                 </button>
               </Transition>
 
@@ -3650,7 +3707,7 @@ watch([chatStatus, chatStatusText], () => {
 </style>
 
 <style lang="scss">
-/* 非 scoped：窗口隐藏时暂停左列条目的动效。
+/* 非 scoped：页面不可见（窗口隐藏或切去其他页）时暂停左列条目的动效。
    条目已抽成 components/rooms/RoomListItem.vue，scoped 规则跨不过组件边界，
    而这里表达的是「整页暂停」这种页面级状态，故单独用非 scoped 块承载。 */
 .rooms-page.is-paused {

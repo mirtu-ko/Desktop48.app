@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shouldAutoMarkSeen, unreadBadgeText, unreadShownCount } from '../src/renderer/src/utils/room-unread'
+import { shouldAutoMarkSeen, unreadBadgeText, unreadShownCount, unreadShownText } from '../src/renderer/src/utils/room-unread'
 
 /** 未读展示口径（纯函数）：数字文案、分割线/胶囊共用条数、贴底自愈判定 */
 
@@ -21,6 +21,17 @@ describe('unreadShownCount', () => {
 
   it('水位在未加载区域（beyond）时可见区域不代表全部，退回角标快照', () => {
     expect(unreadShownCount({ region: 50, snapshot: 3, beyond: true })).toBe(3)
+  })
+})
+
+describe('unreadShownText', () => {
+  it('非 beyond 且补页超过 50 条时直接报实数，分割线与底部胶囊保持一致', () => {
+    expect(unreadShownText({ region: 65, snapshot: 50, beyond: false })).toBe('65')
+  })
+
+  it('beyond 时退回快照并沿用 50+ 封顶口径', () => {
+    expect(unreadShownText({ region: 200, snapshot: 50, beyond: true })).toBe('50+')
+    expect(unreadShownText({ region: 200, snapshot: 12, beyond: true })).toBe('12')
   })
 })
 

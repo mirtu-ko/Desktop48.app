@@ -1,6 +1,6 @@
 import type { PocketRoomViewMode } from '../src/renderer/src/composables/use-pocket-rooms'
 import { describe, expect, it, vi } from 'vitest'
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useUnreadSeenGuard } from '../src/renderer/src/composables/use-unread-seen'
 
 /**
@@ -12,7 +12,9 @@ function setup(initial?: { userId?: number | null, viewMode?: PocketRoomViewMode
   const selectedUserId = ref<number | null>(initial?.userId === undefined ? 10001 : initial.userId)
   const viewMode = ref<PocketRoomViewMode>(initial?.viewMode ?? 'room')
   const atBottom = ref(true)
-  const pageVisible = ref(true)
+  const pageActive = ref(true)
+  const docVisible = ref(true)
+  const pageVisible = computed(() => pageActive.value && docVisible.value)
   const hasMessages = ref(true)
   let entryBusy = false
   const markRead = vi.fn()
@@ -31,6 +33,8 @@ function setup(initial?: { userId?: number | null, viewMode?: PocketRoomViewMode
     selectedUserId,
     viewMode,
     atBottom,
+    pageActive,
+    docVisible,
     pageVisible,
     hasMessages,
     markRead,
@@ -64,7 +68,16 @@ describe('useUnreadSeenGuard', () => {
 
   it('窗口隐藏不补标', async () => {
     const guard = setup()
-    guard.pageVisible.value = false
+    guard.docVisible.value = false
+    guard.unread.value = 1
+    await nextTick()
+    expect(guard.markRead).not.toHaveBeenCalled()
+  })
+
+  it('切去其他页面（KeepAlive 停用）时即使窗口可见也不补标，避免后台吞未读', async () => {
+    const guard = setup()
+    guard.pageActive.value = false
+    guard.docVisible.value = true
     guard.unread.value = 1
     await nextTick()
     expect(guard.markRead).not.toHaveBeenCalled()
