@@ -45,7 +45,7 @@ mpegts 解析 FLV → MSE → <video> oncanplay → 解除 loading
 | 关注点   | 关键实现与约束                                                                                                                 |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | 窗口与载荷 | `frame:false` + `alwaysOnTop` + `backgroundThrottling:false`（防失焦节流弹幕/轮询）；hash 只带 `kind`+`liveId`，全量载荷由主进程持有以支持 reload 自愈 |
-| 尺寸定形 | `computeInitialWindowSize` 按所在显示器 `workArea` 连续插值计算初始尺寸；首次 `@aspect` 无条件定形，落定后才尊重用户缩放（`decideAutoFit`）；电台窗（`liveType === 2`）恒用 9:16 兜底且永不上报 aspect |
+| 尺寸定形 | `computeInitialWindowSize` 按所在显示器 `workArea` 连续插值计算初始尺寸；公演（`source === 'open'`）建窗即按 16:9 横屏初始化，个人直播/回放与电台（`liveType === 2`，永不上报 aspect）默认 9:16 兜底；首次 `@aspect` 无条件定形，落定后才尊重用户缩放（`decideAutoFit`） |
 | 平台与控制 | 窗口控制一律按 `BrowserWindow.fromWebContents(event.sender)` 定位；Linux 下 `closeAllFloatWindows()` 走 `destroy()` 不触发 `unload`，须在主窗口 `closed` 调 `cleanupStreamSessions()` |
 | 详情归一化 | `fetchLiveDetail` 将公演多档 `playStreams` 与个人单档归一为 `LiveDetail`；在线人数首帧来自详情，实时刷新走口袋云信 `LIVEUPDATE`（公演/未登录保持首帧） |
 

@@ -9,7 +9,7 @@ import type { FloatPlayerKind, FloatPlayerPayload } from '@preload/ipc-contract'
 import type { WebContents } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { isFloatTopmost } from '@common/app-config'
-import { computeInitialWindowSize, decideAutoFit, FLOAT_DEFAULT_ASPECT, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_WINDOW_HASH_PATH, initialFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '@common/float-window'
+import { computeInitialWindowSize, decideAutoFit, FLOAT_MIN_HEIGHT, FLOAT_MIN_WIDTH, FLOAT_WINDOW_HASH_PATH, initialFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition, resolveInitialFloatAspect } from '@common/float-window'
 import { is } from '@electron-toolkit/utils'
 import { BrowserWindow, screen, shell } from 'electron'
 import iconWin from '../../../resources/icon-win.ico?asset'
@@ -131,10 +131,10 @@ export function openFloatWindow(kind: FloatPlayerKind, payload: FloatPlayerPaylo
     return
   }
 
-  // 电台（liveType===2）无视频轨、永不上报 aspect，恒保持竖屏兜底比例的初始尺寸；
-  // 视频窗按主窗口所在显示器的工作区比例推导（见 common/float-window.ts 的尺寸策略）
+  // 公演（source==='open'）恒为横屏，直接以 16:9 建窗避免首帧到达后跳变；
+  // 个人直播/回放与电台（liveType===2，永不上报 aspect）默认 9:16 兜底
   const workArea = resolveAnchorDisplay(mainWindow).workArea
-  const { w: width, h: height } = computeInitialWindowSize(FLOAT_DEFAULT_ASPECT, workArea)
+  const { w: width, h: height } = computeInitialWindowSize(resolveInitialFloatAspect(payload.source), workArea)
   const { x, y } = resolveFloatWindowPosition(workArea, { w: width, h: height }, records.size)
   // 建窗即按全局偏好定态：不支持置顶的平台（Linux）始终为 false；其余按偏好置顶，避免打开瞬间被主窗口盖住
   const preference = topmostPreference()
