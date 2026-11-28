@@ -156,6 +156,22 @@ function onVolumeInput(event: Event) {
   emit('volumeChange', value / 100)
 }
 
+/** 滚轮一格 5%，与键盘 ↑/↓ 同档 */
+const VOLUME_WHEEL_STEP_PERCENT = 5
+
+/** 滚轮微调：基准取滑块显示值（静音态为 0），无变化时不 emit */
+function onVolumeWheel(event: WheelEvent) {
+  if (event.deltaY === 0)
+    return
+  const base = mutedIcon.value ? 0 : volumePercent.value
+  const step = event.deltaY < 0 ? VOLUME_WHEEL_STEP_PERCENT : -VOLUME_WHEEL_STEP_PERCENT
+  const next = Math.round(Math.min(100, Math.max(0, base + step)))
+  if (next === base)
+    return
+  showHint(next > 0 ? `音量 ${next}%` : '静音')
+  emit('volumeChange', next / 100)
+}
+
 // 进度条：拖拽过程仅更新本地预览位置，松手（change）再真正 seek 媒体，避免长 HLS 反复切片卡顿
 const dragging = ref(false)
 const dragTime = ref(0)
@@ -309,11 +325,12 @@ function timeText(): string {
       </div>
     </div>
 
-    <!-- 音量：点喇叭切静音，悬停浮出滑块 -->
+    <!-- 音量：点喇叭切静音，悬停浮出滑块，滚轮可微调 -->
     <div
       class="mini-volume"
       @pointerenter="openVolume"
       @pointerleave="scheduleCloseVolume"
+      @wheel.prevent="onVolumeWheel"
     >
       <button
         class="player-capsule__btn"

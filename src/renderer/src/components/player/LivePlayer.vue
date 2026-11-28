@@ -219,8 +219,9 @@ const session = useLiveSession({
 const { localPlaybackUrl, coverImage, realName, carousels, carouselTime, chatroomId, ownerUserId, activeRtmpUrl } = session
 
 // 弹幕订阅须在 session 之后创建：口袋源读 session.chatroomId，同步时立即求值
-const pocketChatroomId = computed(() => (props.source === 'user' ? chatroomId.value : ''))
-/** 有任一弹幕源才显示气泡层与开关（个人直播未登录时两边都没有，连开关都不给） */
+const pocketChatroomId = computed(() =>
+  props.source === 'user' && pocketAuthState.value.loggedIn ? chatroomId.value : '')
+/** 有任一弹幕源才显示气泡层与开关：未登录无口袋会话，公演的 B 站弹幕不受影响 */
 const hasDanmakuRoom = computed(() => danmakuRoomId.value !== undefined || !!pocketChatroomId.value)
 const showDanmaku = computed(() => hasDanmakuRoom.value && danmakuEnabled.value)
 
