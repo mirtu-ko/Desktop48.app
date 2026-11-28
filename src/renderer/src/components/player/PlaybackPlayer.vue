@@ -5,6 +5,7 @@ import useMediaDownload from '@renderer/composables/use-media-download'
 import { useMediaShortcuts } from '@renderer/composables/use-media-shortcuts'
 import { usePlaybackDanmaku } from '@renderer/composables/use-playback-danmaku'
 import { usePlaybackEngine } from '@renderer/composables/use-playback-engine'
+import { usePlayerControlsVisibility } from '@renderer/composables/use-player-controls-visibility'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
 import { loadLiveDetail } from '@renderer/services/live-detail'
@@ -81,6 +82,7 @@ const {
   videoStyle,
   rotateHint,
   shortcutHint,
+  showShortcutHint,
   rotateLeft,
   rotateRight,
   resetRotation,
@@ -92,6 +94,7 @@ const {
   volume,
   togglePlay,
   toggleMute,
+  applySavedVolume,
   onVolumeSliderInput,
   adjustVolume,
   VOLUME_STEP,
@@ -153,43 +156,42 @@ function toggleDanmakuMode() {
   danmakuMode.value = next
 }
 
-/**
- * 面板展开时按下画面空白处收起。用 pointerdown 而非 click：click 的 target 是按下 / 抬起
- * 两点的最近公共祖先，在搜索框里拖选文字后松手会被误判成「点在面板外」。
- * 控制条与右上角悬浮钮不算空白区 —— 那里是操作，收起面板会打断拖动进度。
- */
-function onVideoPointerDown(event: PointerEvent) {
-  if (danmakuMode.value !== 'all')
+// ── 录播倍速（记忆上次选择） ────────────────────────────────────
+const PLAYBACK_RATES = [0.75, 1, 1.25, 1.5, 2]
+const PLAYBACK_RATE_STORAGE_KEY = 'desktop48:playback:rate'
+function loadSavedPlaybackRate(): number {
+  try {
+    const raw = Number(globalThis.localStorage?.getItem(PLAYBACK_RATE_STORAGE_KEY))
+    if (PLAYBACK_RATES.includes(raw))
+      return raw
+  }
+  catch {
+    // 忽略存储读取失败
+  }
+  return 1
+}
+const playbackRate = ref(loadSavedPlaybackRate())
+function applyPlaybackRate(target?: HTMLMediaElement | null) {
+  const el = target ?? getActiveMediaElement()
+  if (el)
+    el.playbackRate = playbackRate.value
+}
+function onRateChange(rate: number) {
+  if (!PLAYBACK_RATES.includes(rate))
     return
-  const target = event.target as HTMLElement | null
-  if (target?.closest('.danmaku-all, .mini-controls, .player-actions'))
-    return
-  danmakuMode.value = 'live'
+  playbackRate.value = rate
+  applyPlaybackRate()
+  showShortcutHint(`倍速 ${rate}x`)
+  try {
+    globalThis.localStorage?.setItem(PLAYBACK_RATE_STORAGE_KEY, String(rate))
+  }
+  catch {
+    // 忽略存储写入失败
+  }
 }
 
 // 摆放偏好是全局单例，读一次即可（两个播放器并发调用共用同一次 IPC）
 void ensureDanmakuPlacement()
-
-const {
-  fontSize: danmakuFontSize,
-  position: danmakuPosition,
-  canFloatLeft: canFloatDanmaku,
-  floating: danmakuFloating,
-} = useDanmakuLayer({
-  videoRect: () => videoRect.value,
-  compact: () => props.compact,
-  fullscreen: () => isFullscreen.value,
-  // 「全部弹幕」面板是气泡层的子元素（宽度随它），面板展开时强制回画面内，
-  // 否则窄黑边里塞不下列表。气泡此时本就隐藏，看不见这次位置切换
-  placement: () => (danmakuMode.value === 'live' ? danmakuPlacement.value : 'video'),
-})
-
-/** 摆放只在「左侧黑边够宽」时开放：按钮只在此时出现，状态由 is-on 表示（不用 disabled） */
-function toggleDanmakuPlacement() {
-  const next = danmakuFloating.value ? 'video' : 'left'
-  void setDanmakuPlacement(next)
-  trackEvent('danmaku:placement', { placement: next })
-}
 
 // 播放防休眠（use-sleep-blocker，与 LivePlayer 共用）
 const { acquire: acquireSleepBlocker, release: releaseSleepBlocker } = useSleepBlocker()
@@ -208,7 +210,7 @@ const {
   getManagedElements: () => [nativeVideo.value, nativeAudio.value],
   onTimeUpdate: onDanmakuTimeUpdate,
   onSeeking: time => seekBarragesTo(time),
-  onMetadataLoaded: async () => {
+  onMetadataLoaded: async (media) => {
     // 换清晰度 / 重试重挂也会触发 loadedmetadata，用标记只计首播
     if (!playbackTracked) {
       playbackTracked = true
@@ -219,6 +221,8 @@ const {
         source: props.source === 'open' ? 'open' : 'user',
       })
     }
+    applySavedVolume(media)
+    applyPlaybackRate(media)
     debugLog('playback', `④元数据就绪: 刷新画面尺寸${isRadio.value ? '（电台无尺寸）' : ''} → 加载弹幕`)
     // 记录源尺寸供旋转缩放计算，并按（可能旋转后的）画面比例上报浮窗
     if (!isRadio.value)
@@ -248,12 +252,90 @@ watch(lastPlaybackError, (message) => {
     trackEvent('player:error', { type: 'playback', starName: realName.value, liveId: props.liveId })
 })
 
+// ── 无操作自动隐藏控件 ──────────────────────────────────────────
+const {
+  controlsVisible,
+  cursorHidden,
+  reveal: revealControls,
+  onControlEnter,
+  onControlLeave,
+  onContainerLeave,
+} = usePlayerControlsVisibility({
+  isFullscreen,
+  keepVisible: () => !playing.value || danmakuMode.value === 'all' || isLoading.value,
+})
+
+function onActionsFocusOut(event: FocusEvent) {
+  const container = event.currentTarget as HTMLElement | null
+  const next = event.relatedTarget as Node | null
+  if (!container || !next || !container.contains(next))
+    onControlLeave()
+}
+
+const {
+  fontSize: danmakuFontSize,
+  position: danmakuPosition,
+  canFloatLeft: canFloatDanmaku,
+  floating: danmakuFloating,
+} = useDanmakuLayer({
+  videoRect: () => videoRect.value,
+  compact: () => props.compact,
+  fullscreen: () => isFullscreen.value,
+  // 「全部弹幕」面板是气泡层的子元素（宽度随它），面板展开时强制回画面内，
+  // 否则窄黑边里塞不下列表。气泡此时本就隐藏，看不见这次位置切换
+  placement: () => (danmakuMode.value === 'live' ? danmakuPlacement.value : 'video'),
+  controlsVisible: () => controlsVisible.value,
+})
+
+/** 摆放只在「左侧黑边够宽」时开放：按钮只在此时出现，状态由 is-on 表示（不用 disabled） */
+function toggleDanmakuPlacement() {
+  const next = danmakuFloating.value ? 'video' : 'left'
+  void setDanmakuPlacement(next)
+  trackEvent('danmaku:placement', { placement: next })
+}
+
+function onVideoPointerDown(event: PointerEvent) {
+  revealControls()
+  if (danmakuMode.value !== 'all')
+    return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.danmaku-all, .mini-controls, .player-actions'))
+    return
+  danmakuMode.value = 'live'
+}
+
+watch(shortcutHint, (hint) => {
+  if (hint)
+    revealControls()
+})
+
+watch(nativeAudio, (el) => {
+  if (!el)
+    return
+  applySavedVolume(el)
+  applyPlaybackRate(el)
+})
+
+function seekBy(deltaSeconds: number) {
+  const mediaElement = getActiveMediaElement()
+  if (!mediaElement)
+    return
+  const max = mediaDuration.value > 0 ? mediaDuration.value : Number.POSITIVE_INFINITY
+  const next = Math.min(max, Math.max(0, mediaElement.currentTime + deltaSeconds))
+  mediaElement.currentTime = next
+  currentTime.value = next
+  showShortcutHint(deltaSeconds > 0 ? `快进 ${deltaSeconds}s` : `快退 ${Math.abs(deltaSeconds)}s`)
+}
+
 // =========== 键盘快捷键（窗口级监听，见 use-media-shortcuts） ===========
 useMediaShortcuts({
   getMedia: getActiveMediaElement,
   actions: {
     togglePlay,
+    toggleMute,
     toggleFullscreen,
+    seekBackward: () => seekBy(-5),
+    seekForward: () => seekBy(5),
     rotateLeft: () => {
       if (!isRadio.value)
         rotateLeft()
@@ -399,6 +481,9 @@ onUnmounted(() => {
         <div
           ref="videoBoxRef"
           class="video-box-inner"
+          :class="{ 'is-cursor-hidden': cursorHidden }"
+          @pointermove="revealControls"
+          @pointerleave="onContainerLeave"
           @pointerdown="onVideoPointerDown"
           @dblclick="onBoxDblClick"
         >
@@ -492,56 +577,86 @@ onUnmounted(() => {
           <div v-else-if="mediaBuffering" class="video-mask buffering">
             <span>缓冲中…</span>
           </div>
-          <div v-if="playbackError" class="video-mask error">
-            <span>{{ playbackError }}</span>
-            <div class="mask-actions">
-              <el-button size="small" type="primary" @click="handleRetry">
+          <!-- 录播加载失败卡：与直播失败卡同款深色卡片视觉 -->
+          <div v-if="playbackError" class="playback-error" :class="{ 'is-compact': compact }">
+            <div class="playback-error__title">
+              录播加载失败
+            </div>
+            <div v-if="realName" class="playback-error__name" :title="realName">
+              {{ realName }}
+            </div>
+            <div class="playback-error__hint">
+              {{ playbackError }}
+            </div>
+            <div class="playback-error__actions">
+              <button type="button" class="playback-error__btn playback-error__btn--primary" @click="handleRetry">
                 重试
-              </el-button>
-              <el-button v-if="playStreamPath" size="small" type="success" @click="onDownloadClick">
+              </button>
+              <button
+                v-if="playStreamPath"
+                type="button"
+                class="playback-error__btn playback-error__btn--secondary"
+                @click="onDownloadClick"
+              >
                 {{ downloading ? '取消下载' : '去下载' }}
-              </el-button>
+              </button>
             </div>
           </div>
 
-          <div class="player-actions">
+          <div
+            v-show="!playbackError"
+            class="player-actions"
+            :class="{ 'is-hidden': !controlsVisible, 'has-active': downloading }"
+            :inert="!controlsVisible && !downloading"
+            @pointerenter="onControlEnter"
+            @pointerleave="onControlLeave"
+            @focusin="onControlEnter"
+            @focusout="onActionsFocusOut"
+          >
             <!-- 旋转控制（分段胶囊交互见 RotationControls.vue 头部注释） -->
             <RotationControls
               v-if="!isRadio && !isLoading && !playbackError"
               :angle="rotationAngle"
+              :inert="!controlsVisible"
               @rotate-left="rotateLeft"
               @rotate-right="rotateRight"
               @reset="resetRotation"
             />
-            <el-tooltip v-if="playStreamPath" :content="downloading ? '下载中，点击取消' : '下载'" placement="bottom" :show-after="400">
-              <button
-                class="action-btn action-btn--download"
-                :class="{ 'is-active': downloading }"
-                :aria-label="downloading ? '取消下载' : '下载'"
-                @click="onDownloadClick"
-              >
-                <MediaIcon name="download" />
-              </button>
-            </el-tooltip>
+            <button
+              v-if="playStreamPath"
+              class="action-btn action-btn--download"
+              :class="{ 'is-active': downloading }"
+              :title="downloading ? '下载中，点击取消' : '下载'"
+              :aria-label="downloading ? '取消下载' : '下载'"
+              @click="onDownloadClick"
+            >
+              <MediaIcon name="download" />
+            </button>
           </div>
 
-          <!-- 控制条：录播与电台回放都保留拖动进度 seek -->
+          <!-- 控制条：录播与电台回放都保留拖动进度 seek 与倍速切换；出错时不渲染 -->
           <MiniControls
-            v-if="!isLoading && playStreamPath"
+            v-if="!isLoading && !playbackError && playStreamPath"
             :playing="playing"
             :muted="muted"
             :volume="volume"
             :hint="shortcutHint"
+            :visible="controlsVisible"
             :is-fullscreen="isFullscreen"
             :show-progress="true"
             :current-time="currentTime"
             :duration="mediaDuration"
             :compact="compact"
+            :playback-rate="playbackRate"
+            :playback-rates="PLAYBACK_RATES"
             @toggle-play="togglePlay"
             @toggle-mute="toggleMute"
             @volume-change="onVolumeSliderInput"
             @toggle-fullscreen="toggleFullscreen"
             @seek="onMiniSeek"
+            @rate-change="onRateChange"
+            @control-enter="onControlEnter"
+            @control-leave="onControlLeave"
           >
             <!-- 弹幕模式切换（实时 ⇄ 全部）：最左端，有弹幕时显示 -->
             <template v-if="hasBarrage" #leading>
@@ -769,17 +884,89 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
-.video-mask.error {
-  background: rgba(0, 0, 0, 0.72);
-  pointer-events: auto;
-}
-
 .video-mask.buffering {
   background: transparent;
 }
 
-.mask-actions {
+/* 录播加载失败卡：与 LivePlayer 的 .live-end / .live-load-failed 同套深色卡片视觉 */
+.playback-error {
+  position: absolute;
+  inset: 0;
+  z-index: 35;
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--fp-gap) * 2);
+  padding: 18px;
+  background: #0c0c0c;
+  color: #fff;
+  text-align: center;
+  user-select: none;
+}
+
+.playback-error__title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.playback-error__name {
+  max-width: 100%;
+  font-size: 14px;
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playback-error__hint {
+  max-width: 320px;
+  font-size: var(--fp-font);
+  line-height: 1.6;
+  opacity: 0.58;
+}
+
+.playback-error__actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.playback-error__btn {
+  padding: 6px 20px;
+  border: none;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: var(--fp-font);
+  color: #fff;
+  cursor: pointer;
+  transition:
+    filter 0.15s ease,
+    background-color 0.15s ease;
+
+  &:hover {
+    filter: brightness(1.12);
+  }
+}
+
+.playback-error__btn--primary {
+  background: linear-gradient(135deg, var(--brand-primary-light), var(--brand-primary));
+}
+
+.playback-error__btn--secondary {
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.playback-error.is-compact {
+  gap: 6px;
+  padding: 12px;
+}
+
+.playback-error.is-compact .playback-error__title {
+  font-size: 15px;
 }
 </style>

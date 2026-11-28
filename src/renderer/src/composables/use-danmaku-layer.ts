@@ -44,9 +44,9 @@ export interface DanmakuLayerLayout {
  */
 export function computeDanmakuLayout(
   rect: DanmakuLayerRect | null,
-  options: { compact: boolean, fullscreen: boolean, placement: DanmakuPlacement },
+  options: { compact: boolean, fullscreen: boolean, placement: DanmakuPlacement, controlsVisible?: boolean },
 ): DanmakuLayerLayout {
-  const { compact, fullscreen, placement } = options
+  const { compact, fullscreen, placement, controlsVisible = true } = options
   // 非全屏播放窗面积小，若仍沿用 18px 上限，在 1080p / 2K 显示器上会和全屏几乎一样大，
   // 相对小窗显得拥挤；窗口态封顶 14px，全屏再放开到 18px。
   const [min, max] = compact ? [10, 14] : fullscreen ? [12, 18] : [12, 14]
@@ -55,7 +55,8 @@ export function computeDanmakuLayout(
 
   const canFloatLeft = rect !== null && rect.left >= MIN_LEFT_BAR
   const floating = placement === 'left' && canFloatLeft
-  const bottom = DANMAKU_CONTROL_CLEARANCE
+  // 底部控制条隐去时弹幕顺滑落回边缘内缩，避免竖屏小窗底部留白显空
+  const bottom = controlsVisible ? DANMAKU_CONTROL_CLEARANCE : DANMAKU_INSET
 
   if (!rect) {
     return {
@@ -101,6 +102,8 @@ export function useDanmakuLayer(options: {
   compact: () => boolean
   fullscreen: () => boolean
   placement?: () => DanmakuPlacement
+  /** 底部控制条当前是否可见；false 时弹幕下沉到边缘内缩 */
+  controlsVisible?: () => boolean
   /** 额外宽度上限（CSS 长度）；不传则沿用布局自身的 width */
   maxWidth?: () => string | undefined
   /**
@@ -115,6 +118,7 @@ export function useDanmakuLayer(options: {
     compact: compact(),
     fullscreen: options.fullscreen(),
     placement: options.placement?.() ?? 'video',
+    controlsVisible: options.controlsVisible?.() ?? true,
   }))
 
   const fontSize = computed(() => layout.value.fontSize)

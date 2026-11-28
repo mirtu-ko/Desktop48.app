@@ -126,11 +126,15 @@ describe('dispatchMediaShortcut / 原生控件让行', () => {
   })
 })
 
-describe('dispatchMediaShortcut / 全屏与旋转', () => {
-  it('f 切换全屏；r / Shift+R / 0 分派到对应旋转动作', () => {
-    const actions = makeActions()
+describe('dispatchMediaShortcut / 全屏、静音与旋转', () => {
+  it('f 切换全屏；m 切换静音；r / Shift+R / 0 分派到对应旋转动作', () => {
+    const actions = { ...makeActions(), toggleMute: vi.fn() }
     expect(dispatchMediaShortcut(makeEvent('f'), actions, null)).toBe(true)
     expect(actions.toggleFullscreen).toHaveBeenCalledTimes(1)
+    expect(dispatchMediaShortcut(makeEvent('m'), actions, null)).toBe(true)
+    expect(actions.toggleMute).toHaveBeenCalledTimes(1)
+    expect(dispatchMediaShortcut(makeEvent('M'), actions, null)).toBe(true)
+    expect(actions.toggleMute).toHaveBeenCalledTimes(2)
     expect(dispatchMediaShortcut(makeEvent('r'), actions, null)).toBe(true)
     expect(actions.rotateRight).toHaveBeenCalledTimes(1)
     expect(dispatchMediaShortcut(makeEvent('R', null, { shiftKey: true }), actions, null)).toBe(true)
@@ -139,12 +143,29 @@ describe('dispatchMediaShortcut / 全屏与旋转', () => {
     expect(actions.resetRotation).toHaveBeenCalledTimes(1)
   })
 
-  it('反向：长按 repeat 不重复旋转，未知键不消费', () => {
-    const actions = makeActions()
+  it('提供 seekBackward / seekForward 时优先走宿主回调', () => {
+    const seekBackward = vi.fn()
+    const seekForward = vi.fn()
+    const actions = { ...makeActions(), seekBackward, seekForward }
+    const media = makeMedia({ currentTime: 30 })
+
+    expect(dispatchMediaShortcut(makeEvent('ArrowLeft'), actions, media)).toBe(true)
+    expect(seekBackward).toHaveBeenCalledTimes(1)
+    expect(dispatchMediaShortcut(makeEvent('ArrowRight'), actions, media)).toBe(true)
+    expect(seekForward).toHaveBeenCalledTimes(1)
+    expect(media.currentTime).toBe(30)
+  })
+
+  it('反向：长按 repeat 不重复旋转、全屏或静音，未知键不消费', () => {
+    const actions = { ...makeActions(), toggleMute: vi.fn() }
     expect(dispatchMediaShortcut(makeEvent('r', null, { repeat: true }), actions, null)).toBe(false)
     expect(dispatchMediaShortcut(makeEvent('0', null, { repeat: true }), actions, null)).toBe(false)
+    expect(dispatchMediaShortcut(makeEvent('f', null, { repeat: true }), actions, null)).toBe(false)
+    expect(dispatchMediaShortcut(makeEvent('m', null, { repeat: true }), actions, null)).toBe(false)
     expect(dispatchMediaShortcut(makeEvent('x'), actions, null)).toBe(false)
     expect(actions.rotateRight).not.toHaveBeenCalled()
     expect(actions.resetRotation).not.toHaveBeenCalled()
+    expect(actions.toggleFullscreen).not.toHaveBeenCalled()
+    expect(actions.toggleMute).not.toHaveBeenCalled()
   })
 })

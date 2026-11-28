@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick, ref } from 'vue'
-import { useVideoRotation } from '../src/renderer/src/composables/use-video-rotation'
+import { FLOAT_PLAYER_VOLUME_KEY, useVideoRotation } from '../src/renderer/src/composables/use-video-rotation'
 
 /**
  * useVideoRotation 的旋转 / 比例上报 / 画面矩形。
@@ -279,5 +279,57 @@ describe('useVideoRotation 音量', () => {
     expect(video.muted).toBe(false)
     expect(video.volume).toBeCloseTo(0.7, 5)
     expect(rotation.volume.value).toBeCloseTo(0.7, 5)
+  })
+
+  it('持久化并恢复上次记忆的音量与静音态', () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => store.set(key, value),
+      removeItem: (key: string) => store.delete(key),
+    })
+
+    const first = mount()
+    first.rotation.onVolumeSliderInput(0.35)
+    expect(store.get(FLOAT_PLAYER_VOLUME_KEY)).toBe(JSON.stringify({ volume: 0.35, muted: false }))
+
+    const second = mount()
+    expect(second.rotation.volume.value).toBeCloseTo(0.35, 5)
+    expect(second.rotation.muted.value).toBe(false)
+    second.rotation.applySavedVolume()
+    expect(second.video.volume).toBeCloseTo(0.35, 5)
+    expect(second.video.muted).toBe(false)
+  })
+
+  it('音量写盘去重并节流：连续高频变动只写入首尾两次', () => {
+    vi.useFakeTimers()
+    try {
+      const store = new Map<string, string>()
+      const setItem = vi.fn((key: string, value: string) => store.set(key, value))
+      vi.stubGlobal('localStorage', {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem,
+        removeItem: (key: string) => store.delete(key),
+      })
+
+      const { rotation, video } = mount()
+      rotation.onVolumeSliderInput(0.5)
+      // 同值 volumechange 不重复写盘
+      rotation.onVolumeChange(changeEvent(video))
+      expect(setItem).toHaveBeenCalledTimes(1)
+
+      // 200ms 内连续拖动只缓存最新值，窗口结束补写一次
+      rotation.onVolumeSliderInput(0.4)
+      rotation.onVolumeSliderInput(0.3)
+      rotation.onVolumeSliderInput(0.2)
+      expect(setItem).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(200)
+      expect(setItem).toHaveBeenCalledTimes(2)
+      expect(store.get(FLOAT_PLAYER_VOLUME_KEY)).toBe(JSON.stringify({ volume: 0.2, muted: false }))
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 })

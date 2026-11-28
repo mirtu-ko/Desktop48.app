@@ -96,4 +96,19 @@ describe('useDanmakuLayer 定位', () => {
     })
     expect(layer.position.value.maxWidth).toBe('33vw')
   })
+
+  it('底部控制条隐藏时底边距落回边缘内缩，重新显示后恢复避让量', () => {
+    const visible = ref(true)
+    const layer = useDanmakuLayer({
+      videoRect: () => makeRect(422, 700),
+      compact: () => true,
+      fullscreen: () => false,
+      controlsVisible: () => visible.value,
+    })
+    expect(layer.position.value.bottom).toBe(DANMAKU_CONTROL_CLEARANCE)
+    visible.value = false
+    expect(layer.position.value.bottom).toBe(DANMAKU_INSET)
+    visible.value = true
+    expect(layer.position.value.bottom).toBe(DANMAKU_CONTROL_CLEARANCE)
+  })
 })

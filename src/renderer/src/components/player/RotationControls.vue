@@ -13,33 +13,34 @@ const emit = defineEmits<{
 <template>
   <!-- 旋转是一个状态而非三个动作：合并成一组，中段直接显示当前角度，点击归零 -->
   <div class="action-group player-capsule">
-    <el-tooltip content="逆时针旋转 90°（Shift + R）" placement="bottom" :show-after="400">
-      <button class="rotate-btn player-capsule__btn" aria-label="逆时针旋转 90 度" @click="emit('rotateLeft')">
-        <MediaIcon name="rotateLeft" />
-      </button>
-    </el-tooltip>
-    <el-tooltip
-      :content="angle === 0 ? '当前未旋转' : `重置为 0°（当前 ${angle}°）`"
-      placement="bottom"
-      :show-after="400"
+    <button
+      class="rotate-btn player-capsule__btn"
+      title="逆时针旋转 90°（Shift + R）"
+      aria-label="逆时针旋转 90 度"
+      @click="emit('rotateLeft')"
     >
-      <!-- 0 度时重置无意义，但不设 disabled：项目约定开关态用样式表达，
-           真 disabled 会让按钮退出焦点序列。点击无副作用，aria 照实说明。 -->
-      <button
-        class="rotate-btn rotate-angle player-capsule__btn"
-        :class="{ 'is-zero': angle === 0 }"
-        :aria-disabled="angle === 0"
-        :aria-label="angle === 0 ? '当前未旋转' : `当前旋转 ${angle} 度，点击重置`"
-        @click="emit('reset')"
-      >
-        {{ angle }}°
-      </button>
-    </el-tooltip>
-    <el-tooltip content="顺时针旋转 90°（R）" placement="bottom" :show-after="400">
-      <button class="rotate-btn player-capsule__btn" aria-label="顺时针旋转 90 度" @click="emit('rotateRight')">
-        <MediaIcon name="rotateRight" />
-      </button>
-    </el-tooltip>
+      <MediaIcon name="rotateLeft" />
+    </button>
+    <!-- 0 度时重置无意义，但不设 disabled：项目约定开关态用样式表达，
+         真 disabled 会让按钮退出焦点序列。点击无副作用，aria 照实说明。 -->
+    <button
+      class="rotate-btn rotate-angle player-capsule__btn"
+      :class="{ 'is-zero': angle === 0 }"
+      :title="angle === 0 ? '当前未旋转' : `重置为 0°（当前 ${angle}° · 快捷键 0）`"
+      :aria-disabled="angle === 0"
+      :aria-label="angle === 0 ? '当前未旋转' : `当前旋转 ${angle} 度，点击重置`"
+      @click="emit('reset')"
+    >
+      {{ angle }}°
+    </button>
+    <button
+      class="rotate-btn player-capsule__btn"
+      title="顺时针旋转 90°（R）"
+      aria-label="顺时针旋转 90 度"
+      @click="emit('rotateRight')"
+    >
+      <MediaIcon name="rotateRight" />
+    </button>
   </div>
 </template>
 
