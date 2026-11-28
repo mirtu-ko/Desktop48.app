@@ -133,18 +133,6 @@ useEventListener(window, 'pointercancel', () => {
     scheduleCloseVolume()
 })
 
-// 清空队列二次确认：多首时防误触，3 秒后自动复位
-const confirmingClear = ref(false)
-let clearConfirmTimer: ReturnType<typeof setTimeout> | null = null
-
-function resetClearConfirm() {
-  confirmingClear.value = false
-  if (clearConfirmTimer) {
-    clearTimeout(clearConfirmTimer)
-    clearConfirmTimer = null
-  }
-}
-
 const progress = computed(() => {
   if (!duration.value)
     return 0
@@ -239,6 +227,15 @@ function onTrackClick(index: number, url: string) {
   playAt(index)
 }
 
+function onInfoKeydown(event: KeyboardEvent) {
+  if (event.isComposing)
+    return
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    panelVisible.value = !panelVisible.value
+  }
+}
+
 /** 切换折叠态（折叠时同步收起队列面板与音量浮层） */
 function toggleCollapsed() {
   collapsed.value = !collapsed.value
@@ -250,7 +247,6 @@ function toggleCollapsed() {
 
 /** 一键停止播放并关闭浮窗 */
 function onCloseBar() {
-  resetClearConfirm()
   clearVolumeCloseTimer()
   volumeOpen.value = false
   panelVisible.value = false
@@ -258,22 +254,7 @@ function onCloseBar() {
   clearAll()
 }
 
-/** 清空队列并收起面板（多首曲目时需二次点击确认防误触） */
-function onClearAllClick() {
-  if (playlist.value.length > 1 && !confirmingClear.value) {
-    confirmingClear.value = true
-    if (clearConfirmTimer)
-      clearTimeout(clearConfirmTimer)
-    clearConfirmTimer = setTimeout(() => {
-      confirmingClear.value = false
-      clearConfirmTimer = null
-    }, 3000)
-    return
-  }
-  onCloseBar()
-}
-
-// 列表被外部清空（如逐首移除完）时复位折叠态，下次起播默认以完整条出现
+// 列表被逐首移除清空时复位折叠态，下次起播默认以完整条出现
 watch(() => playlist.value.length, (length) => {
   if (length === 0) {
     panelVisible.value = false
@@ -281,12 +262,10 @@ watch(() => playlist.value.length, (length) => {
   }
 })
 
-// 展开面板时自动滚动到当前播放行；收起时重置二次确认
+// 展开面板时自动滚动到当前播放行
 watch(panelVisible, async (visible) => {
-  if (!visible) {
-    resetClearConfirm()
+  if (!visible)
     return
-  }
   await nextTick()
   panelRef.value?.querySelector('.panel-row.is-current')?.scrollIntoView({ block: 'nearest' })
 })
@@ -308,7 +287,6 @@ useEventListener(window, 'keydown', (event: KeyboardEvent) => {
 })
 
 onUnmounted(() => {
-  resetClearConfirm()
   clearVolumeCloseTimer()
   if (volumeHintTimer)
     clearTimeout(volumeHintTimer)
@@ -324,15 +302,6 @@ onUnmounted(() => {
         <div class="panel-head">
           <span class="panel-title">播放列表</span>
           <span class="panel-count">{{ playlist.length }} 首</span>
-          <button
-            class="panel-clear"
-            :class="{ 'is-confirming': confirmingClear }"
-            :title="confirmingClear ? '再次点击确认清空' : '清空列表'"
-            @click="onClearAllClick"
-          >
-            <span v-if="confirmingClear" class="panel-clear-text">确认清空</span>
-            <MediaIcon v-else name="trash" :size="15" />
-          </button>
         </div>
         <el-scrollbar max-height="300px" class="panel-scroll">
           <div
@@ -368,24 +337,25 @@ onUnmounted(() => {
       </div>
     </transition>
 
-    <!-- 折叠态：左下角旋转小黑胶圆球，外圈展示实时进度环；点击展开，悬停可一键关闭 -->
-    <div
-      v-if="collapsed"
-      class="audio-orb frosted-surface"
-      :class="{ 'is-playing': playing }"
-      :style="{ '--orb-progress': `${displayProgress * 360}deg` }"
-      role="button"
-      tabindex="0"
-      :title="currentTrack ? `展开播放条 · ${currentTrack.name}` : '展开播放条'"
-      @click="toggleCollapsed"
-      @keydown.enter.space.prevent="toggleCollapsed"
-    >
-      <span class="bar-vinyl" :class="{ 'is-playing': playing }" :style="coverStyle" />
+    <!-- 折叠态：外层定位容器 + 同级圆球按钮与关闭徽章，避免交互元素嵌套截获键盘事件 -->
+    <div v-if="collapsed" class="audio-orb-wrap">
       <button
+        type="button"
+        class="audio-orb frosted-surface"
+        :class="{ 'is-playing': playing }"
+        :style="{ '--orb-progress': `${displayProgress * 360}deg` }"
+        :title="currentTrack ? `展开播放条 · ${currentTrack.name}` : '展开播放条'"
+        :aria-label="currentTrack ? `展开播放条 · ${currentTrack.name}` : '展开播放条'"
+        @click="toggleCollapsed"
+      >
+        <span class="bar-vinyl" :class="{ 'is-playing': playing }" :style="coverStyle" />
+      </button>
+      <button
+        type="button"
         class="bar-close bar-close--orb"
         title="停止并关闭"
         aria-label="停止并关闭"
-        @click.stop="onCloseBar"
+        @click="onCloseBar"
       >
         <MediaIcon name="close" :size="11" />
       </button>
@@ -435,12 +405,20 @@ onUnmounted(() => {
         @keydown.enter.space.prevent="toggleCollapsed"
       />
 
-      <div class="bar-info">
+      <div
+        class="bar-info"
+        role="button"
+        tabindex="0"
+        :aria-expanded="panelVisible"
+        :title="panelVisible ? '收起播放列表' : `${barTitle} · 点击展开播放列表`"
+        @click="panelVisible = !panelVisible"
+        @keydown="onInfoKeydown"
+      >
         <div class="bar-name-row">
           <span v-if="playing" class="eq bar-eq" aria-hidden="true">
             <i /><i /><i />
           </span>
-          <div class="bar-name ellipsis" :title="barTitle">
+          <div class="bar-name ellipsis">
             {{ barTitle }}
           </div>
         </div>
@@ -573,37 +551,6 @@ onUnmounted(() => {
     font-size: 12px;
     color: var(--el-text-color-placeholder);
   }
-
-  .panel-clear {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--el-text-color-secondary);
-    cursor: pointer;
-    transition:
-      background-color 0.2s ease,
-      color 0.2s ease;
-
-    &:hover {
-      background: color-mix(in srgb, var(--el-color-danger) 10%, transparent);
-      color: var(--el-color-danger);
-    }
-
-    &.is-confirming {
-      padding: 3px 8px;
-      background: color-mix(in srgb, var(--el-color-danger) 14%, transparent);
-      color: var(--el-color-danger);
-      font-size: 11px;
-      font-weight: 600;
-    }
-  }
-}
-
-.panel-clear-text {
-  line-height: 1.3;
 }
 
 .panel-scroll {
@@ -713,6 +660,11 @@ onUnmounted(() => {
 }
 
 /* ===== 折叠态迷你黑胶圆球 ===== */
+.audio-orb-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
 .audio-orb {
   --glass-fill: color-mix(in srgb, var(--el-bg-color) 90%, transparent);
   position: relative;
@@ -721,6 +673,8 @@ onUnmounted(() => {
   justify-content: center;
   width: 50px;
   height: 50px;
+  padding: 0;
+  border: none;
   border-radius: 50%;
   box-shadow:
     0 10px 26px -6px rgba(var(--brand-rgb), 0.34),
@@ -830,8 +784,8 @@ onUnmounted(() => {
 
   .audio-bar:hover &,
   .audio-bar:focus-within &,
-  .audio-orb:hover &,
-  .audio-orb:focus-within & {
+  .audio-orb-wrap:hover &,
+  .audio-orb-wrap:focus-within & {
     opacity: 1;
     pointer-events: auto;
     transform: scale(1);
@@ -1022,6 +976,19 @@ onUnmounted(() => {
 .bar-info {
   flex: 1;
   min-width: 0;
+  margin: -3px -4px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color 0.16s ease;
+
+  &:hover {
+    background: color-mix(in srgb, var(--brand-primary) 8%, transparent);
+
+    .bar-name {
+      color: var(--brand-primary);
+    }
+  }
 }
 
 .bar-name-row {
@@ -1042,6 +1009,7 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 600;
   color: var(--el-text-color-primary);
+  transition: color 0.16s ease;
 }
 
 .bar-sub-row {

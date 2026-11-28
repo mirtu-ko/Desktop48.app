@@ -1,12 +1,15 @@
 /** 专辑播放：专辑页（网格快捷按钮）与专辑详情卡片共用一套点播 / 入队规则，状态读写都落在 stores/audio-player 单例上 */
 import type { AlbumSong, MusicAlbum } from '@renderer/services/api-types'
 import useAudioPlayerStore from '@renderer/stores/audio-player'
-import { toTrack, toTracks, trackKey } from '@renderer/utils/album'
+import { pickRandomTracks, RANDOM_PICK_COUNT, toTrack, toTracks, trackKey } from '@renderer/utils/album'
 import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 
-/** 专辑入口来源：网格快捷按钮与详情卡片 */
-type AlbumSource = 'grid' | 'detail'
+/** 专辑入口来源：网格快捷按钮、详情卡片与随机播放 */
+type AlbumSource = 'grid' | 'detail' | 'random'
+
+/** 记录上一批随机抽出的曲目 key，连续点击随机播放时优先避开重复 */
+let lastRandomKeys = new Set<string>()
 
 export function useAlbumPlayer() {
   const { playlist, currentIndex, playing, playAt, playAlbum, addAlbum, addTrack, isCurrent, isBroken } = useAudioPlayerStore()
@@ -30,6 +33,24 @@ export function useAlbumPlayer() {
     }
     trackEvent('album:play', { from })
     playAlbum(tracks)
+  }
+
+  /** 从全曲库随机抽取 N 首可播放曲目并立即起播 */
+  function playRandomTracks(albums: MusicAlbum[], count = RANDOM_PICK_COUNT): boolean {
+    const tracks = pickRandomTracks(albums, {
+      count,
+      isBroken,
+      excludeKeys: lastRandomKeys,
+    })
+    if (!tracks.length) {
+      ElMessage.info('曲库暂无可播放的音源')
+      return false
+    }
+    lastRandomKeys = new Set(tracks.map(track => track.key))
+    trackEvent('album:play', { from: 'random' })
+    playAlbum(tracks)
+    ElMessage.success(`已从曲库随机挑选 ${tracks.length} 首，正在播放《${tracks[0].name}》`)
+    return true
   }
 
   /** 整张专辑追加进播放列表；队列原本为空时自动开始播放 */
@@ -91,6 +112,7 @@ export function useAlbumPlayer() {
     isCurrentTrack,
     isBrokenTrack,
     playWholeAlbum,
+    playRandomTracks,
     queueWholeAlbum,
     playFromAlbum,
     addSingle,

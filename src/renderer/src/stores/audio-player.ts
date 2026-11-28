@@ -278,14 +278,21 @@ function stop() {
 }
 
 /**
- * 整单替换播放列表并从指定下标开始播放
+ * 整单替换播放列表并从指定下标起查找首首可用曲目开始播放；全单失效则停止
  */
 function playAlbum(tracks: AudioTrack[], startIndex = 0) {
   if (!tracks.length) {
     return
   }
   playlist.value = [...tracks]
-  playAt(Math.min(Math.max(startIndex, 0), tracks.length - 1))
+  const clamped = Math.min(Math.max(startIndex, 0), tracks.length - 1)
+  const nextIdx = findNextPlayableIndex(clamped)
+  if (nextIdx >= 0) {
+    playAt(nextIdx)
+  }
+  else {
+    stop()
+  }
 }
 
 /**

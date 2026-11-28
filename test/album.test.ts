@@ -1,6 +1,6 @@
 import type { AlbumSong, MusicAlbum } from '../src/renderer/src/services/api-types'
 import { describe, expect, it } from 'vitest'
-import { playableCount, releaseDate, songSeconds, tagClass, tagLabel, totalTime, toTrack, toTracks, trackKey } from '../src/renderer/src/utils/album'
+import { pickRandomTracks, playableCount, RANDOM_PICK_COUNT, releaseDate, songSeconds, tagClass, tagLabel, totalTime, toTrack, toTracks, trackKey } from '../src/renderer/src/utils/album'
 
 function makeSong(extra: Partial<AlbumSong> = {}): AlbumSong {
   return { songs_id: '1001', songs_name: '夜风', songs_time: '3:45', url: 'https://cdn/1001.mp3', ...extra }
@@ -159,5 +159,49 @@ describe('album.releaseDate', () => {
 
   it('两者都没有时返回「未知」', () => {
     expect(releaseDate(makeAlbum({ start_time: '', year: '' }))).toBe('未知')
+  })
+})
+
+describe('album.pickRandomTracks', () => {
+  it('过滤无音源与失效曲目，并按 URL 跨专辑去重', () => {
+    const albums = [
+      makeAlbum({
+        sid: 'a1',
+        song: [
+          makeSong({ songs_id: '1', songs_name: 'S1', url: 'https://cdn/1.mp3' }),
+          makeSong({ songs_id: '2', songs_name: 'S2', url: null }),
+          makeSong({ songs_id: '3', songs_name: 'S3', url: 'https://cdn/broken.mp3' }),
+        ],
+      }),
+      makeAlbum({
+        sid: 'a2',
+        song: [
+          // 与 a1 同音源，去重后只保留一次
+          makeSong({ songs_id: '10', songs_name: 'S1-精选', url: 'https://cdn/1.mp3' }),
+          makeSong({ songs_id: '4', songs_name: 'S4', url: 'https://cdn/4.mp3' }),
+        ],
+      }),
+    ]
+    const picked = pickRandomTracks(albums, {
+      count: RANDOM_PICK_COUNT,
+      isBroken: url => url.includes('broken'),
+      random: () => 0.5,
+    })
+    expect(picked).toHaveLength(2)
+    expect(picked.map(t => t.url).sort()).toEqual(['https://cdn/1.mp3', 'https://cdn/4.mp3'])
+  })
+
+  it('按 count 截断，且优先避开 excludeKeys 中的上一批曲目，不足时再补齐', () => {
+    const songs = Array.from({ length: 20 }, (_, i) =>
+      makeSong({ songs_id: String(i + 1), songs_name: `曲${i + 1}`, url: `https://cdn/${i + 1}.mp3` }))
+    const albums = [makeAlbum({ sid: 'all', song: songs })]
+
+    const exclude = new Set(Array.from({ length: 15 }, (_, i) => `all:${i + 1}`))
+    const picked = pickRandomTracks(albums, { count: 8, excludeKeys: exclude, random: () => 0.5 })
+
+    expect(picked).toHaveLength(8)
+    // 未在 exclude 中的 5 首（16..20）必须全部入选，再从 exclude 中补 3 首
+    const freshCount = picked.filter(t => !exclude.has(t.key)).length
+    expect(freshCount).toBe(5)
   })
 })

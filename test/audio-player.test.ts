@@ -1,5 +1,17 @@
+import type { MusicAlbum } from '../src/renderer/src/services/api-types'
 import type { AudioTrack } from '../src/renderer/src/stores/audio-player'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('element-plus', () => ({
+  ElMessage: {
+    info: vi.fn(),
+    success: vi.fn(),
+  },
+}))
+
+vi.mock('@renderer/utils/umami', () => ({
+  trackEvent: vi.fn(),
+}))
 
 type AudioListener = () => void
 
@@ -174,5 +186,95 @@ describe('stores/audio-player 边界行为', () => {
     expect(store.muted.value).toBe(false)
     expect(store.volume.value).toBe(0.65)
     expect(fakeAudio.volume).toBe(0.65)
+  })
+
+  it('playAlbum 起播曲目已失效时顺延到下一首可用曲目，全单失效则停止', async () => {
+    const { useAudioPlayerStore } = await import('../src/renderer/src/stores/audio-player')
+    const store = useAudioPlayerStore()
+    const broken = makeTrack('bad')
+    const ok = makeTrack('ok')
+    store.playAlbum([broken])
+    fakeAudio.emit('error')
+    expect(store.isBroken(broken.url)).toBe(true)
+
+    // 再次整单播放以失效曲开头，应自动跳过 bad 起播 ok
+    store.playAlbum([broken, ok], 0)
+    expect(store.currentIndex.value).toBe(1)
+    expect(store.currentTrack.value?.songsId).toBe('ok')
+
+    // 全单失效时停止播放，不保留旧曲 currentIndex
+    store.playAlbum([broken], 0)
+    expect(store.currentIndex.value).toBe(-1)
+    expect(store.playing.value).toBe(false)
+  })
+})
+
+describe('useAlbumPlayer.playRandomTracks', () => {
+  let fakeAudio: FakeAudio
+
+  beforeEach(() => {
+    vi.resetModules()
+    fakeAudio = new FakeAudio()
+    vi.stubGlobal('Audio', class {
+      constructor() {
+        return fakeAudio
+      }
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function makeTestAlbum(sid: string, count: number): MusicAlbum {
+    return {
+      sid,
+      title: `专辑 ${sid}`,
+      singer: 'SNH48',
+      tag: 'zj',
+      image: '',
+      year: '2025',
+      start_time: '',
+      link: '',
+      href: '',
+      song: Array.from({ length: count }, (_, i) => ({
+        songs_id: `${sid}-${i + 1}`,
+        songs_name: `歌 ${sid}-${i + 1}`,
+        songs_time: '3:00',
+        url: `https://example.com/${sid}-${i + 1}.mp3`,
+      })),
+    }
+  }
+
+  it('连续两次调用第二批不包含第一批 key（曲库充足时）', async () => {
+    const { useAlbumPlayer } = await import('../src/renderer/src/composables/use-album-player')
+    const { useAudioPlayerStore } = await import('../src/renderer/src/stores/audio-player')
+    const player = useAlbumPlayer()
+    const store = useAudioPlayerStore()
+    const albums = [makeTestAlbum('a', 20), makeTestAlbum('b', 20)]
+
+    expect(player.playRandomTracks(albums, 15)).toBe(true)
+    const firstKeys = new Set(store.playlist.value.map(t => t.key))
+    expect(firstKeys.size).toBe(15)
+
+    expect(player.playRandomTracks(albums, 15)).toBe(true)
+    const secondKeys = store.playlist.value.map(t => t.key)
+    expect(secondKeys).toHaveLength(15)
+    expect(secondKeys.some(key => firstKeys.has(key))).toBe(false)
+  })
+
+  it('曲库不足 15 首时返回全部可用曲目并正常起播', async () => {
+    const { useAlbumPlayer } = await import('../src/renderer/src/composables/use-album-player')
+    const { useAudioPlayerStore } = await import('../src/renderer/src/stores/audio-player')
+    const player = useAlbumPlayer()
+    const store = useAudioPlayerStore()
+    const albums = [makeTestAlbum('small', 6)]
+
+    expect(player.playRandomTracks(albums, 15)).toBe(true)
+    expect(store.playlist.value).toHaveLength(6)
+    expect(store.currentIndex.value).toBe(0)
+    expect(store.playing.value).toBe(true)
   })
 })
