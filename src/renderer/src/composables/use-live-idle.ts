@@ -35,8 +35,9 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   const { ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
   const { liveItems, lastFetchedAt, refreshLiveStatus, acquireLiveStatusPolling } = useLiveStatusStore()
 
-  /** 公演排期。 */
+  /** 公演排期及首轮加载完成标记（防加载中短暂闪现「暂无公演」提示）。 */
   const shows = ref<OpenLive[]>([])
+  const showsLoaded = ref(false)
 
   /** 回放条目。 */
   const playbacks = ref<LiveListItemView[]>([])
@@ -94,6 +95,9 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
     catch (e: any) {
       shows.value = []
       debugLog('list', `空态预告：公演排期拉取失败（静默忽略）: ${e?.message || e}`)
+    }
+    finally {
+      showsLoaded.value = true
     }
   }
 
@@ -194,13 +198,19 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
     onLiveFound()
   }
 
-  /** 检查一次共享直播状态；有直播则交回列表。 */
+  /** 是否存在未被本地屏蔽的在播直播（防止全站仅有被屏蔽主播时误唤醒列表陷入空态循环）。 */
+  function hasVisibleLive(items: LiveListItem[]): boolean {
+    return items.some(item => !isBlocked(item.userInfo?.userId))
+  }
+
+  /** 检查一次共享直播状态；有未被屏蔽的直播则交回列表。 */
   async function checkLiveOnce(): Promise<void> {
     lastCheckAt.value = Date.now()
     clock.value = lastCheckAt.value
     try {
+      await ensureBlockedLoaded()
       const items = await refreshLiveStatus()
-      if (items.length > 0)
+      if (releaseLiveStatusPolling && pageActive.value && isEmpty() && hasVisibleLive(items))
         handleLiveFound()
     }
     catch (e: any) {
@@ -224,10 +234,6 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
     clock.value = Date.now()
     resumeClock()
     releaseLiveStatusPolling = acquireLiveStatusPolling()
-    if (liveItems.value.length > 0) {
-      handleLiveFound()
-      return
-    }
     void checkLiveOnce()
     void loadShows()
     void loadPlaybacks()
@@ -247,9 +253,12 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
     clock.value = Math.max(clock.value, at)
   })
 
-  // 共享 store 的 120s 轮询发现开播后，空态页立即交回列表展示。
-  watch(liveItems, (items) => {
-    if (!pageActive.value || !items.length || !isEmpty())
+  // 共享 store 的 120s 轮询发现有效开播后，空态页立即交回列表展示（以 releaseLiveStatusPolling 防双重唤醒）。
+  watch(liveItems, async (items) => {
+    if (!releaseLiveStatusPolling || !pageActive.value || !items.length || !isEmpty())
+      return
+    await ensureBlockedLoaded()
+    if (!releaseLiveStatusPolling || !pageActive.value || !isEmpty() || !hasVisibleLive(items))
       return
     lastCheckAt.value = Date.now()
     clock.value = lastCheckAt.value
@@ -289,6 +298,7 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   return {
     shows: previewShows,
     showsTitle: previewTitle,
+    showsLoaded,
     hasShows,
     playbacks,
     playbacksTitle,

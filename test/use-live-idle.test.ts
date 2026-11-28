@@ -7,7 +7,7 @@ import { effectScope, nextTick, ref } from 'vue'
  * 覆盖每 30 秒推进「已等待 N 分钟」以及同步共享 store 的 lastFetchedAt。
  */
 
-const { lifecycleHooks, storeMock, apisMock } = vi.hoisted(() => ({
+const { lifecycleHooks, storeMock, apisMock, blockedIds } = vi.hoisted(() => ({
   lifecycleHooks: {
     mounted: [] as Array<() => void>,
     unmounted: [] as Array<() => void>,
@@ -19,9 +19,10 @@ const { lifecycleHooks, storeMock, apisMock } = vi.hoisted(() => ({
     releasePolling: vi.fn(),
   },
   apisMock: {
-    openLives: vi.fn(async () => ({ liveList: [] })),
-    playbackList: vi.fn(async () => ({ liveList: [], next: '0' })),
+    openLives: vi.fn(async () => ({ liveList: [] as any[] })),
+    playbackList: vi.fn(async () => ({ liveList: [] as any[], next: '0' })),
   },
+  blockedIds: new Set<string>(),
 }))
 
 vi.mock('vue', async (importOriginal) => {
@@ -52,7 +53,7 @@ vi.mock('@renderer/stores/member-flags', () => ({
   }),
   useBlockedMembersStore: () => ({
     ensureBlockedLoaded: async () => {},
-    isBlocked: () => false,
+    isBlocked: (userId?: string | number) => blockedIds.has(String(userId ?? '')),
   }),
 }))
 
@@ -101,7 +102,9 @@ beforeEach(() => {
   storeMock.refreshLiveStatus.mockClear()
   storeMock.releasePolling.mockClear()
   apisMock.openLives.mockClear()
+  apisMock.openLives.mockImplementation(async () => ({ liveList: [] }))
   apisMock.playbackList.mockClear()
+  blockedIds.clear()
 })
 
 afterEach(() => {
@@ -151,6 +154,47 @@ describe('useLiveIdle（空态时钟与上次检查同步）', () => {
 
     await vi.advanceTimersByTimeAsync(120_000)
     expect(idle.waitedText.value).toBe('刚刚开始等待')
+
+    dispose()
+  })
+
+  it('全站仅有被屏蔽成员在播时，不误触发 onLiveFound', async () => {
+    blockedIds.add('999')
+    const blockedLive = { liveId: 'L-blocked', userInfo: { userId: '999', nickname: '已屏蔽' } }
+    storeMock.refreshLiveStatus.mockResolvedValueOnce([blockedLive])
+
+    const { onLiveFound, dispose } = await setupIdle(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onLiveFound).not.toHaveBeenCalled()
+
+    // 共享 store 推送也只含被屏蔽主播 → 依然不唤醒
+    storeMock.liveItems.value = [blockedLive]
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onLiveFound).not.toHaveBeenCalled()
+
+    // 出现未屏蔽成员开播 → 立即唤醒
+    storeMock.liveItems.value = [blockedLive, { liveId: 'L-ok', userInfo: { userId: '100', nickname: '正常成员' } }]
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onLiveFound).toHaveBeenCalledTimes(1)
+
+    dispose()
+  })
+
+  it('showsLoaded 在公演排期回包前为 false，完成后置 true 防兜底文案闪现', async () => {
+    let releaseShows!: () => void
+    apisMock.openLives.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseShows = () => resolve({ liveList: [] })
+    }))
+
+    const { idle, dispose } = await setupIdle(true)
+    expect(idle.showsLoaded.value).toBe(false)
+
+    releaseShows()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(idle.showsLoaded.value).toBe(true)
+    expect(idle.hasShows.value).toBe(false)
 
     dispose()
   })
