@@ -2232,8 +2232,7 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(api.canSpeak.value).toBe(false)
-    // 即使连接已就绪（optIn 是账号级、从别的房间带过来），禁言房间也不该把消息发出去
-    await api.connectRoomQChat()
+    // 禁言判定先于连接态：连接已随进房订阅就绪也不发
     expect(await api.sendMessage('禁言房间')).toEqual({ ok: false, message: '房主已开启全员禁言，暂时不能发言' })
     expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
   })
@@ -2270,12 +2269,12 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
   })
 
   it('发送成功：ACK 回显入列、冷却倒数、回复态清空', async () => {
-    const { api } = await setup(sendFixture())
+    const { api, emitRoomBatch } = await setup(sendFixture())
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    // 默认不连云信，发送前需确认连接
-    expect(await api.connectRoomQChat()).toEqual({ ok: true })
+    // 进房即订阅，连接态由主进程经 pocketRoomBatch 异步推进
+    emitRoomBatch({ kind: 'status', status: 'connected' })
 
     // 先进回复态：发送成功后清空
     api.startReply(api.messages.value[0])
@@ -2316,7 +2315,6 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
 
     expect(await api.sendMessage('第一条')).toEqual({ ok: true })
     await vi.advanceTimersByTimeAsync(1600)
@@ -2332,7 +2330,6 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
 
     vi.mocked(window.mainAPI.pocketSendRoomMessage).mockImplementationOnce(async () => {
       throw new Error('房间连接已失效，请重新进入房间')
@@ -2343,7 +2340,7 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     expect(api.sendCooldownLeft.value).toBe(0)
   })
 
-  it('未进房 / 未确认连接 / 纯空白：拒绝发送且不进 IPC', async () => {
+  it('未进房 / 纯空白：拒绝发送且不进 IPC', async () => {
     const { api } = await setup(sendFixture())
     await api.load()
 
@@ -2352,30 +2349,7 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
 
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    // 进房不自动连云信：未确认前一律不发
-    expect(await api.sendMessage('在吗')).toEqual({ ok: false, message: '请先点击聊天框连接房间' })
-    expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
-
-    await api.connectRoomQChat()
     expect(await api.sendMessage('   ')).toEqual({ ok: false })
-    expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
-  })
-
-  it('主动断开连接：撤销授权、退订当前频道，回到只看模式', async () => {
-    const { api } = await setup(sendFixture())
-    await api.load()
-    await api.selectRoom(10001)
-    await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
-    expect(api.qchatOptIn.value).toBe(true)
-
-    await api.disconnectRoomQChat()
-
-    expect(api.qchatOptIn.value).toBe(false)
-    expect(api.qchatStatus.value).toBe('disconnected')
-    expect(window.mainAPI.pocketRoomQChatLeave).toHaveBeenCalledWith('srv-10001', 'ch-10001')
-    // 断开后发送被拒，提示先连接（不会直接发）
-    expect(await api.sendMessage('还在吗')).toEqual({ ok: false, message: '请先点击聊天框连接房间' })
     expect(window.mainAPI.pocketSendRoomMessage).not.toHaveBeenCalled()
   })
 
@@ -2384,7 +2358,6 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
 
     // 挂起发送：回包落地前切到 10002
     let release: (value: unknown) => void = () => {}
@@ -2407,7 +2380,6 @@ describe('use-pocket-rooms / 房间发言（QChat 发送与删除）', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
     await api.sendMessage('我发的消息')
     const mine = api.messages.value.at(-1)!
 
@@ -2620,18 +2592,15 @@ describe('use-pocket-rooms / QChat 订阅同步', () => {
     }
   }
 
-  it('进房不建连；确认后订阅；切房先订新房再退旧房；退房退订', async () => {
+  it('进房即订阅；切房先订新房再退旧房；退房退订', async () => {
     const { api, calls } = await setup(syncFixture())
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    // 默认不连云信：只看房间不建连、不订阅，消息靠 HTTP 轮询
-    expect(calls.qchatEntered).toEqual([])
-    expect(api.qchatStatus.value).toBe('disconnected')
-    expect(api.chatStatus.value).toBe('ready')
-
-    expect(await api.connectRoomQChat()).toEqual({ ok: true })
+    // 进房即订阅；enter 返回 ok 即已连接
     expect(calls.qchatEntered).toEqual([{ serverId: 'srv-10001', channelId: 'ch-10001' }])
+    expect(api.chatStatus.value).toBe('ready')
+    expect(api.qchatStatus.value).toBe('connected')
 
     await api.selectRoom(10002)
     await vi.advanceTimersByTimeAsync(0)
@@ -2655,7 +2624,6 @@ describe('use-pocket-rooms / QChat 订阅同步', () => {
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
-    await api.connectRoomQChat()
 
     scope.stop()
     await vi.advanceTimersByTimeAsync(0)
@@ -2663,14 +2631,13 @@ describe('use-pocket-rooms / QChat 订阅同步', () => {
     expect(calls.qchatLeft).toEqual([{ serverId: 'srv-10001', channelId: 'ch-10001' }])
   })
 
-  it('连接失败：返回原因、连接态置 disconnected，消息链路不受影响', async () => {
+  it('订阅失败：原因进 qchatHint、连接态置 disconnected，消息链路不受影响', async () => {
     const { api } = await setup(syncFixture())
     await api.load()
     vi.mocked(window.mainAPI.pocketRoomQChatEnter).mockImplementationOnce(async () => ({ ok: false, message: '连接超时' }))
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(0)
 
-    expect(await api.connectRoomQChat()).toEqual({ ok: false, message: '连接超时' })
     expect(api.qchatStatus.value).toBe('disconnected')
     expect(api.qchatHint.value).toBe('连接超时')
     // 实时链路失败只禁发送；HTTP 轮询仍是消息链路兜底
@@ -2820,11 +2787,13 @@ describe('use-pocket-rooms / 关闭房间的判定与轮询', () => {
     expect(calls.messageFetched).toHaveLength(before)
   })
 
-  it('正常房间：5s 轮询照常发，不被关闭态早退误停', async () => {
+  it('正常房间（QChat 未订阅）：5s 轮询照常发，不被关闭态早退误停', async () => {
     const { api, calls } = await setup({
       pocketIds: [10001],
       roomPermissions: { 'ch-10001': openPermission },
     })
+    // 订阅失败 → QChat 不覆盖当前频道，轮询走原 5s 节奏
+    vi.mocked(window.mainAPI.pocketRoomQChatEnter).mockImplementationOnce(async () => ({ ok: false, message: '连接超时' }))
     await api.load()
     await api.selectRoom(10001)
     await vi.advanceTimersByTimeAsync(50)
@@ -2834,6 +2803,68 @@ describe('use-pocket-rooms / 关闭房间的判定与轮询', () => {
     await vi.advanceTimersByTimeAsync(15_000)
 
     expect(calls.messageFetched.length).toBe(before + 3)
+  })
+
+  it('qChat 已订阅且连接正常：兜底轮询放宽到 30s，不再每 5s 打一次', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': openPermission },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.qchatStatus.value).toBe('connected')
+
+    // 首个 tick（约 5s）会打一次兜底轮询，先吸收掉，再量稳态节奏
+    await vi.advanceTimersByTimeAsync(6_000)
+    const before = calls.messageFetched.length
+    await vi.advanceTimersByTimeAsync(23_000)
+    expect(calls.messageFetched.length).toBe(before)
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(calls.messageFetched.length).toBe(before + 1)
+  })
+
+  it('兜底轮询失败不占用降频窗口：下一个 tick 立即重试', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': openPermission },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    expect(api.qchatStatus.value).toBe('connected')
+
+    const before = calls.messageFetched.length
+    roomMock.messageFail.add('ch-10001')
+    // 失败不记入降频窗口：QChat 健康时也按 5s 节奏重试
+    await vi.advanceTimersByTimeAsync(12_000)
+    const failed = calls.messageFetched.length
+    expect(failed).toBe(before + 2)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls.messageFetched.length).toBe(failed + 1)
+
+    // 恢复成功后重新用满 30s 窗口
+    roomMock.messageFail.delete('ch-10001')
+    await vi.advanceTimersByTimeAsync(5_000)
+    const recovered = calls.messageFetched.length
+    expect(recovered).toBe(failed + 2)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls.messageFetched.length).toBe(recovered)
+  })
+
+  it('qChat 断开：下一个 5s tick 立即恢复轮询，不等满 30s', async () => {
+    const { api, calls, emitRoomBatch } = await setup({
+      pocketIds: [10001],
+      roomPermissions: { 'ch-10001': openPermission },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    const before = calls.messageFetched.length
+
+    emitRoomBatch({ kind: 'status', status: 'disconnected' })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls.messageFetched.length).toBe(before + 1)
   })
 
   it('房间重新开放：关闭态清除后轮询自动恢复', async () => {
@@ -3228,5 +3259,191 @@ describe('use-pocket-rooms / 首屏快照', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(storage.has(ROOM_LIST_SNAPSHOT_KEY)).toBe(false)
+  })
+})
+
+describe('use-pocket-rooms / 切回页面的列表复用', () => {
+  it('首灌完成后、窗口内：不需要重拉', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    expect(api.listNeedsReload()).toBe(false)
+  })
+
+  it('复用窗口（60s）到期后需要重拉', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    vi.advanceTimersByTime(60_001)
+    expect(api.listNeedsReload()).toBe(true)
+  })
+
+  it('从未成功加载过（列表为空）需要重拉', async () => {
+    const { api } = await setup({ pocketIds: [] })
+    expect(api.listNeedsReload()).toBe(true)
+  })
+
+  it('屏蔽名单变化（在后台页面被屏蔽）：标脏，切回时重拉', async () => {
+    const { api, setBlocked } = await setup({ pocketIds: [10001, 10002] })
+    await api.load()
+    expect(api.listNeedsReload()).toBe(false)
+    setBlocked([10002])
+    expect(api.listNeedsReload()).toBe(true)
+  })
+
+  it('账号关注镜像变化（notePocketFollow）：标脏，切回时重拉', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    api.notePocketFollow(10003, true)
+    expect(api.listNeedsReload()).toBe(true)
+  })
+
+  it('登出：列表清空，切回时需要重拉（不沿用旧账号的列表）', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    expect(api.listNeedsReload()).toBe(false)
+    authMock.setLoggedIn(false)
+    await api.load()
+    expect(api.rooms.value).toEqual([])
+    expect(api.listNeedsReload()).toBe(true)
+  })
+
+  it('首灌进行中（loading）：切回不重复触发重拉', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    await api.load()
+    vi.advanceTimersByTime(61_000)
+    expect(api.listNeedsReload()).toBe(true)
+
+    // 快速来回切页：在途加载未完成时不再叠一次（否则新的会作废旧的，首灌永远完不成）
+    const pending = api.load()
+    expect(api.listNeedsReload()).toBe(false)
+    await pending
+    expect(api.listNeedsReload()).toBe(false)
+  })
+
+  it('拉取期间成员集合变化：签名按构建列表时的输入截取，下次切回仍会重拉', async () => {
+    const { api } = await setup({ pocketIds: [10001] })
+    const gate: { release?: () => void } = {}
+    // 卡在 load 的末尾（预览批量），制造「列表已按旧输入构建、签名尚未截取」的窗口
+    vi.mocked(window.mainAPI.pocketGetRoomLastMessages).mockImplementationOnce(() =>
+      new Promise((resolve) => {
+        gate.release = () => resolve([])
+      }))
+
+    const pending = api.load()
+    await vi.advanceTimersByTimeAsync(0)
+    // 此刻在成员页关注了另一个成员：当前输入已变，但列表不含它
+    api.notePocketFollow(10003, true)
+    expect(gate.release).toBeTypeOf('function')
+    gate.release!()
+    await pending
+
+    // 签名记的是构建列表时的那份输入，与当前状态不符 → 下次激活仍会重拉
+    expect(api.listNeedsReload()).toBe(true)
+  })
+})
+
+describe('use-pocket-rooms / 精华缓存与排序键', () => {
+  it('同一频道在 TTL 内再次进房：沿用缓存，不再拉精华', async () => {
+    const { api, calls } = await setup({ pocketIds: [10001, 10002] })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    const first = calls.essenceFetched.length
+    expect(first).toBeGreaterThan(0)
+
+    await api.selectRoom(10002)
+    await vi.advanceTimersByTimeAsync(50)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    // 10002 是新频道，会拉一次；回到 10001 命中缓存，不再拉
+    const afterSwitch = calls.essenceFetched.length
+    expect(afterSwitch).toBe(first + 1)
+    expect(calls.essenceFetched.filter(item => item.channelId === 'ch-10001')).toHaveLength(first)
+  })
+
+  it('精华缓存超过 TTL（5 分钟）：重新拉首屏', async () => {
+    const { api, calls } = await setup({ pocketIds: [10001, 10002] })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    await api.selectRoom(10002)
+    await vi.advanceTimersByTimeAsync(50)
+
+    vi.advanceTimersByTime(5 * 60_000 + 1)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(calls.essenceFetched.filter(item => item.channelId === 'ch-10001').length).toBe(2)
+  })
+
+  it('登出清空精华缓存：重新登录后进同一频道必须重拉', async () => {
+    const { api, calls } = await setup({ pocketIds: [10001] })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+    const roomCalls = () => calls.essenceFetched.filter(item => item.channelId === 'ch-10001').length
+    expect(roomCalls()).toBe(1)
+
+    authMock.setLoggedIn(false)
+    await api.load()
+    authMock.setLoggedIn(true)
+    await nextTick()
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(50)
+
+    // 缓存已随账号清空：不能再靠它跳过请求
+    expect(roomCalls()).toBe(2)
+  })
+
+  it('排序键化后结果与原判据一致：临时 > 置顶 > 已关闭沉底 > 直播 > 未读 > 昵称', async () => {
+    const { api } = await setup({
+      pocketIds: [10001, 10002, 10003],
+      livePages: [{ next: '0', liveList: [live('L1', 10003)] }],
+      directory: {
+        10001: { realName: '甲', avatar: '', teamName: '', teamColor: '' },
+        10002: { realName: '乙', avatar: '', teamName: '', teamColor: '' },
+        10003: { realName: '丙', avatar: '', teamName: '', teamColor: '' },
+      },
+    })
+    await api.load()
+    // 直播的 10003 压过无直播的两位
+    expect(api.rooms.value.map(room => room.userId)).toEqual([10003, 10001, 10002])
+  })
+})
+
+describe('use-pocket-rooms / 同房重选的小房间校正门槛', () => {
+  it('同房连续点击：60s 门槛内只首次强制校正，之后走缓存不打接口', async () => {
+    const { api, calls } = await setup({
+      pocketIds: [10001],
+      smallChannels: { 10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' } },
+    })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    const before = calls.smallChannelRefreshed.length
+
+    await api.selectRoom(10001)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+    // 门槛内的重复点击不再发起任何枚举请求
+    expect(calls.smallChannelRefreshed.length).toBe(before + 1)
+    expect(calls.smallChannelRefreshed.at(-1)).toEqual({ userId: 10001, force: true })
+  })
+
+  it('同房重选超过 60s：再次强制校正（能拿到房主新换的小房间）', async () => {
+    const smallChannels = { 10001: { serverId: 'srv-10001', channelId: 'ch-10001-small' } }
+    const { api, calls } = await setup({ pocketIds: [10001], smallChannels })
+    await api.load()
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    smallChannels[10001] = { serverId: 'srv-10001', channelId: 'ch-10001-small-new' }
+    vi.advanceTimersByTime(60_001)
+    await api.selectRoom(10001)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(calls.smallChannelRefreshed.at(-1)).toEqual({ userId: 10001, force: true })
+    expect(api.smallChannel.value?.channelId).toBe('ch-10001-small-new')
   })
 })

@@ -19,7 +19,6 @@ import {
 import { toApiId, toMessageId } from '@common/pocket-ids'
 import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
 import { debug, log } from '../logger'
-import { clientHeaders, profileFor } from './client-profile'
 import { getToken, onSessionReset, postPocket, throwAuthExpired, TOKEN_INVALID_STATUSES } from './pocket-auth-core'
 
 /**
@@ -126,8 +125,14 @@ export async function getRoomChannelOwner(channelId: string): Promise<PocketRoom
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
     throwAuthExpired()
-  if (!envelope.success)
-    throw new Error(envelope.message || '获取房间归属失败')
+  if (!envelope.success) {
+    // 失败原因随错误带给消费方（ES2022 Error.cause）：归属自愈要据此区分「别的门禁」
+    // 与「真的打不开」，渲染层要据此说清为什么进不去
+    const gate = classifyChannelGate(envelope)
+    // 成功只打 content，失败只打定性结果都会丢掉码值与原文：排查新门禁时最需要的就是这两样
+    debug('[pocket-auth] room/info 业务失败（原始回包）：', channelId, JSON.stringify(envelope))
+    throw new Error(gate.message || '获取房间归属失败', { cause: gate })
+  }
   const content = envelope.content || {}
   const channelInfo = (content.channelInfo || {}) as Record<string, unknown>
   debug('[pocket-auth] room/info 原始回包：', JSON.stringify(content))
@@ -242,15 +247,6 @@ export interface PocketServerChannel {
 }
 
 /**
- * seine 服务的伪装头覆盖项：seine48 有独立的客户端特征（appName、UA、appVersion 与
- * 主 App 不同，且带 `X-Custom-Device-Type: ANDROID`），全部来自 client-profile。
- * 返回完整公共头由 postPocket 覆盖合并；`pa` 仍由其统一现算，避免两处签名不一致。
- */
-function seineHeaderOverrides(): Record<string, string> {
-  return clientHeaders(profileFor('seine48'))
-}
-
-/**
  * 拉取某个 team server 下的全部频道（channelId + channelName）。
  * 房间页用它把「房间 / 小房间」两个 tab 显示成真实频道名；
  * 字段结构无官方文档，失败/缺字段由调用方静默回退通用名。
@@ -267,7 +263,6 @@ export async function getServerChannels(serverId: string, force = false): Promis
     SEINE_SERVER_DETAIL_URL,
     { serverId: toApiId(serverId) },
     token,
-    seineHeaderOverrides(),
   )
   if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
     throwAuthExpired()
@@ -286,6 +281,66 @@ export async function getServerChannels(serverId: string, force = false): Promis
   debug('[pocket-auth] 获取频道列表回包：', JSON.stringify(result))
   serverChannelCache.set(serverId, { list: result, at: Date.now() })
   return result
+}
+
+// ===== 小房间门禁 =====
+
+/**
+ * 小房间门禁类型（room/info 拦下时的业务原因）：
+ * - `question`：暗号题（2001），可本地作答；
+ * - `chicken-leg`：赠送门槛（纯文本），不可作答；
+ * - `contribution`：贡献 / 守护门槛（2002 / 2003），不可作答，界面不必区分。
+ */
+export type ChannelAccessGateKind = 'question' | 'chicken-leg' | 'contribution' | 'unknown'
+
+/** 一道门禁的定性结果；`message` 是服务端原文，供界面如实转述（`question` 为空串） */
+export interface ChannelAccessGate {
+  kind: ChannelAccessGateKind
+  /** 服务端业务码（`status`）；回包没给时 undefined */
+  status?: number
+  /** 服务端原文（已 trim）；`question` 类型为空串 */
+  message: string
+}
+
+/** 赠送门槛的原文特征：服务端文案由 App 侧定义，可能存在改写，按关键字兜底 */
+const CHICKEN_LEG_HINTS = ['鸡腿'] as const
+
+/**
+ * 把 room/info 的失败回包定性成门禁：暗号信封 → 鸡腿文案 → 业务码 → unknown。
+ *
+ * 文案必须先于码值：`room/info` 的 2002 不是贡献专属，鸡腿门槛也回 2002，
+ * 先按码判会把赠送门槛误报成贡献。码值分不出贡献与守护，同归 `contribution`。
+ */
+export function classifyChannelGate(envelope: { status?: number, message?: string }): ChannelAccessGate {
+  const raw = (envelope.message || '').trim()
+  const status = envelope.status
+  if (parseQuestionEnvelope(raw))
+    return { kind: 'question', status, message: '' }
+  if (CHICKEN_LEG_HINTS.some(hint => raw.includes(hint)))
+    return { kind: 'chicken-leg', status, message: raw }
+  if (status === 2002 || status === 2003)
+    return { kind: 'contribution', status, message: raw }
+  return { kind: 'unknown', status, message: raw }
+}
+
+/** 拉取小房间门禁（渲染层的锁态与提示文案都靠它）；正常回包 = null */
+export async function getRoomGate(channelId: string): Promise<ChannelAccessGate | null> {
+  const token = getToken()
+  if (!token || !channelId)
+    return null
+  debug('[pocket-auth] 拉取房间门禁请求：', JSON.stringify({ channelId: String(channelId) }))
+  const envelope = await postPocket<Record<string, unknown>>(
+    ROOM_INFO_URL,
+    { channelId: String(channelId) },
+    token,
+  )
+  if (envelope.status !== undefined && TOKEN_INVALID_STATUSES.has(envelope.status))
+    throwAuthExpired()
+  if (envelope.success)
+    return null
+  const gate = classifyChannelGate(envelope)
+  debug('[pocket-auth] 房间门禁回包：', channelId, gate.status, gate.kind, gate.message.slice(0, 80))
+  return gate
 }
 
 // ===== 小房间暗号 =====
@@ -316,7 +371,8 @@ function parseQuestionEnvelope(message: string): PocketRoomQuestion | null {
 /**
  * 拉取小房间的暗号问题。
  * room/info 正常回包 = 无门禁（或该账号已通过暗号），返回 null；
- * 被暗号拦下返回问题；其余业务错误照常抛出。
+ * 被暗号拦下返回问题；其余业务拒绝抛错，原因挂在 `cause`（见 `classifyChannelGate`）——
+ * 「最近30天内赠送过鸡腿礼物」这类非暗号门禁就是从这里区分出来的，不当作网络异常。
  */
 export async function getRoomQuestion(channelId: string): Promise<PocketRoomQuestion | null> {
   const token = getToken()
@@ -335,7 +391,8 @@ export async function getRoomQuestion(channelId: string): Promise<PocketRoomQues
   const question = parseQuestionEnvelope(envelope.message || '')
   if (question)
     return question
-  throw new Error(envelope.message || '获取暗号问题失败')
+  const gate = classifyChannelGate(envelope)
+  throw new Error(gate.message || '获取暗号问题失败', { cause: gate })
 }
 
 /**

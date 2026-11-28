@@ -1,4 +1,3 @@
-import type { PocketClientProfileId } from '@common/pocket-client-profile'
 /**
  * 口袋48请求底座：凭证状态、客户端身份头、HTTP 请求与登录态读接口。
  *
@@ -9,11 +8,9 @@ import type { PocketClientProfileId } from '@common/pocket-client-profile'
  *   （部分 Linux 无钥匙环）时降级明文并打 plainFallback 标记。由 auth-credentials.ts 收敛为
  *   单一内存状态源：启动解密一次，之后业务侧同步读取。token 有效期由服务端掌控
  *   （被踢 / 长期未用会失效），本模块不自动重登。
- * - 请求：主进程直连 pocketapi.48.cn（不经渲染层 netRequest），按客户端档位补头、pa 每次现算；
+ * - 请求：主进程直连 pocketapi.48.cn（不经渲染层 netRequest），按客户端身份补头、pa 每次现算；
  *   失效状态码统一经 throwAuthExpired 清凭证并广播。
- * - 客户端档位：口袋48 / 塞纳河48（见 common/pocket-client-profile.ts 与 client-profile.ts）。
- *   两档协议等价、只有客户端特征不同，服务端因此把同一账号的多个客户端会话分开——
- *   手机端在用口袋48 时，桌面选塞纳河48 即可两端并存。档位随凭证落盘，切换档位需重新登录。
+ * - 客户端身份：恒定「塞纳河48」官方 Android 客户端（见 client-profile.ts），不可选择、不随凭证变。
  *
  * 对外入口统一是 `./pocket-auth`（barrel），消费方不要直接引用本文件。
  */
@@ -21,12 +18,11 @@ import type { StoredAuth } from './auth-credentials'
 import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
-import { resolvePocketClientProfile } from '@common/pocket-client-profile'
 import { app, net, safeStorage } from 'electron'
 import { debug, log } from '../logger'
 import { SafeJSONFileSync } from '../safe-json-file-sync'
 import { AuthCredentialStore, TokenTemporarilyUnavailableError } from './auth-credentials'
-import { clientHeaders, profileFor } from './client-profile'
+import { clientHeaders } from './client-profile'
 import { currentPa, ensurePaWasm } from './pa-sign'
 
 // ===== 凭证状态：唯一状态源，业务侧只读内存快照 =====
@@ -163,8 +159,6 @@ export interface PocketAuthState {
   userId: string
   /** 脱敏手机号（139****1234）；非中国大陆区号登录时带 `+区号 ` 前缀；空串表示未记住 */
   mobileMasked: string
-  /** 当前登录身份档位（模拟的官方客户端）；未登录 / 旧凭证时为默认档口袋48 */
-  clientProfile: PocketClientProfileId
   /** true = 平台无 safeStorage，token 以明文落盘（仅提示用） */
   plainFallback: boolean
   /** 凭证保存时间（ms 时间戳）；0 = 无记录，供设置页展示「已保存 N 天」 */
@@ -224,22 +218,11 @@ export function summarizeEnvelope(envelope: PocketEnvelope<unknown> | null | und
 // ===== 客户端身份 =====
 
 /**
- * 当前请求所用的客户端档位：读凭证内存快照（未登录 / 旧凭证回退默认档）。
- * 与 getToken 同用一个状态源，登录与退出都不需要额外的缓存失效逻辑。
- *
- * 导出供聊天室取同档云信身份（`pocket-danmaku.ts`），保证 HTTP 与 TCP 报同一家客户端。
+ * 组装请求头：固定「塞纳河48」客户端特征（见 client-profile.ts），只补 `pa` 与 `token`。
+ * 身份是常量，登录链路与已登录链路用同一口径，没有可选项需要区分。
  */
-export function currentClientProfile(): PocketClientProfileId {
-  return resolvePocketClientProfile(credentials.getStored()?.clientProfile)
-}
-
-/**
- * 组装请求头：按「本次指定档位 或 当前档位」取客户端特征，只补 `pa` 与 `token`。
- * 登录链路在凭证写入前就用用户选定的档发请求，故显式传入 profileId；
- * 其余接口省略该参数，走凭证里的当前档位。
- */
-function pocketHeaders(token?: string, pa?: string, profileId?: PocketClientProfileId): Record<string, string> {
-  const headers = clientHeaders(profileFor(profileId ?? currentClientProfile()))
+function pocketHeaders(token?: string, pa?: string): Record<string, string> {
+  const headers = clientHeaders()
   headers.pa = pa ?? POCKET_PA
   if (token)
     headers.token = token
@@ -247,7 +230,7 @@ function pocketHeaders(token?: string, pa?: string, profileId?: PocketClientProf
 }
 
 /**
- * 按当前档位生成 App 身份头（含 pa；withToken 时再带登录 token），与业务请求同一口径
+ * 生成 App 身份头（含 pa；withToken 时再带登录 token），与业务请求同一口径
  * （UA / appInfo / pa / token 全部同源）。
  *
  * 两个调用方：
@@ -270,7 +253,6 @@ export async function postPocket<T>(
   data: object,
   token?: string,
   extraHeaders?: Record<string, string>,
-  profileId?: PocketClientProfileId,
 ): Promise<PocketEnvelope<T>> {
   // pa 每次请求现算（内嵌当下时间戳）；wasm 加载失败时退回静态值，不影响请求发出
   await ensurePaWasm()
@@ -279,7 +261,7 @@ export async function postPocket<T>(
   const apiPath = logPath(url)
   return new Promise<PocketEnvelope<T>>((resolve, reject) => {
     const request = net.request({ url, method: 'POST' })
-    const headers = { ...pocketHeaders(token, pa, profileId), ...extraHeaders }
+    const headers = { ...pocketHeaders(token, pa), ...extraHeaders }
     for (const [key, value] of Object.entries(headers))
       request.setHeader(key, value)
 
@@ -364,7 +346,6 @@ function toAuthState(stored: StoredAuth | null): PocketAuthState {
     avatar: stored?.avatar || '',
     userId: stored?.userId || '',
     mobileMasked: maskMobile(stored?.mobile || '', stored?.area),
-    clientProfile: resolvePocketClientProfile(stored?.clientProfile),
     // 只看凭证本体：明文 token 一旦落盘就是明文，与「此刻系统有没有加密能力」无关
     plainFallback: !!stored?.tokenPlain,
     savedAt: stored?.savedAt || 0,
@@ -383,27 +364,25 @@ export function getToken(): string {
   return credentials.getToken()
 }
 
-/** 落盘凭证：档位一并写入，此后所有请求按该档发头（档位随凭证读） */
+/** 落盘凭证：此后所有请求按固定的塞纳河48 身份发头 */
 export async function saveAuth(
   mobile: string,
   token: string,
   info: PocketUserInfo,
   area: string,
-  clientProfile: PocketClientProfileId,
 ): Promise<void> {
   const encrypted = await credentials.save({
     mobile,
     area,
-    clientProfile,
     nickname: info.nickname,
     avatar: info.avatar,
     userId: info.userId,
     savedAt: Date.now(),
   }, token)
-  log(`[pocket-auth] 凭证已保存（${encrypted ? '加密' : '明文降级'}，档位 ${clientProfile}），用户: ${info.nickname || '未知'}`)
+  log(`[pocket-auth] 凭证已保存（${encrypted ? '加密' : '明文降级'}），用户: ${info.nickname || '未知'}`)
 }
 
-/** 退出登录：删除本地凭证文件（档位随凭证消失，请求头回到默认档；下次登录重新选） */
+/** 退出登录：删除本地凭证文件 */
 export function logout(): void {
   credentials.clear()
   resetSessionCaches()

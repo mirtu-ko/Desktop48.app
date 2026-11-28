@@ -1,341 +1,82 @@
 # 房间消息链路
 
-本文说明「房间」页的完整调用链路：从 Dock 入口到房间列表与消息流渲染，覆盖模块划分、跨进程边界、接口取舍与数据形态。
-
-数据结构与协议解析参考 [yk1z/yaya_msg](https://github.com/yk1z/yaya_msg)。与之对应的直播播放链路见《播放链路》（live-playback-pipeline.md），两者互不依赖。
-
-## 0. 设计前提
-
-### 0.1 房间消息不是直播间弹幕
-
-本项目并行存在两套独立的消息体系，接口、协议、渲染位置均不同，改动前需先区分：
-
-| 维度       | 直播间弹幕                 | 房间消息（本文）                                               |
-| ---------- | -------------------------- | -------------------------------------------------------------- |
-| 产品形态   | 浮窗播放器里的实时互动     | 口袋 App「房间」tab 的成员留言流                               |
-| 传输方式   | 自研网易云信 TCP 长连接    | HTTP 轮询（常驻）+ QChat 推送（按需连接后）                    |
-| 入口       | 直播/回放独立播放窗        | Dock「房间」→ `pages/Rooms.vue`                                |
-| 数据源     | NIM 聊天室（`chatroomId`） | team server + channel（`im/server/jump` 解析）                 |
-| 主进程模块 | `pocket-danmaku.ts`        | `pocket-auth.ts` / `pocket-unread.ts` / `pocket-room-qchat.ts` |
-
-消息主体仍以 5s 轮询为底（房间留言流的时效要求远低于弹幕）；QChat 长连接另管「发言」与「已连接频道的实时推送」，且按需建立——进房默认不建连，用户确认后才订阅，未确认时推送这条支路整体不存在（见 room-message-send.md 第 3 节）。
-
-### 0.2 接口无文档，结构自参考实现推导
-
-口袋48 im 域接口无官方文档，请求/回包结构均从参考实现交叉验证得出。字段名宽容匹配代码（`firstStr` 多候选键、`??` 兜底）即由此而来，不应视为冗余代码删除。
-
-### 0.3 token 存于主进程，链路跨进程
-
-所有口袋接口经 `main/pocket48/pocket-auth.ts` 的 `postPocket` 发出：token 仅存于主进程，请求使用 Electron `net.request`（规避渲染层 fetch 的 CORS 与系统代理问题）。每次数据交互均为一次 IPC：
-
-| 角色     | 目录                                  | 职责                                     |
-| -------- | ------------------------------------- | ---------------------------------------- |
-| 渲染进程 | `pages/Rooms.vue`                     | 页面展示与交互（滚底、翻历史、媒体播放） |
-| 编排层   | `composables/use-pocket-rooms.ts`     | 名单合并、频道遍历、消息拉取/轮询编排    |
-| 预加载桥 | `src/preload/index.ts`                | 暴露 `window.mainAPI.pocketGetRoom*`     |
-| 主进程   | `pocket-auth.ts` / `pocket-unread.ts` | 接口请求、未读检测（唯一真相）           |
-
-IPC 契约按项目约定三处同步：`preload/ipc-contract.d.ts` → `preload/index.ts`（`satisfies mainAPI`）→ `main/ipc/register-pocket-ipc.ts`（`handleTraced` 注册）。漏一处 `npm run typecheck` 直接失败。
-
-## 1. 接口清单
-
-全部位于 `pocketapi.48.cn`，均需登录 token：
-
-| 用途                     | 端点                                            | 关键入参                                   | 回包要点                                                                                                                                          |
-| ------------------------ | ----------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 口袋关注 ID 列表         | `user/api/v1/friendships/friends/id`            | 无（token 即账号）                         | 纯 ID 数组，不含昵称/头像（需本地成员目录反查）                                                                                                   |
-| 成员 userId → 房间频道   | `im/api/v1/im/server/jump`                      | `{ starId, targetType: 1 }`                | `{ serverId, channelId }`；解析不出 = 没有房间                                                                                                    |
-| 批量取各频道最后一条消息 | `im/api/v1/team/classic/last/message/get`       | `{ serverIdList: number[] }`               | `lastMsgList`：每频道一条，只有 `serverId/channelId/msgContent/starName`（无 `msgTime`、无 `unreadCount`，见第 7 节）                             |
-| 房间消息（只看房主）     | `im/api/v1/team/message/list/homeowner`         | `{ channelId, serverId, nextTime, limit }` | `message` + `nextTime` 游标；混入官方账号 121569667                                                                                               |
-| 房间消息（全部用户）     | `im/api/v1/team/message/list/all`               | 同上                                       | 同上                                                                                                                                              |
-| 房间精华消息             | `im/api/v1/team/essence/message/list`           | `{ channelId, serverId, nextTime, limit }` | `content.essenceMessageList`：元素与普通消息同构（`msgId*` / `msgType` / `bodys` / `extInfo`），另带 `essenceInfo`（不消费）；`nextTime` 分页游标 |
-| 小房间暗号题面           | `im/api/v1/im/team/room/info`                   | `{ channelId }`                            | 暗号频道回 `status 2001`，`message` 内嵌 `{ questionId, question }`                                                                               |
-| 暗号作答校验             | `im/api/v1/team/channel/question/answer/verify` | `{ answer, questionId }`                   | `success: true` 即通过；否则 `message` 为「回答错误 / 问题不存在」                                                                                |
-| 频道名（seine 频道详情） | `im/api/seine/server/detail`                    | `{ serverId }`                             | `content.channelInfoList[].channelName`                                                                                                           |
-
-## 2. 调用链路总览
-
-### 2.1 首灌（进页面 / 手动刷新）
-
-```
-[Rooms.vue] onMounted → load()（keep-alive 页面只挂载一次；重新进入走 onActivated → refreshRoomStatus(false)）
-   │  未登录：整页登录引导，不发任何口袋接口请求
-   ▼
-[use-pocket-rooms.ts] load()
-   ├─ refreshPocketAuthState()   等登录态落库（同步返回旧值 + 异步刷新，冷启动首帧会误判未登录）
-   ├─ loadFollowedIds()          口袋关注 ID ∪ 本地关注 ID − 屏蔽名单（见第 3 节）；口袋失败则降级为本地名单
-   ├─ fetchLiveMap(true)         共享 live-status store（120s 缓存，force 强制刷新）
-   ├─ 成员目录反查               头像/昵称/队伍（接口不返回；成员查不到回退官方账号，再降级「口袋用户 N」）
-   ├─ resolveRooms(entries)      有界并发 5 遍历 im/server/jump
-   │     ├─ 解析失败/空频道 → 过滤（无房间，含已关闭），计入 hiddenRoomCount
-   │     ├─ 成功 → 写入 channelCache（userId → 频道）
-   │     └─ 全部解析异常（接口故障）→ 整页 loadError + 重试按钮，不展示空列表
-   └─ fetchLastMessageMap(...)   一次批量请求取全部频道最新一条 → 左列预览
-   ▼
-rooms.value（左列排序见下）
-```
-
-**左列排序**（`use-pocket-rooms` 的 `sortRooms`，七级判据）：临时房间 → 用户置顶（`stores/room-pins`，压过直播与未读）→ 已关闭的房间沉底 → 在直播 → 有未读 → 最新一条未读的时刻降序（`latestTime`，大 / 小房间取 max）→ 昵称 `localeCompare('zh')`。未读取大房间 + 小房间合计，与条目角标同源（左列只有一个角标，两处判据不一致会自相矛盾）。置顶是纯本地展示偏好（`localStorage`），变化即重排，入口是条目右键菜单。
-
-⚠️ **未读变化只在「浮上来」时重排**：新出现未读、或已有未读的房间又来新消息（`latestTime` 前移）。进房即 `markRead`（本地乐观清零 + 主进程广播）若也重排，用户刚点的那一条会在他眼皮底下被抽走；`latestTime` 回落（清掉某一路未读）同属「读掉」这一类，同样不重排。条目的下沉留给下一次自然排序（重新进页面 / 手动刷新 / 直播状态刷新）。
-
-被屏蔽成员不进左列（首灌时已从名单里剔除，不为它解析频道）。屏蔽入口在成员页卡片与三处详情抽屉，都可能在房间页挂在 keep-alive 后台时发生，因此另有一条 `watch(blockedMembers)` 就地摘掉对应条目并复核选中项——只靠 `load()` 过滤的话，用户切回本页看到的仍是旧列表。临时条目不受屏蔽影响（那是用户主动打开的，见 2.3）。
-
-### 2.2 选中房间与轮询
-
-```
-[Rooms.vue] @click="selectRoom(room.userId)"
-   ▼
-[use-pocket-rooms.ts] selectRoom(userId)
-   ├─ clearChat()                选中序号 ++（在途回包作废，防消息串房）+ 复位游标/去重键
-   ├─ channelCache 命中 → 直接用；未命中（关注后新增）才懒解析 jump
-   ├─ fetchRoomPage(channel, 0, 'replace')
-   │     pocketGetRoomMessages(channelId, serverId, nextTime=0, scope)
-   │     → normalizePocketRoomMessage 逐条归一（DELETE 类返回 null 过滤）
-   │     → 选中序号已变则丢弃整页（翻历史 / 轮询同样在此拦，防旧频道回包并进新列表）
-   │     → mergeMessages(replace)：接口 msgTime 倒序 → 翻转为时间升序（空页照样落成空列表）
-   │     → historyCursor = nextTime（0 = 下次上翻改用最早持有消息兑底探测）
-   └─ chatStatus='ready' → resumeMessagePoll()
-
-轮询（useIntervalFn，5s，随页面激活态暂停/恢复）：
-    pollRoomMessages() → fetchRoomPage(activeChannel, 0, 'append')
-    └─ 只追加没见过的新消息（messageKeys 去重），并同步左列预览到最新一条
-
-QChat 实时推送（仅确认连接后；主进程 24/11 → pocketRoomBatch 事件）：
-    onRoomBatch(batch)
-    ├─ kind='status' → 只推进连接状态（connecting / connected / reconnecting / disconnected）
-    └─ kind='message' → 频道须仍是 activeChannel（切房尾包直接丢）、经 visibleInScope 过滤、
-       归一化后 append；与 ACK 回显、轮询回包按 msgIdClient 三源去重
-       ⚠️ 首屏 replace 期间到达的推送会被回包顶掉，交给下一轮轮询补齐
-
-左列预览轮询（useIntervalFn，60s；页面激活 + 已登录 + 有房间时开启）：
-    refreshRoomPreviews() → 重取各频道最新一条，补上首灌之后被抽走的预览
-
-翻历史（贴顶自动 / 按钮）：
-    loadMoreHistory() → fetchRoomPage(activeChannel, historyCursor, 'prepend')
-
-切消息范围（只看房主 ⇄ 全部消息）：
-    reloadMessagesForScope() → 复位游标/去重键 → fetchRoomPage(activeChannel, 0, 'replace')
-    └─ 频道与精华保持不动；旧口径的消息留在屏上直到本页回包（失败则清空并置 error）
-```
-
-### 2.3 临时房间（成员详情卡入口）
-
-成员详情卡底栏的「看 TA 的房间」只对**能查询到大房间**的成员出现；点击后关闭卡片并跳转
-`/rooms?member=<userId>`。成员不必在关注名单里——这正是「临时」的用途。
-
-```
-[MemberDetailCard] watch(member.userId)
-   └─ resolveMemberRoomChannel(userId)（services/room-channel，带缓存）
-         ├─ 解析出 serverId/channelId → 底栏展示入口
-         └─ 未登录 / 空频道 / 接口故障 → 不展示（三种情形调用方不必区分）
-   ▼ 点击
-[Rooms.vue] watch(route.query.member)
-   └─ openTemporaryRoom(userId)（use-pocket-rooms）
-         ├─ 未登录 → 拒绝并提示
-         ├─ 频道未解析出 → 拒绝并提示
-         ├─ 已在关注列表 → 直接 selectRoom，不建临时条目
-         └─ 否则建 PocketRoom（temporary: true）置顶并入左列 → selectRoom（同一条选中链路）
-   ▼
-route.query.member 消失（Dock 切回房间页）→ closeTemporaryRoom：撤条目 + 清右侧
-```
-
-约定：
-
-- 临时条目只活在本次会话内存中，不写关注名单、不落盘；左列带「临时」标记与关闭钮，关闭即撤；
-- 频道解析缓存（services/room-channel）由详情卡入口显隐与房间页临时条目共用，同一个人只解析一次。
-  **「不可判定」不等于「没有大房间」**：未登录与接口故障都不落缓存，否则登录后入口不再出现；
-- 列表重建（`load()`）会把临时条目一起冲掉，重建后必须重新并入，且**早于选中复核**——用户正看着的
-  可能正是它；成员随后被关注时，临时条目就地让位给关注条目，选中不断；
-- 临时成员不在关注名单里，也就不在主进程未读检测范围内：左列没有未读角标，`markRead` 对它是空转。
-
-## 3. 各阶段数据形态
-
-**① 房间条目 `PocketRoom`**：`userId`、`nickname`（成员目录反查；成员查不到时回退 `officialInfo` 官方账号，再查不到才降级「口袋用户 N」）、`avatar`、`teamName`、`teamColor`、`serverId` / `channelId`、`preview`（左列预览，空串 = 暂无消息）、`previewTime`（预览对应消息时刻，防旧快照覆盖更新的本地预览）、`live`（匹配到的在播直播；留言流与直播与否无关）。
-
-**② 房间频道 `PocketRoomChannel`**：`serverId` / `channelId` 来自 `im/server/jump` 回包 content；两者为空串表示该成员没有房间（未开通，或已关闭/被回收，见第 4 节）。`targetType: 1` 为固定值。
-
-**③ 消息归一化**：原始 `PocketRoomMessage`（CustomMessageV2：`msgIdServer`、`msgIdClient` 去重键首选、`msgType` 决定正文语义、`msgTime`、`bodys` 多为 JSON 字符串、`extInfo` 内嵌 `user` 资料）经 `utils/pocket-room-message.ts` 输出 `PocketRoomMessageView`，消息流、引用块、相册、语音条、分享卡共用：`id`（`msgIdClient || msgIdServer || msgTime`，轮询/翻历史去重键）、`kind`、`text`、发送者资料（`userId` / `nick` / `avatar` / `level` / `isMember`）、`msgTime`、`quote`（回复类取被回复者昵称/被引用文本/是否礼物，翻牌取被翻提问、昵称位固定「提问」）、`imageUrl` + 原始尺寸、`audioUrl`、`videoUrl` + `videoPoster`、直播分享字段（`liveId` / `liveType` / `liveMode` / `liveStartTime` / `liveCover` / `liveIsPlayback`）。
-
-**④ 批量最新消息 `PocketRoomLastMessage`**：`channelId`、`serverId`、`starName`（**最后发言人**而非房主）、`msgContent`、`msgKey`（消息身份键：msgidClient 优先，最后退 `msgTime:msgContent`；只作「有新消息」的触发判据，不参与计数）、`msgTime`（⚠️ 实测恒为 0，不可作时间轴，见第 7 节）、`unreadCount`（⚠️ 实测恒为 `null`，见第 7 节）。
-
-**⑤ 未读快照 `PocketUnreadBatch`**：`{ rooms: { userId: { count, bigCount, smallCount, latestTime } }, total }`。主进程唯一真相的全量镜像，渲染层只读；变化经 `pocketUnreadBatch` 广播到所有窗口。`count` 是**下限**（单频道数到一页为止，触顶即「至少这么多」），渲染层据此收敛为 `50+`。
-
-关注名单（`loadFollowedIds()` → `number[]`）取口袋账号关注与本地关注（member-flags store）的**并集，只增不删**，再**减去本地屏蔽名单**：本地关注是用户主观行为，口袋接口失败或未登录时不得清除；反向同步（本地新增 → 双写口袋）见成员页「关注」实现。
-
-⚠️ **名单里不只有成员**：账号可能关注官方号（袋王 / 各团官方号），这些 id 不在 `starInfo` 里，成员目录反查必然落空。左列因此再回退一层 `officialInfo`（`member-directory` 的 `findOfficialAccount`，与成员索引分建两张表，官方号不进成员名录）；官方频道其余口径与成员房间一致，不另立档位、不加标识。主进程未读检测同源：关注名单含官方号时其频道照常解析并计数。
-
-⚠️ **关注与屏蔽正交，互不改写**（接线在 renderer 的 `composables/use-member-actions.ts`）。关注是账号维度的事实，屏蔽是本地可见性偏好；早先「屏蔽即取消关注」的规则诞生于两个名单同处本地一个平面的年代，关注改为与口袋双向之后不再自洽——本地单方面取关挡不住下一次 `mergeFromPocket` 把账号关注并回来（只增不删），而真正的账号取关又是用户没点过的操作。屏蔽的效力因此改由展示层保证（**屏蔽优先**）：已屏蔽成员不展示关注态、不进左列、不计未读；唯一保留的互斥方向是用户主动点「关注」时解除屏蔽。
-
-## 4. 房间可用性判定：只认 jump 解析
-
-列表过滤的唯一依据是 `im/server/jump` 能否解析出频道：接口抛错 → 按无房间过滤并计入 `hiddenRoomCount`（左列显示「已隐藏 N 个」）；接口成功但 `serverId` / `channelId` 为空 → 同样过滤。**全部成员解析异常**时整页报错——此时为接口故障而非确实无房间，展示错误与重试入口而非静默空列表。
-
-同一判据也是成员详情卡房间入口的显隐条件（见 2.3）：解析不出频道的成员连入口都不给。
-
-⚠️ **不应将 `im/team/room/info` 的 `channelStatus` 作为关闭判据**。该字段语义不明：实测正常房间同样返回非 0（曾据「非 0 = 已关闭」过滤，导致全部房间被误过滤）；被回收的房间在 jump 阶段即解析不出频道，已由上述路径覆盖。`room/info` 现用于三处：未读检测的频道归属反查（`getRoomChannelOwner`）、小房间的暗号题面拉取（`getRoomQuestion`，见第 8 节）、房间关闭判定（`hasMsgBoard`，见下）。
-
-**关闭的第二种形态（前端提示用）**：房间关闭后 jump 不报错，而是**退到该 server 的直播频道**。实测「刘增艳」房间关闭后回包：`channelId=1247148`、`channelName=直播`、`functionType=USER_LIVE`、`hasMsgBoard=0`；关闭前是留言频道 `1311973`（「增锅的房间🍳」）。对照正常房间（李婷「听听窝」）`functionType=CHAT_CHANNEL`、`hasMsgBoard=1`、`channelName` 为房主自定义名——两个字段同时区分了「留言频道」与「退到直播频道」。这类房间仍留在左列，但 `team/message/list` 恒回空页——与「房间还在、只是没人说话」在消息层面完全同形。
-
-判据取 `room/info` 的 `channelInfo.hasMsgBoard`：`0` = 该频道没有留言板 = 房间已关闭。`loadRoomPermission` 把它归一成 `PocketRoomPermission.hasMsgBoard`（字段缺失为 `null`），经 `utils/room-status.ts` 的 `isRoomClosed` 收敛后，空态文案换成「该房间已关闭」；接口直接回错且服务端文案含「关闭」同样命中；其余情况（含字段缺失）一律退回「暂无消息」，绝不猜。
-
-两个不能用的字段：`channelStatus`（正常房间同样非 0，见上）、`userFunction`（房间级禁言也是全 `false`，那是「不让说话」不是「房间没了」）。这条判据只影响文案，不影响列表过滤与未读计数；关闭前遗留的旧频道未读由未读检测的 `reconcileRoomChannel` 校正清掉（见第 7 节）。
-
-## 5. 消息拉取：倒序、游标、轮询
-
-`fetchRoomPage(channel, nextTime, mode)` 统一三种数据流，接口始终按 `msgTime` 倒序（最新在前）返回：
-
-| mode      | 触发场景     | nextTime | 合并方式                     |
-| --------- | ------------ | -------- | ---------------------------- |
-| `replace` | 选中房间首屏 | 0        | 翻转为时间升序，整体替换     |
-| `prepend` | 翻更早历史   | 游标     | 排序后插到头部               |
-| `append`  | 轮询新消息   | 0        | 去重后排序追加，同步左列预览 |
-
-- 去重键 `messageKeys`：`msgIdClient || msgIdServer || msgTime`，轮询与翻历史共用；
-- `historyExhausted` 只由上翻（prepend）判定：**连续 2 次零新增**（空回包 / 重发同页）才认定，单次零新增可能是边界假信号；上翻游标被写 0 后改用已持有消息的最早 msgTime 兑底探测（懒服务端对不满页直接回 0，不能当真到头）；
-- **轮询回包不得写 `historyCursor`、不得判到头**：轮询拉的是最新一页，其回包游标是「今天」，写进上翻游标会把游标从昨天打回今天，下一次上翻全拉回已持有消息 → 误判到头（实测同一房间有时能翻到昨天、有时翻几页就提示没有更多，即此竞态）；
-- 轮询增量的预览同步按消息时刻比较（`previewTime`），防止批量预览的旧快照覆盖更新的本地预览；
-- **QChat 推送与轮询同权**：同样只 append、不写 `historyCursor`、不判到头——它来自实时流而非分页接口，根本没有游标；
-- 轮询间隔 5s，仅选中房间就绪后启动，且**需以 `onActivated` / `onDeactivated` 控制定时器**：主窗口页面走 keep-alive，切页不销毁，仅挂 `onMounted` 时切页后仍在后台运行（房间页在主窗口内，不受失焦节流影响）；
-- 消息范围 `homeowner`（只看房主）/ `all`（全部用户）两档，切换即重拉当前房间。`homeowner` 会混入口袋官方系统账号 `121569667`，渲染层按 `userId` 过滤。**范围切换只换拉取口径，不得改变当前视图或清掉与范围无关的状态**：走 `reloadMessagesForScope()`（保留当前频道与精华消息，只复位游标/去重键并重拉一页），不要用 `clearChat()` + 重开频道——后者会连带清空精华、闪一下顶部条，多打一次精华请求；也不要改走 `selectRoom()`，它会把 `viewMode` 复位到大房间（踩过）。
-- **精华消息是房间级内容，与消息范围无关**：由房主 / 管理员挑选，`essenceInfo` 记录设置信息（本版本不消费）。进房间（含切频道）时拉一页，**不随 5s 消息轮询复查**——精华低频变更，复查会让每个房间每次停留都多打一个请求。接口失败静默降级：顶部精华条不出现，消息流不受影响。归一化与普通消息共用 `normalizePocketRoomMessage`。**弹层外壳复用 `app.scss` 的「详情卡片共用」**（`detail-card-dialog detail-card essence-card`，宽度由 `.essence-dialog` 收窄；标题头 / 滚动列 / 关闭钮 / 入场动画都走公共定义，页面侧只写列表与条目），图片用 `el-image` 的 `preview-src-list` 全屏预览，工具条复用 `ImageViewerToolbar`（带下载）。
-
-## 6. 消息归一化
-
-`utils/pocket-room-message.ts` 是整个房间链路的协议层，与弹幕归一化（`pocket-chat-message.ts`）是两份独立实现，不共用代码。它有两个入口：HTTP 回包走 `normalizePocketRoomMessage`，QChat 推送 / ACK 回显走 `normalizePocketRoomQChatMessage`，产出同一个 `PocketRoomMessageView`——下游（消息流、引用块、去重键）不区分来源。
-
-### 6.1 msgType 分发
-
-| msgType                                                    | kind        | 正文                                        |
-| ---------------------------------------------------------- | ----------- | ------------------------------------------- |
-| `TEXT` / 未知                                              | text        | bodys 纯文本整体 / JSON 取 `text`           |
-| `IMAGE` / `EXPRESSIMAGE`                                   | image       | `[图片消息]`（解析直链 + 尺寸）             |
-| `AUDIO`                                                    | audio       | `[语音消息]`（解析直链，语音条播放）        |
-| `VIDEO`                                                    | video       | `[视频消息]`                                |
-| `REPLY` / `GIFTREPLY` / `AUDIO_REPLY` / `AUDIO_GIFT_REPLY` | reply       | 回复自己的话；被引用内容进 quote            |
-| `FLIPCARD` / `FLIPCARD_AUDIO` / `FLIPCARD_VIDEO`           | flip        | 答案文本 / `[翻牌回复]`（被翻提问进问答卡） |
-| `LIVEPUSH` / `OPEN_LIVE` / `SHARE_LIVE` 等                 | live        | `[直播分享] 标题`（解析 liveId 封面）       |
-| `PRESENT_NORMAL` / `GIFT_TEXT` 等                          | gift        | `[礼物] 名 xN`                              |
-| `VOTE` / `DISABLE_SPEAK` / `CLOSE_ROOM_CHAT`               | vote/system | 占位文案                                    |
-| `DELETE`                                                   | —           | **返回 null**，不展示                       |
-
-未识别类型不丢弃：`extMsgType` 动态消息（POST_INFO 等）使用兜底文本，为空时显示 `[新消息]`。协议侧语音类型名是 `AUDIO` 不是 `VOICE`。左列预览（`normalizePocketRoomPreview`）复用同一套分发，两侧文案一致；左列单行无法容纳引用块，回复类预览以「回复 昵称」前缀保留上下文，无正文时退回被引用内容，翻牌则以「[提问 xxx]」前缀带上被翻提问。
-
-**表情还原**：协议里的表情是中括号占位符（`[爱心]`），官方 App 用表情图渲染，本版本原样显示会露出字面量。`data/pocket-emojis.ts` 提供「占位符 → 等价 emoji」映射，替换点只有「取用户原文」的几处：发言正文（`bodyText`）、翻牌答案（`flipAnswerText`）、翻牌提问、引用摘要（`parseReplyQuote` 的 `replyText`），未收录的占位符保留原样。归一化自己拼的占位文案（`[图片消息]` 等）与 `[礼物] 名 xN` 前缀**不走**该表——`[礼物]` 同时是表情名，在 `messageText` 出口统一替换会把业务前缀改成 `🎁`。
-
-发送者资料主路径取 `extInfo.user`（userId/nickName/avatar/level/roleId），顶层字段兜底；`roleId > 1` 判定成员（昵称着色 + 「房主」标签）。userId 需宽松数字强转——接口对纯数字 ID 返回 number 与 string 不定。
-
-### 6.2 引用块：replyInfo 的字段语义
-
-⚠️ 易错字段（曾因语义颠倒导致引用内容丢失、回复正文错显）：
-
-- `replyInfo.text` = **本条回复自己的正文**；
-- `replyInfo.replyText` = **被引用消息的文本**；
-- `replyInfo.giftInfo` = 被引用的是礼物消息时，摘要走 `[礼物] 名 xN` 并标金。
-
-引用块为**只读展示**，不提供点击跳转：被引用消息往往不在当前列表（更早历史未拉到 / 被范围过滤 / 原消息已删）。`replyMessageId` 字段仍在协议中，本版本不解析。
-
-### 6.3 翻牌卡：被翻提问
-
-翻牌不是「回复某条消息」，但它同样是「对着一条消息作答」，被回复内容不落在 `replyInfo` 里，而在各自的 info 对象里：
-
-| 翻牌类型         | info 键（同构，flipCard / filpCard 两套拼写并存）           | 被翻提问   | 答案                               |
-| ---------------- | ----------------------------------------------------------- | ---------- | ---------------------------------- |
-| `FLIPCARD`       | `flipCardInfo` / `filpCardInfo`                             | `question` | `answer` 纯文本                    |
-| `FLIPCARD_AUDIO` | `flipCardAudioInfo` / `filpCardAudioInfo`（兼带上面两个键） | `question` | `answer` 为带 `url` 的 JSON 字符串 |
-| `FLIPCARD_VIDEO` | `flipCardVideoInfo` / `filpCardVideoInfo`（兼带上面两个键） | `question` | 同上（`previewImg` / `w` / `h`）   |
-
-`flipCardInfo()` 一处解析全部 6 个键，正文、媒体直链、被翻提问三处共用。`question` **不复用回复消息的引用块**：翻牌不是回复某条消息，而是一次公开问答，UI 上渲染成独立的问答卡（`.msg-flip`）——上半是成员的回答（文字 / 语音条 / 视频），下半是被翻提问，中间一条分隔线，**提问完整展开不截断**（昵称位固定「提问」，提问者昵称协议不返回）。语音 / 视频翻牌尤其依赖它——这类消息的正文只有占位文案 `[翻牌回复]`，没有下半部分就完全看不出被翻了什么。无 `question` 的翻牌退回普通气泡。
-
-## 7. 未读检测（主进程唯一真相）
-
-`main/pocket48/pocket-unread.ts`，与任务列表同一套「主进程真相 + 各窗镜像」模式：页面没开、窗口最小化时未读照常积累（定时器在主进程，不受 Chromium 失焦节流影响）。
-
-计数分两步——**预览接口只作触发判据，条数由消息列表数出来**：
-
-```
-tick()（60s，重入护栏）
-  ├─ 未登录 → 清空未读与已读水位（账号相关状态），广播
-  ├─ getFollowedIds() ∪ 本地关注 减去本地屏蔽名单 → ensureChannels()
-  │     ├─ 被剔除的成员视为「不在名单」：频道缓存与未读按取关同一条路径清理
-  │     └─ 缺失/占位过期的成员：并发 4 解析 jump；空频道按 30min TTL 重试
-  ├─ getRoomLastMessages(serverIds 去重)   一次请求覆盖全部频道，只为判断「哪个频道有新消息」
-  │     └─ 身份键与上轮不同 / 首见 / 上次对齐失败 → 进本轮探测队列
-  ├─ probeChannels()   每轮最多 9 个房间，按上次探测时刻轮转，被挤掉的顺延下一轮
-  │     ├─ getRoomMessages(channelId, 0, 'member')   一页 ROOM_MESSAGE_LIMIT 条
-  │     ├─ 口径 = 只看房主发言（homeowner 端点）且剔除官方系统账号，与渲染层一致
-  │     ├─ 未读 = 列表中比「已读水位」更新的条数；水位那条已沉出本页 → 计到一页封顶
-  │     └─ 首见 / 对齐挂起 → 只把水位推到当下，本轮不计
-  ├─ aggregate()   按成员聚合大 / 小房间贡献
-  ├─ healChannelOwners()   未归属频道自愈（见下）
-  └─ 落盘 + broadcastIpc('pocketUnreadBatch') + app.setBadgeCount
-```
-
-实现约束：
-
-- **预览接口的 `unreadCount` 拿不到，不要按它设计**：该字段要求服务端回完整档，15 组 A/B 探测（pa 三态 × 平台特征头 × 参考实现的真实客户端 profile）全部只回 4 个字段，恒为 `null`；预览回包也没有 `msgTime`。计数只能走消息列表逐条数；
-- **预览身份键只作触发，且探测成功后才推进**：被名额挤掉的频道下一轮仍是「有更新」，不会漏；未被判为「有新消息」的频道一次列表都不拉；
-- **已读水位只有两个推进点**：首见锚定（历史不算未读）与 `markRead`（读到此刻）。检测轮绝不推进水位——否则未读退化成「本轮增量」，无人阅读也会在下一轮归零（角标亮一轮后自行消失，踩过）；
-- **`markRead` 返回清零前的水位，锚点与清零一次完成**：渲染层拿它画「以下是新消息」分割线（按 `msgIdServer` 定位水位那条，找不到退回 `msgTime` 比较）。不要拆成「先取水位、再清零」两次调用——两步之间水位可能被并行清零推进，分割线会整条丢掉。未读条数同理——`markRead` 会乐观清零，条数要在清零前截下；
-- **markRead 分两段**：先按频道清零并立即广播（另一路未读按频道记着，直接沿用，不再为此多拉一轮接口），再拉一页列表把被读频道的水位推到当下。本就没未读的频道跳过这一页；对齐失败则挂起，下一轮检测先对齐再计数；
-- **markRead 不接受渲染层消息 id**：渲染层的消息来自它自己的分页列表，与检测侧对齐用的那次取数不是同一份，混写会让已读复活；
-- **进房即清大房间未读**：点进房间条目（或切回大房间页签），首屏消息加载成功后 `markRead(target='room')`，不等贴底；加载失败 / 空页不清——用户没看到消息，角标保留，重进或重试后再清。小房间未读保留，由它自己的页签入口（暗号解锁后贴底）清。清零与回底配对——进入前大房间有未读时强制滚到底，否则角标没了而新消息还在上面。点已激活的页签不重走进房流程（重取锚点会覆盖原分割线、强制回底会打断上翻）；
-- **贴底即已读，但窗口隐藏期间不标**：贴底时新消息到达（length 监听）、上翻后回到底部（滚动监听）都调 `markRead`；`docVisibility === 'hidden'` 期间一律攒着未读——用户看不见，静默清零等于吞掉未读。回显时若仍贴底，补一次标记（消息就在视口里，不算漏读）；
-- **角标上限 50+**：单频道最多数一页，触顶即「至少这么多」，渲染层按同一条数收敛；条数与口径常量在 `src/common/pocket-rooms.ts`，主进程与渲染层同源。上限只影响角标文案，不影响分割线定位——落点按水位而非条数，水位沉出首屏时由进房补页兜住（见第 9 节）；
-- **检测名单与房间页同口径**：`getFollowedIds()` ∪ 本地关注（`Database.getMemberFlagIds('followed')`）再减本地屏蔽。渲染层房间页用的就是这两份的并集，主进程只认口袋关注时，只在本地关注的成员能进房间页却永远没有大房间记录——未读、小房间发现一起落空（实际踩过）；
-- **被屏蔽成员剔除出检测范围**：检测名单再减本地屏蔽（`Database.getMemberFlagIds('blocked')`，每轮现读，屏蔽 / 解除屏蔽下一轮生效）。剔除后 `ensureChannels` 的取关清理会顺带清掉其频道缓存与未读——屏蔽本身只隐藏直播与回放，管不到未读，不剔除则角标照旧增长；
-- **未读累加需单独触发落盘**：dirty 仅覆盖频道解析/触发锚，遗漏将导致重启后未读数据丢失。
-
-**未归属频道自愈**：`lastMsgList` 回包会出现同 server 下未登记的频道（解析失败的关注成员房间、暗号小房间、非成员互动频道），用 `im/team/room/info` 反查房主——`ownerId` 命中关注名单 → 补进归属表，下一轮生效；`ownerId = 0`（非成员房间）→ 负缓存按 TTL 重试；被暗号拦下（回包带 `questionId`）→ 判定为成员小房间，按「同 server 唯一关注成员」归属，新消息同样计入该成员未读。小房间的主路径是主动枚举频道列表（见第 8 节），这里只兜底 lastMsgList 里出现的频道。
-
-持久化于 `userData/pocket48-unread.json`（SafeJSONFileSync 原子写 + 坏档回退）：频道解析结果（开销最高的环节）随已读水位与按频道的未读一并落盘，重启不重解析、不丢未读、也不把同一页消息重计一遍。
-
-## 8. 小房间与暗号门禁
-
-小房间是成员主频道之外的暗号频道，与大房间同属一个 team server。
-
-**频道发现**：`im/server/jump` 不返回小房间。主进程主动枚举成员 server 的频道列表（seine `server/detail` → `channelInfoList`），对「大房间之外」的频道逐个试 `room/info`：被 `questionId` 拦下的即小房间（公告等普通频道是正常回包，**不能**按「请求成功」反推成小房间）。`lastMsgList` 只在频道有消息时回条，新建 / 换新的小房间在没人说话前根本不会出现，所以被动链路只作兜底。
-
-结果写入 `pocket48-unread.json` 的 `smallChannels`。渲染层选中成员时先读缓存，没有则调 `pocketRefreshSmallChannel(userId)` 立刻枚举一次——发现按 server 节流（5 分钟），反复选中不会反复打接口；检测轮也按同一间隔补扫。故入口异步出现，未发现时不渲染页签。
-
-**失效自愈**：房主更新小房间会换掉 channelId，旧频道随即回「频道不存在」。检测轮探测或渲染层打开该频道收到这个错误时，调 `invalidateSmallChannel(userId)` 清掉 `smallChannels` 条目及其未读/水位/触发锚、放开该 server 的发现间隔并广播；渲染层随后以 `force` 重新发现，**拿到新频道就直接切过去**，只有确实没有小房间了才退回大房间。不清理的话每轮都会对着死频道重打请求，入口也一直指着失效频道。另一种失效是「只删不建」：旧频道已不在 `lastMsgList` 里，探测永远等不到 404，因此枚举时若已登记的频道不在 server 的频道列表里，同样作废（列表非空才判断，接口抽风返回空列表只告警）。渲染层只缓存「已发现」的频道、未发现不缓存（缓存 null 会让新频道等到重启才出现）。
-
-**频道列表缓存**：`getServerChannels` 有 60s 进程内缓存——渲染层取频道名与主进程枚举小房间查的是同一个 `seine/server/detail`，选中成员时两边各要一次。`force` 绕过缓存（旧频道刚失效要立刻看新列表），登录态变化（登出/token 失效）时清空。
-
-**暗号题面**：暗号频道的 `room/info` 恒回业务码 `2001`，`message` 为内嵌 JSON 信封（题面来源）：
-
-```json
-{ "status": 2001, "success": false, "message": "{\"questionId\":\"986\",\"question\":\"层层最喜欢的数字！\"}" }
-```
-
-`2001` 与登录反爬问答同码（`CAPTCHA_STATUS`），`message` 需二次解析。
-
-**作答校验**：`POST im/api/v1/team/channel/question/answer/verify`，body `{ answer, questionId }`。`questionId` 逐题校验：真实 id 配错答回 `{"status":500,"success":false,"message":"回答错误"}`，不存在或缺失 id 回「问题不存在」；`success: true` 即通过。
-
-**锁态与解锁**：解锁状态只存渲染层内存（`unlockedSmallChannels`，`channelId` 为键），重启后重新校验。锁图标由 `smallRequiresAnswer` 判定（与当前视图无关，大房间视图下也常显），输入层由 `smallLocked`（= 小房间视图 && 未解锁）判定；校验失败一律停在锁定层。`MASTER_PASSCODE` 为自用通道（客户端直通、不发起请求），界面不公开。
-
-**频道名**：`jump` 与 `lastMsgList` 均不带频道名，名称取自 seine 频道详情 `im/api/seine/server/detail`（`{ serverId }` → `channelInfoList[].channelName`），一次请求覆盖该 server 下全部频道；取不到时静默回退「房间 / 小房间」。seine 有独立的客户端特征，整档覆盖 `appInfo` / `User-Agent` / `Content-Type` 与 `X-Custom-Device-Type`，`pa` 仍由 `postPocket` 现算；两档特征同源于 `main/pocket48/client-profile.ts`（设备 ID 持久化，跨会话同一台设备；机型取自 `common/android-device.ts`，站点请求 UA 同源）。名称表连 `serverId` 一起存，读取时校验归属。
-
-**界面落点**：频道切换置于 header 右侧（`.room-tab`，激活态用房间青 `--color-rooms`，锁图标常显，未读走全局 `.unread-badge` 数字角标）；消息范围置于消息区右上角（`.chat-tools` / `.scope-tab`，中性配色）。仅剩一条频道时整条页签栏不渲染（`roomTabs.length > 1`）。
-
-## 9. 消息卡的读、抄、看新
-
-这些交互都在 `pages/Rooms.vue`，共同前提是**状态只活在页面内存里**（不落 store，切房即复位）：
-
-| 能力       | 触发                    | 实现要点                                                                                                                                                                                                                                                                            |
-| ---------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 长文折叠   | 正文超过 10 行          | 收起态用 `max-height` 截断（不是 line-clamp）——`scrollHeight` 仍报完整高度，`measureLongText` 才能反复量出「超长」而不抖；行数由 `COLLAPSE_LINES` 注入 `--collapse-lines`                                                                                                           |
-| 复制       | hover 按钮 / 右键菜单   | 取材清单在归一层 `pocketRoomCopyTargets`（正文优先、媒体退化为直链），页面只贴文案与图标；写入走 `utils/clipboard.ts`                                                                                                                                                               |
-| 未读分割线 | 进房（大 / 小房间各自） | 清零前水位由 `markRead` 返回（`markRoomReadCapturing`），按 `msgIdServer` 在水位那条之后插 `.msg-unread-pill`（找不到退回 `msgTime`）；「N 条」取分割线以下可见条数。水位沉出首屏时先补页再落位（见下）。贴底时另给「N 条未读」浮标，用户上翻或点过后让位、分割线保留；换房先清锚点 |
-| 时间分隔   | 跨天 / 同日断档 >5 分钟 | `dividerMap` 一次 O(n) 预计算：跨天出日期文案（今天 / 昨天 / M月D日），同日断档出 `HH:mm`，日期优先；模板只做 O(1) 查表，不逐条解析 dayjs。无 `msgTime` 的消息跳过且不推进基线                                                                                                      |
-| 新消息高亮 | 贴底时轮询 / 推送追加   | 只把「上一条仍在列表里」之后的消息算作新到，切房 / 换范围 / 翻历史都不误判；上翻浏览时不打扰，仍交给浮标计数                                                                                                                                                                        |
-
-**未读分割线的补页兜底**：未读 ≥ 一页时水位那条不在首屏，分割线只能钉在窗口顶（计数侧只报 50+）。`fillUnreadWindow` 复用 prepend 链路静默补拉更早历史（贴底保持贴底、上翻保持视口，最多 4 页），水位补进窗口后分割线落到真实边界、条数一并精确；补满上限仍在窗口外则文案降级为「新消息从更早开始（N 条），上翻继续查看」，继续上翻补进后恢复。锚点对象身份即令牌，换房 / 重进即作废在途补页。
-
-约定：
-
-- **复制只取材用户原文**：`[图片消息]` 一类占位文案与礼物 / 直播分享的合成文案一律不进清单（判据 `isPlaceholderText`，与「语音条下要不要再补一行正文」共用同一份）；
-- 剪贴板写入失败要如实提示，不静默——`navigator.clipboard` 被拒时退回 `execCommand`；
-- hover 复制按钮压在时刻那一格上（绝对定位不占位），显示时把时刻 `visibility: hidden`，否则会从按钮边上露出半截时间戳；
-- 右键菜单视口内回弹（`components/rooms/RoomMessageMenu.vue`），点空白 / 滚动 / Esc / 缩放窗口 / 切页即关；
-- 礼物金的文字色由亮金（`#ffd479` / `#e8b84b`）改为 `color-mix(in srgb, var(--el-color-warning) 50%, #000)`：亮金是从深底弹幕沿用的，叠在浅色底上只有 1.4:1 / 1.9:1，压深后 ≈6:1（与总选「金字金底」同一套处理）。
+本文说明「房间」页的核心架构、跨进程边界、数据流与关键约束。与之并行的直播播放链路见 [live-playback-pipeline.md](./live-playback-pipeline.md)，房间发言与 QChat 协议细节见 [room-message-send.md](./room-message-send.md)。
+
+## 1. 架构定位与分层
+
+房间消息是口袋 App「房间」tab 的成员留言流，与浮窗播放器里的「直播间弹幕」是两套独立体系（QChat / HTTP vs NIM 聊天室）。所有口袋接口经主进程发出，token 不出主进程：
+
+| 层级     | 模块                                                                 | 职责                                                    |
+| -------- | -------------------------------------------------------------------- | ------------------------------------------------------- |
+| 页面层   | `src/renderer/src/pages/Rooms.vue`                                   | 双栏展示、滚动钉底、未读分割线、草稿暂存、门禁与右键菜单 |
+| 编排层   | `src/renderer/src/composables/use-pocket-rooms.ts`                   | 名单合并、排序、首屏水合、消息分页/轮询、QChat 订阅同步 |
+| 协议归一 | `src/renderer/src/utils/pocket-room-message.ts`                      | HTTP 与 QChat 消息统一归一为 `PocketRoomMessageView`    |
+| 预加载桥 | `src/preload/ipc-contract.d.ts` / `src/preload/index.ts`             | 强类型 IPC 契约（与 `register-pocket-ipc.ts` 三处同步） |
+| 主进程   | `pocket-auth.ts` / `pocket-unread.ts` / `pocket-room-qchat.ts`       | 接口请求、未读检测唯一真相、QChat 长连接会话与消息推送  |
+
+## 2. 核心接口（`pocketapi.48.cn`）
+
+| 用途             | 端点                                            | 要点                                                              |
+| ---------------- | ----------------------------------------------- | ----------------------------------------------------------------- |
+| 口袋关注 ID      | `user/api/v1/friendships/friends/id`            | 仅返回 ID 数组，昵称/头像由本地成员目录与 `officialInfo` 反查     |
+| 解析房间频道     | `im/api/v1/im/server/jump`                      | `{ starId, targetType: 1 }` → `{ serverId, channelId }`           |
+| 批量最新消息     | `im/api/v1/team/classic/last/message/get`       | 仅作未读探测触发与左列预览（`msgTime` 恒为 0，`unreadCount` 恒空） |
+| 消息列表         | `im/api/v1/team/message/list/{homeowner,all}`   | `msgTime` 倒序 + `nextTime` 游标；`homeowner` 混入官方号 `121569667` |
+| 精华消息         | `im/api/v1/team/essence/message/list`           | 频道级内容，与消息范围无关；进房时按频道缓存 5 分钟，不随轮询复查 |
+| 频道详情与门禁   | `im/api/v1/im/team/room/info`                   | 房主反查、关闭判定（`hasMsgBoard`）、发言权限（`sendText`/`cdTime`）、门禁定性 |
+| 暗号校验         | `im/api/v1/team/channel/question/answer/verify` | `{ answer, questionId }` → `success: true` 放行                   |
+| Server 频道列表  | `im/api/seine/server/detail`                    | 拉取真实频道名与枚举小房间（主进程 60s 缓存）                     |
+
+## 3. 列表加载、排序与临时房间
+
+- **首灌与复用**：`load()` 先从 `localStorage`（`room-list-snapshot`）首帧水合列表，再并行拉取直播状态与关注名单，通过一次批量 IPC（`pocketGetRoomChannels`）命中主进程持久化频道缓存，最后回填预览并落快照。`KeepAlive` 切回（`onActivated`）时，若成员集合签名未变且在 60s 复用窗口内直接沿用列表；登出或换号时调用 `clearAccountCaches()` 清空账号相关缓存。
+- **名单口径**：`口袋关注 ∪ 本地关注 − 本地屏蔽`（主进程与渲染层同源）。关注与屏蔽正交，屏蔽优先；屏蔽名单或本地关注变化时左列就地同步。官方号回退 `officialInfo` 展示，默认消息范围为 `all`。
+- **七级排序**（`sortRooms`）：临时房间 → 本地置顶 → 已关闭沉底 → 直播中 → 有未读 → 最新未读时刻降序 → 中文昵称。**只在未读「浮上来」时重排**，读掉未读不立即抽走当前条目。
+- **可用性与关闭判定**：
+  - 列表过滤只认 `im/server/jump` 是否返回有效频道（不看语义不明的 `channelStatus`）。
+  - 房间关闭后 `jump` 可能退到直播频道（`hasMsgBoard=0`），此时仍留在左列但标为已关闭并沉底；主进程将关闭前的旧留言频道随快照广播，供「按日期查看」读取历史。
+- **临时房间与深链**：`/rooms?member=<userId>` 命中已关注成员时直接走 `enterRoom(userId, 'query')` 并清掉 query；未关注成员建临时条目（仅存内存、不参与未读），保留 query 维系其生命周期。
+
+## 4. 消息流、轮询与归一化
+
+- **双链路收消息**：
+  - **实时推送（主路径）**：进房即自动订阅 QChat（见 [room-message-send.md](./room-message-send.md)），推送 `24/11`、发送 ACK 与 HTTP 轮询按 `msgIdClient` 三源去重。
+  - **HTTP 轮询（兜底）**：`fetchRoomPage` 统一首屏 `replace`、上翻 `prepend`、增量 `append`。QChat 健康时自动降频到 **30s**，断线切回 **5s**；`KeepAlive` 切去其他页面时暂停定时器并拦截后台推送，切回 `onActivated` 时通过 `pollRoomMessages(true)` 绕过 30s 节流立即补拉。
+- **分页与游标约束**：
+  - `append` 轮询与 QChat 推送**绝不写 `historyCursor`**，也**不判到头**。
+  - 上翻连续 2 次无进展（无新增且游标未前移）才置 `historyExhausted`；游标归 0 时改用最早持有消息的 `msgTime` 兜底探测。
+  - 切换 `只看房主 / 全部消息` 走 `reloadMessagesForScope()`，只复位消息流，保留当前频道与精华缓存。
+- **左列预览所有权**：日常更新由主进程 `pocketUnreadBatch.previews` 镜像广播（替代渲染层自有预览轮询）；选中且在大房间视图的未关闭房间归消息轮询即时维护，批量预览不回写。
+- **归一化要点（`pocket-room-message.ts`）**：
+  - `DELETE` 返回 `null` 过滤；未识别类型降级展示不丢弃；`TEXT` 中不含 `text`/`messageType` 的非空 JSON 字面量原样保留文本（`{}` 返回空串）。
+  - `replyInfo.text` 是本条回复正文，`replyInfo.replyText` 是被引用内容。
+  - 翻牌（`FLIPCARD*`）兼容 `flipCard*` / `filpCard*` 拼写，独立渲染为问答卡（不复用引用块）。
+  - 表情占位符（`[爱心]`）仅在用户原文处映射为 emoji，不对 `[图片消息]` / `[礼物]` 等业务前缀替换。
+
+## 5. 未读检测与已读水位（主进程唯一真相）
+
+`main/pocket48/pocket-unread.ts` 持有全部未读状态并持久化至 `userData/pocket48-unread.json`（原子写），变化经 `pocketUnreadBatch` 广播并同步 Dock / 托盘角标。
+
+- **两步计数（60s 一轮）**：先用批量预览接口比对 `seenKeys` 判「哪些频道有新消息」，再对触发的频道拉一页 `homeowner` 消息（剔除官方号 `121569667`），数出比 `readMarks` 水位更新的条数（单频道封顶 `ROOM_MESSAGE_LIMIT`）。大房间每轮探测，小房间每 5 轮探测一次（首见锚定与 `alignPending` 不降频）；每轮最多探测 9 个频道，按上次探测时刻轮转。
+- **自愈机制**：
+  - 未归属频道通过 `room/info` 反查房主或门禁（`healChannelOwners`），并记录已关闭的历史频道。
+  - 有效大房间按 60 分钟 TTL 定期复核归属（每轮最多 2 个）；有未读且超 30 分钟未探测的频道强制补探并校对归属。
+- **水位与竞态护栏**：
+  - 水位只在**首见锚定**与 **`markRead`** 推进，检测轮绝不推进。
+  - `markRead(userId, target)` 返回清零前的旧水位（供渲染层画分割线），先递增 `markEpoch` 使在途 `probeChannels` 回包作废，再按频道清零、广播，最后拉一页列表对齐水位（失败入 `alignPending` 下轮补齐）。
+- **页面可见性与桌面端 IM 体验**：
+  - 页面可见性定义为 `pageVisible = pageActive && docVisibility === 'visible'`。窗口隐藏或 `KeepAlive` 切去其他页面时一律不标已读；切回可见且有未读时，截旧水位画「以下是 N 条新消息」分割线再清零。
+  - `markRoomReadCapturing` 与 `settleBigRoomEnter` 入口均复核 `selectedUserId` 与 `viewMode`，防止切房/切页签加载中误清未在看频道。
+  - 分割线与底部未读胶囊共用 `unreadShownText`（非 `beyond` 报精确条数，`beyond` 补页触顶后统一走 `50+` 封顶）；水位沉出首屏时由 `fillUnreadWindow` 最多补拉 4 页。
+
+## 6. 小房间与门禁
+
+- **发现与缓存**：主进程通过 `seine/server/detail` 枚举同 server 下非大房间频道并试探 `room/info`，被 `question`（暗号）或 `chicken-leg`（赠送鸡腿）门禁拦下即记入 `smallChannels`（按 server 30 分钟节流，频道失效时 `invalidateSmallChannel` 立即作废并强制重枚举）。同一 server 挂多位关注成员时不猜归属。
+- **门禁定性（`classifyChannelGate`）**：按「暗号信封 → 文案关键字（鸡腿）→ 业务码（2002/2003 贡献/守护）→ `unknown`」顺序判定；门禁拒绝在 `probeChannels` 中不计 `failCount`。
+- **界面与解锁**：页签栏始终渲染（`roomTabs.length > 0`）。暗号门禁提供输入框并通过 `question/answer/verify` 校验（解锁态存渲染层内存）；鸡腿与贡献/守护等不可作答门禁只展示服务端原文与说明，不给输入框。
+
+## 7. 页面级交互约束（`Rooms.vue`）
+
+- **按频道暂存草稿**：以 `${userId}:${viewMode}` 为键暂存输入草稿，切房或切大小房间不串房，登出清空；发送前截下 `sendKey` 防止发送在途切房误清目标房间草稿。
+- **滚动与长文**：`atBottom` 为钉底开关，仅用户主动上滚时退钉，图片/视频加载撑高后自动补贴底；正文超 10 行用 `max-height` 折叠以保持 `scrollHeight` 测量稳定。
+- **按日期查看**：`RoomDateDialog` 走独立只读轨道，不干扰主消息流、已读水位与轮询。

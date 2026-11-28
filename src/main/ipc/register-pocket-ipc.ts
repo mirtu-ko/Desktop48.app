@@ -2,7 +2,7 @@
  * 口袋48账号 IPC 通道注册：只接线，登录/凭证逻辑归 main/pocket48/pocket-auth.ts。
  * 通道清单与 preload/index.ts 的 mainAPI 契约一一对应，两边改动请同步。
  */
-import type { PocketClientProfileId, PocketRoomReplyTarget } from '@preload/ipc-contract'
+import type { PocketRoomReplyTarget } from '@preload/ipc-contract'
 import type { IpcMainInvokeEvent } from 'electron'
 import * as pocketAuth from '../pocket48/pocket-auth'
 import {
@@ -28,7 +28,7 @@ export function registerPocketIPC(): void {
   // 轮询对 token 失效走「整轮冻结、未读不丢」，那是给瞬时网络故障的，真失效不适用
   pocketAuth.setAuthExpiredNotifier(() => {
     pocketUnread.clearAccountUnread()
-    // 房间 QChat 长连接用的是已作废 token 的旧档身份，一并断掉
+    // 房间 QChat / 聊天室长连接用的是已作废 token，一并断掉
     resetRoomQChatSessions()
     broadcastIpc('pocketAuthExpired')
   })
@@ -37,21 +37,18 @@ export function registerPocketIPC(): void {
     mobile: string,
     area?: string,
     answer?: string,
-    clientProfile?: PocketClientProfileId,
-  ) => pocketAuth.sendSms(mobile, area, answer, clientProfile))
+  ) => pocketAuth.sendSms(mobile, area, answer))
   handleTraced('pocketLoginByCode', (
     _event: IpcMainInvokeEvent,
     mobile: string,
     code: string,
     area?: string,
-    clientProfile?: PocketClientProfileId,
-  ) => pocketAuth.loginByCode(mobile, code, area, clientProfile))
+  ) => pocketAuth.loginByCode(mobile, code, area))
   handleTraced('pocketLoginByToken', (
     _event: IpcMainInvokeEvent,
     token: string,
     mobile?: string,
-    clientProfile?: PocketClientProfileId,
-  ) => pocketAuth.loginByToken(token, mobile, clientProfile))
+  ) => pocketAuth.loginByToken(token, mobile))
   handleTraced('pocketGetAuthState', () => pocketAuth.getAuthState())
   handleTraced('pocketLogout', () => {
     // 凭证既然要删，按该凭证建立的聊天室长连接（含进房身份）也一并断掉
@@ -87,8 +84,7 @@ export function registerPocketIPC(): void {
   // 取关清理仍只归检测轮（子集调用不删名单外成员）
   handleTraced('pocketGetRoomChannels', (_event: IpcMainInvokeEvent, userIds: number[]) =>
     pocketUnread.getRoomChannelsBatch(userIds))
-  // 房间发言权限（room/info 的 userFunction）：房主开房间级禁言时 sendText=false。
-  // 渲染层据此在输入框直接显示禁言、并且不再引导 QChat 建连（建连会顶掉手机端）
+  // 房间发言权限（room/info 的 userFunction）：房主开房间级禁言时 sendText=false，渲染层据此在输入框直接显示禁言态
   handleTraced('pocketGetRoomPermissions', (_event: IpcMainInvokeEvent, channelId: string) =>
     pocketAuth.getRoomPermissions(channelId))
   handleTraced('pocketGetRoomMessages', (
@@ -127,9 +123,12 @@ export function registerPocketIPC(): void {
   // 重新发现小房间：选中成员时本地还没发现，或旧频道刚失效（force 绕过发现间隔）
   handleTraced('pocketRefreshSmallChannel', (_event: IpcMainInvokeEvent, userId: number, force = false) =>
     pocketUnread.refreshSmallChannel(userId, force))
-  // 小房间暗号：问题拉取（room/info 拦截信封）+ 作答校验（万能密码客户端直通）
+  // 小房间门禁：问题拉取（room/info 拦截信封）+ 作答校验（万能密码客户端直通）
   handleTraced('pocketGetRoomQuestion', (_event: IpcMainInvokeEvent, channelId: string) =>
     pocketAuth.getRoomQuestion(channelId))
+  // 门禁定性（含非暗号门禁：赠送鸡腿 / 贡献 / 守护）：锁态与提示文案都读这一份
+  handleTraced('pocketGetRoomGate', (_event: IpcMainInvokeEvent, channelId: string) =>
+    pocketAuth.getRoomGate(channelId))
   handleTraced('pocketCheckRoomAnswer', (_event: IpcMainInvokeEvent, channelId: string, questionId: string, answer: string) =>
     pocketAuth.checkRoomAnswer(channelId, questionId, answer))
   // 房间消息发送（QChat 圈组长连接，见 pocket-room-qchat.ts）：进房订阅 / 离房退订 /

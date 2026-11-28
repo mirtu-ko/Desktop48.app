@@ -13,12 +13,17 @@ export interface MediaShortcutActions {
   rotateLeft: () => void
   rotateRight: () => void
   resetRotation: () => void
+  /** ↑：音量 + 一步（步进与解除静音由宿主负责） */
+  volumeUp: () => void
+  /** ↓：音量 - 一步 */
+  volumeDown: () => void
 }
 
 /**
  * 按键分派（纯逻辑）：识别并执行快捷键动作。
  * 返回 true 表示已消费（调用方应 preventDefault），false 表示不认识/不应处理。
- * 直播场景仅需要旋转族快捷键（seek/音量对直播流无意义），通过 actions 传 partial 即可。
+ * 各宿主按需传 actions（partial）：不传对应动作的键不响应。
+ * 音量走宿主动作而非直接写 mediaElement.volume —— 解除静音、同步滑块都只有宿主知道。
  */
 export function dispatchMediaShortcut(
   event: KeyboardEvent,
@@ -46,28 +51,24 @@ export function dispatchMediaShortcut(
         return false
       break
     case 'ArrowLeft':
-      if (mediaElement)
-        mediaElement.currentTime = Math.max(0, mediaElement.currentTime - 5)
-      else
+      if (!mediaElement)
         return false
+      mediaElement.currentTime = Math.max(0, mediaElement.currentTime - 5)
       break
     case 'ArrowRight':
-      if (mediaElement)
-        mediaElement.currentTime = mediaElement.currentTime + 5
-      else
+      if (!mediaElement)
         return false
+      mediaElement.currentTime = mediaElement.currentTime + 5
       break
     case 'ArrowUp':
-      if (mediaElement)
-        mediaElement.volume = Math.min(1, mediaElement.volume + 0.1)
-      else
+      if (!actions.volumeUp)
         return false
+      actions.volumeUp()
       break
     case 'ArrowDown':
-      if (mediaElement)
-        mediaElement.volume = Math.max(0, mediaElement.volume - 0.1)
-      else
+      if (!actions.volumeDown)
         return false
+      actions.volumeDown()
       break
     case 'f':
     case 'F':
@@ -99,7 +100,7 @@ export function dispatchMediaShortcut(
 
 /** 窗口级快捷键：OS 激活哪个播放窗，keydown 就只到哪个 window */
 export function useMediaShortcuts(options: {
-  /** 当前媒体元素：方向键 seek / 调音量直接操作它 */
+  /** 当前媒体元素：←/→ seek 直接操作它（音量走 actions） */
   getMedia: () => HTMLMediaElement | null
   actions: Partial<MediaShortcutActions>
   /** 额外的启用条件（如电台直播不接旋转键） */

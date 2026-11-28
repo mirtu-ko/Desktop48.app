@@ -114,12 +114,11 @@ vi.mock('../src/main/pocket48/pocket-auth', () => ({
     const permission = authMock.permissions[channelId]
     return permission ? { sendText: true, roomRole: '0', followFlag: true, hasMsgBoard: true, ...permission } : null
   },
-  currentClientProfile: () => 'pocket48',
   expireStoredAuth: expireAuthMock,
 }))
 
 vi.mock('../src/main/pocket48/client-profile', () => ({
-  nimIdentityFor: () => ({ sdkVersion: 92012, packageName: 'com.pocket.snh48.activity' }),
+  nimIdentity: () => ({ sdkVersion: 92110, packageName: 'com.seine48.app' }),
 }))
 
 vi.mock('../src/main/ipc/send', () => ({
@@ -476,5 +475,71 @@ describe('pocket-room-qchat / 发送', () => {
 
   it('未订阅的频道：拒绝发送（防切房后发到旧频道）', async () => {
     await expect(sendRoomMessage('999', '888', '在吗')).rejects.toThrow('房间连接已失效，请重新进入房间')
+  })
+})
+
+describe('pocket-room-qchat / 广播去重与并发订阅', () => {
+  it('切房双订窗口期内，同一窗口只收到一次状态事件且消息按频道隔离', async () => {
+    const winA = fakeSender()
+    const winB = fakeSender()
+    await handleRoomQChatEnter('111', '222', winA)
+    await handleRoomQChatEnter('111', '333', winA)
+    await handleRoomQChatEnter('111', '333', winB)
+
+    sendMock.calls.length = 0
+    const instance = clientMock.instances[0]
+    ;(instance.options.onReconnecting as ((attempt: number) => void))(1)
+
+    // winA 同时在两个频道下，状态事件去重后只推一次；winB 也只推一次
+    expect(sendMock.calls.filter(call => call[0] === winA)).toHaveLength(1)
+    expect(sendMock.calls.filter(call => call[0] === winB)).toHaveLength(1)
+
+    sendMock.calls.length = 0
+    ;(instance.options.onMessage as ((msg: Record<string, unknown>) => void))({
+      serverId: '111',
+      channelId: '222',
+      fromAccount: 'star',
+      fromClientType: 0,
+      fromNick: '成员',
+      type: 0,
+      body: '你好',
+      attachment: '',
+      ext: '',
+      msgIdClient: 'c1',
+      msgIdServer: 's1',
+      time: 1728000010,
+    })
+
+    // 频道 222 的消息只推给订阅了 222 的 winA，不推给只订 333 的 winB
+    expect(sendMock.calls.filter(call => call[0] === winA)).toHaveLength(1)
+    expect(sendMock.calls.filter(call => call[0] === winB)).toHaveLength(0)
+  })
+
+  it('并发进入同一新频道时，后进者等待在途订阅完成后才返回 ok', async () => {
+    const winA = fakeSender()
+    const winB = fakeSender()
+    let releaseSubscribe!: () => void
+    clientMock.subscribeImpl = () => new Promise<void>((resolve) => {
+      releaseSubscribe = resolve
+    })
+
+    const enterA = handleRoomQChatEnter('111', '222', winA)
+    await vi.waitFor(() => expect(releaseSubscribe).toBeTypeOf('function'))
+
+    let enterBDone = false
+    const enterB = handleRoomQChatEnter('111', '222', winB).then((res) => {
+      enterBDone = true
+      return res
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+    // 在途订阅未结束前，后进者不得提前返回 ok
+    expect(enterBDone).toBe(false)
+
+    releaseSubscribe()
+    await expect(enterA).resolves.toEqual({ ok: true })
+    await expect(enterB).resolves.toEqual({ ok: true })
+    expect(enterBDone).toBe(true)
+    expect(clientMock.instances[0].subscribeCalls).toHaveLength(1)
   })
 })

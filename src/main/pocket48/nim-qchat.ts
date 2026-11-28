@@ -13,11 +13,10 @@
  * - 请求/响应靠 serial + 服务号/指令号匹配（serial 从 2 起，32767 回绕），单请求 12s 超时；
  * - 心跳 1/2（15s，两条连接各自发）；任一条异常断开即整体重连（QChat 地址需重新索取）。
  *
- * 登录身份（SDK 版本 + 包名）取当前档位（client-profile.ts 的 nimIdentityFor），
- * 与聊天室、HTTP 同档——参考实现的 QChat 文件报的是旧版 seine SDK，档位口径以本项目为准。
+ * 登录身份（SDK 版本 + 包名）取 client-profile.ts 的 `nimIdentity()`（塞纳河48 APK），
+ * 与聊天室、HTTP 同源——参考实现的 QChat 文件报的是旧版 seine SDK，本项目口径以 client-profile 为准。
  *
  * 终端类型（属性 3）恒为 AOS：两个官方 App 都是 Android 客户端，忠实模拟即报 AOS。
- * 注意 `2/2` 是账号级登录，建连会顶掉同账号的其他在线设备，故房间页默认不连、确认后才连。
  *
  * 会话骨架（握手 → 登录 → 请求/响应 + 心跳）见 nim-session.ts，本文件只保留 QChat 协议族。
  */
@@ -430,7 +429,7 @@ export class NimQChatClient {
 
   /**
    * 双会话建立 + 订阅恢复；任一步失败即整体作废（静默清理，不触发重连）。
-   * 登录身份恒为 AOS（属性 3 = 1，见 buildNimLoginPacket）；这一步会顶掉同账号的其他在线设备。
+   * 登录身份恒为 AOS（属性 3 = 1，见 buildNimLoginPacket）。
    */
   private async establish(): Promise<void> {
     const { appKey, account, token, nim } = this.options
@@ -464,8 +463,9 @@ export class NimQChatClient {
       if (!qchatAddresses.length)
         throw new Error('云信没有返回 QChat 连接地址')
 
+      const qchatAddress = qchatAddresses[this.reconnectAttempt % qchatAddresses.length]
       const qchatSession = this.createSession({
-        address: parseTcpAddress(qchatAddresses[0]),
+        address: parseTcpAddress(qchatAddress),
         loginPacket: buildQChatLoginPacket({ appKey, account, token, deviceId, nim }),
         loginServiceId: SERVICE_QCHAT,
         loginCommandId: CMD_QCHAT_LOGIN,
@@ -538,9 +538,7 @@ export class NimQChatClient {
       return
     if (this.stopped)
       return
-    this.connected = false
-    this.nimSession?.destroy()
-    this.qchatSession?.destroy()
+    this.destroySessions()
     if (!this.everConnected)
       return
     this.options.onDisconnected?.()

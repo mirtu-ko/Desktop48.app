@@ -4,11 +4,9 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   clientHeaders,
-  nimIdentityFor,
-  POCKET48_ANDROID,
-  POCKET_CLIENT_PROFILES,
+  nimIdentity,
+  POCKET_CLIENT,
   pocketDeviceId,
-  SEINE48_ANDROID,
 } from '../src/main/pocket48/client-profile'
 
 /**
@@ -87,77 +85,48 @@ describe('client-profile / 设备 ID 持久化', () => {
 })
 
 describe('client-profile / 公共头', () => {
-  it('主 App（pocket48）Android 档：UA / Content-Type / appInfo 与真实客户端一致', () => {
-    const headers = clientHeaders(POCKET48_ANDROID)
+  it('唯一身份为塞纳河48 Android 档：UA / Content-Type / 专属头与真实客户端一致', () => {
+    const headers = clientHeaders()
     expect(headers['User-Agent'])
-      .toBe('PocketFans201807/7.1.44_26092001 (23013RK75C:Android 14;Xiaomi UKQ1.231003.002 release-keys)')
+      .toBe('PocketFans201807/1.3.4_26092001 (23013RK75C:Android 14;Xiaomi UKQ1.231003.002 release-keys)')
     // Android 档的写法带空格且 UTF-8 大写，勿「顺手统一」成 iOS 档的紧写形式
     expect(headers['Content-Type']).toBe('application/json; charset=UTF-8')
     expect(headers['Accept-Language']).toBe('zh-Hans-CN;q=1')
-    expect(headers.appInfo).toBe(JSON.stringify({
-      IMEI: pocketDeviceId(),
-      appBuild: '26092001',
-      appName: 'pocket48',
-      appVersion: '7.1.44',
-      deviceId: pocketDeviceId(),
-      deviceName: '23013RK75C',
-      osType: 'android',
-      osVersion: '14',
-      phoneName: '23013RK75C',
-      phoneSystemVersion: '14',
-      vendor: 'Xiaomi',
-    }))
-  })
-
-  it('seine48 Android 档：独立特征并带专属 Device-Type 头', () => {
-    const headers = clientHeaders(SEINE48_ANDROID)
-    expect(headers['User-Agent'])
-      .toBe('PocketFans201807/1.3.4_26092001 (23013RK75C:Android 14;Xiaomi UKQ1.231003.002 release-keys)')
     expect(headers['X-Custom-Device-Type']).toBe('ANDROID')
-    const appInfo = JSON.parse(headers.appInfo)
-    expect(appInfo).toMatchObject({
-      appName: 'seine48',
+    // 键顺序与实测回包一致，故整体断言
+    expect(headers.appInfo).toBe(JSON.stringify({
       appVersion: '1.3.4',
       appBuild: 26092001,
       osType: 'android',
-    })
+      appName: 'seine48',
+      deviceId: pocketDeviceId(),
+      deviceName: '23013RK75C',
+      osVersion: '14',
+      vendor: 'Xiaomi',
+      IMEI: pocketDeviceId(),
+      phoneName: '23013RK75C',
+      phoneSystemVersion: '14',
+    }))
   })
 
-  it('两档共用同一台设备（同一设备 ID），且都不自带 token / pa', () => {
-    const main = JSON.parse(clientHeaders(POCKET48_ANDROID).appInfo)
-    const seine = JSON.parse(clientHeaders(SEINE48_ANDROID).appInfo)
-    expect(seine.deviceId).toBe(main.deviceId)
-    expect(seine.IMEI).toBe(main.IMEI)
-    for (const headers of [clientHeaders(POCKET48_ANDROID), clientHeaders(SEINE48_ANDROID)]) {
-      expect(headers).not.toHaveProperty('token')
-      expect(headers).not.toHaveProperty('pa')
-    }
+  it('hTTP 与云信共用同一台设备（同一设备 ID），公共头不自带 token / pa', () => {
+    const headers = clientHeaders()
+    const appInfo = JSON.parse(headers.appInfo)
+    expect(appInfo.deviceId).toBe(appInfo.IMEI)
+    expect(appInfo.deviceId).toBe(pocketDeviceId())
+    expect(headers).not.toHaveProperty('token')
+    expect(headers).not.toHaveProperty('pa')
   })
 })
 
 describe('client-profile / 云信聊天室身份', () => {
-  it('包名与 SDK 版本取自各档自己的官方 APK（Web SDK 被服务端拒）', () => {
-    // 口袋48 7.1.44 APK：applicationId com.pocket.snh48.activity + 云信 SDK 9.20.12
-    expect(nimIdentityFor('pocket48')).toEqual({
-      sdkVersion: 92012,
-      packageName: 'com.pocket.snh48.activity',
-    })
+  it('包名与 SDK 版本取自塞纳河48 官方 APK（Web SDK 被服务端拒）', () => {
     // 塞纳河48 1.3.4 APK：包名 com.seine48.app + 云信 SDK 9.21.10
-    expect(nimIdentityFor('seine48')).toEqual({
+    expect(nimIdentity()).toEqual({
       sdkVersion: 92110,
       packageName: 'com.seine48.app',
     })
-  })
-
-  it('每档都必须登记云信身份，且两档取值不同（否则档位切换对聊天室无效）', () => {
-    for (const profile of Object.values(POCKET_CLIENT_PROFILES)) {
-      expect(profile.nim.sdkVersion).toBeGreaterThan(0)
-      expect(profile.nim.packageName).toMatch(/^[a-z][a-z0-9_.]+$/)
-    }
-    expect(POCKET_CLIENT_PROFILES.pocket48.nim).not.toEqual(POCKET_CLIENT_PROFILES.seine48.nim)
-  })
-
-  it('未知档位回退默认档的云信身份', () => {
-    expect(nimIdentityFor('nope' as never)).toEqual(nimIdentityFor('pocket48'))
+    // 与 HTTP 请求同源：TCP 与 HTTP 报的是同一家客户端
+    expect(nimIdentity()).toBe(POCKET_CLIENT.nim)
   })
 })

@@ -45,13 +45,13 @@ describe('common/feedback', () => {
         arch: 'x64',
         electron: '44.5.1',
         locale: 'zh-CN',
-        clientProfile: 'pocket48-android',
+        clientProfile: '塞纳河48',
         loggedIn: true,
       }, new Date('2026-11-07T01:30:00'))
 
       expect(text).toContain('应用版本: v0.2.8')
       expect(text).toContain('运行环境: win32 x64 · Electron 44.5.1')
-      expect(text).toContain('客户端身份: pocket48-android')
+      expect(text).toContain('客户端身份: 塞纳河48')
       expect(text).toContain('登录状态: 已登录')
       // 摘要只报布尔登录态，不得出现手机号等账号字段
       expect(text).not.toContain('手机')

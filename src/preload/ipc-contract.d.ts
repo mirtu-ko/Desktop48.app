@@ -14,7 +14,6 @@ import type { FeedbackInput, FeedbackMetaResponse } from '@common/feedback'
 import type { LiveDanmaku } from '@common/live-danmaku'
 import type { MemberFlag, MemberFlagKind } from '@common/member-flags'
 import type { MemberTeamPromotion } from '@common/member-team-promotion'
-import type { PocketClientProfileId } from '@common/pocket-client-profile'
 import type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctItem, StarInfoItem } from '../main/data'
 import type { FfmpegProblem, FfmpegSource, FfmpegStatus } from '../main/ffmpeg/ffmpeg-process'
 import type { TaskSnapshot } from '../main/ffmpeg/task-registry'
@@ -52,8 +51,6 @@ export type { AllMemberItem, MemberDataContent, OfficialInfoItem, StarAdjunctIte
 export type { MemberFlag, MemberFlagKind }
 // 预备生的本地升格：ownerId 只留在主进程，跨进程只传升格内容
 export type { MemberTeamPromotion }
-// 客户端身份档位（口袋48 / 塞纳河48）：跨进程传递与界面选项共用，来源 common
-export type { PocketClientProfileId }
 export type MemberInfo = StarInfoItem & { teamColor: string }
 
 /**
@@ -282,8 +279,6 @@ export interface PocketAuthState {
   userId: string
   /** 脱敏手机号（139****1234）；空串表示未记住 */
   mobileMasked: string
-  /** 当前登录身份档位（模拟的官方客户端）；未登录时为默认档 */
-  clientProfile: PocketClientProfileId
   /** true = 平台无安全加密能力，token 以明文落盘（仅提示用） */
   plainFallback: boolean
   /** 凭证保存时间（ms 时间戳）；0 = 无记录，供设置页展示「已保存 N 天」 */
@@ -363,6 +358,21 @@ export interface PocketServerChannel {
 export interface PocketRoomQuestion {
   questionId: string
   question: string
+}
+
+/**
+ * 小房间门禁种类（主进程 classifyChannelGate 定性）：question 可作答，
+ * chicken-leg / contribution 不可作答，unknown 是其余业务拒绝。
+ */
+export type PocketRoomGateKind = 'question' | 'chicken-leg' | 'contribution' | 'unknown'
+
+/** 小房间门禁（room/info 失败回包的定性结果）；null = 无门禁 */
+export interface PocketRoomGate {
+  kind: PocketRoomGateKind
+  /** 服务端业务码（status）；回包没给时省略 */
+  status?: number
+  /** 服务端原文（question 类型为空串：它的 message 是 JSON 信封，题面另有 question 字段） */
+  message: string
 }
 
 /** 暗号提交结果（主进程对端：pocket-auth.checkRoomAnswer） */
@@ -647,11 +657,11 @@ interface StaticIpcInvokeMap {
   // ===== 口袋48账号 =====
   // 对端：main/ipc/register-pocket-ipc.ts；登录与凭证存储在 main/pocket48/pocket-auth.ts
   /** 发送登录验证码；命中反爬问答题时返回 needCaptcha=true 与题目选项 */
-  pocketSendSms: InvokeSpec<[mobile: string, area?: string, answer?: string, clientProfile?: PocketClientProfileId], PocketSmsResult>
-  /** 验证码登录；clientProfile 为本轮选定的身份档位，随凭证保存；失败以 reject 报错 */
-  pocketLoginByCode: InvokeSpec<[mobile: string, code: string, area?: string, clientProfile?: PocketClientProfileId], PocketAuthState>
+  pocketSendSms: InvokeSpec<[mobile: string, area?: string, answer?: string], PocketSmsResult>
+  /** 验证码登录；失败以 reject 报错 */
+  pocketLoginByCode: InvokeSpec<[mobile: string, code: string, area?: string], PocketAuthState>
   /** 粘贴 token 登录：主进程校验有效后落盘；无效以 reject 报错 */
-  pocketLoginByToken: InvokeSpec<[token: string, mobile?: string, clientProfile?: PocketClientProfileId], PocketAuthState>
+  pocketLoginByToken: InvokeSpec<[token: string, mobile?: string], PocketAuthState>
   /** 当前登录态（读本地凭证，不做网络校验） */
   pocketGetAuthState: InvokeSpec<[], PocketAuthState>
   /** 退出登录：删除本地凭证 */
@@ -711,6 +721,11 @@ interface StaticIpcInvokeMap {
   pocketRefreshSmallChannel: InvokeSpec<[userId: number, force?: boolean], PocketRoomChannel | null>
   /** 拉取小房间的暗号问题；null = 无门禁（room/info 未被拦），其余错误 reject */
   pocketGetRoomQuestion: InvokeSpec<[channelId: string], PocketRoomQuestion | null>
+  /**
+   * 拉取小房间门禁（含非暗号门禁：赠送 / 贡献 / 守护）；null = 无门禁。
+   * 与 pocketGetRoomQuestion 是同一个 room/info，区别只在失败时返回定性结果而不是抛错。
+   */
+  pocketGetRoomGate: InvokeSpec<[channelId: string], PocketRoomGate | null>
   /**
    * 提交小房间暗号：走服务端校验端点，success 才算通过（via=server）；
    * 万能密码为开发者自用通道（via=master，不发起请求）；接口不可达时 reason=unverified。

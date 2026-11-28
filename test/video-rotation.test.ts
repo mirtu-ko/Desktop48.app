@@ -16,6 +16,9 @@ interface FakeVideo {
   videoWidth: number
   videoHeight: number
   paused: boolean
+  /** 真实 media 元素带 volume / muted，音量用例直接读这两项 */
+  volume: number
+  muted: boolean
   play: () => Promise<void>
   pause: () => void
   addEventListener: ReturnType<typeof vi.fn>
@@ -35,6 +38,8 @@ function makeVideo(width = 1920, height = 1080): FakeVideo {
     videoWidth: width,
     videoHeight: height,
     paused: false,
+    volume: 1,
+    muted: false,
     play: () => Promise.resolve(),
     pause: () => {},
     addEventListener: vi.fn(),
@@ -194,5 +199,85 @@ describe('useVideoRotation 画面矩形', () => {
     expect(rect?.height).toBe(500)
     expect(rect?.width).toBeCloseTo(281.25, 1)
     expect(rect?.left).toBeCloseTo(359.38, 1)
+  })
+})
+
+describe('useVideoRotation 音量', () => {
+  function changeEvent(media: FakeVideo): Event {
+    return { target: media } as unknown as Event
+  }
+
+  it('↑ 每次加一步并同步 volume ref，↓ 一致', () => {
+    const { rotation, video } = mount()
+    video.volume = 0.5
+
+    rotation.adjustVolume(rotation.VOLUME_STEP)
+    rotation.onVolumeChange(changeEvent(video))
+    expect(video.volume).toBeCloseTo(0.55, 5)
+    expect(rotation.volume.value).toBeCloseTo(0.55, 5)
+
+    rotation.adjustVolume(-rotation.VOLUME_STEP)
+    expect(video.volume).toBeCloseTo(0.5, 5)
+  })
+
+  it('夹在 0~1，且浮点累加不留误差', () => {
+    const { rotation, video } = mount()
+    video.volume = 0.97
+
+    rotation.adjustVolume(rotation.VOLUME_STEP)
+    expect(video.volume).toBe(1)
+    video.volume = 0.02
+    rotation.adjustVolume(-rotation.VOLUME_STEP)
+    expect(video.volume).toBe(0)
+  })
+
+  it('静音态下按 ↑ 先恢复静音前音量再加一步，不会从 0 起步', () => {
+    const { rotation, video } = mount()
+    video.volume = 0.6
+    rotation.onVolumeChange(changeEvent(video))
+    video.muted = true
+    rotation.onVolumeChange(changeEvent(video))
+    expect(rotation.muted.value).toBe(true)
+    // 静音期间把音量改小，静音前音量不受影响
+    video.volume = 0.1
+    rotation.onVolumeChange(changeEvent(video))
+
+    rotation.adjustVolume(rotation.VOLUME_STEP)
+
+    expect(video.muted).toBe(false)
+    expect(video.volume).toBeCloseTo(0.65, 5)
+    expect(rotation.volume.value).toBeCloseTo(0.65, 5)
+  })
+
+  it('滑块拖到 0 时同步将 media 音量归零；静音态拖回正值解除静音', () => {
+    const { rotation, video } = mount()
+    video.volume = 0.8
+    rotation.onVolumeChange(changeEvent(video))
+
+    rotation.onVolumeSliderInput(0)
+    expect(rotation.volume.value).toBe(0)
+    expect(video.volume).toBe(0)
+
+    video.muted = true
+    rotation.onVolumeChange(changeEvent(video))
+    rotation.onVolumeSliderInput(0.3)
+    expect(video.muted).toBe(false)
+    expect(video.volume).toBeCloseTo(0.3, 5)
+    expect(rotation.volume.value).toBeCloseTo(0.3, 5)
+  })
+
+  it('静音且音量为 0 时取消静音会补回音量，而不是停在 0', () => {
+    const { rotation, video } = mount()
+    video.volume = 0.7
+    rotation.onVolumeChange(changeEvent(video))
+    video.muted = true
+    video.volume = 0
+    rotation.onVolumeChange(changeEvent(video))
+
+    rotation.toggleMute()
+
+    expect(video.muted).toBe(false)
+    expect(video.volume).toBeCloseTo(0.7, 5)
+    expect(rotation.volume.value).toBeCloseTo(0.7, 5)
   })
 })

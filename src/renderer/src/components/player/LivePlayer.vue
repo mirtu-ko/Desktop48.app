@@ -122,6 +122,7 @@ const {
   videoWrapperStyle,
   videoStyle,
   rotateHint,
+  shortcutHint,
   rotateLeft,
   rotateRight,
   resetRotation,
@@ -130,8 +131,12 @@ const {
   toggleFullscreen,
   playing,
   muted,
+  volume,
   togglePlay,
   toggleMute,
+  onVolumeSliderInput,
+  adjustVolume,
+  VOLUME_STEP,
   onVolumeChange,
   updateVideoDimensions,
 } = useVideoRotation({
@@ -151,6 +156,11 @@ watch(playing, value => emit('playing', value))
 // 公演（open）只用 B 站弹幕（房间号由 payload 携带）；个人直播（user）只用口袋48互动消息
 // （聊天室 ID 由详情接口携带，需登录且直播进行中）。两类互不混用。
 const danmakuRoomId = computed(() => (props.source === 'open' && props.bilibiliRoomId > 0 ? props.bilibiliRoomId : undefined))
+/**
+ * 弹幕开关只管「看不看得见」，不管「连不连」：关闭时只收起气泡层，
+ * 订阅照旧（enabled 恒为 true），互动榜 / 在线人数 / 下播推送等同一路上的消息不受影响，
+ * 重新打开也无需重连。发送入口在收起时一并隐去（见 canSendDanmaku）。
+ */
 const danmakuEnabled = ref(true)
 // 摆放偏好是全局单例，读一次即可（两个播放器并发调用共用同一次 IPC）
 void ensureDanmakuPlacement()
@@ -241,7 +251,7 @@ const showDanmaku = computed(() => hasDanmakuRoom.value && danmakuEnabled.value)
 /** 弹幕开关：翻转并上报使用率（只记用户主动切换，不记初始状态） */
 function toggleDanmaku() {
   danmakuEnabled.value = !danmakuEnabled.value
-  // 关闭弹幕即停口袋会话，输入条没有可发通道，一并收起
+  // 只收起输入条，不断开连接：气泡层随开关隐藏，口袋会话与互动榜照旧
   if (!danmakuEnabled.value)
     composing.value = false
   trackEvent('danmaku:toggle', { enabled: danmakuEnabled.value ? 'on' : 'off' })
@@ -311,7 +321,9 @@ const { danmakuItems, stop: stopDanmaku, sendBarrage, pocketStatus } = useLiveDa
   roomId: () => danmakuRoomId.value,
   liveId: () => props.liveId,
   pocketRoomId: () => pocketChatroomId.value,
-  enabled: () => danmakuEnabled.value,
+  // 连接恒开：气泡层的显隐由 danmakuEnabled 单独控制（隐藏消息 ≠ 断开互动会话），
+  // 关掉弹幕后再开会话会让互动榜、在线人数、下播推送一并失联
+  enabled: () => true,
   onRank: (users) => {
     rankUsers.value = users
     debugLog('rankUsers', users)
@@ -334,12 +346,13 @@ const { danmakuItems, stop: stopDanmaku, sendBarrage, pocketStatus } = useLiveDa
 // ── 弹幕发送 ────────────────────────────────────────────────────
 // 发送走播放器已建立的同一条聊天室会话（13/6），因此入口只在「个人直播 + 已登录 +
 // 已拿到聊天室 ID」时出现；公演用的是 B 站弹幕，没有可写通道。
+// 隐藏消息不影响发送：会话一直在，按钮常驻，发出去的消息照样送达
 const canSendDanmaku = computed(() => props.source === 'user'
   && pocketAuthState.value.loggedIn
   && !!pocketChatroomId.value
   && !liveEnded.value
   && !loadFailed.value)
-/** 输入条展开态：弹幕关掉后口袋会话也会停，此时不留一个发不出去的输入框 */
+/** 输入条展开态：隐藏消息时收起（气泡层已收，输入条没有落点） */
 const danmakuComposeOpen = computed(() => canSendDanmaku.value && danmakuEnabled.value && composing.value)
 
 /** 展开/收起输入条；展开后立刻聚焦，少一次点击 */
@@ -786,10 +799,16 @@ const { running: recording, onActionClick: onRecordClick } = useMediaDownload({
 
 // ── 键盘快捷键（窗口级监听：按键只到 OS 激活的播放窗） ──────────────────────
 // 按键分派与 PlaybackPlayer 共用 useMediaShortcuts（键位单源）；
-// 直播场景只接旋转族快捷键（seek/音量对直播流无意义，不传对应 action 即不响应）
+// 直播不接 ←/→（seek 对直播无意义）；↑/↓ 音量作用于本地 media，直播同样有效
 useMediaShortcuts({
   getMedia: () => null,
-  actions: { rotateLeft, rotateRight, resetRotation },
+  actions: {
+    rotateLeft,
+    rotateRight,
+    resetRotation,
+    volumeUp: () => adjustVolume(VOLUME_STEP),
+    volumeDown: () => adjustVolume(-VOLUME_STEP),
+  },
   isEnabled: () => !isRadio.value,
 })
 
@@ -1049,17 +1068,19 @@ onUnmounted(() => {
         v-if="!mediaLoading && !liveEnded"
         :playing="playing"
         :muted="muted"
+        :volume="volume"
+        :hint="shortcutHint"
         :is-fullscreen="isFullscreen"
         @toggle-play="togglePlay"
         @toggle-mute="toggleMute"
+        @volume-change="onVolumeSliderInput"
         @toggle-fullscreen="toggleFullscreen"
       >
         <template #leading>
-          <!-- 发送弹幕排在最左：直播里它是最高频的主动操作，放最外侧先够到；
-               展开态与弹幕开关同一条高亮规则。弹幕关掉时一并隐藏：口袋会话已停，
-               留着只会是个点不动的入口 -->
+          <!-- 发送弹幕排在控制条最左：直播里它是最高频的主动操作，放最外侧先够到。
+               隐藏消息时按钮照常保留（会话未断，仍可发送），只有输入条会随开关收起 -->
           <button
-            v-if="canSendDanmaku && danmakuEnabled"
+            v-if="canSendDanmaku"
             class="player-capsule__btn danmaku-send-toggle"
             :class="{ 'is-on': danmakuComposeOpen }"
             :title="danmakuComposeOpen ? '收起弹幕输入' : '发送弹幕'"
@@ -1070,13 +1091,13 @@ onUnmounted(() => {
           </button>
 
           <!-- 弹幕开关：录播窗口没有发送入口，它是最左一枚；直播里让位给发送钮，
-               两者同属「互动」语义，仍相邻常驻 -->
+               两者同属「互动」语义，仍相邻常驻。只切显隐，不断开互动会话 -->
           <button
             v-if="hasDanmakuRoom"
             class="player-capsule__btn danmaku-toggle"
             :class="{ 'is-on': danmakuEnabled }"
-            :title="danmakuEnabled ? '关闭弹幕' : '开启弹幕'"
-            :aria-label="danmakuEnabled ? '关闭弹幕' : '开启弹幕'"
+            :title="danmakuEnabled ? '隐藏房间消息' : '显示房间消息'"
+            :aria-label="danmakuEnabled ? '隐藏房间消息' : '显示房间消息'"
             @click="toggleDanmaku"
           >
             <MediaIcon name="chat" />
@@ -1357,16 +1378,26 @@ onUnmounted(() => {
   color: var(--brand-secondary);
 }
 
-.danmaku-float-toggle.is-on {
+.danmaku-float-toggle {
   color: var(--brand-secondary);
+  &.is-on {
+    color: var(--brand-primary-light);
+  }
 }
 
-/* 发送开关与输入条：开关开启态同弹幕语言；输入条压在控制条上方，
-   宽度与控制条同口径（左右留白 + 520px 封顶），窄窗下不越出窗口 */
-.danmaku-send-toggle.is-on {
+/* 发送开关：默认线条图标与控制条其他图标的红色语言一致。
+   激活（输入条展开）时整钮转为实色红底、图标反白，且 hover 不改变它 —— 保持「正在发」的状态直到收起 */
+.danmaku-send-toggle {
   color: var(--brand-secondary);
+
+  &.is-on,
+  &.is-on:hover {
+    background: var(--color-lives);
+    color: #fff;
+  }
 }
 
+/* 输入条：压在控制条上方，宽度与控制条同口径（左右留白 + 520px 封顶），窄窗下不越出窗口 */
 .danmaku-compose {
   position: absolute;
   /* 层级在控制条（20）之上、悬浮按钮（30）之下：输入条只与胶囊上下相邻，不参与争抢 */

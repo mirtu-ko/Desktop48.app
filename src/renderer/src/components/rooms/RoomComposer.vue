@@ -7,22 +7,19 @@ import { ref } from 'vue'
  * 房间输入条：回复摘要 + 输入框 + 发送按钮。
  *
  * 只负责「长什么样」与把交互抛出去：草稿、连接状态、冷却、禁言判断、发送编排
- * 全部留在页面（use-pocket-rooms）。这里唯一的本地状态是输入框实例，用于
- * 建连成功 / 点「回复」后自动聚焦 —— 通过 defineExpose 的 focus() 给页面调用。
+ * 全部留在页面（use-pocket-rooms）。这里唯一的本地状态是输入框实例，供页面调用 focus()。
  */
 defineProps<{
   /** 引用摘要；null 表示不在回复态 */
   replyTarget: { senderName: string, text: string } | null
-  /** 已选择「连上去发言」：显示断开入口 */
-  qchatOptIn: boolean
-  /** 发送中（按钮 loading、断开钮禁用） */
+  /** 发送中（按钮 loading） */
   sendBusy: boolean
   draft: string
   /** 阻断态：输入框转为警告色，说明为什么发不出去 */
   blocked: boolean
   muted: boolean
   placeholder: string
-  /** 允许编辑（未就绪时为 false，点输入框会走建连确认） */
+  /** 允许编辑（连接未就绪时为 false） */
   canSend: boolean
   /** 能否发送（草稿为空 / 冷却 / 未连接时为 false） */
   usable: boolean
@@ -33,7 +30,6 @@ defineProps<{
 const emit = defineEmits<{
   'update:draft': [value: string]
   'cancelReply': []
-  'disconnect': []
   'composerClick': []
   'draftEnter': [event: KeyboardEvent]
   'send': []
@@ -41,7 +37,7 @@ const emit = defineEmits<{
 
 const draftInput = ref<InputInstance | null>(null)
 
-/** 供页面在「建连成功」「点回复」后把焦点交回输入框 */
+/** 供页面点「回复」后把焦点交回输入框 */
 function focus(): void {
   draftInput.value?.focus()
 }
@@ -67,18 +63,6 @@ defineExpose({ focus })
       </button>
     </div>
     <div class="composer-row">
-      <el-button
-        v-if="qchatOptIn"
-        class="composer-disconnect"
-        text
-        size="small"
-        type="danger"
-        title="断开连接（回到只看模式，不再顶手机）"
-        :disabled="sendBusy"
-        @click="emit('disconnect')"
-      >
-        断开连接
-      </el-button>
       <el-input
         ref="draftInput"
         :model-value="draft" class="composer-input"

@@ -211,14 +211,25 @@ function mediaUrl(raw: unknown, host: 'source' | 'mp4'): string {
 }
 
 /**
- * bodys 兜底正文：能解析成 JSON 的只认其中 text 字段（'{}' 这类空壳不当正文），
- * 解析失败的纯文本才整体作正文（TEXT 消息 bodys 可能就是裸文本）。
+ * bodys 兜底正文：能解析成 JSON 的优先取 text 字段（'{}' 这类空壳不当正文）；
+ * 对 TEXT 消息，若用户发送的内容本身恰好是一段不含 text/messageType 的非空 JSON 文本
+ * （如 `{"a": 1}` 或 `[1, 2]`），保留原文而非渲染为空白气泡。
  */
-function bodyText(msg: Record<string, unknown>, body: Record<string, unknown> | null): string {
-  const raw = body
-    ? jsonText(body, 'text')
-    : (typeof msg.bodys === 'string' ? msg.bodys.trim() : '')
-  return replacePocketEmoji(raw)
+function bodyText(msg: Record<string, unknown>, body: Record<string, unknown> | null, preserveJsonLiteral = false): string {
+  if (!body)
+    return replacePocketEmoji(typeof msg.bodys === 'string' ? msg.bodys.trim() : '')
+  const extracted = jsonText(body, 'text')
+  if (extracted)
+    return replacePocketEmoji(extracted)
+  if (
+    preserveJsonLiteral
+    && typeof msg.bodys === 'string'
+    && !('messageType' in body)
+    && (Array.isArray(body) || Object.keys(body).length > 0)
+  ) {
+    return replacePocketEmoji(msg.bodys.trim())
+  }
+  return ''
 }
 
 /**
@@ -273,7 +284,7 @@ function flipAnswerText(info: Record<string, unknown>): string {
 function messageText(msgType: string, msg: Record<string, unknown>, body: Record<string, unknown> | null): string {
   switch (msgType) {
     case 'TEXT':
-      return bodyText(msg, body)
+      return bodyText(msg, body, true)
     case 'IMAGE':
     case 'EXPRESSIMAGE':
       return '[图片消息]'

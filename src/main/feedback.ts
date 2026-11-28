@@ -3,7 +3,7 @@
  *
  * 为什么放在主进程而不是渲染层直接 fetch：
  * - 上报地址由主进程持有，渲染层不传 URL，避免把 `netRequest` 的域名白名单为反馈而放宽
- * - 环境摘要（版本 / 平台 / 身份档）由主进程采集，渲染层无法伪造
+ * - 环境摘要（版本 / 平台 / 客户端身份）由主进程采集，渲染层无法伪造
  * - 网络异常与超时统一在这里收口，渲染层只需处理成功 / 失败两种结果
  *
  * 上报内容只含用户填写的问题描述、可选联系方式与本文件采集的摘要；
@@ -13,9 +13,10 @@
 import type { FeedbackInput, FeedbackMeta, FeedbackPayload } from '@common/feedback'
 import type { Buffer } from 'node:buffer'
 import { FEEDBACK_ENDPOINT, validateFeedbackInput } from '@common/feedback'
+import { POCKET_CLIENT_LABEL } from '@common/pocket-client-profile'
 import { app, net } from 'electron'
 import { log } from './logger'
-import { currentClientProfile, getAuthState } from './pocket48/pocket-auth'
+import { getAuthState } from './pocket48/pocket-auth'
 
 const FEEDBACK_TIMEOUT = 15 * 1000
 const FEEDBACK_RESPONSE_MAX_BYTES = 64 * 1024
@@ -31,7 +32,7 @@ export function collectFeedbackMeta(): FeedbackMeta {
     arch: process.arch,
     electron: process.versions.electron ?? '',
     locale: app.getLocale(),
-    clientProfile: currentClientProfile(),
+    clientProfile: POCKET_CLIENT_LABEL,
     loggedIn: getAuthState().loggedIn,
   }
 }

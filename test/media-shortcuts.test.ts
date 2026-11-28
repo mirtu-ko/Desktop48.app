@@ -37,6 +37,8 @@ function makeActions() {
     rotateLeft: vi.fn(),
     rotateRight: vi.fn(),
     resetRotation: vi.fn(),
+    volumeUp: vi.fn(),
+    volumeDown: vi.fn(),
   }
 }
 
@@ -63,17 +65,36 @@ describe('dispatchMediaShortcut / 方向键 seek', () => {
     expect(media.currentTime).toBe(30)
   })
 
-  it('反向：没有媒体元素时不消费（直播浮窗不接 seek）', () => {
+  it('反向：没有媒体元素时不消费 ←/→（直播浮窗不接 seek）', () => {
     expect(dispatchMediaShortcut(makeEvent('ArrowRight'), makeActions(), null)).toBe(false)
-    expect(dispatchMediaShortcut(makeEvent('ArrowUp'), makeActions(), null)).toBe(false)
+    expect(dispatchMediaShortcut(makeEvent('ArrowLeft'), makeActions(), null)).toBe(false)
+  })
+})
+
+describe('dispatchMediaShortcut / ↑↓ 音量', () => {
+  it('↑↓ 分派给宿主的音量动作，不直接写 media.volume', () => {
+    const actions = makeActions()
+    const media = makeMedia({ volume: 0.95 })
+    expect(dispatchMediaShortcut(makeEvent('ArrowUp', button), actions, media)).toBe(true)
+    expect(actions.volumeUp).toHaveBeenCalledTimes(1)
+    expect(media.volume).toBe(0.95)
+    expect(dispatchMediaShortcut(makeEvent('ArrowDown', button), actions, media)).toBe(true)
+    expect(actions.volumeDown).toHaveBeenCalledTimes(1)
+    expect(media.volume).toBe(0.95)
   })
 
-  it('音量键按 0.1 阶梯调整并夹在 0~1', () => {
-    const media = makeMedia({ volume: 0.95 })
-    expect(dispatchMediaShortcut(makeEvent('ArrowUp', button), makeActions(), media)).toBe(true)
-    expect(media.volume).toBe(1)
-    expect(dispatchMediaShortcut(makeEvent('ArrowDown', button), makeActions(), media)).toBe(true)
-    expect(media.volume).toBe(0.9)
+  it('没有音量动作的宿主（旧宿主）不消费 ↑↓，也不动音量', () => {
+    const legacyActions = { rotateLeft: vi.fn(), rotateRight: vi.fn(), resetRotation: vi.fn() }
+    const media = makeMedia({ volume: 0.5 })
+    expect(dispatchMediaShortcut(makeEvent('ArrowUp', button), legacyActions, media)).toBe(false)
+    expect(dispatchMediaShortcut(makeEvent('ArrowDown', button), legacyActions, media)).toBe(false)
+    expect(media.volume).toBe(0.5)
+  })
+
+  it('反向：焦点在滑块 / 输入框时不消费，方向键留给控件本身', () => {
+    const actions = makeActions()
+    expect(dispatchMediaShortcut(makeEvent('ArrowUp', { tagName: 'INPUT' }), actions, makeMedia())).toBe(false)
+    expect(actions.volumeUp).not.toHaveBeenCalled()
   })
 })
 

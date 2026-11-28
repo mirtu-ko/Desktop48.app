@@ -4,8 +4,7 @@
 
 import type { PocketRoom } from '@renderer/composables/use-pocket-rooms'
 import type { PocketRoomCopyKey, PocketRoomMessageView } from '@renderer/utils/pocket-room-message'
-import type { Component, ComponentPublicInstance, VNode } from 'vue'
-import { ROOM_MESSAGE_LIMIT } from '@common/pocket-rooms'
+import type { Component, ComponentPublicInstance } from 'vue'
 import { ArrowRight, Calendar, ChatDotRound, Check, Delete, DocumentCopy, Lock, Microphone, Picture, Refresh, StarFilled, VideoCamera } from '@element-plus/icons-vue'
 import RoomAlbum from '@renderer/components/rooms/RoomAlbum.vue'
 import RoomComposer from '@renderer/components/rooms/RoomComposer.vue'
@@ -20,6 +19,7 @@ import RoomVoiceBar from '@renderer/components/rooms/RoomVoiceBar.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import PreviewImage from '@renderer/components/ui/PreviewImage.vue'
 import { usePocketRooms } from '@renderer/composables/use-pocket-rooms'
+import { useUnreadSeenGuard } from '@renderer/composables/use-unread-seen'
 import { useMemberDirectoryStore } from '@renderer/stores/member-directory'
 import { useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { useMemberTeamPromotionStore } from '@renderer/stores/member-team-promotion'
@@ -30,6 +30,7 @@ import { debugLog } from '@renderer/utils/debug'
 import { isPlaceholderText, liveShareTitle, pocketRoomCopyTargets } from '@renderer/utils/pocket-room-message'
 import { resolveDateChannel, resolveRoomArchiveStart } from '@renderer/utils/room-date-jump'
 import { shouldTrackRoomEnter } from '@renderer/utils/room-enter-tracker'
+import { unreadShownText, unreadBadgeText as unreadText } from '@renderer/utils/room-unread'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
 import { useDebounceFn, useDocumentVisibility, useEventListener, useIntersectionObserver, useResizeObserver } from '@vueuse/core'
@@ -40,6 +41,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 const {
   rooms,
+  pageActive,
   loading,
   liveRefreshing,
   loadError,
@@ -58,6 +60,7 @@ const {
   smallLocked,
   smallQuestion,
   smallQuestionLoading,
+  smallGateNotice,
   chatStatus,
   chatStatusText,
   roomClosed,
@@ -84,10 +87,7 @@ const {
 
   qchatStatus,
   qchatHint,
-  qchatOptIn,
   canSpeak,
-  connectRoomQChat,
-  disconnectRoomQChat,
   sendBusy,
   sendCooldownLeft,
   replyTarget,
@@ -102,8 +102,10 @@ const {
 const router = useRouter()
 const route = useRoute()
 
-/** 页面可见性：窗口隐藏 / 最小化时暂停左列直播特效动画（见 .rooms-page.is-paused） */
+/** 窗口可见性：与 pageActive 合并为 pageVisible */
 const docVisibility = useDocumentVisibility()
+/** 房间页可见性：合并 KeepAlive 激活态与窗口可见性，不可见时暂停左列动效与未读补标 */
+const pageVisible = computed(() => pageActive.value && docVisibility.value === 'visible')
 
 /** 精华消息弹层是否打开 */
 const essenceOpen = ref(false)
@@ -219,11 +221,6 @@ const essenceSummary = computed(() => {
     return ''
   return message.text || '[消息]'
 })
-
-/** 未读数字角标文案：计数按列表一页封顶，触顶即「至少这么多」，收敛为 50+ */
-function unreadText(count: number): string {
-  return count >= ROOM_MESSAGE_LIMIT ? `${ROOM_MESSAGE_LIMIT}+` : String(count)
-}
 
 /** 左列房间未读角标文案：v-if 与插值共用同一出口，计数语义与封顶规则只此一处 */
 function roomUnreadText(userId: number): string {
@@ -360,7 +357,7 @@ const unreadAnchor = ref<{
   /** 水位那条的服务端 id：优先按它定位（同一毫秒多条不致错位） */
   msgIdServer: string
   msgTime: number
-  /** 截下时的未读条数（角标口径，含封顶）：底部胶囊文案用 */
+  /** 截下时的未读条数（角标口径，含封顶）：仅 beyond 时作为分割线与胶囊的回退条数 */
   count: number
   /** 补页触顶后水位仍在窗口外：分割线钉窗口顶、文案降级（见 fillUnreadWindow） */
   beyond: boolean
@@ -411,6 +408,9 @@ function setUnreadAnchorEl(el: Element | ComponentPublicInstance | null) {
  * count 由调用方在清零前取得（乐观清零后只剩 0）。回包时已切房 / 换频道则不落锚点。
  */
 async function markRoomReadCapturing(userId: number, target: 'room' | 'small', count: number) {
+  // 先复核当前仍在目标房间与频道：避免切换加载期间又切走，在主进程误清未在看频道的未读
+  if (selectedUserId.value !== userId || viewMode.value !== target)
+    return false
   unreadJumped.value = false
   const prev = await markRoomRead(userId, target)
   if (selectedUserId.value !== userId || viewMode.value !== target)
@@ -435,14 +435,25 @@ const unreadAnchorBeyond = computed(() =>
   unreadAnchor.value?.beyond === true && unreadIndex.value === 0,
 )
 
+/**
+ * 分割线与底部胶囊共用的条数文案：两处必须完全一致（非 beyond 报精确条数，beyond 走 50+ 封顶），
+ * 避免「分割线 4 条、胶囊 3 条」或补页超 50 条时「分割线 65 条、胶囊 50+ 条」。
+ */
+const unreadShownLabel = computed(() =>
+  unreadShownText({
+    region: unreadRegionCount.value,
+    snapshot: unreadAnchor.value?.count ?? 0,
+    beyond: unreadAnchorBeyond.value,
+  }),
+)
+
 /** 分割线文案：正常报「以下是 N 条」；水位在未加载区域时降级为提示上翻 */
 const unreadDividerText = computed(() => {
-  const anchor = unreadAnchor.value
-  if (!anchor)
+  if (!unreadAnchor.value)
     return ''
   return unreadAnchorBeyond.value
-    ? `新消息从更早开始（${unreadText(anchor.count)} 条），上翻继续查看`
-    : `以下是 ${unreadRegionCount.value} 条新消息`
+    ? `新消息从更早开始（${unreadShownLabel.value} 条），上翻继续查看`
+    : `以下是 ${unreadShownLabel.value} 条新消息`
 })
 
 /**
@@ -464,15 +475,21 @@ async function onViewModeChange(mode: 'room' | 'small') {
     return
   const userId = selectedUserId.value
   if (mode !== 'room') {
-    // 小房间未读同样在清零前截（两个频道各有自己的水位与条数）
+    // 小房间未读同样在清零前截（两个频道各有自己的水位与条数）；
+    // 必须等频道切换完成且未上锁、首屏消息就绪后再标已读，避免锁住或加载失败时误清未读
     const hadUnread = userId !== null ? unreadChannelOf(userId).small : 0
     unreadAnchor.value = null
     unreadJumped.value = false
     beginEntryMark()
     try {
-      void setViewMode(mode)
-      if (userId !== null && hadUnread > 0)
+      await setViewMode(mode)
+      if (userId !== null && hadUnread > 0 && !smallLocked.value && chatStatus.value === 'ready' && messages.value.length > 0) {
         await markRoomReadCapturing(userId, 'small', hadUnread)
+        if (selectedUserId.value === userId && viewMode.value === 'small') {
+          await nextTick()
+          scrollToBottom()
+        }
+      }
     }
     finally {
       endEntryMark()
@@ -516,6 +533,16 @@ const roomTabs = computed<Array<{ mode: 'room' | 'small', name: string, unread: 
     })
   }
   return tabs
+})
+
+/** 不可作答门禁的说明：原文已转述，这里只说「本地无从解锁、条件满足后自动放行」 */
+const smallGateHint = computed(() => {
+  const kind = smallGateNotice.value?.kind
+  if (kind === 'chicken-leg')
+    return '这是成员给小房间设的赠送门槛，本应用无法代为解锁；条件满足后重新进入即可查看'
+  if (kind === 'contribution')
+    return '这是成员给小房间设的贡献 / 守护门槛（服务端只用同一个业务码回，分不出是哪一种），本应用无法代为解锁；条件满足后重新进入即可查看'
+  return '当前账号未通过该小房间的准入条件，本应用无法代为解锁'
 })
 
 /** 小房间暗号输入层（锁定态展示） */
@@ -624,6 +651,30 @@ let preservingScroll = false
 /** 上翻历史时收到的新消息数：浮标提示用，回底 / 切房清零 */
 const newCount = ref(0)
 
+/** 当前房间、当前频道的角标未读：贴底自愈的触发源（贴底时它应为 0） */
+const activeUnreadCount = computed(() => {
+  const userId = selectedUserId.value
+  if (userId === null)
+    return 0
+  const unread = unreadChannelOf(userId)
+  return viewMode.value === 'small' ? unread.small : unread.big
+})
+
+/**
+ * 贴底自愈（见 composables/use-unread-seen）：检测轮把已经看过的消息又数成未读时补标一次。
+ * 收尾在途不补——分割线还要截旧水位（entryMarkDepth）。
+ */
+useUnreadSeenGuard({
+  unread: activeUnreadCount,
+  selectedUserId,
+  viewMode,
+  atBottom,
+  pageVisible,
+  hasMessages: computed(() => messages.value.length > 0),
+  entryBusy: () => entryMarkDepth > 0,
+  markRead: (userId, target) => void markRoomRead(userId, target),
+})
+
 function onListScroll() {
   const el = listRef.value
   if (!el)
@@ -647,7 +698,7 @@ function onListScroll() {
     newCount.value = 0
     // 上翻后回到底部即补标（贴底即已读，与 length 监听同口径）；只在刚回底这一刻标，
     // 停在底部时新消息由 length 监听管
-    if (!wasAtBottom && docVisibility.value === 'visible' && entryMarkDepth === 0
+    if (!wasAtBottom && pageVisible.value && entryMarkDepth === 0
       && selectedUserId.value !== null && messages.value.length) {
       void markRoomRead(selectedUserId.value, viewMode.value)
     }
@@ -730,6 +781,9 @@ function onRoomWrapDblClick(room: PocketRoom, event: MouseEvent) {
  * unreadCount 传条数：锚点要用它，而 markRoomRead 会乐观清零，之后只剩 0。
  */
 async function settleBigRoomEnter(userId: number, unreadCount: number) {
+  // 选房 / 切页签期间已切到其他房间或小房间：直接退出，不误清当前房间的锚点或未读
+  if (selectedUserId.value !== userId || viewMode.value !== 'room')
+    return
   // 加载失败：未读保留，留到下次进房成功再清
   if (chatStatus.value !== 'ready') {
     unreadAnchor.value = null
@@ -752,9 +806,9 @@ async function settleBigRoomEnter(userId: number, unreadCount: number) {
   scrollToBottom()
 }
 
-/** 点进房间（左列条目）：选中 → 清大房间未读（有未读则回底） */
-async function enterRoom(userId: number) {
-  trackRoomEnter(userId, 'list')
+/** 点进房间（左列条目 / 深链命中已关注成员）：选中 → 清大房间未读（有未读则回底） */
+async function enterRoom(userId: number, from: 'list' | 'query' = 'list') {
+  trackRoomEnter(userId, from)
   // 未读数在 markRoomRead 乐观清零前取，否则永远是 0
   const hadUnread = unreadChannelOf(userId).big
   // 换房先撤掉上一间的分割线：消息清空与水位重取之间有间隙，别让旧锚点落回新列表
@@ -774,12 +828,21 @@ async function enterRoom(userId: number) {
 /**
  * 临时房间的边界就是这条路由 query：成员详情卡底栏入口 push `/rooms?member=<userId>`，
  * query 一旦消失（Dock 切回房间页、走别的入口）即撤掉临时条目——离开页面就不再保留。
- * 成员不在关注名单里也照样打开，这正是「临时」的用途（不写关注名单、不落盘）。
+ * 成员不在关注名单里也照样打开，这正是「临时」的用途（不写关注名单、不落盘）；
+ * 若该成员已在关注列表中（如托盘点击未读房间），走 enterRoom 保留未读分割线与收尾保护。
  */
 watch(() => route.query.member, async (value) => {
   const userId = Number(Array.isArray(value) ? value[0] : value)
   if (!Number.isFinite(userId) || userId <= 0) {
     closeTemporaryRoom()
+    return
+  }
+  if (rooms.value.some(room => room.userId === userId)) {
+    closeTemporaryRoom()
+    await enterRoom(userId, 'query')
+    // 已关注成员进房后清掉 query：避免残留 ?member 挡住后续页内回显补标（临时房间保留 query 维系其生命周期）
+    if (route.path === '/rooms' && route.query.member === value)
+      void router.replace({ path: '/rooms' })
     return
   }
   const result = await openTemporaryRoom(userId)
@@ -825,24 +888,41 @@ watch(() => messages.value.length, async (len, oldLen) => {
   }
   newCount.value = 0
   // 贴底浏览即已读：主进程清当前视图频道未读并对齐基线，广播后角标同步消失；上翻不标记。
-  // 收尾在途时让位（见 entryMarkDepth）；窗口隐藏期间不标——用户看不见，静默清零等于吞掉
-  // 未读，回显时由 docVisibility 监听补标
-  if (docVisibility.value === 'visible' && entryMarkDepth === 0 && selectedUserId.value !== null && messages.value.length)
+  // 收尾在途时让位（见 entryMarkDepth）；不可见（窗口隐藏或 KeepAlive 停用）时不标，回到可见后由 pageVisible 补标
+  if (pageVisible.value && entryMarkDepth === 0 && selectedUserId.value !== null && messages.value.length)
     void markRoomRead(selectedUserId.value, viewMode.value)
   await nextTick()
   scrollToBottom()
 })
 
 /**
- * 回显补标：隐藏期间贴底到的消息先攒着未读（见 length 监听），回显时消息已在视口里，
- * 按「贴底即已读」补一次标记。上翻中（!atBottom）不补——那正是没看完的样子。
+ * 回显 / 切回补标：不可见期间攒有未读时，截旧水位画「以下是 N 条新消息」分割线再清零
+ * （新消息由 onActivated 的 pollRoomMessages 补齐后分割线自动落位）；无未读时仅常规补标。
+ * 带 member 深链切入且指向其他房间（如托盘点另一位未读成员）时让位给 enterRoom，避免误标旧房间。
  */
-watch(docVisibility, (visibility) => {
-  if (visibility !== 'visible')
+watch(pageVisible, async (visible) => {
+  if (!visible)
     return
-  if (entryMarkDepth > 0 || selectedUserId.value === null || !messages.value.length || !atBottom.value)
+  const rawQueryMember = route.query.member
+  const queryMember = Number(Array.isArray(rawQueryMember) ? rawQueryMember[0] : rawQueryMember)
+  if (Number.isFinite(queryMember) && queryMember > 0 && queryMember !== selectedUserId.value)
     return
-  void markRoomRead(selectedUserId.value, viewMode.value)
+  const userId = selectedUserId.value
+  if (entryMarkDepth > 0 || userId === null || !messages.value.length || !atBottom.value)
+    return
+  const target = viewMode.value
+  const hadUnread = activeUnreadCount.value
+  if (hadUnread <= 0) {
+    void markRoomRead(userId, target)
+    return
+  }
+  beginEntryMark()
+  try {
+    await markRoomReadCapturing(userId, target, hadUnread)
+  }
+  finally {
+    endEntryMark()
+  }
 })
 
 /**
@@ -1065,20 +1145,39 @@ watch(messages, (list) => {
 }, { flush: 'post' })
 
 // ===== 发言输入条（确认连接后在消息区底部常驻）=====
-/** 输入草稿；发送成功即清空 */
-const draft = ref('')
+/** 按房间频道暂存的输入草稿（`${userId}:${viewMode}` → 文本）：切房或切大小房间不串房，登出清空 */
+const roomDrafts = ref<Record<string, string>>({})
+const draftKey = computed(() => (selectedUserId.value === null ? '' : `${selectedUserId.value}:${viewMode.value}`))
+const draft = computed({
+  get: () => (draftKey.value ? (roomDrafts.value[draftKey.value] ?? '') : ''),
+  set: (value: string) => {
+    const key = draftKey.value
+    if (!key)
+      return
+    if (value)
+      roomDrafts.value[key] = value
+    else
+      delete roomDrafts.value[key]
+  },
+})
 
-/** 输入条可见条件：已登录 + 选中房间 + 消息就绪 + 不在小房间暗号锁定态。
- * 连接状态不影响可见性——未连接也要把输入条摆出来，点它才引导连接。
- * 房间禁言 / 未关注也不隐藏：要让用户看到「为什么说不了话」，而不是输入框凭空消失。
- * 房间已关闭则隐藏：没有留言板，禁言文案（「房主已开启全员禁言」）在这里是错的。
- */
-const composerVisible = computed(() =>
+watch(loggedIn, (isLoggedIn) => {
+  if (!isLoggedIn)
+    roomDrafts.value = {}
+})
+
+/** 输入条挂载条件：切房期间不随加载态卸载，避免底部跳动 */
+const composerMounted = computed(() =>
   loggedIn.value
   && !!selectedRoom.value
-  && chatStatus.value === 'ready'
   && !smallLocked.value
   && !roomClosed.value,
+)
+
+/** 输入条可交互条件：挂载 + 消息就绪 */
+const composerVisible = computed(() =>
+  composerMounted.value
+  && chatStatus.value === 'ready',
 )
 
 /**
@@ -1102,7 +1201,7 @@ const composerMuted = computed(() => speakBlock.value === 'muted')
 /** 阻断提示节流：反复点输入框时只每 3s 提示一次，不堆一屏 toast */
 let speakBlockToastAt = 0
 
-/** 输入条可交互（不含连接状态）：未连接时点击它用于引导连接；阻断态直接不可交互 */
+/** 输入条可交互（不含连接状态）：阻断态直接不可交互；未连接时点发送钮给出状态提示 */
 const composerUsable = computed(() =>
   composerVisible.value
   && !speakBlock.value
@@ -1110,18 +1209,17 @@ const composerUsable = computed(() =>
   && sendCooldownLeft.value === 0,
 )
 
-/** 可发送：已确认连接 + 连接就绪 + 不在发送中 / 冷却中（主进程同口径限流是最终防线） */
+/** 可发送：连接就绪 + 不在发送中 / 冷却中（主进程同口径限流是最终防线） */
 const canSend = computed(() =>
   composerUsable.value
-  && qchatOptIn.value
   && qchatStatus.value === 'connected',
 )
 
-/** 占位文案即状态：未连接时是「点击连接」的引导，连接后是连接状态与冷却倒数 */
+/** 占位文案即状态：未就绪时只提示连接 / 重连，不给点击引导 */
 const composerPlaceholder = computed(() => {
   if (!composerVisible.value)
     return ''
-  // 阻断原因优先于连接状态：连接了也发不出去，别让文案引导用户去建连
+  // 阻断原因优先于连接状态：连接了也发不出去，别让文案引导用户等连接
   if (speakBlock.value === 'unfollowed')
     return '请关注后发言'
   if (speakBlock.value === 'muted')
@@ -1130,8 +1228,6 @@ const composerPlaceholder = computed(() => {
     return '正在发送…'
   if (sendCooldownLeft.value > 0)
     return `发送冷却中（${Math.ceil(sendCooldownLeft.value / 1000)}s）…`
-  if (!qchatOptIn.value)
-    return '点击此处连接房间后发言'
   if (qchatStatus.value === 'connecting')
     return '正在连接房间…'
   if (qchatStatus.value === 'reconnecting')
@@ -1165,60 +1261,12 @@ const sendButtonHint = computed(() => {
     return '正在发送消息'
   if (sendCooldownLeft.value > 0)
     return `发言冷却中，${Math.ceil(sendCooldownLeft.value / 1000)}s 后可继续发送`
-  if (!qchatOptIn.value)
-    return '先点击输入框连接房间，连接后即可发言'
   if (qchatStatus.value !== 'connected')
     return '房间连接未就绪，暂不能发送'
   return '发送消息（也可按 Enter）'
 })
 
-/**
- * 连接确认正文：一句前提 + 两条影响，拆成要点比整段说明更好扫读。
- * 弹窗挂在 body 下，正文样式复用 app.scss 的 .app-confirm-body / .app-confirm-list。
- */
-function connectConfirmBody(): VNode {
-  return h('div', { class: 'app-confirm-body' }, [
-    h('p', { class: 'app-confirm-lead' }, '发言需要以当前账号连接云信 IM。'),
-    h('ul', { class: 'app-confirm-list' }, [
-      h('li', '同一账号只允许一台设备在线。'),
-    ]),
-  ])
-}
-
-/**
- * 连接房间前的确认：发言必须以当前账号登录云信 IM，同账号只允许一台设备在线，
- * 连接后手机（或其他设备）上的口袋48 会被顶下线。确认一次后本窗口内不再打扰。
- */
-async function requestQChatConnection(): Promise<boolean> {
-  if (qchatOptIn.value)
-    return qchatStatus.value !== 'disconnected'
-  try {
-    await ElMessageBox.confirm(
-      connectConfirmBody(),
-      '连接房间',
-      {
-        type: 'warning',
-        customClass: 'app-confirm',
-        modalClass: 'detail-card-overlay',
-        confirmButtonText: '连接并发言',
-        cancelButtonText: '取消',
-      },
-    )
-  }
-  catch {
-    // 用户取消：保持未连接，房间消息仍可正常浏览（HTTP 轮询）
-    return false
-  }
-  const result = await connectRoomQChat()
-  if (!result.ok) {
-    ElMessage.error(result.message || '连接房间失败')
-    return false
-  }
-  composerEl.value?.focus()
-  return true
-}
-
-/** 阻断态点输入框：只解释原因，绝不发起 QChat 建连（建连会顶掉手机端，而这里本就发不出去） */
+/** 阻断态点输入框：只解释原因，不发请求 */
 function noticeSpeakBlock(): void {
   const block = speakBlock.value
   if (!block || Date.now() - speakBlockToastAt < 3000)
@@ -1229,15 +1277,10 @@ function noticeSpeakBlock(): void {
     : '房主已开启全员禁言，暂时不能发言')
 }
 
-/** 未连接时点输入框：先确认再连接，不吞掉用户的输入意图 */
+/** 点输入框：阻断态只解释原因（连接随进房自动建立） */
 function onComposerClick(): void {
-  if (speakBlock.value) {
+  if (speakBlock.value)
     noticeSpeakBlock()
-    return
-  }
-  if (!composerUsable.value || qchatOptIn.value)
-    return
-  void requestQChatConnection()
 }
 
 /** Enter 发送；组词中的 Enter 是拼音选字，不是确认 */
@@ -1247,39 +1290,20 @@ function onDraftEnter(event: KeyboardEvent) {
   void onSendClick('enter')
 }
 
-/** 输入条上的「断开连接」：回到只看模式（不再顶手机），断开前二次确认 */
-async function onDisconnectClick(): Promise<void> {
-  try {
-    await ElMessageBox.confirm(
-      '断开连接后回到只看模式，手机等其他设备不再被顶下线；房间消息仍通过 HTTP 轮询。',
-      '断开房间连接',
-      {
-        type: 'warning',
-        customClass: 'app-confirm',
-        modalClass: 'detail-card-overlay',
-        confirmButtonText: '断开',
-        cancelButtonText: '取消',
-      },
-    )
-  }
-  catch {
-    return
-  }
-  await disconnectRoomQChat()
-  ElMessage.success('已断开房间连接')
-}
-
 async function onSendClick(via: 'enter' | 'button') {
   if (!composerUsable.value)
     return
   if (!canSend.value) {
-    // 未连接：先引导连接。连接成功后由用户再点一次发送，避免「确认完就误发」
-    if (!qchatOptIn.value)
-      void requestQChatConnection()
-    else if (qchatStatus.value !== 'connected')
-      ElMessage.info(qchatHint.value || '房间正在连接，请稍候')
+    // 连接随进房建立：只在尚未就绪时解释一句
+    if (qchatStatus.value !== 'connected') {
+      const fallback = qchatStatus.value === 'disconnected'
+        ? '房间未连接，暂不能发言'
+        : '房间正在连接，请稍候'
+      ElMessage.info(qchatHint.value || fallback)
+    }
     return
   }
+  const sendKey = draftKey.value
   const text = draft.value.trim()
   if (!text)
     return
@@ -1290,7 +1314,9 @@ async function onSendClick(via: 'enter' | 'button') {
     hasReply: replyTarget.value ? 'yes' : 'no',
   })
   if (result.ok) {
-    draft.value = ''
+    // 按发送前截下的频道键清理草稿，避免发送在途切房时误清目标房间的草稿
+    if (sendKey)
+      delete roomDrafts.value[sendKey]
     return
   }
   if (result.message)
@@ -1330,7 +1356,7 @@ useResizeObserver(
   { box: 'border-box' },
 )
 const newMsgFloatStyle = computed(() => ({
-  bottom: `${12 + (composerVisible.value ? composerHeight.value : 0)}px`,
+  bottom: `${12 + (composerMounted.value ? composerHeight.value : 0)}px`,
 }))
 
 // ===== 复制（hover 按钮 + 右键菜单）=====
@@ -1463,11 +1489,6 @@ function onMenuPick(key: string) {
 function openMessageMenu(event: MouseEvent, message: PocketRoomMessageView) {
   openMenu(event, { kind: 'message', message })
 }
-
-// ===== 左列房间条目的右键菜单 =====
-// 两件事：置顶 / 取消置顶（展示顺序），以及未读的手动出口。
-// 未读出口的由来：进房清零要求首屏消息加载成功（见 settleBigRoomEnter），频道失效 / 空页时
-// 那条路走不通，角标会一直挂着；右键直接标已读是这类房间当前唯一的手动出口。
 
 // ===== 左列房间条目的右键菜单 =====
 // 两件事：置顶 / 取消置顶（展示顺序），以及未读的手动出口。
@@ -1650,18 +1671,16 @@ function liveCardHint(message: PocketRoomMessageView): string {
 
 /** 右栏消息区状态文案 */
 const statusText = ref('')
+// 底部只显示错误：加载提示由消息区空态给出，重复显示会让高度跳动
 watch([chatStatus, chatStatusText], () => {
-  if (chatStatus.value === 'loading')
-    statusText.value = '正在加载房间消息…'
-  else if (chatStatus.value === 'error')
-    statusText.value = chatStatusText.value || '房间消息加载失败'
-  else
-    statusText.value = ''
+  statusText.value = chatStatus.value === 'error'
+    ? (chatStatusText.value || '房间消息加载失败')
+    : ''
 }, { immediate: true })
 </script>
 
 <template>
-  <div class="page-root rooms-page" :class="{ 'is-paused': docVisibility === 'hidden' }">
+  <div class="page-root rooms-page" :class="{ 'is-paused': !pageVisible }">
     <!-- 未登录：居中登录卡片（房间依赖账号关注关系） -->
     <div v-if="!loggedIn && !loading" class="gate">
       <div class="gate-card frosted-surface">
@@ -2104,9 +2123,29 @@ watch([chatStatus, chatStatusText], () => {
                 </template>
               </div>
 
-              <!-- 小房间暗号锁定层：不展示消息内容，仅在暗号校验通过后进房 -->
+              <!-- 小房间门禁层：不展示消息内容。两种形态——
+                   暗号门禁给输入框（本地可作答）；赠送鸡腿一类的门槛只说明原因，本地无从解锁，
+                   给输入框只会把人引到「输错了无数遍」的死路 -->
               <div v-else-if="smallLocked" class="small-lock">
-                <div class="small-lock-card">
+                <div v-if="smallGateNotice" class="small-lock-card">
+                  <span class="small-lock-badge">
+                    <el-icon :size="18">
+                      <Lock />
+                    </el-icon>
+                  </span>
+                  <p class="small-lock-title">
+                    「{{ smallChannelName || '小房间' }}」需要权限
+                  </p>
+                  <!-- 门槛原文是服务端对当前账号的判定（含刷新说明），原样转述，不自己编改写规则 -->
+                  <blockquote v-if="smallGateNotice.message" class="small-lock-question">
+                    {{ smallGateNotice.message }}
+                  </blockquote>
+                  <p class="small-lock-hint">
+                    {{ smallGateHint }}
+                  </p>
+                </div>
+
+                <div v-else class="small-lock-card">
                   <span class="small-lock-badge">
                     <el-icon :size="18">
                       <Lock />
@@ -2181,14 +2220,12 @@ watch([chatStatus, chatStatusText], () => {
                 </template>
               </div>
 
-              <!-- 发言输入条：房间就绪后常驻消息区底部。默认不连接云信（只看不挤手机），
-                   点输入框先确认「会挤掉其他登录端」，确认后才建连；回复态在输入行上方显示引用摘要 -->
+              <!-- 发言输入条：房间就绪后常驻消息区底部。进房即订阅，未就绪时占位文案即状态 -->
               <RoomComposer
-                v-if="composerVisible"
+                v-if="composerMounted"
                 ref="composerEl"
                 v-model:draft="draft"
                 :reply-target="replyTarget"
-                :qchat-opt-in="qchatOptIn"
                 :send-busy="sendBusy"
                 :blocked="!!speakBlock"
                 :muted="composerMuted"
@@ -2198,7 +2235,6 @@ watch([chatStatus, chatStatusText], () => {
                 :send-hint="sendButtonHint"
                 :send-label="sendButtonLabel"
                 @cancel-reply="cancelReply"
-                @disconnect="onDisconnectClick"
                 @composer-click="onComposerClick"
                 @draft-enter="onDraftEnter"
                 @send="onSendClick('button')"
@@ -2222,7 +2258,7 @@ watch([chatStatus, chatStatusText], () => {
                   <el-icon :size="12">
                     <ArrowRight />
                   </el-icon>
-                  {{ unreadText(unreadAnchor.count) }} 条未读
+                  {{ unreadShownLabel }} 条未读
                 </button>
               </Transition>
 
@@ -2932,9 +2968,10 @@ watch([chatStatus, chatStatusText], () => {
   text-overflow: ellipsis;
 }
 
-/* 小房间暗号锁定层：盖住消息区，不展示任何消息内容。
- * 卡片自成一块「门牌」：徽标 → 标题 → 成员出的题（引用块）→ 输入行 → 兜底提示。
- * 题目是成员手写的原话，用引用块而非正文呈现，避免与界面自己的措辞混作一类。 */
+/* 小房间门禁层：盖住消息区，不展示任何消息内容。
+ * 卡片自成一块「门牌」：徽标 → 标题 → 成员设的条件（引用块）→ 输入行 / 说明 → 兜底提示。
+ * 引用块里的都是成员或服务端给的原话（暗号题面 / 「最近30天内赠送过鸡腿礼物…」），
+ * 用引用块而非正文呈现，避免与界面自己的措辞混作一类。 */
 .small-lock {
   display: flex;
   flex: 1;
@@ -3670,7 +3707,7 @@ watch([chatStatus, chatStatusText], () => {
 </style>
 
 <style lang="scss">
-/* 非 scoped：窗口隐藏时暂停左列条目的动效。
+/* 非 scoped：页面不可见（窗口隐藏或切去其他页）时暂停左列条目的动效。
    条目已抽成 components/rooms/RoomListItem.vue，scoped 规则跨不过组件边界，
    而这里表达的是「整页暂停」这种页面级状态，故单独用非 scoped 块承载。 */
 .rooms-page.is-paused {

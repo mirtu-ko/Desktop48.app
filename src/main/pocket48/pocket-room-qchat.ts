@@ -2,14 +2,12 @@
  * 成员房间消息发送会话（主进程持有 QChat 长连接，协议见 nim-qchat.ts）。
  *
  * 与 pocket-danmaku.ts 同一「会话 + 订阅者」模式：同一账号复用一条 QChat 连接，
- * 按频道订阅 / 退订（引用计数）；渲染层房间页确认后订阅、离房退订，切房时
+ * 按频道订阅 / 退订（引用计数）；房间页进房即订阅、离房退订，切房时
  * **先订新房再退旧房**——旧频道若是最后一条订阅，退了会整条连接销毁，切房体验断裂。
  * 凭据（accid + imToken）由主进程内部取用（getImCredentials），渲染层接触不到。
  *
  * 登录态变更（登出 / token 失效）时 resetRoomQChatSessions 断掉全部会话：
  * 旧连接用的是旧档进房身份与已作废 token，继续挂着只会收到「已过期」，不该沿用。
- *
- * 建连会顶掉同账号的其他在线设备（手机端），故默认不连——由房间页确认后才调用 enter。
  */
 import type {
   PocketRoomBatch,
@@ -21,9 +19,9 @@ import type {
 import type { WebContents } from 'electron'
 import { sendIpc } from '../ipc/send'
 import { debug } from '../logger'
-import { nimIdentityFor } from './client-profile'
+import { nimIdentity } from './client-profile'
 import { isFatalAuthError, NimQChatClient } from './nim-qchat'
-import { currentClientProfile, expireStoredAuth, getImCredentials, getRoomPermissions, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
+import { expireStoredAuth, getImCredentials, getRoomPermissions, getRoomSenderProfile, IM_APP_KEY } from './pocket-auth'
 import { buildRoomSendInput } from './room-message-payload'
 
 /**
@@ -45,6 +43,8 @@ interface ChannelState {
   lastSentAt: number
   /** 服务端房间级发言冷却（毫秒），进房预热写入；0 = 未知，按本地下限 */
   cooldownMs: number
+  /** 在途的频道订阅 Promise：并发进同频道时复用等待，防止提前返回 ok */
+  subscribing: Promise<void> | null
 }
 
 interface RoomSession {
@@ -63,12 +63,26 @@ function channelKey(serverId: string, channelId: string): string {
 }
 
 function pushBatch(session: RoomSession, batch: PocketRoomBatch): void {
-  for (const channel of session.channels.values()) {
+  if (batch.kind === 'message') {
+    const channel = session.channels.get(channelKey(batch.message.serverId, batch.message.channelId))
+    if (!channel)
+      return
     for (const subscriber of channel.subscribers.keys()) {
       if (!subscriber.isDestroyed())
         sendIpc(subscriber, 'pocketRoomBatch', batch)
     }
+    return
   }
+  // 状态事件属于会话级，切房「先订新房再退旧房」期间同一窗口会在两个频道下出现，去重后只发一次
+  const targets = new Set<WebContents>()
+  for (const channel of session.channels.values()) {
+    for (const subscriber of channel.subscribers.keys()) {
+      if (!subscriber.isDestroyed())
+        targets.add(subscriber)
+    }
+  }
+  for (const subscriber of targets)
+    sendIpc(subscriber, 'pocketRoomBatch', batch)
 }
 
 /** 摘掉窗口在该频道的订阅与 destroyed 钩子；不在订阅表返回 false（钩子与显式退订可能先后到达） */
@@ -145,7 +159,7 @@ export async function handleRoomQChatEnter(
         account: credentials.accid,
         token: credentials.token,
         // 会话建立时定档：与本次凭据、HTTP 请求同源（云信登录身份恒为 AOS，同官方 App）
-        nim: nimIdentityFor(currentClientProfile()),
+        nim: nimIdentity(),
         onConnected: () => pushBatch(session!, { kind: 'status', status: 'connected' }),
         onReconnecting: attempt => pushBatch(session!, { kind: 'status', status: 'reconnecting', message: `第 ${attempt} 次重连` }),
         onDisconnected: () => pushBatch(session!, { kind: 'status', status: 'disconnected' }),
@@ -180,7 +194,7 @@ export async function handleRoomQChatEnter(
     const client = session.client
     let channel = session.channels.get(key)
     if (!channel) {
-      channel = { serverId, channelId, subscribers: new Map(), lastSentAt: 0, cooldownMs: 0 }
+      channel = { serverId, channelId, subscribers: new Map(), lastSentAt: 0, cooldownMs: 0, subscribing: null }
       session.channels.set(key, channel)
       createdChannel = channel
     }
@@ -210,9 +224,18 @@ export async function handleRoomQChatEnter(
         session.establishing = false
       }
     }
-    // 新房频道才需要显式订阅；重连后的订阅恢复由客户端内部订阅表完成
-    if (createdChannel)
-      await client.subscribeChannel(serverId, channelId)
+    // 新房频道显式订阅；并发进入同一频道时共享在途 Promise，确保返回 ok 时订阅已完成
+    if (createdChannel) {
+      const subscribePromise = client.subscribeChannel(serverId, channelId).finally(() => {
+        if (channel.subscribing === subscribePromise)
+          channel.subscribing = null
+      })
+      channel.subscribing = subscribePromise
+      await subscribePromise
+    }
+    else if (channel.subscribing) {
+      await channel.subscribing
+    }
     primeChannelCooldown(channel)
     return { ok: true }
   }
@@ -225,8 +248,7 @@ export async function handleRoomQChatEnter(
       if (enteredChannel.subscribers.size === 0 && session.channels.get(key) === enteredChannel)
         session.channels.delete(key)
     }
-    // 空频道会话一律销毁，不看 client.connected：连接成功但订阅失败时登录态已建立，
-    // 留着就是一条占着账号在线态、把手机端顶下线的空转连接（用户看到的是「进入失败」）
+    // 空频道会话一律销毁，不看 client.connected：连接成功但订阅失败时不保留空转连接
     if (session && session.channels.size === 0) {
       session.client.destroy()
       if (sessions.get(session.accid) === session)
@@ -289,7 +311,8 @@ export async function sendRoomMessage(
     throw new Error(`发送太快，请 ${Math.ceil(waitMs / 1000)} 秒后再试`)
   const profile = await getRoomSenderProfile()
   const input = buildRoomSendInput({ serverId, channelId, text, reply, profile })
-  channel.lastSentAt = now
+  // 在拉取资料后、即将发出前记录冷却起点，避免资料请求耗时挤占服务端 cdTime 窗口
+  channel.lastSentAt = Date.now()
   try {
     const result = await session.client.sendMessage(input)
     debug(`[pocket-room-qchat] 已发送：${channelKey(serverId, channelId)} msgIdClient=${result.msgIdClient}`)

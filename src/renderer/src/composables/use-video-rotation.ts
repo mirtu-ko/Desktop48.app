@@ -205,15 +205,113 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
       el.pause()
   }
 
+  // 每次按键的音量步进
+  const VOLUME_STEP = 0.05
+  const volume = ref(1)
+  /**
+   * 静音前的音量，取消静音 / 静音态按 ↑ 时恢复到这里。
+   * 只在进入静音那一次快照；静音与归零同时发生时 volume 已是 0，用 lastAudibleVolume 兜底。
+   */
+  let volumeBeforeMute = 1
+  let lastAudibleVolume = 1
+
   function toggleMute() {
     const el = getMedia()
     if (!el)
       return
+    // 音量已归零时取消静音等于没改，先补回上一次能听到的音量
+    if (el.muted && el.volume <= 0) {
+      el.volume = volumeBeforeMute > 0 ? volumeBeforeMute : lastAudibleVolume
+      volume.value = el.volume
+    }
     el.muted = !el.muted
   }
 
+  /** 改音量；静音态不动静音开关，由调用方决定是否解除 */
+  function setVolume(next: number) {
+    const el = getMedia()
+    const clamped = Math.min(1, Math.max(0, next))
+    if (!el)
+      return
+    el.volume = clamped
+  }
+
+  /**
+   * 音量滑块（入参 0..1）：拖到 0 视为静音，拖回正值退出静音并落在当前位置；
+   * 静音态拖到 0 不覆盖 volumeBeforeMute，之后按 ↑ / 点喇叭仍回到原来的音量。
+   */
+  function onVolumeSliderInput(value: number) {
+    if (!Number.isFinite(value))
+      return
+    const el = getMedia()
+    // 取整到整数百分比，避免浮点误差让读数和滑块对不上
+    const next = Math.round(Math.min(1, Math.max(0, value)) * 100) / 100
+    // 归零交给 media 自己上报 muted；这里再置 muted 会让取消静音后滑块停在 0
+    if (next === 0) {
+      setVolume(0)
+      volume.value = 0
+      return
+    }
+    // 静音态下拖滑块即恢复声音
+    if (el && el.muted)
+      el.muted = false
+    setVolume(next)
+    // volumechange 是异步的，先同步 UI，滑块不滞后一帧
+    volume.value = next
+  }
+
+  // 键盘调音量的提示：焦点常在按钮/空白处，看不见胶囊里的滑块，只能靠它确认音量。
+  // 带自增 id，方便宿主按 id 去重
+  const shortcutHint = ref<{ id: number, text: string } | null>(null)
+  let shortcutHintTimer: ReturnType<typeof setTimeout> | null = null
+  let shortcutHintSeq = 0
+
+  function showShortcutHint(text: string) {
+    shortcutHint.value = { id: ++shortcutHintSeq, text }
+    if (shortcutHintTimer)
+      clearTimeout(shortcutHintTimer)
+    shortcutHintTimer = setTimeout(() => {
+      shortcutHint.value = null
+    }, 1000)
+  }
+
+  function notifyVolume() {
+    if (muted.value || volume.value <= 0) {
+      showShortcutHint('静音')
+      return
+    }
+    showShortcutHint(`音量 ${Math.round(volume.value * 100)}%`)
+  }
+
+  /** 键盘 ↑/↓：静音态按 ↑ 先恢复静音前音量再加一步 */
+  function adjustVolume(delta: number) {
+    const el = getMedia()
+    if (!el)
+      return
+    if (el.muted && delta > 0) {
+      el.muted = false
+      el.volume = Math.round(Math.min(1, Math.max(0, (volumeBeforeMute || lastAudibleVolume || 1) + delta)) * 1000) / 1000
+      // volumechange 异步，先同步再报提示
+      muted.value = el.muted
+      volume.value = el.volume
+      notifyVolume()
+      return
+    }
+    // 取三位小数，修掉浮点累加误差
+    setVolume(Math.round(Math.min(1, Math.max(0, el.volume + delta)) * 1000) / 1000)
+    volume.value = el.volume
+    notifyVolume()
+  }
+
   function onVolumeChange(event: Event) {
-    muted.value = (event.target as HTMLMediaElement).muted
+    const el = event.target as HTMLMediaElement
+    const wasMuted = muted.value
+    muted.value = el.muted
+    volume.value = Number.isFinite(el.volume) ? el.volume : 1
+    if (!el.muted && volume.value > 0)
+      lastAudibleVolume = volume.value
+    if (!wasMuted && el.muted)
+      volumeBeforeMute = Math.max(volume.value, lastAudibleVolume)
   }
 
   // 计算画面实际显示宽高比（90/270° 旋转会交换源宽高），上报给浮窗自动定形
@@ -261,6 +359,10 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
   })
 
   onUnmounted(() => {
+    if (shortcutHintTimer) {
+      clearTimeout(shortcutHintTimer)
+      shortcutHintTimer = null
+    }
     const video = getVideo()
     if (video)
       video.removeEventListener('resize', handleNativeVideoResize)
@@ -273,6 +375,7 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
     videoWrapperStyle,
     videoStyle,
     rotateHint,
+    shortcutHint,
     rotateLeft,
     rotateRight,
     resetRotation,
@@ -283,6 +386,12 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
     muted,
     togglePlay,
     toggleMute,
+    volume,
+    volumeBeforeMute: () => volumeBeforeMute,
+    VOLUME_STEP,
+    setVolume,
+    onVolumeSliderInput,
+    adjustVolume,
     onVolumeChange,
     updateVideoDimensions,
   }

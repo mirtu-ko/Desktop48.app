@@ -23,7 +23,6 @@
 
 // ===== 底座：凭证状态 / 身份头 / 请求 / 登录态 =====
 export {
-  currentClientProfile,
   ensureAuthLoaded,
   expireStoredAuth,
   getAuthState,
@@ -67,9 +66,11 @@ export type {
 // ===== 房间 =====
 export {
   checkRoomAnswer,
+  classifyChannelGate,
   getRoomChannel,
   getRoomChannelOwner,
   getRoomEssenceMessages,
+  getRoomGate,
   getRoomLastMessages,
   getRoomMessages,
   getRoomPermissions,
@@ -79,6 +80,8 @@ export {
 } from './pocket-room-api'
 
 export type {
+  ChannelAccessGate,
+  ChannelAccessGateKind,
   PocketRoomAnswerResult,
   PocketRoomChannel,
   PocketRoomLastMessage,

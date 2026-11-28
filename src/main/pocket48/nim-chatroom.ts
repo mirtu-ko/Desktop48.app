@@ -4,7 +4,7 @@
  * 按云信移动端 TCP 协议直连（云信应用只允许移动端登录，Web SDK 会被服务端拒）：
  * LBS 取地址 → RSA 握手交换 RC4 密钥
  * → 以安卓客户端身份登录进入聊天室 → 接收消息流。
- * 其中的包名与 SDK 版本由调用方按当前档位传入（`NimClientIdentity`，见 client-profile.ts），
+ * 其中的包名与 SDK 版本由调用方传入（`NimClientIdentity`，取自 client-profile.ts 的 `nimIdentity()`），
  * 设备 ID 取自 `client-profile.ts`（与口袋 HTTP 同一台设备；由 UUID 抽 16 位小写 hex，
  * 仅作登录属性，不参与签名）。
  *
@@ -54,7 +54,7 @@ const SEEN_MESSAGE_LIMIT = 2048
 /**
  * 构造聊天室登录包体：`[0x02] + 房间属性表 + 认证属性表`。
  * 认证属性里的 **6 = SDK 版本、25 = 包名**就是「以哪个客户端身份进房」，
- * 取自档位的云信身份（`NimClientIdentity`）。独立成纯函数便于直接断言这两个字段，
+ * 取自 `client-profile.ts` 的云信身份（`NimClientIdentity`）。独立成纯函数便于直接断言这两个字段，
  * 也避免身份来源在类内部再次隐式取用。
  */
 export function buildChatroomLoginBody(input: {
@@ -90,8 +90,8 @@ export function buildChatroomLoginBody(input: {
 
 /**
  * 发送弹幕时的发送者特征：对应官方 `AppIMMessage` 的 `user` 与 `config` 两块展示字段。
- * 由调用方按「当前账号资料 + 当前档位」拼好传入（客户端不自己去取 HTTP 资料），
- * 保证与聊天室登录身份、HTTP 请求头来自同一次档位判定。
+ * 由调用方按「当前账号资料 + 客户端事实」拼好传入（客户端不自己去取 HTTP 资料），
+ * 保证与聊天室登录身份、HTTP 请求头同源。
  */
 export interface ChatroomSender {
   user: {
@@ -188,8 +188,8 @@ export interface NimChatroomClientOptions {
   token: string
   roomId: string
   /**
-   * 以哪个客户端的身份进聊天室（SDK 版本 + 包名）。由调用方按当前档位取值，
-   * 与 HTTP 请求同档——见 `client-profile.ts` 的 `nimIdentityFor`。
+   * 以哪个客户端的身份进聊天室（SDK 版本 + 包名）。由调用方取 `client-profile.ts` 的
+   * `nimIdentity()` 传入，与 HTTP 请求同源。
    */
   nim: NimClientIdentity
   /** 仅供测试：替换 TCP 会话实现，缺省走 CommonlinkSession（生产不传） */
