@@ -7,6 +7,7 @@ import PlaybackPlayer from '@renderer/components/player/PlaybackPlayer.vue'
 import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import EventBus from '@renderer/services/event-bus'
 import { ensureTopmostSupport, topmostSupported } from '@renderer/stores/topmost-support'
+import { debugLog } from '@renderer/utils/debug'
 import { flushPlayDuration, openPlayDuration } from '@renderer/utils/play-duration'
 import { useEventListener } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue'
@@ -48,10 +49,13 @@ const pinned = computed(() => topmostSupported.value && isFloatTopmostPinned(top
 
 onMounted(() => {
   EventBus.on('live-unavailable', onLiveUnavailable)
-  // 置顶能力：ChromeOS 的 Linux 容器里图钉按下去不会有任何层级变化，只能降级成说明态
+  // 置顶能力：ChromeOS 的 Linux 容器等不支持置顶的环境直接隐藏图钉按钮
   void ensureTopmostSupport()
   void window.mainAPI.floatPlayerGetPayload(kind, liveId).then((value) => {
     payload.value = value
+  }).catch((error) => {
+    debugLog('float-window', '获取播放载荷失败:', error)
+    payload.value = null
   })
   void window.mainAPI.windowIsMaximized().then((value) => {
     isMaximized.value = value
@@ -123,11 +127,6 @@ function onPlaying(value: boolean) {
 
 /** 图钉是本窗二态：点亮时取消置顶，未点亮时改为始终置顶；新策略由主进程回推，不做本地乐观更新 */
 function onToggleTopmost() {
-  // 平台不支持时只解释原因，不发 IPC —— 发了也不会有任何层级变化
-  if (!topmostSupported.value) {
-    showHint('当前环境不支持窗口置顶（ChromeOS 的 Linux 容器或 Wayland 会话）')
-    return
-  }
   const next = nextFloatTopmost(topmost.value, playing.value)
   void window.mainAPI.floatWindowSetTopmost(next).then(() => {
     // 浮窗常被别的窗口压住一角，只改图标容易被忽略，成功后再压一条提示
@@ -137,8 +136,6 @@ function onToggleTopmost() {
 
 /** 点亮时说明「已置顶」并区分是策略继承还是本窗钉住；未点亮时说清下一击会变成什么 */
 const topmostTitle = computed(() => {
-  if (!topmostSupported.value)
-    return '当前环境不支持窗口置顶（ChromeOS 的 Linux 容器或 Wayland 会话）'
   if (pinned.value) {
     return topmost.value === 'always'
       ? '本窗已置顶 · 点击取消置顶'
@@ -355,21 +352,6 @@ useEventListener(document, 'fullscreenchange', () => {
 
   &:hover {
     background: rgba(var(--brand-rgb), 0.22);
-  }
-}
-
-/* 平台不支持置顶（Crostini）：保留按钮但弱化，点一下说明原因，不做成「点了没反应」 */
-.fw-pin.is-unsupported {
-  opacity: 0.45;
-  cursor: help;
-
-  &:hover {
-    color: var(--el-text-color-secondary);
-    background: transparent;
-  }
-
-  &:active {
-    transform: none;
   }
 }
 

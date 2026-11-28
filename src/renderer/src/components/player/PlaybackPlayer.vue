@@ -15,8 +15,8 @@ import { flushPlayDuration, markPlayDurationStarted } from '@renderer/utils/play
 import { formatMediaTime } from '@renderer/utils/time-format'
 import Tools from '@renderer/utils/tools'
 import { trackEvent } from '@renderer/utils/umami'
+import { useEventListener } from '@vueuse/core'
 import dayjs from 'dayjs'
-import { ElMessage } from 'element-plus'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import DanmakuBubbles from './DanmakuBubbles.vue'
 import MiniControls from './MiniControls.vue'
@@ -50,6 +50,9 @@ const userAvatar = ref('')
 const onlineNumber = ref(0)
 
 let playbackTracked = false
+let disposed = false
+const detailLoading = ref(false)
+const detailError = ref('')
 
 // 弹幕展示模式：实时堆叠 | 全部面板
 type DanmakuMode = 'live' | 'all'
@@ -226,6 +229,19 @@ const {
   onIdle: releaseSleepBlocker,
 })
 
+// 合并详情拉取态与播放引擎加载态，避免组件直接改写 usePlaybackEngine 内部 ref
+const isLoading = computed(() => detailLoading.value || mediaLoading.value)
+// 合并详情拉取失败与播放引擎错误：任一出错都结束加载态并展示重试遮罩
+const playbackError = computed(() => detailError.value || lastPlaybackError.value)
+
+function handleRetry() {
+  if (!playStreamPath.value) {
+    void getLiveOne()
+    return
+  }
+  retryPlayback()
+}
+
 // 录播播放错误（引擎内 notifyError 已按文案去重）
 watch(lastPlaybackError, (message) => {
   if (message)
@@ -238,13 +254,30 @@ useMediaShortcuts({
   actions: {
     togglePlay,
     toggleFullscreen,
-    rotateLeft,
-    rotateRight,
-    resetRotation,
+    rotateLeft: () => {
+      if (!isRadio.value)
+        rotateLeft()
+    },
+    rotateRight: () => {
+      if (!isRadio.value)
+        rotateRight()
+    },
+    resetRotation: () => {
+      if (!isRadio.value)
+        resetRotation()
+    },
     // ↑/↓ 调音量：与迷你条音量滑块走同一条通道（静音态下自动解除静音）
     volumeUp: () => adjustVolume(VOLUME_STEP),
     volumeDown: () => adjustVolume(-VOLUME_STEP),
   },
+})
+
+// 按 Esc 收起「全部弹幕」面板（含搜索框聚焦时，跳过输入法组词态）
+useEventListener(window, 'keydown', (event: KeyboardEvent) => {
+  if (event.isComposing)
+    return
+  if (event.key === 'Escape' && danmakuMode.value === 'all')
+    danmakuMode.value = 'live'
 })
 
 // 迷你条拖进度 / 「全部」面板点击跳转共用此 seek 通道：
@@ -263,6 +296,8 @@ function onMiniSeek(value: number) {
  * 开放公演选流为空、录播尚未生成、弹幕源变化需重载。
  */
 async function getLiveOne() {
+  detailError.value = ''
+  detailLoading.value = true
   try {
     debugLog('playback', `②拉详情: source=${props.source} → ${props.source === 'open' ? 'getOpenLiveOne' : 'getLiveOne'}, props:`, props)
     const view = await loadLiveDetail({
@@ -272,19 +307,27 @@ async function getLiveOne() {
       avatarUrl: props.avatarUrl,
       startTime: props.startTime,
     })
+    if (disposed)
+      return
     debugLog('playback', `②拉详情: 归一结果 streamType=${view.streamType ?? '单档'} cover=${view.coverUrl ? '有' : '无'}`, view)
 
-    // 开放公演回放选流为空：没有可播地址，停在空载
+    // 开放公演回放选流为空：没有可播地址，结束加载并展示重试遮罩
     if (props.source === 'open' && !view.playStreamPath) {
       debugLog('playback', '②拉详情: 公演回放选流为空，无法播放')
-      ElMessage({ message: '未获取到公演回放地址', type: 'error' })
+      detailError.value = '未获取到公演回放地址'
       return
     }
 
     // 录播尚未生成：不进播放引擎
     if (!view.review) {
       debugLog('playback', `②拉详情: liveId=${props.liveId} 暂无回放（review=false）`)
-      ElMessage({ message: '录播回放尚未生成！', type: 'warning' })
+      detailError.value = '录播回放尚未生成，请稍后重试'
+      return
+    }
+
+    if (!view.playStreamPath) {
+      debugLog('playback', `②拉详情: liveId=${props.liveId} 未返回播放地址`)
+      detailError.value = '未获取到录播播放地址'
       return
     }
 
@@ -313,8 +356,14 @@ async function getLiveOne() {
     }
   }
   catch (error: any) {
+    if (disposed)
+      return
     console.error('PlaybackPlayer.vue, 获取录播信息失败:', error.message)
-    ElMessage({ message: '获取录播信息失败', type: 'error' })
+    detailError.value = '获取录播信息失败，请重试'
+  }
+  finally {
+    if (!disposed)
+      detailLoading.value = false
   }
 }
 
@@ -335,6 +384,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  disposed = true
   flushPlayDuration()
   debugLog('playback', `⑤录播会话结束（liveId=${props.liveId}）: 销毁播放引擎 → 释放防休眠`)
   destroyPlayer()
@@ -435,20 +485,20 @@ onUnmounted(() => {
           </div>
 
           <PlayerLoading
-            v-if="mediaLoading && !lastPlaybackError"
+            v-if="isLoading && !playbackError"
             label="正在加载录播"
             hint="连接回放源中，请稍候"
           />
           <div v-else-if="mediaBuffering" class="video-mask buffering">
             <span>缓冲中…</span>
           </div>
-          <div v-if="lastPlaybackError" class="video-mask error">
-            <span>{{ lastPlaybackError }}</span>
+          <div v-if="playbackError" class="video-mask error">
+            <span>{{ playbackError }}</span>
             <div class="mask-actions">
-              <el-button size="small" type="primary" @click="retryPlayback">
+              <el-button size="small" type="primary" @click="handleRetry">
                 重试
               </el-button>
-              <el-button size="small" type="success" @click="onDownloadClick">
+              <el-button v-if="playStreamPath" size="small" type="success" @click="onDownloadClick">
                 {{ downloading ? '取消下载' : '去下载' }}
               </el-button>
             </div>
@@ -457,13 +507,13 @@ onUnmounted(() => {
           <div class="player-actions">
             <!-- 旋转控制（分段胶囊交互见 RotationControls.vue 头部注释） -->
             <RotationControls
-              v-if="!isRadio && !mediaLoading"
+              v-if="!isRadio && !isLoading && !playbackError"
               :angle="rotationAngle"
               @rotate-left="rotateLeft"
               @rotate-right="rotateRight"
               @reset="resetRotation"
             />
-            <el-tooltip :content="downloading ? '下载中，点击取消' : '下载'" placement="bottom" :show-after="400">
+            <el-tooltip v-if="playStreamPath" :content="downloading ? '下载中，点击取消' : '下载'" placement="bottom" :show-after="400">
               <button
                 class="action-btn action-btn--download"
                 :class="{ 'is-active': downloading }"
@@ -477,7 +527,7 @@ onUnmounted(() => {
 
           <!-- 控制条：录播与电台回放都保留拖动进度 seek -->
           <MiniControls
-            v-if="!mediaLoading"
+            v-if="!isLoading && playStreamPath"
             :playing="playing"
             :muted="muted"
             :volume="volume"

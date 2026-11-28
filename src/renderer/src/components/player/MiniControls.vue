@@ -72,9 +72,6 @@ watch(() => props.hint, (hint) => {
   if (!hint || hint.id === lastHintId)
     return
   lastHintId = hint.id
-  // 浮层开着时滑块本身就在动，不再叠一条
-  if (volumeOpen.value)
-    return
   showHint(hint.text)
 })
 
@@ -126,7 +123,7 @@ function onRangeInput(event: Event) {
         :aria-label="`播放进度 ${formatMediaTime(currentTime)} / ${formatMediaTime(duration)}`"
         @input="onRangeInput"
       >
-      <span class="mini-time">{{ timeText() }}</span>
+      <span class="mini-time" :title="timeText()">{{ timeText() }}</span>
     </template>
 
     <!-- 音量：点喇叭切静音，悬停浮出滑块 -->
@@ -379,7 +376,7 @@ function onRangeInput(event: Event) {
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.85);
   white-space: nowrap;
-  overflow: visible;
+  overflow: hidden;
   text-overflow: ellipsis;
 }
 </style>
