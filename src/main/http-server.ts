@@ -100,11 +100,6 @@ const server = http.createServer((req, res) => {
     // 上游连接还活着但不再吐数据时，FFmpeg 不会退出；由守卫结束响应以触发播放器重连
     let idleGuard: ReturnType<typeof createStreamIdleGuard> | null = null
 
-    res.writeHead(200, {
-      'Content-Type': 'video/x-flv',
-      'Connection': 'close',
-    })
-
     // 浏览器标签切换、播放器销毁或用户关闭页面时，都要尽快结束对应 FFmpeg。
     const closeResponse = () => {
       if (responseClosed)
@@ -134,10 +129,18 @@ const server = http.createServer((req, res) => {
     res.on('finish', closeResponse)
     req.on('aborted', closeResponse)
 
+    // 先于 pipe 注册：收到首块流数据时再发 200 FLV 头，未出首帧即失败时可返回真实 502/504
     ffmpeg.stdout.on('data', () => {
-      if (!hasReceivedData)
+      if (!hasReceivedData) {
+        hasReceivedData = true
         debug(`[http-server.ts] ${liveId} 收到首帧流数据，开始向播放器输出`)
-      hasReceivedData = true
+        if (!res.headersSent) {
+          res.writeHead(200, {
+            'Content-Type': 'video/x-flv',
+            'Connection': 'close',
+          })
+        }
+      }
       idleGuard?.touch()
     })
 
@@ -145,16 +148,22 @@ const server = http.createServer((req, res) => {
       if (responseClosed)
         return
       debug(`[http-server.ts] ${liveId} 超过 ${STREAM_IDLE_TIMEOUT_MS}ms 无流数据，结束响应以触发重连`)
-      // 与 FFmpeg 正常退出同形：不留错误体，mpegts 判为下载完成 → ended → 既有断流重试链
+      // 未发出 FLV 头时返回 504；已出流后空结束，复用既有 ended 断流重试链
+      if (!res.headersSent)
+        res.writeHead(504, { 'Content-Type': 'text/plain; charset=utf-8' })
       res.end('')
       closeResponse()
     })
 
     ffmpeg.stdout.on('error', (err) => {
       error('[http-server.ts] 读取直播流失败:', err)
-      if (!res.headersSent)
-        res.writeHead(500)
-      res.end('Read error')
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
+        res.end('Read error')
+      }
+      else {
+        res.end('')
+      }
       closeResponse()
     })
 
@@ -163,12 +172,15 @@ const server = http.createServer((req, res) => {
         return
 
       if (!res.headersSent) {
-        res.writeHead(hasReceivedData ? 200 : 502)
+        res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' })
+        res.end(code === 0 || signal === 'SIGTERM' || signal === 'SIGKILL'
+          ? ''
+          : 'Stream closed unexpectedly')
       }
-
-      res.end(code === 0 || signal === 'SIGTERM' || signal === 'SIGKILL'
-        ? ''
-        : 'Stream closed unexpectedly')
+      else {
+        // FLV 200 头已发出：不再向二进制流追加纯文本，防止 mpegts 报致命解析错
+        res.end('')
+      }
       closeResponse()
     })
 

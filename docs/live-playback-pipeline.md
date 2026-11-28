@@ -1,260 +1,98 @@
 # 播放链路
 
-本文说明直播播放的完整调用链路：从列表页点击卡片到视频画面渲染，覆盖模块划分、跨进程边界、安全闸门与数据形态。
+本文说明直播、录播（回放）与公演播放的核心架构、跨进程边界、状态流转与关键约束。与之并行的房间消息链路见 [room-message-pipeline.md](./room-message-pipeline.md)。
 
-## 0. 设计前提
+## 1. 架构定位与分层
 
-48 官方下发的直播地址为 `rtmp://`，浏览器内核不支持直接播放，因此需要一次转封装：
+48 官方直播源为 `rtmp://`，浏览器内核无法直播，需由主进程 spawn FFmpeg 转封装为本地 HTTP-FLV；录播（VOD）为 `http(s)` 的 `.m3u8` / `.mp4`，渲染层直连播放，不经过 FFmpeg。
 
-```
-rtmp://（官方源） → FFmpeg 转封装 → http://127.0.0.1（本地） → <video> 可播放
-```
+| 层级       | 模块                                                                 | 职责                                                       |
+| ---------- | -------------------------------------------------------------------- | ---------------------------------------------------------- |
+| 入口与汇聚 | `Shows.vue` / `Lives.vue` / `Playbacks.vue` → `stores/float-players` | 载荷归一、开播前唯一 FFmpeg 守卫（`checkLiveReady`）       |
+| 播放器编排 | `LivePlayer.vue` / `PlaybackPlayer.vue` 及 `composables/use-live-*`  | 详情拉取、播放器实例、断流重试、结束态复盘、弹幕与快捷键   |
+| 预加载桥   | `src/preload/index.ts` / `src/preload/ipc-contract.d.ts`             | 将主进程能力暴露为 `window.mainAPI.*`                      |
+| 主进程转流 | `main/stream.ts` / `main/http-server.ts` / `main/stream-idle-guard`  | 会话登记、延迟 spawn FFmpeg、本机回环 HTTP-FLV、空闲守卫   |
+| 主进程窗口 | `main/window/float-window.ts` / `common/float-window.ts`             | 独立播放窗去重、载荷回取、自适应尺寸定形与生命周期         |
+| 主进程弹幕 | `main/bilibili/danmaku-session.ts` / `main/pocket48/pocket-danmaku`  | 双源长连接会话管理、订阅者生命周期与批量下发               |
 
-FFmpeg 为外部可执行程序，只能由主进程 spawn。该约束决定了单次播放必然跨进程，也是整条链路复杂度的根本来源。
+主进程边界：`main/stream.ts` 只导出纯业务函数，由 `main/ipc/register-stream-ipc.ts` 经 `handleTraced` 统一接线；任何交给 FFmpeg 的地址都必须先过 `main/net/allowed-hosts.ts` 的 `isAllowedStreamUrl` 白名单。
 
-| 角色     | 目录                   | 职责                                                 |
-| -------- | ---------------------- | ---------------------------------------------------- |
-| 渲染进程 | `src/renderer`         | Vue 页面与播放器 UI                                  |
-| 预加载桥 | `src/preload/index.ts` | 将主进程能力暴露为 `window.mainAPI.*`                |
-| 主进程   | `src/main`             | 本地 HTTP 服务、FFmpeg 进程管理、白名单/端口安全闸门 |
-
-主进程侧分工（改动前先看清）：`main/stream.ts` 只导出纯业务函数（`handleCreateLiveStream` / `handleStopLiveStream` / `cleanupStreamSessions` / `createFlvStreamProcess`），不直接调用 `ipcMain.handle`；`main/ipc/register-stream-ipc.ts` 是唯一接线处，经 `ipc/trace.ts` 的 `handleTraced` 包装注册，全部 invoke 通道由 `ipc/index.ts` 的 `registerAllIPC()` 统一挂载；`main/http-server.ts` 是本机回环 HTTP 服务（端口 8080–8090，被占则退避），播放器 GET `/live/:id.flv` 时才真正 spawn FFmpeg；`main/net/allowed-hosts.ts` 的 `isAllowedStreamUrl` 是白名单，任何交给 FFmpeg 的 URL 都必须先过它。
-
-## 1. 调用链路总览
-
-以公演页点击进行中的公演为例；个人直播链路除详情接口分叉外一致。
+## 2. 直播播放主链路与转流保障
 
 ```
-[Shows.vue] @click="openLiveStream(show)"
-   │  show → payload（结构转换），仅 status === 2 才继续
-   ▼
-[stores/float-players.ts] openLive(payload)
-   │  薄封装：只把页面意图转成一次 IPC 调用，自身不持有状态
-   │  checkLiveReady()（use-live-guard）：FFmpeg 未就绪则提示并跳设置页，不开必然空转的窗口
-   ▼ openPlayer('live', payload) → window.mainAPI.openFloatWindow(kind, payload)
-   ===== 进程边界 =====
-[main/window/float-window.ts] openFloatWindow
-   ├─ Map<`${kind}:${liveId}`> 去重：已存在 → restore/show/focus 复用
-   └─ 否则 new BrowserWindow（frame:false / alwaysOnTop）→ `#/float?kind=..&liveId=..`
-   ▼
-[独立窗口渲染进程] main.ts 按 hash 分流 → mount(FloatWindowApp)
-   │  floatPlayerGetPayload(kind, liveId) 回取全量载荷 → 展开为 props
-   ▼
-[LivePlayer.vue] onMounted → resumeLive() → session.getLiveOne()
-   ▼
-[use-live-session.ts] getLiveOne()
-   ├─ onSessionStart()  复位 loading 与重试计数
-   ├─ fetchLiveDetail()
-   │    source==='open' → Apis.openLive() → pickPreferredStream(playStreams) 选高清
-   │    source==='user' → Apis.live()     → 单档 rtmp 地址
-   ├─ applyLiveDetail()  同步封面/主播名/头像/电台轮播/在线人数
-   └─ restartLiveStream(rtmpUrl)
-        ├─ onBeforeRebuild()  清重试计时器 + 销毁播放器 + 复位媒体元素
-        ├─ stopCurrentLiveStream()  先停旧会话
-        └─ startLiveStream() → createLiveStream(rtmpUrl, liveId)
-             ===== 进程边界 =====
-           [main/stream.ts] handleCreateLiveStream
-             ├─ assertLocalServerAvailable()  端口全被占则抛错
-             ├─ isAllowedStreamUrl(rtmpUrl)   白名单校验，拒绝非 48 域
-             └─ 仅登记 { liveId → rtmpUrl } 入 streamSessions，**不启动 FFmpeg**
-           ← "http://127.0.0.1:<port>/live/xxx.flv"
-        写入 localPlaybackUrl（经 buildPlaybackUrl 附加 ?t=<时间戳>&r=<重启序号>）
-   ▼ （watch localPlaybackUrl immediate:true 触发）
-[use-live-player.ts] mountPlayer() → mpegts.createPlayer(localPlaybackUrl) → HTTP GET
-   ▼
-[main/http-server.ts] 命中 /live/xxx.flv
-   │  Origin 校验（'null' / file:// / dev-server 才放行）
-   │  createFlvStreamProcess 于此刻 spawn：ffmpeg -i rtmp://... -c copy -f flv pipe:1
-   └─ ffmpeg.stdout.pipe(res)
-   ▼
-mpegts 解析 FLV → MSE → <video> → oncanplay → 加载态解除
+列表页点击 → stores/float-players.openLive (checkLiveReady 校验 FFmpeg)
+  ──IPC──▶ [main/window/float-window.ts] 按 kind:liveId 去重，打开独立播放窗 (#/float?kind&liveId)
+  ▼
+[LivePlayer.vue] floatPlayerGetPayload 回取全量载荷 → use-live-session.getLiveOne()
+  ├─ fetchLiveDetail()：open 源 pickPreferredStream(playStreams) / user 源单档 rtmp
+  └─ createLiveStream(rtmpUrl, liveId)
+       ──IPC──▶ [main/stream.ts] 校验端口与白名单，仅登记 { liveId → rtmpUrl }（同 liveId 换新地址时顺手停掉旧进程）
+       ◀── http://127.0.0.1:<port>/live/<id>.flv
+  ▼ （写入 localPlaybackUrl，经 buildPlaybackUrl 附 ?t=&r=，watch immediate 驱动挂载）
+[use-live-player.ts] mpegts.js GET 本地地址
+  ──HTTP──▶ [main/http-server.ts] Origin 校验 → 此刻才 spawn FFmpeg (-c copy -f flv pipe:1) → stdout.pipe(res)
+  ▼
+mpegts 解析 FLV → MSE → <video> oncanplay → 解除 loading
 ```
 
-### 1.1 独立播放窗
+- **延迟启动与首帧发头**：`handleCreateLiveStream` 不启动 FFmpeg，播放器真正发起 HTTP GET 时才 spawn（避免建窗即关留孤儿进程；同地址复用会话）。`http-server.ts` 延迟到收到 `ffmpeg.stdout` 首块流数据时再发 `200 video/x-flv` 头：未出首帧即退出/超时返回 `502`/`504`（读错误返回 `500`），已发 200 后异常退出一律空 `res.end('')`，不向二进制流追加纯文本污染 FLV。
+- **Linux FFmpeg 回落**：`resolveFfmpegEnvironment` 按「显式目录 → 系统 `ffmpeg`（`findSystemFfmpeg`）」优先级查找。`ffmpeg-static` 的 Linux 静态链接产物无动态加载器，解析域名会 `EAI_SYSTEM`/SIGSEGV（`-version` 冒烟测不出来），故 deb 包声明 `depends: ffmpeg` 兜底。
+- **双向资源回收**：渲染层 `onUnmounted` 销毁播放器并停会话；HTTP `close`/`finish`/`aborted` 直接 `SIGKILL` 对应进程；`handleStopLiveStream` 优雅写 `'q'` → 2s 未退调 `forceKill`（`SIGTERM` 后 1s 超时升级 `SIGKILL`）；主窗口关闭或 `before-quit` 调 `cleanupStreamSessions()` 清空全部会话。
+- **两类地址区分**：`LiveDetail.playStreamPath` 是接口契约字段（官方 `rtmp://` 输入），不可更名；`localPlaybackUrl` 是内部状态（本地 `http://127.0.0.1:...` 输出）。
 
-直播 / 回放打开的是真正的 Electron 独立窗口，可拖出应用窗口之外。
+## 3. 独立播放窗与数据形态
 
-| 关注点   | 实现                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 窗口创建 | `main/window/float-window.ts` 的 `openFloatWindow`，`frame:false` + `alwaysOnTop`；以 `kind:liveId` 去重，重复点击只聚焦不新建；标题栏整条 `-webkit-app-region: drag` 交给系统，无自研拖拽代码                                                                                                                                                                                                                        |
-| 页面复用 | 与主窗口共用 `index.html`；`renderer/src/main.ts` 按 hash 是否以 `FLOAT_WINDOW_HASH_PATH` 开头分流                                                                                                                                                                                                                                                                                                                    |
-| 载荷传递 | hash 只带 `kind` + `liveId`，全量载荷由主进程持有、播放窗经 `floatPlayerGetPayload` 回取，窗口 reload 后可自愈                                                                                                                                                                                                                                                                                                        |
-| 缩放     | 系统边框自由缩放；`@aspect` 到达时按工作区整体重算（非只保宽度），保持右上角不动。**首次定形无条件执行**：建窗用 9:16 兜底，此时「实际尺寸 ≠ 请求值」是常态（DPI、WM 取整），据此判定用户缩放过会让首次定形被整个跳过，横屏视频停在竖屏窄窗；定形落定后才尊重用户缩放（判据 `decideAutoFit`）                                                                                                                         |
-| 最大化   | 标题栏自带按钮（`maximizable: true`），双击标题栏同效，属系统级最大化。状态由主进程经 `sendIpc` 推 `windowOnMaximizeChange`（各窗口独立，不可广播）；最大化视同用户接管尺寸                                                                                                                                                                                                                                           |
-| 初始尺寸 | 按所在显示器工作区自适应：以 1280×800 / 1920×1080 两档工作区做连续插值——横屏宽占工作区 53%→45%，竖屏高上限占工作区 80%→70%，再按下限撑开（竖屏短边 `FLOAT_INITIAL_MIN_WIDTH_PORTRAIT` 320 / 横屏宽 `FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE` 680），夹回工作区可容纳范围后按视频比例内接、叠加标题栏（`computeInitialWindowSize`）。避免 1280 的硬下限导致 1440 反而更小；`workArea` 为 DIP，4K@200% 与 1080p@100% 观感一致 |
-| 电台窗   | 无特殊尺寸分支：与视频窗同走 `computeInitialWindowSize`，恒用竖屏兜底比例 9/16（无视频轨、永不上报 aspect，定形永不触发），随工作区按比例缩放。判据 `payload.liveType === 2`；回放的 `liveType` 由 `Playbacks.vue` 透传，不能等 `PlaybackPlayer` 拉详情                                                                                                                                                               |
-| 置顶     | 播放中置顶（播放状态变化 → `setAlwaysOnTop`），暂停 / 结束取消；创建时先置顶。层级为默认 `floating`（在任务栏之下），要盖住全屏应用需改 `screen-saver`                                                                                                                                                                                                                                                                |
-| 生命周期 | 关闭主窗口 → `closeAllFloatWindows()` + `cleanupStreamSessions()` → `window-all-closed` 触发退出；播放窗的 `live-unavailable` 经 `notifyLiveUnavailable` 上报主进程再转发主窗口 EventBus                                                                                                                                                                                                                              |
-| 任务状态 | 下载 / 录制任务列表是主进程注册表的镜像，**每个窗口都要 `installTasks()`**；`Started`/`End`/`Error` 广播给全部窗口，`Progress` 只回发起方                                                                                                                                                                                                                                                                             |
+| 关注点   | 关键实现与约束                                                                                                                 |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 窗口与载荷 | `frame:false` + `alwaysOnTop` + `backgroundThrottling:false`（防失焦节流弹幕/轮询）；hash 只带 `kind`+`liveId`，全量载荷由主进程持有以支持 reload 自愈 |
+| 尺寸定形 | `computeInitialWindowSize` 按所在显示器 `workArea` 连续插值计算初始尺寸；首次 `@aspect` 无条件定形，落定后才尊重用户缩放（`decideAutoFit`）；电台窗（`liveType === 2`）恒用 9:16 兜底且永不上报 aspect |
+| 平台与控制 | 窗口控制一律按 `BrowserWindow.fromWebContents(event.sender)` 定位；Linux 下 `closeAllFloatWindows()` 走 `destroy()` 不触发 `unload`，须在主窗口 `closed` 调 `cleanupStreamSessions()` |
+| 详情归一化 | `fetchLiveDetail` 将公演多档 `playStreams` 与个人单档归一为 `LiveDetail`；在线人数首帧来自详情，实时刷新走口袋云信 `LIVEUPDATE`（公演/未登录保持首帧） |
 
-尺寸常量集中在 `src/common/float-window.ts`（主进程与渲染端共用）；播放窗须 `backgroundThrottling:false`，否则失焦时 Chromium 默认节流 rAF/定时器，弹幕与轮询会卡顿。
+## 4. 播放器编排、故障恢复与结束态
 
-⚠️ 窗口控制通道一律以 `BrowserWindow.fromWebContents(event.sender)` 定位窗口，不能恒取主窗口——否则播放窗的关闭按钮会关掉主窗口。
+`LivePlayer.vue` 组合 8 个核心 composable（`session` / `retry` / `player` 环状引用靠函数声明提升解耦）：
 
-⚠️ **平台差异（Linux）**：`will-resize` / `resized` 只有 macOS / Windows 触发，`fitFloatWindowAspect` 另有一道兜底——尺寸偏离「上次程序设置的尺寸」超 2px 即视为用户缩放，且该兜底**只在首次定形落定后生效**，否则建窗时的 DPI / WM 偏差会被误判成用户缩放，使首次定形被跳过。Wayland 下 `setSize` / `setPosition` / `setAlwaysOnTop` 不保证被合成器采纳，初始 x/y 可能失效（尺寸定形通常仍生效，未做分支）。`closeAllFloatWindows()` 用 `destroy()`，**不触发 `unload`**，渲染端 `stopLiveStream` 不会执行，故转流进程由 `http-server.ts` 的 `req.on('close')` SIGKILL 兜底、`streamSessions` 由 `cleanupStreamSessions()` 清理——macOS 关主窗口不退出应用，该步骤须挂在主窗口 `closed` 而非仅 `before-quit`。
+| composable           | 负责                                                       | 不负责                             |
+| -------------------- | ---------------------------------------------------------- | ---------------------------------- |
+| `use-live-session`   | 拉详情、补拉聊天室 ID、开/停转流会话、界面状态同步         | 播放器实例、重试节奏、弹幕订阅     |
+| `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位                         | 地址来源、错误处理策略             |
+| `use-stream-retry`   | 重试节奏（默认 2s × 3，决策走纯函数 `nextRetryAttempt`）   | 具体恢复逻辑（由 `attempt` 注入）  |
+| `use-video-rotation` | 旋转 / 容器全屏 / 播放暂停 / 音量                          | 地址、重试                         |
+| `use-sleep-blocker`  | 播放期间阻止系统休眠                                       | 播放行为                           |
+| `use-media-download` | 录制发起（原始 RTMP 直存，不经本地转封装）                 | 页面播放链路                       |
+| `use-live-danmaku`   | 双源弹幕订阅、投放节拍与自发回推认领                       | 播放行为、气泡层渲染               |
+| `use-danmaku-layer`  | 弹幕层锚定（画面内 / 左侧黑边）、字号与宽度上限计算        | 弹幕内容与生命周期                 |
 
-## 2. 各阶段数据形态
+### 关键约束与状态流转
 
-**① 列表项 `OpenLive`**（`getOpenLiveList`）：`{ liveId, title, subTitle, coverPath, status /* 1未开始 2进行中 4已结束 */, stime /* 字符串 */, teamList: [{ teamId, teamName, teamColor }] }`。
+- **响应式与复位**：composable 参数统一传 getter（防 props 固化）；播放器重建统一由 `watch(localPlaybackUrl, { immediate: true })` 驱动；`resetMediaElement` 清空 `onerror`/`oncanplay`/`onloadedmetadata`/`onended` 防止旧句柄串场；`requestId` 拦截过期详情回包，`streamRestartToken` 拼入 `?r=` 防止 mpegts 复用缓存。
+- **断流与静默故障**：
+  - 主播连麦换签名时旧流结束不触发 mpegts `ERROR`（也不能用 `LOADING_COMPLETE`，worker 模式下会被丢弃），统一由媒体元素 `onended` 按网络错上抛进 `retry.schedule()`，并在 `oncanplay` 清零连续失败计数。
+  - `main/stream-idle-guard.ts` 监控 `ffmpeg.stdout`，10s 无数据即结束响应（未发头回 `504`，已发头空结束触发 `ended`），把本机断网/推流静默挂死转入既有重试链。
+  - 所有失败出口收敛至 `loadFailureKind`（`stream | detail | offline`）与 `markLoadFailed()`，离线直接短路详情与列表请求，`online` 事件自动触发 `retryAfterStall()`；`request()` 对随机 `{status:1017}` 与网络异常默认重试 3 次，业务结论不重试。
+- **下播结束态 vs 下架删除**：
+  - `enterLiveEnded`（下播结束卡，不关窗）的入口：`CLOSELIVE` 推送、详情/换流（`handleLiveRestream`）判 `review=true` / VOD 地址 /「回放生成中」、重试耗尽后列表复核已无本场（仅 user 源）。进入后停流停计时停弹幕、广播 `live-unavailable` 刷新列表，并拉 `POST live/api/v1/live/result` 展示复盘（必须带登录 token，`liveTime`/`totalMoney`/`liveId` 按字符串宽松解析；拉不到降级简版卡）。
+  - `closeUnavailableLive`（详情或换流明确报 `10049 已被删除`）为错误态，停流并立即关窗。
+- **交互与空态细节**：
+  - 快捷键共用 `useMediaShortcuts`，直播不接 `←/→`，电台模式仅禁用旋转快捷键、保留 `↑/↓` 调音量。
+  - 房间消息隐藏时点「发送弹幕」会同步开启消息层并聚焦输入条。
+  - 直播列表空态 `use-live-idle` 每 30s 推进 `clock` 刷新「已等待 N 分钟」，并同步 `useLiveStatusStore.lastFetchedAt` 更新「上次检查」时间。
 
-**② `FloatPlayerPayload`**（`Shows.vue` 转换）：在 ① 基础上将 `stime` 转数字，并补 `source`（`'open' | 'user'`，决定详情接口）、`liveType`（1 视频 / 其它电台）、`bilibiliRoomId`（仅公演携带，映射不到则缺省，播放器不显示弹幕入口）。载荷在后续三层（数组项 → FloatPlayer → LivePlayer props）原样透传。
+## 5. 弹幕链路
 
-**③ 播放窗记录**（主进程 `records`，键为 `kind:liveId`）：`{ win, payload, aspectFitted, userResized }`。`stores/float-players.ts` 对外只暴露 `openLive` / `openPlayback` 两个语义入口。
-
-**④ 详情归一化 `LiveDetail`**：公演接口返回 `playStreams` 多档清晰度、个人直播返回单地址，`fetchLiveDetail` 归一为同一结构（`playStreamPath` / `coverPath` / `user` / `liveId` / `onlineNum`（仅 user）/ `carousels`（仅电台）），后续代码不再区分来源；`applyLiveDetail` 消费它写界面状态，在线人数经 `onOnlineNum` 上浮窗（首帧值），实时刷新走云信 LIVEUPDATE 推送（`liveUpdateInfo.online`，与官方 App 同构；未登录/公演无 IM 会话时保持首帧）。主进程返回 `{ url /* http://127.0.0.1:.../live/xxx.flv */, liveId }`。
-
-## 3. 两类地址的区分
-
-| 变量                        | 内容                         | 方向                       |
-| --------------------------- | ---------------------------- | -------------------------- |
-| `LiveDetail.playStreamPath` | `rtmp://live-play.48.cn/...` | 输入：供主进程 FFmpeg 拉流 |
-| `localPlaybackUrl`          | `http://127.0.0.1:8080/...`  | 输出：供 mpegts 播放器加载 |
-
-前者为接口契约字段（`services/api-types.ts`），不可更名；后者为内部状态。
-
-## 4. FFmpeg 的延迟启动
-
-`handleCreateLiveStream` 本身不启动 FFmpeg：它只做闸门校验并登记 `{ liveId → rtmpUrl }`，返回本地地址；播放器 GET 本地地址时 `http-server` 才取出地址并 spawn。收益：播放窗创建后立即关闭不会遗留 FFmpeg 进程；同一直播（`existingSession.inputUrl === rtmpUrl`）复用会话，不重复登记。
-
-### 4.1 linux 上的 FFmpeg 来源（配置目录 → 系统安装）
-
-`resolveFfmpegEnvironment` 的优先级是「显式目录（用户配置或一键下载）→ linux 系统 ffmpeg」，两者都没有时才原样返回显式目录的失败判定。系统来源由 `findSystemFfmpeg` 探测（PATH + `/usr/local/bin`、`/usr/bin`），存在性之外还要求可执行位。
-
-这条回落不是可选项，而是修 bug：ffmpeg-static 的 linux 产物是 **glibc 静态链接**，域名解析要 `dlopen` `libnss_dns.so.2`，而静态程序没有动态加载器 —— 普通发行版上 `getaddrinfo` 返回 `EAI_SYSTEM`，ChromeOS Crostini 容器里直接 SIGSEGV，主进程只看到 `close code=null`。注意 `-version` 不解析域名，所以「冒烟校验跑通」证明不了可用。deb 侧的 `depends: ffmpeg`（`electron-builder.yml`）保证系统来源存在，用户安装时自动带上；命令行走 `apt install ffmpeg` 的也是同一条来源。
-
-## 5. 关闭时的资源回收
-
-回收路径双向，渲染进程与主进程各自独立兜底：
-
-```
-关闭播放窗 → 窗口销毁 → LivePlayer.onUnmounted
-   ├─ session.dispose() / retry.reset() / elapsedTimer.pause()
-   └─ player.destroyPlayer() / releaseSleepBlocker()
-HTTP 连接断开 → http-server 的 req/res close → SIGKILL FFmpeg（响应级）
-handleStopLiveStream → stopProcess(优雅写 'q') → 2s 未退 SIGTERM → 再失败 SIGKILL（会话级）
-应用退出 → before-quit → cleanupStreamSessions() 清空全部会话与进程
-```
-
-任一侧异常均不导致 FFmpeg 进程泄漏。
-
-## 6. LivePlayer.vue 中 composable 的协作
-
-该文件是耦合度最高的模块，共挂载 9 个 composable，其中 session / retry / player / recoverStream 存在环状引用，依靠函数声明提升解决实例化顺序——因此 `useLiveSession({ onBeforeRebuild: rebuildMedia, onSessionStart: beginSession })` 引用的两个 handler 定义于文件更靠后的位置，此为有意为之。
-
-```
-session ──onSessionStart──▶ beginSession ──▶ retry.reset() + mediaLoading=true
-session ──onBeforeRebuild─▶ rebuildMedia ──▶ retry.reset() + player.destroyPlayer()
-session ──onAvatar/onOnlineNum/onEnded/onUnavailable/onSessionError─▶ 标题栏 / 在线人数 / 结束卡 / 关窗 / 失败卡
-player  ──onCanPlay───────▶ onPlayerCanPlay ──▶ retry 复位 + clearLoadFailure()
-player  ──onError─────────▶ handleStreamError ──▶ 网络错保持 loading / 致命错销毁播放器 → retry.schedule()
-main    ──stdout 空闲 10s─▶ http-server 结束响应 ──▶ 媒体元素 ended ──▶ 同上的 onError 入口
-network ──offline/online─▶ watch(isOnline) ──▶ markLoadFailed('offline') / retryAfterStall()
-watchdog──起播 15s 未出画▶ recoverStream 或 markLoadFailed('stream')
-retry   ──attempt─────────▶ recoverStream ──▶ 离线短路 / fetchLiveDetail → 判回放态 → 重建流
-retry   ──onExhausted─────▶ handleRetryExhausted ──▶ refreshLiveStatus(true) → enterLiveEnded / loadFailed
-danmaku ──onLiveEnd──────▶ closeLiveEnded ──▶ enterLiveEnded
-```
-
-`enterLiveEnded`（下播结束态，见 §6.1）是「直播终结」的唯一出口：停流停计时停弹幕 → 广播 `live-unavailable` → 拉复盘切结束卡。**不再 `emit('close')`**——官方 `LiveCloseFragment` 就是覆盖在播放器上的结束页，用户点关闭才关窗；`closeUnavailableLive`（详情明确反馈下架，如 `10049 已被删除`）是错误态不是结束态，仍立即关窗。
-
-建议阅读顺序：先读 `beginSession` / `rebuildMedia` / `handleStreamError` / `onPlayerCanPlay` / `recoverStream` / `enterLiveEnded` 六个 handler，再回看 `useXxx({...})` 的参数。
-
-| composable           | 负责                                                        | 不负责                               |
-| -------------------- | ----------------------------------------------------------- | ------------------------------------ |
-| `use-live-session`   | 拉详情、补拉聊天室 ID、开/停转流会话、界面状态同步          | 播放器实例、重试节奏、轮询、弹幕订阅 |
-| `use-live-player`    | mpegts 实例创建/销毁、媒体元素复位                          | 地址来源、错误处理策略               |
-| `use-stream-retry`   | 重试节奏（默认 2s × 3，决策走纯函数）                       | 具体恢复逻辑（由 attempt 注入）      |
-| `use-video-rotation` | 旋转 / 容器全屏 / 播放暂停 / 音量                           | 地址、重试                           |
-| `use-sleep-blocker`  | 播放期间阻止系统休眠                                        | 播放行为                             |
-| `use-media-download` | 录制发起（走原始 RTMP 直存文件，不经本地转封装）            | 页面播放链路                         |
-| `use-live-danmaku`   | 双源弹幕订阅与投放                                          | 播放行为、气泡层渲染                 |
-| `use-danmaku-layer`  | 弹幕层锚定与摆放（画面内 / 左侧黑边）、字号自适应、宽度上限 | 弹幕内容与生命周期                   |
-
-直播已播时长只有一个消费者，计时逻辑已内联到 `LivePlayer.vue`；在线人数仍由 IM 推送更新，不走轮询。
-
-弹幕层的几何全在 `computeDanmakuLayout`（纯函数）：字号按渲染区短边等比缩放，三档封顶——迷你窗 10–14px、非全屏播放窗 12–14px、全屏 12–18px（窗口态面积小，沿用 18px 上限会和全屏一样大、显得拥挤）；摆放取全局偏好 `danmakuPlacement`（`video` 画面内 / `left` 左侧黑边），黑边窄于 60px 时自行回落画面内、入口按钮只在 `canFloatLeft` 时出现；公演（B 站）弹幕另限宽 33vw，防单条横跨整块画面。直播与回放共用，迷你浮窗不传 `placement`。
-
-### 6.1 下播结束态与复盘数据
-
-主播下播有三条判决路径，都进 `enterLiveEnded`：`CLOSELIVE` 消息（服务端推送即达，仅登录用户有口袋 IM 会话）、详情状态确认（`getLiveOne` / `recoverStream` 判 `review=true` / VOD 地址，或「回放生成中」文案；无需登录）、重试耗尽后的列表确认（`refreshLiveStatus(true)` 里已无本场 liveId，仅 user 源）。耗尽时列表仍有本场、查询失败或 open 源，一律切加载失败卡（`loadFailed`），不再把网络故障误报成「直播已结束」。加载失败与下播结束是两条互斥出口，共用 `.live-end` 卡片外壳但状态源不同，见 §7.7。
-
-1. **收摊**：停已播计时、复位重试状态机、停弹幕会话（`useLiveDanmaku` 额外暴露的 `stop`）、停流并销毁播放器。此后 `handleStreamError` 与所有在途 `fetchLiveDetail` 回包都被 `liveEnded` 拦下——停流必然触发错误事件，不拦就会把已结束的直播反复重拉。
-2. **广播 `live-unavailable`**：列表页据此把该直播移出进行中（与下架同一通道，Lives 页只关心刷新）。
-3. **拉复盘**：`POST live/api/v1/live/result`（body `{ liveId }`，**必须带登录 token**，实测无 token 报 400「缺少请求参数」）→ 主进程 `pocketGetLiveResult` 原样回传 content → 渲染层 `services/live-result.ts` 宽松解析。字段类型以报文为准：`liveTime` / `totalMoney` / `liveId` 实测都是**字符串**数字，官方 bean 声明的 long/int 不可信。进行中也可查，下播即时可用，无结算延迟。
-4. **结束卡**（`.live-end`，z-index 35 盖住整块画面，官方 `LiveCloseFragment` 同构）：标题「直播已结束」+ 主播名 + 时长 / 总观看 / 礼物三围芯片 + 榜单前三（与互动榜同构）+ 关闭按钮。时长取复盘 `liveTime`（毫秒）优先、回落本地已播时长；礼物取复盘 `totalMoney` 优先、回落 LIVEUPDATE 累计流水；compact 小浮窗（viewportWidth < 420，默认竖屏直播窗 360 宽故恒真，拉宽越过 420 后回落普通播放窗字号档位）榜单缩小保留——榜单仅三项竖排、约 74px 高，窄窗高度足够，当初砍掉是过度收紧。复盘拉不到（未登录直接跳过请求——接口必须带 token；接口失败）时降级简版卡，**不因此关窗**。
-
-`liveOnline` 是本场累计观看（下播时即终值），结束卡作「总观看」展示；与实时推送的 `onlineNum`（当前在线）不同口径。
-
-## 7. 实现约定（易错点）
-
-### 7.1 composable 参数采用 getter 而非值
-
-`useLiveSession({ liveId: () => props.liveId })`。直接传值会在调用瞬间固化，props 的后续变化无法在 composable 内感知。
-
-### 7.2 播放器重建统一由 watch 驱动
-
-`getLiveOne()` 取得地址后本可直接调用 `setupPlayer(地址)`，实现上改为 `watch(localPlaybackUrl, ..., { immediate: true })`：首次播放、断流重试、恢复播放三类场景归并为「写入地址」一个动作，重建逻辑只存在于一处；`immediate: true` 让首挂载也走同一路径。
-
-### 7.3 递增令牌
-
-连续两次点击同一场直播时，第一次请求持有的 `requestId` 会被第二次推进计数，迟到响应检测到自己已过期，主动 `stopLiveStream` 撤销刚登记的会话并放弃写入，不覆盖第二次的结果（分页列表的 `listRequestId` 同模式）。`streamRestartToken` 是另一维度序号，拼进地址的 `?r=` 参数，让同 URL 的两次重启在浏览器/mpegts 眼里是两个不同资源。
-
-### 7.4 详情失败按业务结论分流
-
-`getLiveOne` 的 `try/catch` 里，详情接口失败不一定意味着下架：`10049 已被删除` 才广播 `live-unavailable` 并 `emit('close')` 关窗；「回放生成中」是本场下播，走 `onEnded` 进结束卡（`request()` 也不为它弹错误提示）；成功路径若详情已转回放态（`review=true` / VOD 地址）同样走 `onEnded`，不把回放地址喂给直播转流链；其余临时故障走 `onSessionError` 切加载失败卡（既不关窗，也不再静默转圈）。错误提示由 `services/apis.ts` 的 `request()` 统一弹窗（3 秒同文案去重），此处不重复弹。
-
-⚠️ 只有确定性失败才该走这条路：pocketapi 的 `getLiveOne` 会随机返回 `{status:1017}`（同一份 body 约 1/3 命中，与参数、频率、并发无关，2026-09-13 实测），若原样当成下架会无故关播，故 `request()` 对 1017 与网络层异常默认重试 3 次（退避 400/800/1200ms）；`10049 该成员直播已被删除` 等业务结论不重试，立即上抛。**下架（错误态）与下播（结束态）是两条路**：前者立即关窗，后者进结束卡停流展示复盘，见 §6.1。
-
-### 7.5 上游推流中断（连麦等）只能从媒体元素侧感知
-
-主播开始/停止连麦时，官方换发新签名（仅 query 里 `wsSecret` / `wsTime` 变化，Stream Key 不变），旧地址失效 → FFmpeg 退出 → 本地 FLV 响应结束。这条路径**没有任何 mpegts ERROR 事件**，重试状态机不会被触发，恢复入口须自行建立：
-
-- 本地响应没有 `Content-Length`，mpegts 判定为 LOADING_COMPLETE 而非 Early-EOF，不抛 ERROR；随后 `endOfStream()` 把时长校正到最后一段，播完缓冲即触发 `ended`（伴随 `pause`，观感是「停住 + 暂停」）。
-- 触发点取媒体元素的 `onended`（直播正常播放时永远不会 ended），一律按网络错误上抛 → `retry.schedule()` → `recoverStream` 重新拉详情拿到**新签名地址**重建。
-- ⚠️ 不要改用 mpegts 的 `LOADING_COMPLETE` 兜底：`enableWorker: true` 时 worker 回传的包只有 `{ msg, event }`、不带 `extraData`，主线程按 `'extraData' in packet` 判断后直接丢弃该事件。
-- 重试计数语义是「连续失败次数」，必须在 canplay 时清零，否则一场直播里累计断流 3 次（连麦很容易做到）会被误判为加载失败。
-
-### 7.6 开播前的 FFmpeg 校验只做一次
-
-`stores/float-players.ts` 的 `openLive` 是四个开播入口（直播列表 / 公演页 / 房间资料卡 / 房间分享卡）的唯一汇聚点，`use-live-guard` 的 `checkLiveReady()` 接在这里，新增入口无需接线；`openPlayback` 不做该校验——回放走 mpegts 直连，不经过 FFmpeg 转封装。判定口径与启动门禁、下载守卫共用 `window.mainAPI.getFfmpegStatus`（`resolveFfmpegEnvironment`：显式目录 → linux 系统 ffmpeg 回落，见 4.1），不要另起一套。
-
-### 7.7 静默故障与加载失败态
-
-本机断网与主播停推不是一回事：RTMP 的 TCP 连接仍活着、FFmpeg 不会退出、本地 FLV 响应不结束，mpegts 既不派发 ERROR 也不触发 `ended`；而看门狗在 `canplay` 时已撤销。状态机因此零输入，等多久都不会出失败卡。
-
-- `main/stream-idle-guard.ts` 从 spawn 起算、每次 `ffmpeg.stdout` 数据刷新，10s 无数据即 `res.end('')` + 结束转流会话，把静默挂死转成媒体元素 `ended`，复用 §7.5 的既有重试链；渲染层不为它新增状态或定时器。正常流每秒几十个音频 tag，10s 是极大余量，误触发也只是重连一次。
-- 所有失败路径收敛到 `loadFailureKind`（`stream | detail | offline`）与唯一写入口 `markLoadFailed()`：停看门狗/重试计时器、上报一次 `live:load-failed { by }`；文案由 `describeLoadFailure()` 纯函数派生。`stream` = 起播静默或重试耗尽，`detail` = 首次详情失败，`offline` = 本机断网。
-- 离线时任何来源都归一为 `offline`；`recoverStream()` 与 `confirmExhaustedEnding()` 走同一个 `shortCircuitIfOffline()`，避免断网时白打详情与列表请求。`online` 事件触发 `retryAfterStall()` 自动重建。
-
-## 8. 弹幕链路
-
-与播放链路并行、共享 LivePlayer 的互动消息子系统。**双源按直播类型分流，互不混用**：
+双源按直播类型分流，由 `use-live-danmaku` 统一投放至气泡层，几何布局由纯函数 `computeDanmakuLayout` 负责：
 
 | 直播类型                    | 数据源         | 会话锚点                              | 主进程模块                         |
 | --------------------------- | -------------- | ------------------------------------- | ---------------------------------- |
-| 公演（`source='open'`）     | B 站弹幕       | `bilibiliRoomId`（payload 携带）      | `main/bilibili/danmaku-session.ts` |
-| 个人直播（`source='user'`） | 口袋48互动消息 | `chatroomId`（use-live-session 补拉） | `main/pocket48/pocket-danmaku.ts`  |
+| 公演（`source='open'`）     | B 站只读弹幕   | `bilibiliRoomId`（payload 携带）      | `main/bilibili/danmaku-session.ts` |
+| 个人直播（`source='user'`） | 口袋48互动消息 | `chatroomId`（`use-live-session` 补拉） | `main/pocket48/pocket-danmaku.ts`  |
 
-两源由 `use-live-danmaku` 统一订阅，投放到同一气泡层；口袋的 LIVEUPDATE 不进气泡层，路由到左上角互动榜面板（同报文的 online / allMoney 驱动胶囊在线人数与礼物流水段）。CLOSELIVE 与 INFORM_PULL_STREAM 同样不进气泡层：前者宿主切入下播结束态（停流 + 广播刷新列表 + 复盘卡，见 §6.1），后者宿主拉详情拿新 token 重建流（连麦/PK 时地址主体不变、token 变；地址未变则跳过），其余 13 类连麦/PK 消息按官方门禁集合静默丢弃。口袋源走自研网易云信 TCP 客户端（`nim-chatroom.ts`），需登录口袋账号；进房身份（SDK 版本与包名）取自 `client-profile.ts` 的 `nimIdentity()`，与 HTTP 请求报同一家客户端（塞纳河48），登录态变更时旧会话会被断开。
+- **主进程会话治理**：两处会话表的 `subscribers` 均为 `Map<WebContents, () => void>`，显式退订或会话销毁时同步摘除 `destroyed` 监听防止累积；`handleDanmakuStart` 与 `handlePocketDanmakuStart` 在异步握手/取凭据后均复核并发入册的会话，防止重复建连与旧连接泄漏；登录态变更时 `resetPocketDanmakuSessions()` 断开全部口袋会话。
+- **B 站房间号三级解析**（`utils/bilibili-room.ts`）：`teamList[0].groupId` 查表 → 标题/副标题匹配团体/队伍名 → 在播官方房间书名号兜底（主进程缓存 5 分钟）。
+- **口袋消息路由与发送**：`LIVEUPDATE` 驱动在线人数与互动榜；`CLOSELIVE` 进下播结束态；`INFORM_PULL_STREAM` 触发 `handleLiveRestream` 拉详情换流（地址未变跳过，已下播/下架走对应分流）；其余 13 类连麦/PK 指令静默丢弃。发送弹幕仅个人直播可用，复用当前聊天室会话（`sourceId` 必传 `liveId`），发送成功后本地先上屏并在 10s 窗口按 ID 或 `userId+正文` 认领服务端回推。
 
-**B 站房间号三级解析**（`utils/bilibili-room.ts`，从严到宽，全部落空则无弹幕）：① `teamList[0].groupId` 查团体房间表（`common/bilibili-rooms.ts`）；② 标题/副标题文本匹配，先团体名（SNH48…）再队伍名（TEAM X…，接口的 teamName 不含团体名）；③ 在线兜底：主进程拉五个官方直播间信息（`bilibiliRoomInfos` IPC，缓存 5 分钟），只取在播中的房间，与公演名书名号段互配命中——teamList 为空的公演（新生公演、生日会等）靠这层发现。
+## 6. 录播（回放）链路与调试
 
-弹幕连不上只提示一次，不影响直播播放：B 站握手失败经 toast 提示后关闭弹幕层；口袋源断连由协议客户端自动重连，未登录则不建立会话。
-
-### 8.1 发送弹幕（个人直播）
-
-只有个人直播可写：公演用的是 B 站只读弹幕，没有上行通道。入口在已登录且已取到 `chatroomId` 时出现（胶囊「发送」按钮 → 底部输入条），发送复用**当前观看已建立**的聊天室会话，不新建连接——同一账号的另一条连接会顶掉自己。
-
-链路：`LivePlayer.submitDanmaku` → `use-live-danmaku.sendBarrage` → `services/pocket-chatroom.sendPocketBarrage` → IPC `pocketDanmakuSend` → `pocket-danmaku.handlePocketDanmakuSend` → `nim-chatroom.sendMessage`（service 13 / command 6，等回包取消息 ID 与时刻）。
-
-报文与官方 `com.netease.nimlib.chatroom.h.a` 同构，属性表六项：`1`=消息 UUID、`2`=100（自定义）、`3`=附件（自定义消息为空）、`4`=remoteExtension、`10`+`11`=反垃圾开关与待检正文。`remoteExtension` 是 `AppIMMessage` 的 JSON，正文只放 `text`；`messageType=BARRAGE_NORMAL`、`module=live`、`sourceId` 必须是直播 ID（接收端按它与当前场次比对，传聊天室 ID 会被整条丢弃）。
-
-发送成功后本地先上屏，并在 10 秒窗口内按正文认领服务端回推的同一条消息（是否回推由服务端决定）。空内容、超过 `POCKET_DANMAKU_MAX_LENGTH`（`common/live-danmaku.ts`，与输入框 `maxlength` 同源）、会话未连接、未登录均在本地拒绝；禁言等业务拒绝以服务端错误码体现。
-
-## 9. 对照：历史公演（回放）链路
-
-`openHistoryStream` → `openPlayback(payload)` → `PlaybackPlayer`：`usePlaybackEngine` 按后缀选 hls.js 或原生 `<video>` 直接加载（维护 loading / buffering / error 三态），`usePlaybackDanmaku` 按当前播放时间推进弹幕游标。该链路不涉及 FFmpeg 与本地 HTTP 服务，因为 VOD 地址（http 协议的 m3u8/mp4）浏览器可直接播放。
-
-## 10. 链路验证
-
-三条播放链已埋 debug 日志，scope 对照表登记在 `utils/debug.ts` 头部；播放相关的是 `live`（直播链与双源弹幕收发）、`show`（status 分流与 B 站房间映射）、`playback`（回放链），同表另有 `net`（所有链共用的请求层）、`list` / `load-more`（列表分页）、`tasks`（下载录制）、`pocket-auth` / `pocket-rooms` / `rooms-page`（房间链）。渲染层由 `import.meta.env.DEV` 门控，`npm run dev` 即输出（`[DBG]` 前缀，故意不用 `console.debug`——后者默认被 DevTools Verbose 过滤器隐藏）；主进程由 `is.dev || DESKTOP48_VERBOSE=1` 门控；IPC 层由 `handleTraced` 自动记录通道名/参数摘要/耗时/错误。排查时在 `getLiveOne()` 处设断点逐步步进，调用栈面板会完整呈现链路与各变量取值。
+- **回放链路**：`openPlayback(payload)` → `PlaybackPlayer.vue`，直连 VOD 地址不经 FFmpeg。`usePlaybackEngine` 通过 `isHlsSourceUrl`（按 `URL.pathname` 识别，兼容带防盗链 query/hash 的 `.m3u8`）选择 `hls.js` 或原生 `<video>`；`usePlaybackDanmaku` 维护递增请求序号 `loadSeq`，在 `loadBarrages` 与 `resetBarrageSource` 拦截切源/重置后的过期回包。
+- **调试日志**：scope 定义见 `utils/debug.ts`（播放相关：`live` / `show` / `playback` / `net` / `list`）。渲染层由 `import.meta.env.DEV` 门控，主进程由 `is.dev || DESKTOP48_VERBOSE=1` 门控，IPC 由 `handleTraced` 自动记录耗时与错误。

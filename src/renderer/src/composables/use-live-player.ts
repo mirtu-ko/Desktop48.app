@@ -55,6 +55,7 @@ export function useLivePlayer(options: {
     mediaElement.load()
     mediaElement.onerror = null
     mediaElement.oncanplay = null
+    mediaElement.onloadedmetadata = null
     mediaElement.onended = null
   }
 

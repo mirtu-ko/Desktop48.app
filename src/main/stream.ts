@@ -91,19 +91,29 @@ function stopProcess(process: ReturnType<typeof spawn>) {
   forceKill(process)
 }
 
-/** SIGTERM 失败再补 SIGKILL */
+const FORCE_KILL_TIMEOUT_MS = 1000
+
+/** 先发 SIGTERM，超时仍未退出或发送失败再升级 SIGKILL */
 function forceKill(process: ReturnType<typeof spawn>) {
-  try {
-    process.kill('SIGTERM')
-  }
-  catch (err) {
-    error('[stream.ts] 发送 FFmpeg 终止信号失败:', err)
+  const sendSigkill = () => {
+    if (process.exitCode !== null)
+      return
     try {
       process.kill('SIGKILL')
     }
     catch (killErr) {
       error('[stream.ts] 强制结束 FFmpeg 失败:', killErr)
     }
+  }
+  try {
+    process.kill('SIGTERM')
+    const timer = setTimeout(sendSigkill, FORCE_KILL_TIMEOUT_MS)
+    timer.unref()
+    process.once('close', () => clearTimeout(timer))
+  }
+  catch (err) {
+    error('[stream.ts] 发送 FFmpeg 终止信号失败:', err)
+    sendSigkill()
   }
 }
 
@@ -192,6 +202,10 @@ export async function handleCreateLiveStream(rtmpUrl: string, liveId: string) {
       liveId,
     }
   }
+
+  // 同 liveId 换新推流地址时，顺手停掉旧地址对应的残留转流进程
+  if (existingSession)
+    stopActiveProcesses(sessionId)
 
   streamSessions.set(sessionId, {
     sessionId,

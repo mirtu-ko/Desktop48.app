@@ -22,6 +22,16 @@ interface PlaybackEngineOptions {
   onIdle?: () => void
 }
 
+/** 判定播放地址是否为 HLS（兼容带防盗链 query / hash 参数的 .m3u8 链接） */
+export function isHlsSourceUrl(url: string): boolean {
+  try {
+    return new URL(url).pathname.toLowerCase().endsWith('.m3u8')
+  }
+  catch {
+    return url.split(/[?#]/, 1)[0].toLowerCase().endsWith('.m3u8')
+  }
+}
+
 /**
  * 录播（VOD）播放引擎：按地址选择 HLS 或原生 MP4 播放，
  * 维护「加载中 / 缓冲中 / 出错」三态，媒体事件全部经 onXxx 回调交还组件做业务处理。
@@ -138,7 +148,7 @@ export function usePlaybackEngine(options: PlaybackEngineOptions) {
     error.value = ''
     loading.value = true
 
-    if (sourcePath.endsWith('.m3u8')) {
+    if (isHlsSourceUrl(sourcePath)) {
       debugLog('playback', `引擎选择: ${sourcePath} 是 HLS → 优先 hls.js 引擎（原生 video 不支持直播切片级控制）`)
       if (Hls.isSupported()) {
         const hls = new Hls()

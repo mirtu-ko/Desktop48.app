@@ -355,11 +355,15 @@ const canSendDanmaku = computed(() => props.source === 'user'
 /** 输入条展开态：隐藏消息时收起（气泡层已收，输入条没有落点） */
 const danmakuComposeOpen = computed(() => canSendDanmaku.value && danmakuEnabled.value && composing.value)
 
-/** 展开/收起输入条；展开后立刻聚焦，少一次点击 */
+/** 展开/收起输入条；若房间消息当前处于隐藏态，点发送时一并开启消息层并聚焦 */
 function toggleDanmakuCompose() {
-  composing.value = !composing.value
-  if (composing.value)
+  const willOpen = !danmakuComposeOpen.value
+  composing.value = willOpen
+  if (willOpen) {
+    if (!danmakuEnabled.value)
+      danmakuEnabled.value = true
     void nextTick(() => inputRef.value?.focus())
+  }
 }
 
 /**
@@ -757,6 +761,12 @@ async function handleLiveRestream() {
     const data = await session.fetchLiveDetail()
     if (isManuallyUnmounted.value || liveEnded.value)
       return
+    // 换流期间若已转回放态，直接进下播结束卡，不把 VOD 地址喂给直播转流链
+    if (isEndedLiveDetail(data, props.source)) {
+      debugLog('live', '①直播:换流时详情已转为回放，判定本场下播')
+      finishLiveEnded('detail')
+      return
+    }
     session.applyLiveDetail(data)
     if (data.playStreamPath === activeRtmpUrl.value) {
       debugLog('live', '①直播:换流信号但详情地址未变，跳过重建')
@@ -766,6 +776,17 @@ async function handleLiveRestream() {
     await session.restartLiveStream(data.playStreamPath)
   }
   catch (error) {
+    if (error instanceof Error && isLiveEndedMessage(error.message)) {
+      debugLog('live', `①直播:换流时详情反馈「${error.message}」，判定本场下播`)
+      finishLiveEnded('error')
+      return
+    }
+    if (error instanceof Error && isLiveRemovedMessage(error.message)) {
+      debugLog('live', `①直播:换流时详情反馈「${error.message}」，关闭直播窗口`)
+      session.stopStreamNow()
+      closeUnavailableLive()
+      return
+    }
     // 换流期间详情失败不关窗（可能是瞬时抖动）：交给断流重试链兜底
     debugLog('live', `①直播:换流重建失败，转重试链兜底 ${error}`)
     retry.schedule()
@@ -800,16 +821,25 @@ const { running: recording, onActionClick: onRecordClick } = useMediaDownload({
 // ── 键盘快捷键（窗口级监听：按键只到 OS 激活的播放窗） ──────────────────────
 // 按键分派与 PlaybackPlayer 共用 useMediaShortcuts（键位单源）；
 // 直播不接 ←/→（seek 对直播无意义）；↑/↓ 音量作用于本地 media，直播同样有效
+// 电台模式只禁画面旋转，↑/↓ 调音量照常生效
 useMediaShortcuts({
   getMedia: () => null,
   actions: {
-    rotateLeft,
-    rotateRight,
-    resetRotation,
+    rotateLeft: () => {
+      if (!isRadio.value)
+        rotateLeft()
+    },
+    rotateRight: () => {
+      if (!isRadio.value)
+        rotateRight()
+    },
+    resetRotation: () => {
+      if (!isRadio.value)
+        resetRotation()
+    },
     volumeUp: () => adjustVolume(VOLUME_STEP),
     volumeDown: () => adjustVolume(-VOLUME_STEP),
   },
-  isEnabled: () => !isRadio.value,
 })
 
 /** 挂载播放器；环境不支持 HTTP-FLV 时统一在此提示 */

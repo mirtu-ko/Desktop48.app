@@ -4,6 +4,7 @@ import { useLiveStatusStore } from '@renderer/stores/live-status'
 import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
+import { useIntervalFn } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { enrichLiveItem } from './use-paged-live-list'
@@ -32,7 +33,7 @@ export interface UseLiveIdleOptions {
 export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   const { followedMembers, ensureFollowedLoaded, isFollowed } = useFollowedMembersStore()
   const { ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
-  const { liveItems, refreshLiveStatus, acquireLiveStatusPolling } = useLiveStatusStore()
+  const { liveItems, lastFetchedAt, refreshLiveStatus, acquireLiveStatusPolling } = useLiveStatusStore()
 
   /** 公演排期。 */
   const shows = ref<OpenLive[]>([])
@@ -207,6 +208,11 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
     }
   }
 
+  // 空态灵动岛时钟：每 30 秒推进一次「已等待 N 分钟」，避免无人开播时文案冻结
+  const { pause: pauseClock, resume: resumeClock } = useIntervalFn(() => {
+    clock.value = Date.now()
+  }, 30_000, { immediate: false })
+
   function startPolling(): void {
     if (releaseLiveStatusPolling)
       return
@@ -216,6 +222,7 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
       lastCheckAt.value = waitingSince.value
     }
     clock.value = Date.now()
+    resumeClock()
     releaseLiveStatusPolling = acquireLiveStatusPolling()
     if (liveItems.value.length > 0) {
       handleLiveFound()
@@ -227,9 +234,18 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   }
 
   function stopPolling(): void {
+    pauseClock()
     releaseLiveStatusPolling?.()
     releaseLiveStatusPolling = null
   }
+
+  // 同步共享 store 120s 轮询的最近检查时刻（即便本轮仍无直播，灵动岛的「上次检查」也跟着更新）
+  watch(lastFetchedAt, (at) => {
+    if (!pageActive.value || !isEmpty() || !at)
+      return
+    lastCheckAt.value = at
+    clock.value = Math.max(clock.value, at)
+  })
 
   // 共享 store 的 120s 轮询发现开播后，空态页立即交回列表展示。
   watch(liveItems, (items) => {

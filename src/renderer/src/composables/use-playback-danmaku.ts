@@ -6,7 +6,7 @@ import { trackEvent } from '@renderer/utils/umami'
 import { ElMessage } from 'element-plus'
 import { computed, ref, shallowRef } from 'vue'
 
-/** Tools.lyricsParse 的输出形态：[hh:mm:ss]\t用户名\t内容 */
+/** Tools.lyricsParse 的输出形态：[hh:mm:ss]用户名\t内容 */
 interface RawLyricLine {
   time: string
   username?: string
@@ -32,12 +32,18 @@ export function usePlaybackDanmaku(options: {
   const barrageLoaded = shallowRef(false)
   let loadedUrl = ''
 
+  /** 加载请求序号：重置或切源后作废在途回包 */
+  let loadSeq = 0
+
   /** 加载并解析指定 url 的弹幕；url 未变化时跳过 */
   async function loadBarrages(url: string) {
     if (!url || loadedUrl === url)
       return
+    const seq = ++loadSeq
     try {
       const response = await Apis.barrage(url)
+      if (seq !== loadSeq || barrageUrl.value !== url)
+        return
       const lines: RawLyricLine[] = Tools.lyricsParse(response)
       barrageEntries.value = lines
         .map(item => ({
@@ -55,6 +61,8 @@ export function usePlaybackDanmaku(options: {
       trackEvent('danmaku:connect', { source: 'vod', result: 'ok' })
     }
     catch (error) {
+      if (seq !== loadSeq || barrageUrl.value !== url)
+        return
       console.error('[use-playback-danmaku] 弹幕加载失败:', error)
       trackEvent('danmaku:connect', { source: 'vod', result: 'fail' })
       ElMessage({ message: '弹幕加载失败', type: 'error' })
@@ -89,6 +97,7 @@ export function usePlaybackDanmaku(options: {
 
   /** 换回放：清空叠加层、进度归零并重置加载态 */
   function resetBarrageSource() {
+    loadSeq++
     barrageEntries.value = []
     barrageLoaded.value = false
     loadedUrl = ''
