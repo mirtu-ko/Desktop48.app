@@ -9,7 +9,14 @@ import useFloatPlayersStore from '@renderer/stores/float-players'
 import { resolveBilibiliRoomIdAsync } from '@renderer/utils/bilibili-room'
 import Constants from '@renderer/utils/constants'
 import { debugLog } from '@renderer/utils/debug'
+import Tools from '@renderer/utils/tools'
 import { ElMessage } from 'element-plus'
+
+/** 直播页当前在播数少于该阈值时，若存在进行中公演则一并展示 */
+export const LIVE_SHOWS_THRESHOLD = 10
+
+/** 直播页列表态最多展示的进行中公演场数 */
+export const MAX_ONGOING_SHOWS = 4
 
 /** 是否进行中：公演卡片「可点击」的唯一真值来源 */
 export function isShowLive(show: Pick<OpenLive, 'status'>): boolean {
@@ -34,6 +41,23 @@ export function isTodayShow(show: Pick<OpenLive, 'stime'>): boolean {
   return date.getFullYear() === now.getFullYear()
     && date.getMonth() === now.getMonth()
     && date.getDate() === now.getDate()
+}
+
+/** 筛选进行中的公演、按开演时间升序并归一化封面地址（默认不截断，保留总数供标题计数） */
+export function pickOngoingShows(shows: readonly OpenLive[], limit?: number): OpenLive[] {
+  const list = shows
+    .filter(show => isShowLive(show))
+    .sort((a, b) => Number.parseInt(a.stime) - Number.parseInt(b.stime))
+    .map(show => ({
+      ...show,
+      coverPath: show.coverPath ? Tools.sourceUrl(show.coverPath) : show.coverPath,
+    }))
+  return limit !== undefined ? list.slice(0, limit) : list
+}
+
+/** 直播列表态是否应伴随展示进行中公演：在播数少于阈值且未开启「只看关注」 */
+export function shouldShowOngoingShowsInList(liveCount: number, onlyFollowed: boolean): boolean {
+  return liveCount > 0 && liveCount < LIVE_SHOWS_THRESHOLD && !onlyFollowed
 }
 
 export function useShowActions() {

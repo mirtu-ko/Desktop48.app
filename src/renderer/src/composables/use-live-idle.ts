@@ -1,6 +1,6 @@
 import type { LiveListItem, LiveListItemView, OpenLive } from '@renderer/services/api-types'
 import Apis from '@renderer/services/apis'
-import { useLiveStatusStore } from '@renderer/stores/live-status'
+import { LIVE_STATUS_POLL_MS, useLiveStatusStore } from '@renderer/stores/live-status'
 import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
@@ -8,7 +8,7 @@ import { useIntervalFn } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { enrichLiveItem } from './use-paged-live-list'
-import { isTodayShow } from './use-show-actions'
+import { isTodayShow, pickOngoingShows } from './use-show-actions'
 
 /** 空态公演最多展示几场。 */
 const MAX_PREVIEW_SHOWS = 4
@@ -80,25 +80,50 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
 
   const hasPlaybacks = computed(() => playbacks.value.length > 0)
 
-  /** 拉取公演排期；失败静默降级。 */
-  async function loadShows(): Promise<void> {
+  /** 正在进行的公演（供列表态直播较少时伴随展示，与空态共用同一份排期缓存）。 */
+  const ongoingShows = computed(() => pickOngoingShows(shows.value))
+
+  let lastShowsFetchedAt = 0
+  let showsRequestSeq = 0
+
+  /** 拉取公演排期（复用 LIVE_STATUS_POLL_MS 新鲜期与序号防覆盖）；失败静默降级。 */
+  async function loadShows(force = false): Promise<void> {
+    if (!force && lastShowsFetchedAt && Date.now() - lastShowsFetchedAt < LIVE_STATUS_POLL_MS)
+      return
+    const seq = ++showsRequestSeq
     try {
       const content = await Apis.openLives(0, '0', false, { silent: true })
+      if (seq !== showsRequestSeq)
+        return
       shows.value = [...(content.liveList || [])]
         .sort((a, b) => Number.parseInt(a.stime) - Number.parseInt(b.stime))
         .map(show => ({
           ...show,
           coverPath: show.coverPath ? Tools.sourceUrl(show.coverPath) : show.coverPath,
         }))
-      debugLog('list', `空态预告：公演 ${shows.value.length} 场（今日 ${todayShows.value.length} 场）`)
+      lastShowsFetchedAt = Date.now()
+      debugLog('list', `空态预告：公演 ${shows.value.length} 场（今日 ${todayShows.value.length} 场，进行中 ${ongoingShows.value.length} 场）`)
     }
     catch (e: any) {
-      shows.value = []
+      if (seq !== showsRequestSeq)
+        return
+      if (!showsLoaded.value)
+        shows.value = []
       debugLog('list', `空态预告：公演排期拉取失败（静默忽略）: ${e?.message || e}`)
     }
     finally {
-      showsLoaded.value = true
+      if (seq === showsRequestSeq)
+        showsLoaded.value = true
     }
+  }
+
+  /** 公演在播放窗内下播/下架时，同步从本地排期缓存移除 */
+  function removeShow(liveId: string): void {
+    if (!shows.value.length)
+      return
+    const next = shows.value.filter(show => show.liveId !== liveId)
+    if (next.length !== shows.value.length)
+      shows.value = next
   }
 
   /**
@@ -300,6 +325,9 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
     showsTitle: previewTitle,
     showsLoaded,
     hasShows,
+    ongoingShows,
+    refreshShows: loadShows,
+    removeShow,
     playbacks,
     playbacksTitle,
     hasPlaybacks,

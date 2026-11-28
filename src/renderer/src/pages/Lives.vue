@@ -9,7 +9,13 @@ import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.
 import { useLiveIdle } from '@renderer/composables/use-live-idle'
 import { useMemberDetail } from '@renderer/composables/use-member-detail'
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
-import { isShowLive, showLockedHint, useShowActions } from '@renderer/composables/use-show-actions'
+import {
+  isShowLive,
+  MAX_ONGOING_SHOWS,
+  shouldShowOngoingShowsInList,
+  showLockedHint,
+  useShowActions,
+} from '@renderer/composables/use-show-actions'
 import EventBus from '@renderer/services/event-bus'
 import useFloatPlayersStore from '@renderer/stores/float-players'
 import { LIVE_STATUS_POLL_MS, useLiveStatusStore } from '@renderer/stores/live-status'
@@ -127,6 +133,9 @@ const {
   showsTitle: previewShowsTitle,
   showsLoaded: previewShowsLoaded,
   hasShows: hasPreviewShows,
+  ongoingShows,
+  refreshShows,
+  removeShow,
   playbacks: previewPlaybacks,
   playbacksTitle: previewPlaybacksTitle,
   hasPlaybacks: hasPreviewPlaybacks,
@@ -167,6 +176,23 @@ const displayedLiveList = computed(() => (
     ? orderedLiveList.value.filter(item => isFollowed(item.userInfo.userId))
     : orderedLiveList.value
 ))
+
+/** 列表态直播人数较少（<10）且未开启「只看关注」时伴随展示进行中公演（复用 useLiveIdle 排期缓存） */
+const needOngoingShows = computed(() => (
+  viewState.value === 'list' && shouldShowOngoingShowsInList(visibleLiveList.value.length, onlyFollowed.value)
+))
+
+const showOngoingShowsSection = computed(() => (
+  needOngoingShows.value && ongoingShows.value.length > 0
+))
+
+/** 卡片区最多展示 4 场，标题仍保留进行中总场数（与空态 todayShows/previewShows 同口径） */
+const displayedOngoingShows = computed(() => ongoingShows.value.slice(0, MAX_ONGOING_SHOWS))
+
+watch(needOngoingShows, (need) => {
+  if (need)
+    void refreshShows(false)
+}, { immediate: true })
 
 // 点击卡片：以独立播放窗打开直播，可边看边继续浏览列表
 function play(item: LiveListItem) {
@@ -218,6 +244,7 @@ function onLiveUnavailable(liveId: string) {
   if (index !== -1)
     liveList.value.splice(index, 1)
   removeLive(liveId)
+  removeShow(liveId)
 }
 
 // 手动/自动刷新：回到列表顶部并软刷新（旧卡片保留到新数据落地，失败则原样保留）。
@@ -227,6 +254,9 @@ function refreshList(forceLiveStatus = true, silent = false) {
   pendingForceRefresh = forceLiveStatus
   pendingSilentRefresh = silent
   void refreshFromTop({ keepList: true })
+  // 空态或列表态少直播时同步刷新公演排期，手动刷新可立即感知公演开演/结束
+  if (viewState.value === 'idle' || needOngoingShows.value)
+    void refreshShows(forceLiveStatus)
 }
 
 onMounted(() => {
@@ -246,6 +276,8 @@ onActivated(() => {
   const storeNewer = lastFetchedAt.value > lastSyncedAt
   if (stale || storeNewer)
     refreshList(false, true)
+  else if (needOngoingShows.value)
+    void refreshShows(false)
 })
 
 // 空态轮询的启停由 useLiveIdle 自己挂生命周期（页面被 keep-alive 缓存，不能靠 onUnmounted 收尾）
@@ -271,7 +303,7 @@ onUnmounted(() => {
         <span class="idle-dot" aria-hidden="true" />
         <div class="idle-head-main">
           <p class="idle-title">
-            当前没有直播
+            当前没有成员直播
           </p>
           <p class="idle-sub">
             {{ loading ? '正在检查开播…' : '监控中，每 120 秒自动刷新检查' }}
@@ -407,7 +439,33 @@ onUnmounted(() => {
             />
           </div>
         </div>
-        <div v-if="noMore" class="list-end">
+        <section v-if="showOngoingShowsSection" class="live-ongoing-shows">
+          <h2 class="section-title section-title--live">
+            正在公演 · {{ ongoingShows.length }} 场
+            <button
+              type="button"
+              class="section-more"
+              aria-label="查看全部公演"
+              @click="goToAll('/shows')"
+            >
+              查看全部
+            </button>
+          </h2>
+          <div class="idle-shows">
+            <div
+              v-for="show in displayedOngoingShows"
+              :key="show.liveId"
+              class="idle-show lift-card clickable"
+              @click="onShowClick(show)"
+            >
+              <ShowCard :show="show" hint="" />
+            </div>
+          </div>
+        </section>
+        <div v-if="onlyFollowed" class="list-end">
+          已筛选 · 仅显示关注的 {{ displayedLiveList.length }} 个直播
+        </div>
+        <div v-else-if="noMore" class="list-end">
           没有更多直播了
         </div>
       </el-scrollbar>
@@ -709,6 +767,15 @@ onUnmounted(() => {
 
 .live-item {
   min-width: 0;
+}
+
+/* 列表态直播人数较少时伴随展示的进行中公演分区，左右边距与 .card-grid 对齐 */
+.live-ongoing-shows {
+  padding: 0 var(--space-page-x) 8px;
+
+  .section-title--live {
+    --st-accent: var(--color-lives);
+  }
 }
 
 /* Dock 关注过滤按钮：默认低调融入计数文案，hover/激活呈关注金胶囊 */
