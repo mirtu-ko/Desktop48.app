@@ -19,6 +19,7 @@ const WIDTH_QUERY = /@(?:media|container)\s*\(\s*max-width:\s*(\d+px)/g
 /** 宽度轴断点登记表：各处语义不同，新增或改值都要显式更新这里 */
 const WIDTH_BREAKPOINTS = [
   'assets/css/app.scss:740px',
+  'components/floats/FloatAudioBar.vue:1120px',
   'components/rooms/RoomListItem.vue:960px',
   'pages/Lives.vue:680px',
   'pages/Lives.vue:760px',
