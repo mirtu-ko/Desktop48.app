@@ -12,6 +12,7 @@ import { DISK_CACHE_LIMIT_BYTES, scheduleCacheAutoClean } from './cache-storage'
 import { ConfigStore } from './config-store'
 import { Database } from './database'
 import { stopAllFfmpegTasks } from './ffmpeg/ffmpeg-process'
+import { startLocalStreamServer, stopLocalStreamServer } from './http-server'
 import { registerAllIPC } from './ipc'
 import { sendIpc } from './ipc/send'
 import { log } from './logger'
@@ -19,14 +20,13 @@ import { ensureAuthLoaded } from './pocket48/pocket-auth'
 import { cleanupPocketDanmakuSessions } from './pocket48/pocket-danmaku'
 import { cleanupRoomQChatSessions } from './pocket48/pocket-room-qchat'
 import { startPocketUnread, stopPocketUnread } from './pocket48/pocket-unread'
-import { cleanupStreamSessions } from './stream'
+import { cleanupStreamSessions, createFlvStreamProcess } from './stream'
 import { destroyTray, installTray, isTrayActive } from './tray'
 import { initUpdater, scheduleStartupCheck, startPendingInstall } from './updater'
 import { closeAllFloatWindows } from './window/float-window'
 import { closeSplashWindow, fadeInWindow, fadeOutSplashWindow, isSplashWindow, showSplashWindow } from './window/splash-window'
 import { centerWindow, computeWindowBounds, fitWindowToWorkArea } from './window/window-bounds'
 import { wireWindowStateEvents } from './window/window-events'
-import './http-server' // live中转服务器主进程注册（side effect：启动本地 HTTP-FLV 服务）
 
 /** Chromium 磁盘缓存硬上限（淘汰口径见 cache-storage.ts）；必须在 app ready 前设置 */
 app.commandLine.appendSwitch('disk-cache-size', String(DISK_CACHE_LIMIT_BYTES))
@@ -55,6 +55,7 @@ database.init()
 ConfigStore.instance().init({ downloadDirectory: defaultDownloadDirectory() }, database.takeLegacyConfig())
 database.dropLegacyConfig()
 registerAllIPC()
+startLocalStreamServer(createFlvStreamProcess)
 
 log('[app.ts] 主进程路径:', process.execPath)
 log('[app.ts] 预加载:', fileURLToPath(new URL('../preload/index.mjs', import.meta.url)))
@@ -360,6 +361,7 @@ app.on('before-quit', () => {
   // 应用退出前统一清理独立播放窗 / 直播会话 / 转流进程 / 弹幕长连接
   closeAllFloatWindows()
   cleanupStreamSessions()
+  stopLocalStreamServer()
   cleanupDanmakuSessions()
   cleanupPocketDanmakuSessions()
   cleanupRoomQChatSessions()

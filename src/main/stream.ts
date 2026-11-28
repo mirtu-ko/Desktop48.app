@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
 import { ConfigStore } from './config-store'
 import { resolveFfmpegBinary } from './ffmpeg/ffmpeg-process'
-import { assertLocalServerAvailable, serverHost, serverPort } from './http-server'
 import { debug, error, log } from './logger'
 import { isAllowedStreamUrl } from './net/allowed-hosts'
+import { assertLocalServerAvailable, getStreamServerPort, STREAM_SERVER_HOST } from './stream-server-state'
 
 // 直播播放只在这里维护“会话”和“活跃转流进程”的状态。
 // IPC 负责注册直播地址，HTTP 端点真正触发 FFmpeg 拉流并输出 HTTP-FLV。
@@ -194,7 +194,7 @@ export async function handleCreateLiveStream(rtmpUrl: string, liveId: string) {
   const publicPath = getStreamRoute(liveId)
 
   if (existingSession && existingSession.inputUrl === rtmpUrl) {
-    const url = `http://${serverHost}:${serverPort()}${publicPath}`
+    const url = `http://${STREAM_SERVER_HOST}:${getStreamServerPort()}${publicPath}`
     debug(`[stream.ts] 复用已有直播会话: ${liveId} → ${url}`)
     return {
       // 用 127.0.0.1 而非 localhost：localhost 可能解析到 ::1，与回环 IPv4 监听不匹配。
@@ -213,7 +213,7 @@ export async function handleCreateLiveStream(rtmpUrl: string, liveId: string) {
     inputUrl: rtmpUrl,
   })
 
-  const url = `http://${serverHost}:${serverPort()}${publicPath}`
+  const url = `http://${STREAM_SERVER_HOST}:${getStreamServerPort()}${publicPath}`
   debug(`[stream.ts] 新建直播会话: ${liveId} → ${url}（FFmpeg 待播放器拉流时由 http-server 触发）`)
   return {
     url,
