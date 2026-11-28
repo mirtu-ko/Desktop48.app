@@ -475,19 +475,29 @@ async function onViewModeChange(mode: 'room' | 'small') {
     return
   const userId = selectedUserId.value
   if (mode !== 'room') {
-    // 小房间未读同样在清零前截（两个频道各有自己的水位与条数）；
-    // 必须等频道切换完成且未上锁、首屏消息就绪后再标已读，避免锁住或加载失败时误清未读
+    // 小房间未读同样在清零前截（两个频道各有自己的水位与条数）：
+    // 1. 门禁锁定态：点过来即清零（避免没有门禁权限的用户永远消不掉角标），
+    //    同时保留截下的水位锚点——若用户随后输入暗号解锁，加载完消息仍能画出未读分割线；
+    // 2. 已解锁态：等首屏消息就绪后再标已读并回底（加载失败不清，保留角标待重试）。
     const hadUnread = userId !== null ? unreadChannelOf(userId).small : 0
     unreadAnchor.value = null
     unreadJumped.value = false
     beginEntryMark()
     try {
       await setViewMode(mode)
-      if (userId !== null && hadUnread > 0 && !smallLocked.value && chatStatus.value === 'ready' && messages.value.length > 0) {
-        await markRoomReadCapturing(userId, 'small', hadUnread)
-        if (selectedUserId.value === userId && viewMode.value === 'small') {
-          await nextTick()
-          scrollToBottom()
+      if (userId !== null && hadUnread > 0) {
+        if (smallLocked.value) {
+          await markRoomReadCapturing(userId, 'small', hadUnread)
+        }
+        else if (chatStatus.value === 'ready') {
+          const hasContent = messages.value.length > 0
+          if (hasContent || messageScope.value === 'all') {
+            await markRoomReadCapturing(userId, 'small', hasContent ? hadUnread : 0)
+            if (hasContent && selectedUserId.value === userId && viewMode.value === 'small') {
+              await nextTick()
+              scrollToBottom()
+            }
+          }
         }
       }
     }
