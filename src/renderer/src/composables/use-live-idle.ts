@@ -1,13 +1,14 @@
 import type { LiveListItem, LiveListItemView, OpenLive } from '@renderer/services/api-types'
 import Apis from '@renderer/services/apis'
-import { useLiveStatusStore } from '@renderer/stores/live-status'
+import { LIVE_STATUS_POLL_MS, useLiveStatusStore } from '@renderer/stores/live-status'
 import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { debugLog } from '@renderer/utils/debug'
 import Tools from '@renderer/utils/tools'
+import { useIntervalFn } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { enrichLiveItem } from './use-paged-live-list'
-import { isTodayShow } from './use-show-actions'
+import { isTodayShow, pickOngoingShows } from './use-show-actions'
 
 /** 空态公演最多展示几场。 */
 const MAX_PREVIEW_SHOWS = 4
@@ -32,10 +33,11 @@ export interface UseLiveIdleOptions {
 export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   const { followedMembers, ensureFollowedLoaded, isFollowed } = useFollowedMembersStore()
   const { ensureBlockedLoaded, isBlocked } = useBlockedMembersStore()
-  const { liveItems, refreshLiveStatus, acquireLiveStatusPolling } = useLiveStatusStore()
+  const { liveItems, lastFetchedAt, refreshLiveStatus, acquireLiveStatusPolling } = useLiveStatusStore()
 
-  /** 公演排期。 */
+  /** 公演排期及首轮加载完成标记（防加载中短暂闪现「暂无公演」提示）。 */
   const shows = ref<OpenLive[]>([])
+  const showsLoaded = ref(false)
 
   /** 回放条目。 */
   const playbacks = ref<LiveListItemView[]>([])
@@ -78,22 +80,50 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
 
   const hasPlaybacks = computed(() => playbacks.value.length > 0)
 
-  /** 拉取公演排期；失败静默降级。 */
-  async function loadShows(): Promise<void> {
+  /** 正在进行的公演（供列表态直播较少时伴随展示，与空态共用同一份排期缓存）。 */
+  const ongoingShows = computed(() => pickOngoingShows(shows.value))
+
+  let lastShowsFetchedAt = 0
+  let showsRequestSeq = 0
+
+  /** 拉取公演排期（复用 LIVE_STATUS_POLL_MS 新鲜期与序号防覆盖）；失败静默降级。 */
+  async function loadShows(force = false): Promise<void> {
+    if (!force && lastShowsFetchedAt && Date.now() - lastShowsFetchedAt < LIVE_STATUS_POLL_MS)
+      return
+    const seq = ++showsRequestSeq
     try {
       const content = await Apis.openLives(0, '0', false, { silent: true })
+      if (seq !== showsRequestSeq)
+        return
       shows.value = [...(content.liveList || [])]
         .sort((a, b) => Number.parseInt(a.stime) - Number.parseInt(b.stime))
         .map(show => ({
           ...show,
           coverPath: show.coverPath ? Tools.sourceUrl(show.coverPath) : show.coverPath,
         }))
-      debugLog('list', `空态预告：公演 ${shows.value.length} 场（今日 ${todayShows.value.length} 场）`)
+      lastShowsFetchedAt = Date.now()
+      debugLog('list', `空态预告：公演 ${shows.value.length} 场（今日 ${todayShows.value.length} 场，进行中 ${ongoingShows.value.length} 场）`)
     }
     catch (e: any) {
-      shows.value = []
+      if (seq !== showsRequestSeq)
+        return
+      if (!showsLoaded.value)
+        shows.value = []
       debugLog('list', `空态预告：公演排期拉取失败（静默忽略）: ${e?.message || e}`)
     }
+    finally {
+      if (seq === showsRequestSeq)
+        showsLoaded.value = true
+    }
+  }
+
+  /** 公演在播放窗内下播/下架时，同步从本地排期缓存移除 */
+  function removeShow(liveId: string): void {
+    if (!shows.value.length)
+      return
+    const next = shows.value.filter(show => show.liveId !== liveId)
+    if (next.length !== shows.value.length)
+      shows.value = next
   }
 
   /**
@@ -193,19 +223,30 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
     onLiveFound()
   }
 
-  /** 检查一次共享直播状态；有直播则交回列表。 */
+  /** 是否存在未被本地屏蔽的在播直播（防止全站仅有被屏蔽主播时误唤醒列表陷入空态循环）。 */
+  function hasVisibleLive(items: LiveListItem[]): boolean {
+    return items.some(item => !isBlocked(item.userInfo?.userId))
+  }
+
+  /** 检查一次共享直播状态；有未被屏蔽的直播则交回列表。 */
   async function checkLiveOnce(): Promise<void> {
     lastCheckAt.value = Date.now()
     clock.value = lastCheckAt.value
     try {
+      await ensureBlockedLoaded()
       const items = await refreshLiveStatus()
-      if (items.length > 0)
+      if (releaseLiveStatusPolling && pageActive.value && isEmpty() && hasVisibleLive(items))
         handleLiveFound()
     }
     catch (e: any) {
       debugLog('list', `空态轮询失败（静默忽略）: ${e?.message || e}`)
     }
   }
+
+  // 空态灵动岛时钟：每 30 秒推进一次「已等待 N 分钟」，避免无人开播时文案冻结
+  const { pause: pauseClock, resume: resumeClock } = useIntervalFn(() => {
+    clock.value = Date.now()
+  }, 30_000, { immediate: false })
 
   function startPolling(): void {
     if (releaseLiveStatusPolling)
@@ -216,24 +257,33 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
       lastCheckAt.value = waitingSince.value
     }
     clock.value = Date.now()
+    resumeClock()
     releaseLiveStatusPolling = acquireLiveStatusPolling()
-    if (liveItems.value.length > 0) {
-      handleLiveFound()
-      return
-    }
     void checkLiveOnce()
     void loadShows()
     void loadPlaybacks()
   }
 
   function stopPolling(): void {
+    pauseClock()
     releaseLiveStatusPolling?.()
     releaseLiveStatusPolling = null
   }
 
-  // 共享 store 的 120s 轮询发现开播后，空态页立即交回列表展示。
-  watch(liveItems, (items) => {
-    if (!pageActive.value || !items.length || !isEmpty())
+  // 同步共享 store 120s 轮询的最近检查时刻（即便本轮仍无直播，灵动岛的「上次检查」也跟着更新）
+  watch(lastFetchedAt, (at) => {
+    if (!pageActive.value || !isEmpty() || !at)
+      return
+    lastCheckAt.value = at
+    clock.value = Math.max(clock.value, at)
+  })
+
+  // 共享 store 的 120s 轮询发现有效开播后，空态页立即交回列表展示（以 releaseLiveStatusPolling 防双重唤醒）。
+  watch(liveItems, async (items) => {
+    if (!releaseLiveStatusPolling || !pageActive.value || !items.length || !isEmpty())
+      return
+    await ensureBlockedLoaded()
+    if (!releaseLiveStatusPolling || !pageActive.value || !isEmpty() || !hasVisibleLive(items))
       return
     lastCheckAt.value = Date.now()
     clock.value = lastCheckAt.value
@@ -273,7 +323,11 @@ export function useLiveIdle({ isEmpty, onLiveFound }: UseLiveIdleOptions) {
   return {
     shows: previewShows,
     showsTitle: previewTitle,
+    showsLoaded,
     hasShows,
+    ongoingShows,
+    refreshShows: loadShows,
+    removeShow,
     playbacks,
     playbacksTitle,
     hasPlaybacks,

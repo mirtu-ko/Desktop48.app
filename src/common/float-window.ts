@@ -38,10 +38,18 @@ export function floatBarHeight(windowWidth: number): number {
 }
 
 /**
- * 视频元数据未就绪时的兜底宽高比（多数直播为竖屏）；
+ * 视频元数据未就绪时的兜底宽高比（多数个人直播为竖屏）；
  * 电台窗（liveType===2）无视频轨、永不上报 aspect，恒用此比例，随工作区按比例缩放。
  */
 export const FLOAT_DEFAULT_ASPECT = 9 / 16
+
+/** 公演直播与公演录播的初始宽高比（恒为横屏，避免首帧到达后再从竖屏跳变） */
+export const FLOAT_LANDSCAPE_ASPECT = 16 / 9
+
+/** 建窗初始宽高比：公演（source === 'open'）直接开 16:9 横屏窗，其余默认 9:16 兜底 */
+export function resolveInitialFloatAspect(source?: string): number {
+  return source === 'open' ? FLOAT_LANDSCAPE_ASPECT : FLOAT_DEFAULT_ASPECT
+}
 
 /** 窗口最小尺寸：再小控制条会挤爆，且比例内接需要有效输入 */
 export const FLOAT_MIN_WIDTH = 240

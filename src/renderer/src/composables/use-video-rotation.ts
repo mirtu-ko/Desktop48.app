@@ -2,6 +2,9 @@ import type { ComputedRef, Ref } from 'vue'
 import { useFullscreen, useResizeObserver } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
+/** 浮窗播放器音量与静音记忆的 localStorage 键 */
+export const FLOAT_PLAYER_VOLUME_KEY = 'desktop48:float-player:volume'
+
 interface UseVideoRotationOptions {
   /** 视频容器（全屏作用在它上面，浮层才不会丢） */
   videoBoxRef: Ref<HTMLElement | null>
@@ -193,7 +196,70 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
 
   // 旋转 90/270 时原生控制条会跟着画面侧躺，改用自绘迷你条（见 MiniControls）
   const playing = ref(false)
-  const muted = ref(false)
+
+  function loadSavedVolume(): { volume: number, muted: boolean } {
+    try {
+      const raw = globalThis.localStorage?.getItem(FLOAT_PLAYER_VOLUME_KEY)
+      if (!raw)
+        return { volume: 1, muted: false }
+      const parsed = JSON.parse(raw) as { volume?: unknown, muted?: unknown }
+      const vol = typeof parsed.volume === 'number' && Number.isFinite(parsed.volume)
+        ? Math.min(1, Math.max(0, parsed.volume))
+        : 1
+      return { volume: vol, muted: parsed.muted === true }
+    }
+    catch {
+      return { volume: 1, muted: false }
+    }
+  }
+
+  const VOLUME_SAVE_THROTTLE_MS = 200
+  const savedVolume = loadSavedVolume()
+  let lastSavedVolumeJson = JSON.stringify({
+    volume: Math.round(savedVolume.volume * 100) / 100,
+    muted: savedVolume.muted,
+  })
+  let pendingVolumeJson: string | null = null
+  let saveVolumeTimer: ReturnType<typeof setTimeout> | null = null
+
+  function writeVolumeJson(json: string) {
+    lastSavedVolumeJson = json
+    try {
+      globalThis.localStorage?.setItem(FLOAT_PLAYER_VOLUME_KEY, json)
+    }
+    catch {
+      // 忽略配额或受限环境写入失败
+    }
+  }
+
+  function flushVolumeSave() {
+    if (saveVolumeTimer) {
+      clearTimeout(saveVolumeTimer)
+      saveVolumeTimer = null
+    }
+    if (pendingVolumeJson && pendingVolumeJson !== lastSavedVolumeJson)
+      writeVolumeJson(pendingVolumeJson)
+    pendingVolumeJson = null
+  }
+
+  /** 去重 + 200ms leading/trailing 节流写盘，避免拖动或 volumechange 重复高频写入 */
+  function saveVolumeState(vol: number, isMuted: boolean) {
+    const json = JSON.stringify({ volume: Math.round(Math.min(1, Math.max(0, vol)) * 100) / 100, muted: isMuted })
+    if (json === lastSavedVolumeJson && pendingVolumeJson === null)
+      return
+    if (!saveVolumeTimer) {
+      writeVolumeJson(json)
+      saveVolumeTimer = setTimeout(() => {
+        saveVolumeTimer = null
+        if (pendingVolumeJson && pendingVolumeJson !== lastSavedVolumeJson)
+          writeVolumeJson(pendingVolumeJson)
+        pendingVolumeJson = null
+      }, VOLUME_SAVE_THROTTLE_MS)
+      return
+    }
+    pendingVolumeJson = json
+  }
+  const muted = ref(savedVolume.muted)
 
   function togglePlay() {
     const el = getMedia()
@@ -207,13 +273,22 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
 
   // 每次按键的音量步进
   const VOLUME_STEP = 0.05
-  const volume = ref(1)
+  const volume = ref(savedVolume.volume)
   /**
    * 静音前的音量，取消静音 / 静音态按 ↑ 时恢复到这里。
    * 只在进入静音那一次快照；静音与归零同时发生时 volume 已是 0，用 lastAudibleVolume 兜底。
    */
-  let volumeBeforeMute = 1
-  let lastAudibleVolume = 1
+  let volumeBeforeMute = savedVolume.volume > 0 ? savedVolume.volume : 1
+  let lastAudibleVolume = savedVolume.volume > 0 ? savedVolume.volume : 1
+
+  /** 将当前记忆的音量与静音态同步到媒体元素（新开浮窗或切换音视频元素时调用） */
+  function applySavedVolume(target?: HTMLMediaElement | null) {
+    const el = target ?? getMedia()
+    if (!el)
+      return
+    el.volume = volume.value
+    el.muted = muted.value
+  }
 
   function toggleMute() {
     const el = getMedia()
@@ -225,6 +300,9 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
       volume.value = el.volume
     }
     el.muted = !el.muted
+    muted.value = el.muted
+    saveVolumeState(volume.value, muted.value)
+    notifyVolume()
   }
 
   /** 改音量；静音态不动静音开关，由调用方决定是否解除 */
@@ -250,17 +328,22 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
     if (next === 0) {
       setVolume(0)
       volume.value = 0
+      saveVolumeState(0, muted.value)
       return
     }
     // 静音态下拖滑块即恢复声音
-    if (el && el.muted)
+    if (el && el.muted) {
       el.muted = false
+      muted.value = false
+    }
     setVolume(next)
     // volumechange 是异步的，先同步 UI，滑块不滞后一帧
     volume.value = next
+    lastAudibleVolume = next
+    saveVolumeState(next, muted.value)
   }
 
-  // 键盘调音量的提示：焦点常在按钮/空白处，看不见胶囊里的滑块，只能靠它确认音量。
+  // 键盘调音量 / 快进快退 / 倍速的提示：焦点常在按钮/空白处，靠它即时确认。
   // 带自增 id，方便宿主按 id 去重
   const shortcutHint = ref<{ id: number, text: string } | null>(null)
   let shortcutHintTimer: ReturnType<typeof setTimeout> | null = null
@@ -294,12 +377,17 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
       // volumechange 异步，先同步再报提示
       muted.value = el.muted
       volume.value = el.volume
+      lastAudibleVolume = el.volume
+      saveVolumeState(volume.value, muted.value)
       notifyVolume()
       return
     }
     // 取三位小数，修掉浮点累加误差
     setVolume(Math.round(Math.min(1, Math.max(0, el.volume + delta)) * 1000) / 1000)
     volume.value = el.volume
+    if (volume.value > 0)
+      lastAudibleVolume = volume.value
+    saveVolumeState(volume.value, muted.value)
     notifyVolume()
   }
 
@@ -312,6 +400,7 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
       lastAudibleVolume = volume.value
     if (!wasMuted && el.muted)
       volumeBeforeMute = Math.max(volume.value, lastAudibleVolume)
+    saveVolumeState(volume.value, muted.value)
   }
 
   // 计算画面实际显示宽高比（90/270° 旋转会交换源宽高），上报给浮窗自动定形
@@ -353,12 +442,14 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
   })
 
   onMounted(() => {
+    applySavedVolume()
     const video = getVideo()
     if (video)
       video.addEventListener('resize', handleNativeVideoResize)
   })
 
   onUnmounted(() => {
+    flushVolumeSave()
     if (shortcutHintTimer) {
       clearTimeout(shortcutHintTimer)
       shortcutHintTimer = null
@@ -376,6 +467,7 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
     videoStyle,
     rotateHint,
     shortcutHint,
+    showShortcutHint,
     rotateLeft,
     rotateRight,
     resetRotation,
@@ -390,6 +482,7 @@ export function useVideoRotation(options: UseVideoRotationOptions) {
     volumeBeforeMute: () => volumeBeforeMute,
     VOLUME_STEP,
     setVolume,
+    applySavedVolume,
     onVolumeSliderInput,
     adjustVolume,
     onVolumeChange,

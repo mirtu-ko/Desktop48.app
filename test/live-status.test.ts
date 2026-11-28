@@ -139,4 +139,24 @@ describe('live-status 共享 store', () => {
     await vi.advanceTimersByTimeAsync(120_000)
     expect(apisMock.lives).toHaveBeenCalledTimes(2)
   })
+
+  it('后台静默刷新在途失败时，前台非静默手动刷新自动补拉一次以给出错误提示', async () => {
+    let rejectSilent!: (err: Error) => void
+    apisMock.lives
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectSilent = reject
+      }))
+      .mockImplementationOnce(async () => ({ next: '0', liveList: [live('L1', 1)] }))
+
+    const api = store.useLiveStatusStore()
+    const silentReq = api.refreshLiveStatus(true, { silent: true })
+    const foregroundReq = api.refreshLiveStatus(true, { silent: false })
+
+    rejectSilent(new Error('network error'))
+    await expect(silentReq).rejects.toThrow('network error')
+    await expect(foregroundReq).resolves.toMatchObject([{ liveId: 'L1' }])
+    expect(apisMock.lives).toHaveBeenCalledTimes(2)
+    expect(apisMock.lives.mock.calls[0][1]).toEqual({ silent: true })
+    expect(apisMock.lives.mock.calls[1][1]).toEqual({ silent: false })
+  })
 })

@@ -1,6 +1,6 @@
 import type { FloatFitState } from '../src/common/float-window'
 import { describe, expect, it } from 'vitest'
-import { computeInitialWindowSize, decideAutoFit, fitAspectInBox, FLOAT_BAR_HEIGHT, FLOAT_BAR_HEIGHT_MIN, FLOAT_CASCADE_STEP, FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE, FLOAT_MIN_WIDTH, floatBarHeight, initialFloatTopmost, isFloatTopmostPinned, nextFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition } from '../src/common/float-window'
+import { computeInitialWindowSize, decideAutoFit, fitAspectInBox, FLOAT_BAR_HEIGHT, FLOAT_BAR_HEIGHT_MIN, FLOAT_CASCADE_STEP, FLOAT_DEFAULT_ASPECT, FLOAT_INITIAL_MIN_WIDTH_LANDSCAPE, FLOAT_LANDSCAPE_ASPECT, FLOAT_MIN_WIDTH, floatBarHeight, initialFloatTopmost, isFloatTopmostPinned, nextFloatTopmost, resolveFloatTopmost, resolveFloatWindowPosition, resolveInitialFloatAspect } from '../src/common/float-window'
 
 /** 基准工作区：1080p @100%，原点在屏幕左上（workArea 是 DIP，缩放已折算，故 4K@200% 等价） */
 const HD = { x: 0, y: 0, width: 1920, height: 1080 }
@@ -117,6 +117,22 @@ describe('computeInitialWindowSize', () => {
 
   it('极小工作区退化为最小尺寸而非负数', () => {
     expect(computeInitialWindowSize(9 / 16, { x: 0, y: 0, width: 200, height: 100 })).toEqual({ w: 240, h: 160 })
+  })
+})
+
+describe('resolveInitialFloatAspect', () => {
+  it('公演直播与公演录播（source=open）建窗即采用 16:9 横屏比例', () => {
+    const aspect = resolveInitialFloatAspect('open')
+    expect(aspect).toBe(FLOAT_LANDSCAPE_ASPECT)
+    const size = computeInitialWindowSize(aspect, HD)
+    expect(size.w).toBeGreaterThan(size.h)
+  })
+
+  it('个人直播/回放/缺省来源沿用 9:16 竖屏兜底比例', () => {
+    expect(resolveInitialFloatAspect('user')).toBe(FLOAT_DEFAULT_ASPECT)
+    expect(resolveInitialFloatAspect(undefined)).toBe(FLOAT_DEFAULT_ASPECT)
+    const size = computeInitialWindowSize(resolveInitialFloatAspect('user'), HD)
+    expect(size.w).toBeLessThan(size.h)
   })
 })
 

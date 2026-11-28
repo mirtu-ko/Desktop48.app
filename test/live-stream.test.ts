@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { isHlsSourceUrl } from '../src/renderer/src/composables/use-playback-engine'
 import {
   buildPlaybackUrl,
   describeLoadFailure,
@@ -174,5 +175,26 @@ describe('describeLoadFailure（失败卡文案）', () => {
     expect(describeLoadFailure('offline').hint).toContain('自动')
     expect(describeLoadFailure('stream').title).toBe('直播暂时无法加载')
     expect(describeLoadFailure('detail').hint).toContain('直播信息')
+  })
+})
+
+describe('isHlsSourceUrl（HLS 播放地址识别）', () => {
+  it('识别普通及带 query/hash 防盗链参数的 .m3u8 地址', () => {
+    expect(isHlsSourceUrl('https://idol-vod.48.cn/live/abc.m3u8')).toBe(true)
+    expect(isHlsSourceUrl('https://idol-vod.48.cn/live/abc.m3u8?wsSecret=123&wsTime=456')).toBe(true)
+    expect(isHlsSourceUrl('https://idol-vod.48.cn/live/abc.m3u8#t=10')).toBe(true)
+    expect(isHlsSourceUrl('https://idol-vod.48.cn/live/abc.M3U8?token=xyz#part')).toBe(true)
+  })
+
+  it('兼容非法 URL 或相对路径形式', () => {
+    expect(isHlsSourceUrl('/vod/replay.m3u8?sign=abc#top')).toBe(true)
+    expect(isHlsSourceUrl('replay.m3u8')).toBe(true)
+  })
+
+  it('非 HLS 地址返回 false（即使 query 中包含 .m3u8 字样）', () => {
+    expect(isHlsSourceUrl('https://idol-vod.48.cn/live/abc.mp4')).toBe(false)
+    expect(isHlsSourceUrl('https://idol-vod.48.cn/live/abc.mp4?fallback=test.m3u8')).toBe(false)
+    expect(isHlsSourceUrl('http://127.0.0.1:8080/live/abc.flv')).toBe(false)
+    expect(isHlsSourceUrl('')).toBe(false)
   })
 })

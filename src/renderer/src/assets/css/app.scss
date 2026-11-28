@@ -1561,6 +1561,38 @@ body,
   align-items: center;
   gap: var(--fp-gap);
   z-index: 30;
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
+
+  &.is-hidden:not(.has-active) {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-4px);
+  }
+
+  /* 录制/下载进行中时仅淡出旋转胶囊，保留呼吸中的任务按钮供状态确认 */
+  &.is-hidden.has-active {
+    .action-group {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .action-btn.is-active {
+      opacity: 0.78;
+    }
+  }
+}
+
+/* 全屏且控件淡出时同步隐藏鼠标指针 */
+.is-cursor-hidden {
+  cursor: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-actions {
+    transition: none;
+  }
 }
 
 /* hover 白纱叠加层注册为可动画颜色，保证渐入渐出手感 */
@@ -1633,6 +1665,14 @@ body,
   display: flex;
   flex-direction: column-reverse;
   align-items: flex-start;
+  /* 与底部控制条淡入淡出同步缓动，控制条隐去时弹幕顺滑落回底边 */
+  transition: bottom 0.22s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .danmaku-list {
+    transition: none;
+  }
 }
 
 /* 作者名：8em 上限——写 100% 无约束力（气泡宽由内容撑出），长 ID 会把正文挤成多行 */

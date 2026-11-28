@@ -4,7 +4,7 @@
  * Lives 与 Rooms 都需要「当前有哪些人在播」，但两页各自轮询会重复请求全站
  * getLiveList。这里统一负责分页拉取、120s 轮询、并发去重与新鲜度判断：
  * - Rooms 用它匹配房间 LIVE 状态与分享消息的直播/回放选路；
- * - Lives 空态用它检测开播，非空态仍由分页列表自己加载；
+ * - Lives 列表与空态检测都读它（全站直播并发量小，一次拉全量，最多 10 页）；
  * - 手动刷新通过 force=true 立即更新，跳过新鲜度缓存。
  */
 import type { LiveListItem } from '@renderer/services/api-types'
@@ -31,8 +31,9 @@ const lastFetchedAt = ref(0)
  */
 const removedLiveIds = new Set<string>()
 
-/** 进行中的全量刷新：并发调用共用同一请求。 */
+/** 进行中的全量刷新：并发调用共用同一请求；记录是否静默以便前台显式刷新失败时兜底补拉。 */
 let inflight: Promise<LiveListItem[]> | null = null
+let inflightSilent = true
 /** 轮询消费者的引用计数：没有页面需要时停止定时器。 */
 let pollConsumers = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -56,11 +57,11 @@ const liveIdSet = computed<Set<string> | null>(() => {
 })
 
 /** 拉取全站直播并分页去重。 */
-async function fetchAllLiveItems(): Promise<LiveListItem[]> {
+async function fetchAllLiveItems(silent = true): Promise<LiveListItem[]> {
   const items: LiveListItem[] = []
   let next = '0'
   for (let page = 0; page < MAX_LIVE_PAGES; page++) {
-    const content = await Apis.lives(next, { silent: true })
+    const content = await Apis.lives(next, { silent })
     items.push(...(content.liveList || []))
     if (!content.next || content.next === '0' || !(content.liveList || []).length)
       break
@@ -78,17 +79,32 @@ async function fetchAllLiveItems(): Promise<LiveListItem[]> {
 /**
  * 刷新共享直播状态。
  * force=true 用于手动刷新；否则在 120s 新鲜期内直接复用缓存。
+ * silent 默认 true（后台轮询不弹窗）；前景列表显式加载/手动刷新可传 false。
  */
-async function refreshLiveStatus(force = false): Promise<LiveListItem[]> {
+async function refreshLiveStatus(force = false, options?: { silent?: boolean }): Promise<LiveListItem[]> {
   if (!force && loaded.value && Date.now() - lastFetchedAt.value < LIVE_STATUS_POLL_MS)
     return liveItems.value
-  if (inflight)
-    return inflight
+
+  const silent = options?.silent ?? true
+  if (inflight) {
+    if (!silent && inflightSilent) {
+      try {
+        return await inflight
+      }
+      catch {
+        // 后台静默请求失败时，前台显式刷新补发一次非静默请求以给出错误提示
+      }
+    }
+    else {
+      return inflight
+    }
+  }
 
   refreshing.value = true
+  inflightSilent = silent
   inflight = (async () => {
     try {
-      const fetched = await fetchAllLiveItems()
+      const fetched = await fetchAllLiveItems(silent)
       // 请求发出后才收到下架广播时，回包仍可能带着那一场；按最新 removedLiveIds 再过滤一次
       const items = fetched.filter(item => !removedLiveIds.has(String(item.liveId)))
       liveItems.value = items

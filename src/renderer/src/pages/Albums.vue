@@ -5,10 +5,11 @@ import AlbumDetailCard from '@renderer/components/ui/AlbumDetailCard.vue'
 import CoverImage from '@renderer/components/ui/CoverImage.vue'
 import FloatingRefreshDock from '@renderer/components/ui/FloatingRefreshDock.vue'
 import FloatingTabBar from '@renderer/components/ui/FloatingTabBar.vue'
+import MediaIcon from '@renderer/components/ui/MediaIcon.vue'
 import BaseSkeleton from '@renderer/components/ui/skeleton/BaseSkeleton.vue'
 import { useAlbumPlayer } from '@renderer/composables/use-album-player'
 import Apis from '@renderer/services/apis'
-import { tagClass, tagLabel, totalTime } from '@renderer/utils/album'
+import { RANDOM_PICK_COUNT, tagClass, tagLabel, totalTime } from '@renderer/utils/album'
 import { computed, onMounted, ref } from 'vue'
 
 const albumList = ref<MusicAlbum[]>([])
@@ -53,7 +54,13 @@ const isRefreshing = computed(() => loading.value && albumList.value.length > 0)
 const showSkeleton = computed(() => loading.value && albumList.value.length === 0)
 
 // ===== 歌曲播放：全局迷你播放条（use-album-player） =====
-const { playWholeAlbum, openAlbumConcept, openAlbumShop } = useAlbumPlayer()
+const { playWholeAlbum, playRandomTracks, openAlbumConcept, openAlbumShop } = useAlbumPlayer()
+const hasAlbums = computed(() => albumList.value.length > 0)
+
+/** 无论当前处于哪个年份 Tab，都固定从全曲库随机抽取 15 首并播放 */
+function onRandomPlay() {
+  playRandomTracks(albumList.value, RANDOM_PICK_COUNT)
+}
 
 /** 专辑详情卡片（null = 卡片关闭） */
 const currentAlbum = ref<MusicAlbum | null>(null)
@@ -207,11 +214,22 @@ onMounted(fetchAlbums)
       </div>
     </el-scrollbar>
 
-    <!-- 右上角浮动刷新按钮 -->
+    <!-- 右上角浮动操作条：全曲库随机播放 + 刷新 -->
     <FloatingRefreshDock
       :loading="loading"
       @refresh="fetchAlbums"
-    />
+    >
+      <button
+        type="button"
+        class="random-play-btn"
+        :disabled="loading || !hasAlbums"
+        :title="`从全曲库随机播放 ${RANDOM_PICK_COUNT} 首`"
+        @click="onRandomPlay"
+      >
+        <MediaIcon name="shuffle" :size="14" />
+        <span>随机播放</span>
+      </button>
+    </FloatingRefreshDock>
 
     <!-- 专辑详情卡片：全屏蒙版 + 左专辑栏 / 右曲目列表，↑ / ↓ 切专辑 -->
     <AlbumDetailCard
@@ -226,8 +244,50 @@ onMounted(fetchAlbums)
 </template>
 
 <style scoped lang="scss">
+@use '../assets/css/fluid' as *;
+
 /* ===== 页面骨架：与直播/公演页同构（相对定位 + 裁剪见全局 .page-root；
  * 滚动区给 Dock 的底部预留也由全局 .page-root .el-scrollbar__view 统一提供） ===== */
+
+.random-play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: fluid(28px, 32px);
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--brand-primary) 26%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--brand-primary) 10%, var(--el-bg-color));
+  color: var(--brand-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.12s ease;
+
+  &:hover:not(:disabled) {
+    border-color: transparent;
+    background: var(--gradient-brand);
+    color: #fff;
+    box-shadow: var(--shadow-glow);
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.95);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
 
 .albums-container {
   /* 顶部留出左上角年份切换器空间（--tabbar-offset-top） */

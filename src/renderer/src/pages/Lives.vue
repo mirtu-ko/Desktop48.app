@@ -9,14 +9,19 @@ import CardSkeletonGrid from '@renderer/components/ui/skeleton/CardSkeletonGrid.
 import { useLiveIdle } from '@renderer/composables/use-live-idle'
 import { useMemberDetail } from '@renderer/composables/use-member-detail'
 import { enrichLiveItem, usePagedLiveList } from '@renderer/composables/use-paged-live-list'
-import { isShowLive, showLockedHint, useShowActions } from '@renderer/composables/use-show-actions'
-import Apis from '@renderer/services/apis'
+import {
+  isShowLive,
+  MAX_ONGOING_SHOWS,
+  shouldShowOngoingShowsInList,
+  showLockedHint,
+  useShowActions,
+} from '@renderer/composables/use-show-actions'
 import EventBus from '@renderer/services/event-bus'
 import useFloatPlayersStore from '@renderer/stores/float-players'
-import { useLiveStatusStore } from '@renderer/stores/live-status'
-import { useFollowedMembersStore } from '@renderer/stores/member-flags'
+import { LIVE_STATUS_POLL_MS, useLiveStatusStore } from '@renderer/stores/live-status'
+import { useBlockedMembersStore, useFollowedMembersStore } from '@renderer/stores/member-flags'
 import { debugLog } from '@renderer/utils/debug'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
@@ -28,10 +33,11 @@ const { openLive, openPlayback } = useFloatPlayersStore()
 // 空态公演预告的点击选路：与公演页同一份实现（进行中开直播 / 其余提示原因），见 use-show-actions
 const { onShowClick } = useShowActions()
 
-// 关注名单：模块级共享状态（与成员页共用同一份），直播列表页据此优先展示并加标识。
-// 页面被 keep-alive 缓存（只挂载一次），跨页同步靠这份共享状态而不是重新挂载
+// 关注与屏蔽名单：模块级共享状态（与成员页共用同一份），页面被 keep-alive 缓存，
+// 屏蔽与关注变更均直接驱动当前列表就地响应，无需等下次翻页或手动刷新
 const { followedMembers, refreshFollowedMembers, isFollowed } = useFollowedMembersStore()
-const { refreshLiveStatus, removeLive } = useLiveStatusStore()
+const { isBlocked } = useBlockedMembersStore()
+const { lastFetchedAt, refreshLiveStatus, removeLive } = useLiveStatusStore()
 
 // 成员详情卡片：点卡片上的成员名打开，详情按 userId 反查（数据源见 stores/member-directory）
 const {
@@ -47,7 +53,13 @@ const {
 // 列表滚动容器：绑给模板，并交给 usePagedLiveList 做回顶与触底判定
 const liveScrollRef = ref<any>(null)
 
-// 分页状态与触底加载：见 composables/use-paged-live-list.ts（直播/回放共用）
+/** 下一次首页加载是否强制刷新共享直播状态，以及是否静默（后台切回/空态唤醒不弹错误提示） */
+let pendingForceRefresh = false
+let pendingSilentRefresh = false
+/** 本页最近一次成功同步到共享 store 的时刻：onActivated 用来判断切回时是否过期 */
+let lastSyncedAt = 0
+
+// 分页状态与触底加载：复用 useLiveStatusStore 全量拉取，避免手动刷新或空态唤醒重复打 Apis.lives
 const {
   list: liveList,
   loading,
@@ -58,7 +70,15 @@ const {
   refreshFromTop,
 } = usePagedLiveList({
   scrollbarRef: liveScrollRef,
-  loadPage: next => Apis.lives(next),
+  loadPage: async () => {
+    const force = pendingForceRefresh
+    const silent = pendingSilentRefresh
+    pendingForceRefresh = false
+    pendingSilentRefresh = false
+    const items = await refreshLiveStatus(force, { silent })
+    lastSyncedAt = lastFetchedAt.value || Date.now()
+    return { next: '0', liveList: items }
+  },
   // 封面/日期/成员信息补全：与回放页共用 enrichLiveItem，成员查询失败逐条容错
   processItem: item => enrichLiveItem(item, 'fallback'),
   stopOnError: false,
@@ -84,6 +104,9 @@ watch(loading, (isLoading) => {
   lastLoadFailed.value = loadFailed.value
 }, { flush: 'sync' })
 
+/** 已过滤本地屏蔽成员的可见直播列表：在详情卡内屏蔽/取消屏蔽成员时就地生效 */
+const visibleLiveList = computed(() => liveList.value.filter(item => !isBlocked(item.userInfo?.userId)))
+
 /**
  * 页面展示态的唯一真值来源（模板分支与空态轮询共用，避免多处各写一遍判定）：
  * - list：有直播。刷新走软刷新，期间旧卡片保留，不会掉回下面三种状态
@@ -93,7 +116,7 @@ watch(loading, (isLoading) => {
  */
 type LiveViewState = 'list' | 'skeleton' | 'error' | 'idle'
 const viewState = computed<LiveViewState>(() => {
-  if (liveList.value.length > 0)
+  if (visibleLiveList.value.length > 0)
     return 'list'
   if (!listSettled.value)
     return 'skeleton'
@@ -108,7 +131,11 @@ const viewState = computed<LiveViewState>(() => {
 const {
   shows: previewShows,
   showsTitle: previewShowsTitle,
+  showsLoaded: previewShowsLoaded,
   hasShows: hasPreviewShows,
+  ongoingShows,
+  refreshShows,
+  removeShow,
   playbacks: previewPlaybacks,
   playbacksTitle: previewPlaybacksTitle,
   hasPlaybacks: hasPreviewPlaybacks,
@@ -117,7 +144,7 @@ const {
 } = useLiveIdle({
   // 首屏未落定 / 加载失败都不算空态：前者会在每次进页面时白拉一次公演，后者应由用户重试
   isEmpty: () => viewState.value === 'idle',
-  onLiveFound: () => refreshList(false),
+  onLiveFound: () => refreshList(false, true),
 })
 
 /** 关注名单非空才值得重排：空名单直接复用原数组，省掉一次全量拷贝 + 排序 */
@@ -126,7 +153,7 @@ const hasFollowed = computed(() => followedMembers.value.length > 0)
 /** 关注成员优先展示：比较器只输出布尔值差，配合稳定排序，组内各自保持接口返回顺序。
  * userId 归一化集中在 store 的 isFollowed，页面不自己 parseInt */
 const orderedLiveList = computed(() => {
-  const list = liveList.value
+  const list = visibleLiveList.value
   if (!hasFollowed.value)
     return list
   return [...list].sort(
@@ -135,7 +162,37 @@ const orderedLiveList = computed(() => {
 })
 
 /** 已加载列表里关注成员的直播条数：dock 文案据此说明「优先展示」是否已生效 */
-const followedLiveCount = computed(() => liveList.value.filter(item => isFollowed(item.userInfo.userId)).length)
+const followedLiveCount = computed(() => visibleLiveList.value.filter(item => isFollowed(item.userInfo.userId)).length)
+
+/** 只看关注成员开关（点右上角 Dock 关注数切换）；无关注直播时自动复位，避免停在空筛选页 */
+const onlyFollowed = ref(false)
+watch(followedLiveCount, (count) => {
+  if (count === 0 && onlyFollowed.value)
+    onlyFollowed.value = false
+})
+
+const displayedLiveList = computed(() => (
+  onlyFollowed.value
+    ? orderedLiveList.value.filter(item => isFollowed(item.userInfo.userId))
+    : orderedLiveList.value
+))
+
+/** 列表态直播人数较少（<10）且未开启「只看关注」时伴随展示进行中公演（复用 useLiveIdle 排期缓存） */
+const needOngoingShows = computed(() => (
+  viewState.value === 'list' && shouldShowOngoingShowsInList(visibleLiveList.value.length, onlyFollowed.value)
+))
+
+const showOngoingShowsSection = computed(() => (
+  needOngoingShows.value && ongoingShows.value.length > 0
+))
+
+/** 卡片区最多展示 4 场，标题仍保留进行中总场数（与空态 todayShows/previewShows 同口径） */
+const displayedOngoingShows = computed(() => ongoingShows.value.slice(0, MAX_ONGOING_SHOWS))
+
+watch(needOngoingShows, (need) => {
+  if (need)
+    void refreshShows(false)
+}, { immediate: true })
 
 // 点击卡片：以独立播放窗打开直播，可边看边继续浏览列表
 function play(item: LiveListItem) {
@@ -187,15 +244,19 @@ function onLiveUnavailable(liveId: string) {
   if (index !== -1)
     liveList.value.splice(index, 1)
   removeLive(liveId)
+  removeShow(liveId)
 }
 
 // 手动/自动刷新：回到列表顶部并软刷新（旧卡片保留到新数据落地，失败则原样保留）。
-// forceLiveStatus=false 用于空态检测已更新共享状态后的自动回列表，避免紧接着重复 getLiveList。
-function refreshList(forceLiveStatus = true) {
+// forceLiveStatus=false 用于空态唤醒或切回同步，直接复用共享 store 缓存，零重复请求。
+function refreshList(forceLiveStatus = true, silent = false) {
   imageVersion.value += 1
-  if (forceLiveStatus)
-    void refreshLiveStatus(true).catch(error => debugLog('list', '手动刷新共享直播状态失败', error))
+  pendingForceRefresh = forceLiveStatus
+  pendingSilentRefresh = silent
   void refreshFromTop({ keepList: true })
+  // 空态或列表态少直播时同步刷新公演排期，手动刷新可立即感知公演开演/结束
+  if (viewState.value === 'idle' || needOngoingShows.value)
+    void refreshShows(forceLiveStatus)
 }
 
 onMounted(() => {
@@ -205,6 +266,18 @@ onMounted(() => {
   EventBus.on('live-unavailable', onLiveUnavailable)
   // 双击底部 Dock 的直播项（根组件广播）：回顶由根组件做，这里只负责刷新当前可见的列表
   EventBus.on('lives-refresh', onLivesRefresh)
+})
+
+// KeepAlive 切回直播页：若列表超过新鲜期或其它页已更新共享直播状态，静默软刷新避免停留在旧列表
+onActivated(() => {
+  if (!listSettled.value || loading.value || viewState.value !== 'list')
+    return
+  const stale = Date.now() - lastSyncedAt >= LIVE_STATUS_POLL_MS
+  const storeNewer = lastFetchedAt.value > lastSyncedAt
+  if (stale || storeNewer)
+    refreshList(false, true)
+  else if (needOngoingShows.value)
+    void refreshShows(false)
 })
 
 // 空态轮询的启停由 useLiveIdle 自己挂生命周期（页面被 keep-alive 缓存，不能靠 onUnmounted 收尾）
@@ -221,14 +294,19 @@ onUnmounted(() => {
 
     <div class="live-main">
       <!-- 空态灵动岛：脱离滚动流，固定在页面顶部 -->
-      <div v-if="viewState === 'idle'" class="idle-head frosted-surface" role="status">
+      <div
+        v-if="viewState === 'idle'"
+        class="idle-head frosted-surface"
+        :class="{ 'is-checking': loading }"
+        role="status"
+      >
         <span class="idle-dot" aria-hidden="true" />
         <div class="idle-head-main">
           <p class="idle-title">
-            当前没有直播
+            当前没有成员直播
           </p>
           <p class="idle-sub">
-            监控中，每 120 秒自动刷新检查
+            {{ loading ? '正在检查开播…' : '监控中，每 120 秒自动刷新检查' }}
           </p>
         </div>
         <div class="idle-meta">
@@ -301,7 +379,7 @@ onUnmounted(() => {
               </el-tooltip>
             </div>
           </template>
-          <p v-else class="idle-hint">
+          <p v-else-if="previewShowsLoaded" class="idle-hint">
             近期也没有公演排期，晚点再来看看吧
           </p>
 
@@ -327,6 +405,7 @@ onUnmounted(() => {
                 <!-- enrichLiveItem 已在取数阶段补全 cover/date/member，渲染时必然就绪 -->
                 <LiveItem
                   :item="item"
+                  :image-version="imageVersion"
                   date-mode="relative"
                   :followed="isFollowed(item.userInfo.userId)"
                   @select-member="id => openMemberDetail(id, 'live')"
@@ -346,7 +425,7 @@ onUnmounted(() => {
       >
         <div class="card-grid">
           <div
-            v-for="item in orderedLiveList"
+            v-for="item in displayedLiveList"
             :key="item.liveId"
             class="live-item"
             @click="play(item)"
@@ -360,7 +439,33 @@ onUnmounted(() => {
             />
           </div>
         </div>
-        <div v-if="noMore" class="list-end">
+        <section v-if="showOngoingShowsSection" class="live-ongoing-shows">
+          <h2 class="section-title section-title--live">
+            正在公演 · {{ ongoingShows.length }} 场
+            <button
+              type="button"
+              class="section-more"
+              aria-label="查看全部公演"
+              @click="goToAll('/shows')"
+            >
+              查看全部
+            </button>
+          </h2>
+          <div class="idle-shows">
+            <div
+              v-for="show in displayedOngoingShows"
+              :key="show.liveId"
+              class="idle-show lift-card clickable"
+              @click="onShowClick(show)"
+            >
+              <ShowCard :show="show" hint="" />
+            </div>
+          </div>
+        </section>
+        <div v-if="onlyFollowed" class="list-end">
+          已筛选 · 仅显示关注的 {{ displayedLiveList.length }} 个直播
+        </div>
+        <div v-else-if="noMore" class="list-end">
           没有更多直播了
         </div>
       </el-scrollbar>
@@ -371,9 +476,21 @@ onUnmounted(() => {
         title="刷新"
         @refresh="refreshList"
       >
-        <!-- 关注条数只在有置顶项时出现：让「优先展示」是可见的，而不是用户自己去数卡片位置 -->
-        <span v-if="liveList.length" class="dock-note">
-          已加载 {{ liveList.length }} 个直播<template v-if="followedLiveCount"> · 关注 {{ followedLiveCount }} 条置顶</template>
+        <!-- 关注条数只在有置顶项时出现：点击可一键切换「只看关注 / 全部」 -->
+        <span v-if="visibleLiveList.length" class="dock-note">
+          已加载 {{ visibleLiveList.length }} 个直播<template v-if="followedLiveCount">
+            ·
+            <button
+              type="button"
+              class="dock-filter"
+              :class="{ 'is-active': onlyFollowed }"
+              :aria-pressed="onlyFollowed"
+              :title="onlyFollowed ? '点击显示全部直播' : '点击只看关注成员'"
+              @click="onlyFollowed = !onlyFollowed"
+            >
+              只看关注 ({{ followedLiveCount }})
+            </button>
+          </template>
         </span>
       </FloatingRefreshDock>
     </div>
@@ -461,6 +578,10 @@ onUnmounted(() => {
     }
   }
 
+  &.is-checking .idle-dot::after {
+    animation-duration: 1.1s;
+  }
+
   .idle-head-main {
     min-width: 0;
   }
@@ -495,12 +616,12 @@ onUnmounted(() => {
     border-left: 1px solid var(--el-border-color-lighter);
   }
 
-  /* 已等待时长是唯一随时间跳动的值，用加深的直播玫红提亮：原色直接做文字对比度不足，混黑压深一档 */
+  /* 已等待时长是唯一随时间跳动的值，用直播玫红混主文字色兼顾浅/深色对比度 */
   .idle-waited {
     font-size: 12px;
     font-weight: 600;
     line-height: 1.4;
-    color: color-mix(in srgb, var(--color-lives) 72%, #000);
+    color: color-mix(in srgb, var(--color-lives) 72%, var(--el-text-color-primary));
     white-space: nowrap;
   }
 
@@ -646,5 +767,41 @@ onUnmounted(() => {
 
 .live-item {
   min-width: 0;
+}
+
+/* 列表态直播人数较少时伴随展示的进行中公演分区，左右边距与 .card-grid 对齐 */
+.live-ongoing-shows {
+  padding: 0 var(--space-page-x) 8px;
+
+  .section-title--live {
+    --st-accent: var(--color-lives);
+  }
+}
+
+/* Dock 关注过滤按钮：默认低调融入计数文案，hover/激活呈关注金胶囊 */
+.dock-filter {
+  padding: 1px 8px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease;
+
+  &:hover {
+    background: color-mix(in srgb, var(--color-follow) 14%, transparent);
+    color: color-mix(in srgb, var(--color-follow) 72%, var(--el-text-color-primary));
+  }
+
+  &.is-active {
+    background: color-mix(in srgb, var(--color-follow) 18%, transparent);
+    color: color-mix(in srgb, var(--color-follow) 78%, var(--el-text-color-primary));
+    font-weight: 600;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-follow) 40%, transparent);
+  }
 }
 </style>

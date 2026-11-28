@@ -11,6 +11,7 @@ import { useLiveSession } from '@renderer/composables/use-live-session'
 import useMediaDownload from '@renderer/composables/use-media-download'
 import { useMediaShortcuts } from '@renderer/composables/use-media-shortcuts'
 import { useOnlinePoll } from '@renderer/composables/use-online-poll'
+import { usePlayerControlsVisibility } from '@renderer/composables/use-player-controls-visibility'
 import { useSleepBlocker } from '@renderer/composables/use-sleep-blocker'
 import { useStreamRetry } from '@renderer/composables/use-stream-retry'
 import { useVideoRotation } from '@renderer/composables/use-video-rotation'
@@ -134,6 +135,7 @@ const {
   volume,
   togglePlay,
   toggleMute,
+  applySavedVolume,
   onVolumeSliderInput,
   adjustVolume,
   VOLUME_STEP,
@@ -172,32 +174,6 @@ const composing = ref(false)
 const draft = ref('')
 const sending = ref(false)
 const inputRef = ref<HTMLInputElement | null>(null)
-
-const {
-  fontSize: danmakuFontSize,
-  position: danmakuPosition,
-  topLeft: rankPosition,
-  canFloatLeft: canFloatDanmaku,
-  floating: danmakuFloating,
-} = useDanmakuLayer({
-  videoRect: () => videoRect.value,
-  compact: () => props.compact,
-  fullscreen: () => isFullscreen.value,
-  // 黑边不够宽（videoRect.left < 60）时由 computeDanmakuLayout 自行回落画面内，
-  // 与全屏无关：窗口态下竖屏直播同样留得出左侧栏
-  placement: () => danmakuPlacement.value,
-  // 公演 B 站弹幕可能很长；限制在窗口宽度的 33%，避免单条横跨整块画面
-  maxWidth: () => (props.source === 'open' ? '33vw' : undefined),
-  // 输入条展开时气泡层整条抬起：避让量在 --dm-compose-clearance 里（输入条高度 + 间距）
-  extraBottom: () => (composing.value && danmakuEnabled.value ? 'var(--dm-compose-clearance)' : undefined),
-})
-
-/** 摆放只在「左侧黑边够宽」时开放：按钮只在此时出现，状态由 is-on 表示（不用 disabled） */
-function toggleDanmakuPlacement() {
-  const next = danmakuFloating.value ? 'video' : 'left'
-  void setDanmakuPlacement(next)
-  trackEvent('danmaku:placement', { placement: next })
-}
 
 // ── 已播时长（在线人数不走轮询，见下方 LIVEUPDATE）──────────────
 const elapsedTime = ref(0)
@@ -260,8 +236,31 @@ function toggleDanmaku() {
 // ── 互动榜单（口袋 LIVEUPDATE 消息）─────────────────────────────
 // 榜单不进气泡层，独立锚画面左边缘、贴窗口顶（悬于气泡层正上方并左对齐）；可由胶囊开关收起。
 // 同报文的 online / allMoney 路由到胶囊在线人数与榜单面板的礼物流水段
+const RANK_VISIBLE_STORAGE_KEY = 'desktop48:live:rank-visible'
+function loadSavedRankVisible(isCompact: boolean): boolean {
+  try {
+    const raw = globalThis.localStorage?.getItem(RANK_VISIBLE_STORAGE_KEY)
+    if (raw === '1')
+      return true
+    if (raw === '0')
+      return false
+  }
+  catch {
+    // 忽略存储读取失败
+  }
+  return !isCompact
+}
 const rankUsers = ref<PocketRankUser[]>([])
-const rankVisible = ref(true)
+const rankVisible = ref(loadSavedRankVisible(props.compact))
+function toggleRankVisible() {
+  rankVisible.value = !rankVisible.value
+  try {
+    globalThis.localStorage?.setItem(RANK_VISIBLE_STORAGE_KEY, rankVisible.value ? '1' : '0')
+  }
+  catch {
+    // 忽略存储写入失败
+  }
+}
 /** 加载失败的榜单头像（按 userId 记账）：回退首字母占位 */
 const failedRankAvatars = reactive(new Set<string>())
 
@@ -355,11 +354,83 @@ const canSendDanmaku = computed(() => props.source === 'user'
 /** 输入条展开态：隐藏消息时收起（气泡层已收，输入条没有落点） */
 const danmakuComposeOpen = computed(() => canSendDanmaku.value && danmakuEnabled.value && composing.value)
 
-/** 展开/收起输入条；展开后立刻聚焦，少一次点击 */
+// ── 无操作自动隐藏控件 ──────────────────────────────────────────
+const {
+  controlsVisible,
+  cursorHidden,
+  reveal: revealControls,
+  onControlEnter,
+  onControlLeave,
+  onContainerLeave,
+} = usePlayerControlsVisibility({
+  isFullscreen,
+  keepVisible: () => !playing.value || danmakuComposeOpen.value || mediaLoading.value || liveEnded.value,
+})
+
+function onActionsFocusOut(event: FocusEvent) {
+  const container = event.currentTarget as HTMLElement | null
+  const next = event.relatedTarget as Node | null
+  if (!container || !next || !container.contains(next))
+    onControlLeave()
+}
+
+const {
+  fontSize: danmakuFontSize,
+  position: danmakuPosition,
+  topLeft: rankPosition,
+  canFloatLeft: canFloatDanmaku,
+  floating: danmakuFloating,
+} = useDanmakuLayer({
+  videoRect: () => videoRect.value,
+  compact: () => props.compact,
+  fullscreen: () => isFullscreen.value,
+  // 黑边不够宽（videoRect.left < 60）时由 computeDanmakuLayout 自行回落画面内，
+  // 与全屏无关：窗口态下竖屏直播同样留得出左侧栏
+  placement: () => danmakuPlacement.value,
+  controlsVisible: () => controlsVisible.value,
+  // 公演 B 站弹幕可能很长；限制在窗口宽度的 33%，避免单条横跨整块画面
+  maxWidth: () => (props.source === 'open' ? '33vw' : undefined),
+  // 输入条展开时气泡层整条抬起：避让量在 --dm-compose-clearance 里（输入条高度 + 间距）
+  extraBottom: () => (composing.value && danmakuEnabled.value ? 'var(--dm-compose-clearance)' : undefined),
+})
+
+/** 摆放只在「左侧黑边够宽」时开放：按钮只在此时出现，状态由 is-on 表示（不用 disabled） */
+function toggleDanmakuPlacement() {
+  const next = danmakuFloating.value ? 'video' : 'left'
+  void setDanmakuPlacement(next)
+  trackEvent('danmaku:placement', { placement: next })
+}
+
+/** 弹幕输入条展开时按下画面空白处收起（与录播全部弹幕面板同口径） */
+function onVideoPointerDown(event: PointerEvent) {
+  revealControls()
+  if (!danmakuComposeOpen.value)
+    return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.danmaku-compose, .mini-controls, .player-actions'))
+    return
+  composing.value = false
+}
+
+watch(shortcutHint, (hint) => {
+  if (hint)
+    revealControls()
+})
+
+watch(nativeAudio, (el) => {
+  if (el)
+    applySavedVolume(el)
+})
+
+/** 展开/收起输入条；若房间消息当前处于隐藏态，点发送时一并开启消息层并聚焦 */
 function toggleDanmakuCompose() {
-  composing.value = !composing.value
-  if (composing.value)
+  const willOpen = !danmakuComposeOpen.value
+  composing.value = willOpen
+  if (willOpen) {
+    if (!danmakuEnabled.value)
+      danmakuEnabled.value = true
     void nextTick(() => inputRef.value?.focus())
+  }
 }
 
 /**
@@ -619,6 +690,7 @@ function onPlayerCanPlay() {
       source: props.source === 'open' ? 'open' : 'user',
     })
   }
+  applySavedVolume()
   if (!isRadio.value)
     updateVideoDimensions()
 }
@@ -757,6 +829,12 @@ async function handleLiveRestream() {
     const data = await session.fetchLiveDetail()
     if (isManuallyUnmounted.value || liveEnded.value)
       return
+    // 换流期间若已转回放态，直接进下播结束卡，不把 VOD 地址喂给直播转流链
+    if (isEndedLiveDetail(data, props.source)) {
+      debugLog('live', '①直播:换流时详情已转为回放，判定本场下播')
+      finishLiveEnded('detail')
+      return
+    }
     session.applyLiveDetail(data)
     if (data.playStreamPath === activeRtmpUrl.value) {
       debugLog('live', '①直播:换流信号但详情地址未变，跳过重建')
@@ -766,6 +844,17 @@ async function handleLiveRestream() {
     await session.restartLiveStream(data.playStreamPath)
   }
   catch (error) {
+    if (error instanceof Error && isLiveEndedMessage(error.message)) {
+      debugLog('live', `①直播:换流时详情反馈「${error.message}」，判定本场下播`)
+      finishLiveEnded('error')
+      return
+    }
+    if (error instanceof Error && isLiveRemovedMessage(error.message)) {
+      debugLog('live', `①直播:换流时详情反馈「${error.message}」，关闭直播窗口`)
+      session.stopStreamNow()
+      closeUnavailableLive()
+      return
+    }
     // 换流期间详情失败不关窗（可能是瞬时抖动）：交给断流重试链兜底
     debugLog('live', `①直播:换流重建失败，转重试链兜底 ${error}`)
     retry.schedule()
@@ -799,17 +888,28 @@ const { running: recording, onActionClick: onRecordClick } = useMediaDownload({
 
 // ── 键盘快捷键（窗口级监听：按键只到 OS 激活的播放窗） ──────────────────────
 // 按键分派与 PlaybackPlayer 共用 useMediaShortcuts（键位单源）；
-// 直播不接 ←/→（seek 对直播无意义）；↑/↓ 音量作用于本地 media，直播同样有效
+// 直播不接 ←/→（seek 对直播无意义）；F 全屏、M 静音与 ↑/↓ 音量照常生效
+// 电台模式只禁画面旋转，其余快捷键照常生效
 useMediaShortcuts({
   getMedia: () => null,
   actions: {
-    rotateLeft,
-    rotateRight,
-    resetRotation,
+    toggleMute,
+    toggleFullscreen,
+    rotateLeft: () => {
+      if (!isRadio.value)
+        rotateLeft()
+    },
+    rotateRight: () => {
+      if (!isRadio.value)
+        rotateRight()
+    },
+    resetRotation: () => {
+      if (!isRadio.value)
+        resetRotation()
+    },
     volumeUp: () => adjustVolume(VOLUME_STEP),
     volumeDown: () => adjustVolume(-VOLUME_STEP),
   },
-  isEnabled: () => !isRadio.value,
 })
 
 /** 挂载播放器；环境不支持 HTTP-FLV 时统一在此提示 */
@@ -884,7 +984,10 @@ onUnmounted(() => {
     <div
       ref="videoBoxRef"
       class="video-box"
-      :class="{ 'video-box-background': !isRadio }"
+      :class="{ 'video-box-background': !isRadio, 'is-cursor-hidden': cursorHidden }"
+      @pointermove="revealControls"
+      @pointerleave="onContainerLeave"
+      @pointerdown="onVideoPointerDown"
       @dblclick="onBoxDblClick"
     >
       <RadioStage
@@ -1001,25 +1104,34 @@ onUnmounted(() => {
           {{ loadFailure?.action }}
         </button>
       </div>
-      <!-- 悬浮按钮整组随加载隐藏：蒙层盖住全部浮层，且流就绪前录制无从谈起 -->
-      <div v-show="!mediaLoading && !liveEnded" class="player-actions">
+      <!-- 悬浮按钮整组随加载与失败卡隐藏：蒙层盖住全部浮层，且流就绪前录制无从谈起 -->
+      <div
+        v-show="!mediaLoading && !liveEnded && !loadFailed"
+        class="player-actions"
+        :class="{ 'is-hidden': !controlsVisible, 'has-active': recording }"
+        :inert="!controlsVisible && !recording"
+        @pointerenter="onControlEnter"
+        @pointerleave="onControlLeave"
+        @focusin="onControlEnter"
+        @focusout="onActionsFocusOut"
+      >
         <RotationControls
           v-if="liveType === 1"
           :angle="rotationAngle"
+          :inert="!controlsVisible"
           @rotate-left="rotateLeft"
           @rotate-right="rotateRight"
           @reset="resetRotation"
         />
-        <el-tooltip :content="recording ? '录制中，点击结束' : '录制'" placement="bottom" :show-after="400">
-          <button
-            class="action-btn action-btn--record"
-            :class="{ 'is-active': recording }"
-            :aria-label="recording ? '结束录制' : '录制'"
-            @click="onRecordClick"
-          >
-            <MediaIcon name="videoCamera" />
-          </button>
-        </el-tooltip>
+        <button
+          class="action-btn action-btn--record"
+          :class="{ 'is-active': recording }"
+          :title="recording ? '录制中，点击结束' : '录制'"
+          :aria-label="recording ? '结束录制' : '录制'"
+          @click="onRecordClick"
+        >
+          <MediaIcon name="videoCamera" />
+        </button>
       </div>
 
       <!-- 互动榜单：口袋 LIVEUPDATE 消息驱动，锚画面左边缘、贴窗口顶 —— 悬于弹幕气泡层正上方并左对齐 -->
@@ -1063,18 +1175,21 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 控制条：LIVE 状态段走 #leading 插槽；加载期间整条隐藏（连接中不显示 LIVE 状态） -->
+      <!-- 控制条：LIVE 状态段走 #leading 插槽；加载 / 失败 / 结束期间整条隐藏 -->
       <MiniControls
-        v-if="!mediaLoading && !liveEnded"
+        v-if="!mediaLoading && !liveEnded && !loadFailed"
         :playing="playing"
         :muted="muted"
         :volume="volume"
         :hint="shortcutHint"
+        :visible="controlsVisible"
         :is-fullscreen="isFullscreen"
         @toggle-play="togglePlay"
         @toggle-mute="toggleMute"
         @volume-change="onVolumeSliderInput"
         @toggle-fullscreen="toggleFullscreen"
+        @control-enter="onControlEnter"
+        @control-leave="onControlLeave"
       >
         <template #leading>
           <!-- 发送弹幕排在控制条最左：直播里它是最高频的主动操作，放最外侧先够到。
@@ -1123,7 +1238,7 @@ onUnmounted(() => {
             :class="{ 'is-on': rankVisible }"
             :title="rankVisible ? '收起互动榜' : '展开互动榜'"
             :aria-label="rankVisible ? '收起互动榜' : '展开互动榜'"
-            @click="rankVisible = !rankVisible"
+            @click="toggleRankVisible"
           >
             <MediaIcon name="trophy" />
           </button>

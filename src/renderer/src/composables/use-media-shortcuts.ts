@@ -9,10 +9,15 @@ import { useEventListener } from '@vueuse/core'
 
 export interface MediaShortcutActions {
   togglePlay: () => void
+  toggleMute: () => void
   toggleFullscreen: () => void
   rotateLeft: () => void
   rotateRight: () => void
   resetRotation: () => void
+  /** ←：快退（宿主可提供以顺带展示屏幕提示；未传时回退直接改 mediaElement.currentTime） */
+  seekBackward: () => void
+  /** →：快进 */
+  seekForward: () => void
   /** ↑：音量 + 一步（步进与解除静音由宿主负责） */
   volumeUp: () => void
   /** ↓：音量 - 一步 */
@@ -51,14 +56,26 @@ export function dispatchMediaShortcut(
         return false
       break
     case 'ArrowLeft':
-      if (!mediaElement)
+      if (actions.seekBackward) {
+        actions.seekBackward()
+      }
+      else if (mediaElement) {
+        mediaElement.currentTime = Math.max(0, mediaElement.currentTime - 5)
+      }
+      else {
         return false
-      mediaElement.currentTime = Math.max(0, mediaElement.currentTime - 5)
+      }
       break
     case 'ArrowRight':
-      if (!mediaElement)
+      if (actions.seekForward) {
+        actions.seekForward()
+      }
+      else if (mediaElement) {
+        mediaElement.currentTime = mediaElement.currentTime + 5
+      }
+      else {
         return false
-      mediaElement.currentTime = mediaElement.currentTime + 5
+      }
       break
     case 'ArrowUp':
       if (!actions.volumeUp)
@@ -70,12 +87,17 @@ export function dispatchMediaShortcut(
         return false
       actions.volumeDown()
       break
+    case 'm':
+    case 'M':
+      if (event.repeat || !actions.toggleMute)
+        return false
+      actions.toggleMute()
+      break
     case 'f':
     case 'F':
-      if (actions.toggleFullscreen)
-        actions.toggleFullscreen()
-      else
+      if (event.repeat || !actions.toggleFullscreen)
         return false
+      actions.toggleFullscreen()
       break
     case 'r':
     case 'R':

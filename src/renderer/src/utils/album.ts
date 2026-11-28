@@ -73,3 +73,68 @@ export function releaseDate(album: MusicAlbum): string {
   const ts = Number(album.start_time)
   return ts > 0 ? dayjs(ts * 1000).format('YYYY-MM-DD') : album.year || '未知'
 }
+
+/** 随机播放默认抽取曲目数 */
+export const RANDOM_PICK_COUNT = 15
+
+export interface PickRandomTracksOptions {
+  /** 抽取数量，默认 15 */
+  count?: number
+  /** 判定音源是否已失效（如 audio-player 的 isBroken） */
+  isBroken?: (url: string) => boolean
+  /** 上一批刚抽过的曲目 key，曲库充足时优先避开以实现「换一批」手感 */
+  excludeKeys?: ReadonlySet<string>
+  /** 随机数发生器（测试可注入） */
+  random?: () => number
+}
+
+function shuffleInPlace<T>(items: T[], random: () => number): T[] {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1))
+    ;[items[i], items[j]] = [items[j], items[i]]
+  }
+  return items
+}
+
+/**
+ * 从曲库随机抽取指定数量的可播放曲目：
+ * 1. 过滤无音源伴奏与已标记失效的链接
+ * 2. 按音源 URL 去重（同一首歌收录在多张专辑/精选集时只入池一次）
+ * 3. 优先从未在 excludeKeys 中的曲目抽满，不足时再从 excludeKeys 中补足
+ */
+export function pickRandomTracks(
+  albums: MusicAlbum[],
+  options: PickRandomTracksOptions = {},
+): AudioTrack[] {
+  const count = Math.max(0, Math.floor(options.count ?? RANDOM_PICK_COUNT))
+  if (count === 0)
+    return []
+
+  const isBroken = options.isBroken
+  const excludeKeys = options.excludeKeys
+  const random = options.random ?? Math.random
+
+  const seenUrls = new Set<string>()
+  const fresh: AudioTrack[] = []
+  const recent: AudioTrack[] = []
+
+  for (const album of albums) {
+    for (const song of album.song) {
+      if (!song.url || isBroken?.(song.url) || seenUrls.has(song.url))
+        continue
+      seenUrls.add(song.url)
+      const track = toTrack(album, song)
+      if (excludeKeys?.has(track.key))
+        recent.push(track)
+      else
+        fresh.push(track)
+    }
+  }
+
+  shuffleInPlace(fresh, random)
+  if (fresh.length >= count)
+    return fresh.slice(0, count)
+
+  shuffleInPlace(recent, random)
+  return [...fresh, ...recent.slice(0, count - fresh.length)]
+}

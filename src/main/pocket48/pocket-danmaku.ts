@@ -22,30 +22,51 @@ interface PocketDanmakuSession {
   chatroomId: string
   liveId: string
   client: NimChatroomClient
-  subscribers: Set<WebContents>
+  /** 订阅窗口 → destroyed 兜底钩子（显式退订时须同步摘除，避免监听累积） */
+  subscribers: Map<WebContents, () => void>
 }
 
 const sessions = new Map<string, PocketDanmakuSession>()
 
 function pushStatus(session: PocketDanmakuSession, status: PocketDanmakuStatus, message?: string): void {
-  for (const subscriber of session.subscribers)
-    sendIpc(subscriber, 'pocketDanmakuBatch', { chatroomId: session.chatroomId, kind: 'status', status, message })
+  for (const subscriber of session.subscribers.keys()) {
+    if (!subscriber.isDestroyed())
+      sendIpc(subscriber, 'pocketDanmakuBatch', { chatroomId: session.chatroomId, kind: 'status', status, message })
+  }
 }
 
 function pushMessage(session: PocketDanmakuSession, message: PocketRawChatMessage): void {
-  for (const subscriber of session.subscribers)
-    sendIpc(subscriber, 'pocketDanmakuBatch', { chatroomId: session.chatroomId, kind: 'messages', items: [message] })
+  for (const subscriber of session.subscribers.keys()) {
+    if (!subscriber.isDestroyed())
+      sendIpc(subscriber, 'pocketDanmakuBatch', { chatroomId: session.chatroomId, kind: 'messages', items: [message] })
+  }
+}
+
+function detachSubscriber(session: PocketDanmakuSession, sender: WebContents): boolean {
+  const hook = session.subscribers.get(sender)
+  if (!hook)
+    return false
+  session.subscribers.delete(sender)
+  if (!sender.isDestroyed())
+    sender.removeListener('destroyed', hook)
+  return true
 }
 
 function subscribe(session: PocketDanmakuSession, sender: WebContents): void {
   if (session.subscribers.has(sender))
     return
-  session.subscribers.add(sender)
+  const hook = () => handlePocketDanmakuStop(session.chatroomId, sender)
+  session.subscribers.set(sender, hook)
   // 播放窗关闭走 destroy()，不触发渲染层退订：随 webContents 销毁兜底清理
-  sender.once('destroyed', () => handlePocketDanmakuStop(session.chatroomId, sender))
+  sender.once('destroyed', hook)
 }
 
 function disposeSession(session: PocketDanmakuSession): void {
+  for (const [subscriber, hook] of session.subscribers) {
+    if (!subscriber.isDestroyed())
+      subscriber.removeListener('destroyed', hook)
+  }
+  session.subscribers.clear()
   session.client.destroy()
 }
 
@@ -89,7 +110,7 @@ export async function handlePocketDanmakuStart(chatroomId: string, liveId: strin
     chatroomId: roomKey,
     liveId: String(liveId || ''),
     client: null as unknown as NimChatroomClient,
-    subscribers: new Set(),
+    subscribers: new Map(),
   }
   sessions.set(roomKey, session)
   subscribe(session, sender)
@@ -119,7 +140,9 @@ export async function handlePocketDanmakuStart(chatroomId: string, liveId: strin
     pushStatus(session, 'disconnected', err.message)
     if (sessions.get(roomKey) === session)
       sessions.delete(roomKey)
-    client.destroy()
+    // 失败会话同样要走完整清理：摘掉订阅者的 destroyed 监听再销毁 client，
+    // 否则同窗口重试会重复挂 hook，且旧 hook 在窗口销毁时会按 chatroomId 命中新会话
+    disposeSession(session)
   })
   return true
 }
@@ -173,9 +196,8 @@ export function handlePocketDanmakuStop(chatroomId: string, sender: WebContents)
   // 键归一与 handlePocketDanmakuStart 一致：不 trim 会键不对称，永远退订不掉
   const roomKey = String(chatroomId || '').trim()
   const session = sessions.get(roomKey)
-  if (!session)
+  if (!session || !detachSubscriber(session, sender))
     return
-  session.subscribers.delete(sender)
   if (session.subscribers.size > 0)
     return
   sessions.delete(roomKey)

@@ -59,7 +59,8 @@ interface DanmakuSession {
   realRoomId: number
   token: string
   hosts: DanmakuHost[]
-  subscribers: Set<WebContents>
+  /** 订阅窗口 → destroyed 兜底钩子（显式退订时须同步摘除，避免监听累积） */
+  subscribers: Map<WebContents, () => void>
   socket: WebSocket | null
   heartbeatTimer: ReturnType<typeof setInterval> | null
   reconnectTimer: ReturnType<typeof setTimeout> | null
@@ -290,8 +291,10 @@ function flushDanmaku(session: DanmakuSession): void {
     return
 
   const items = session.pending.splice(0, session.pending.length)
-  for (const subscriber of session.subscribers)
-    sendIpc(subscriber, 'danmakuBatch', { roomId: session.roomId, items })
+  for (const subscriber of session.subscribers.keys()) {
+    if (!subscriber.isDestroyed())
+      sendIpc(subscriber, 'danmakuBatch', { roomId: session.roomId, items })
+  }
 }
 
 function scheduleReconnect(session: DanmakuSession): void {
@@ -344,16 +347,31 @@ function disposeSession(session: DanmakuSession): void {
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING))
     socket.close()
 
+  for (const [subscriber, hook] of session.subscribers) {
+    if (!subscriber.isDestroyed())
+      subscriber.removeListener('destroyed', hook)
+  }
   session.subscribers.clear()
+}
+
+function detachSubscriber(session: DanmakuSession, sender: WebContents): boolean {
+  const hook = session.subscribers.get(sender)
+  if (!hook)
+    return false
+  session.subscribers.delete(sender)
+  if (!sender.isDestroyed())
+    sender.removeListener('destroyed', hook)
+  return true
 }
 
 function subscribe(session: DanmakuSession, sender: WebContents): void {
   if (session.subscribers.has(sender))
     return
 
-  session.subscribers.add(sender)
+  const hook = () => handleDanmakuStop(session.roomId, sender)
+  session.subscribers.set(sender, hook)
   // 播放窗关闭走的是 destroy()，不触发渲染层 unload：退订必须在主进程随 webContents 兜底
-  sender.once('destroyed', () => handleDanmakuStop(session.roomId, sender))
+  sender.once('destroyed', hook)
 }
 
 /**
@@ -378,7 +396,7 @@ export async function handleDanmakuStart(roomId: number, sender: WebContents): P
     realRoomId: roomId,
     token: '',
     hosts: [],
-    subscribers: new Set(),
+    subscribers: new Map(),
     socket: null,
     heartbeatTimer: null,
     reconnectTimer: null,
@@ -401,6 +419,13 @@ export async function handleDanmakuStart(roomId: number, sender: WebContents): P
   if (sender.isDestroyed())
     return false
 
+  // 握手期间若同房间已被并发启动并入册，直接复用已有会话，防止前一条连接被覆盖泄漏
+  const racing = sessions.get(roomId)
+  if (racing && !racing.closed) {
+    subscribe(racing, sender)
+    return true
+  }
+
   sessions.set(roomId, session)
   subscribe(session, sender)
   connectSocket(session)
@@ -414,10 +439,9 @@ export async function handleDanmakuStart(roomId: number, sender: WebContents): P
 /** 退订某房间的弹幕；最后一个订阅者离开时断开连接 */
 export function handleDanmakuStop(roomId: number, sender: WebContents): void {
   const session = sessions.get(roomId)
-  if (!session)
+  if (!session || !detachSubscriber(session, sender))
     return
 
-  session.subscribers.delete(sender)
   if (session.subscribers.size > 0)
     return
 
